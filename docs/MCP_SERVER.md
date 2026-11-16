@@ -9,7 +9,7 @@ The Geode MCP (Model Context Protocol) server (`src/mcp/server.zig`)
 exposes graph-database operations and the GQL language bridge to
 AI/LLM clients over the MCP JSON-RPC protocol (stdio and HTTP
 transports). It is built on the pinned `mcp` library (`build.zig.zon`
-`.mcp` = v0.1.22).
+`.mcp` = v0.1.26).
 
 This document records exactly which MCP methods Geode implements,
 which it intentionally does not, and the one upstream-library caveat
@@ -50,16 +50,33 @@ by newlines and a message "MUST NOT contain embedded newlines".
 
 Every list is a single page: no `nextCursor` is returned.
 
-Errors are JSON-RPC errors (the `message` is the Zig error name the
-library reports, e.g. `InvalidParams`):
+Errors are JSON-RPC errors whose `message` says what was wrong and
+whose `data` carries it (SONNY-6585, `mcp.setErrorDetail` in mcp v0.1.23,
+`src/mcp/error_detail.zig`; the data is serialized with escaping). Before,
+the message was the Zig error name (`InvalidParams`) and there was no data.
 
-| Request | Error code |
-|---|---|
-| `tools/call` with an unknown tool name | `-32602` (the spec's protocol error for an unknown tool) |
-| `prompts/get` with an unknown prompt name | `-32602` |
-| `prompts/get` missing a required argument, with an argument the prompt does not take, or with a non-string argument value | `-32602` |
-| `tools/list`, `resources/list`, `prompts/list` with a `cursor` (geode never issues one) | `-32602` (pagination: an invalid cursor) |
-| `resources/read` of a URI geode does not serve | `-32002` (resource not found) |
+| Request | Error code | `message` / `data` |
+|---|---|---|
+| `tools/call` with an unknown tool name | `-32602` (the spec's protocol error for an unknown tool) | `Unknown tool: <name>` / `{"name"}` |
+| `prompts/get` with an unknown prompt name | `-32602` | `Unknown prompt: <name>` / `{"name"}` |
+| `prompts/get` missing a required argument, with an argument the prompt does not take, or with a non-string argument value | `-32602` | `Prompt <name>: missing required argument '<arg>'` (or `takes no argument`, `is not a string`) / `{"name"}` |
+| `tools/list`, `resources/list`, `prompts/list` with a `cursor` (geode never issues one) | `-32602` (pagination: an invalid cursor) | `Invalid cursor: ...` / `{"cursor"}` |
+| `resources/read` of a URI geode does not serve | `-32002` (resource not found) | `Resource not found: <uri>` / `{"uri"}` |
+
+Over HTTP (`geode mcp --port <port>`, the transport unless `--stdio` is
+given; it serves until SIGINT or SIGTERM) the endpoint is `POST /mcp` and
+each client has a session (mcp v0.1.26, SONNY-6644): `initialize` answers an
+`Mcp-Session-Id` header that the client sends on every later request. A
+request without one is `400`, an unknown or expired one `404` (sessions
+idle 30 minutes with no open connection expire), and `DELETE /mcp` with
+the header ends it. Before, `geode mcp --port` exited as soon as it printed
+its port.
+
+A notification (no `id`) is never answered, even when it fails, and a
+`tools/call` the client cancels with `notifications/cancelled` gets no
+reply (mcp v0.1.23). The library's built-in `barrier` tool is gone, so
+`tools/call` of `barrier` is an unknown tool. Every handler result is one
+JSON value; the library answers any other with `-32603`.
 | `resources/subscribe` / `resources/unsubscribe` | `-32601` (see below) |
 
 Tool **execution** failures are not protocol errors: they are a
@@ -70,9 +87,17 @@ arguments), a backend that cannot be reached, and a statement the server
 reports as failed (for `query`, `schema`, `explain` and `graphs`
 alike). A `resources/read` whose endpoint DSN is unusable answers
 the resource with a `{"error": "<reason>"}` text document (the library can
-only report a Zig error name, which would drop the reason); when the
-server is unreachable, `schema` and `stats` answer their offline
-documents (`"note": "Server unavailable"`).
+only report a Zig error name, which would drop the reason). When the
+server is unreachable, every resource answers
+`{"error": "Server unavailable (<error>): nothing was read"}`. Before
+SONNY-6586, `schema` and `stats` answered `"node_labels": []` /
+`"node_count": 0` with a `"Server unavailable"` note, which read as an
+empty graph.
+
+The `query` tool's `parameters` object maps each name to a JSON value:
+`null`, a boolean, a number, a string, an array (a GQL LIST) or an object
+(a GQL MAP), nested up to 64 deep. Before SONNY-6586 an array or object
+was refused (`UnsupportedParamType`).
 
 Before SONNY-6552 the lists were pretty-printed bare arrays,
 `resources/read` was a bare `{uri,mimeType,text}`, an unknown prompt or
@@ -172,7 +197,7 @@ Geode's side of the contract (`src/mcp/server.zig`): `GeodeMcpServer.init`
 passes its own `allocator` to `mcp.Server.init`, and every handler returns
 bytes from that allocator. `tools/call` and `resources/read` results are
 built with it (`src/mcp/tools.zig`, `src/mcp/resources.zig`, including the
-offline fallback documents); the resource and prompt results are
+unreachable-server error documents); the resource and prompt results are
 serialized with it (SONNY-6552), and the tool listing and the empty
 CompleteResult are handed over as `ownedCopy` copies. Returning a string
 literal would be an invalid free.
@@ -183,7 +208,7 @@ fails on a leak and panics on an invalid free):
 - `zig build test-sonny6531-mcp-ownership` drives every method Geode
   implements through the real `mcp.Server.processMessage` dispatch (every
   tool incl. `isError` results and an unknown tool, every resource incl.
-  unknown URIs and the offline fallbacks, every prompt incl. unknown,
+  unknown URIs and an unreachable server, every prompt incl. unknown,
   completion, logging, subscribe/unsubscribe, notifications and a batch),
   with no backend, an undialable DSN, a dead endpoint and a real
   `geode serve`; then a real Debug `geode mcp --stdio` session answers
@@ -199,7 +224,7 @@ fails on a leak and panics on an invalid free):
 
 ### Known upstream advertisement caveat
 
-The pinned `mcp` library (v0.1.22) **hardcodes**
+The pinned `mcp` library (v0.1.26, as v0.1.22) **hardcodes**
 `"resources":{"subscribe":true,"listChanged":true}` in the
 `initialize` response (`mcp.zig` `handleInitialize`, ~line 3193) and
 exposes **no `ServerOptions` field to override it**. Geode therefore

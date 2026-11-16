@@ -147,7 +147,7 @@ test "forwardToShard routes cross-node read to target and returns Response" {
     };
 
     // Bring up both QUIC listeners.  Each coord.start() spawns its
-    // raft/network/health/replication loops + the cluster_poll loop.
+    // raft/network/health loops + the cluster_poll loop.
     try coord_a.start();
     try coord_b.start();
     defer {

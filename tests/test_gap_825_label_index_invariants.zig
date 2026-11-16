@@ -298,7 +298,7 @@ test "GAP-825b: loadOneGraphFromAdapter rebuilds nodes_by_graph and node_labels_
 
     // Drop the in-memory caches and rebuild from the adapter.  This
     // exercises the same code path as a process restart.
-    store.clearNodes();
+    try store.clearNodes();
     try testing.expectEqual(@as(usize, 0), store.nodesInGraphCount("g"));
 
     try store.loadFromFile();
@@ -339,9 +339,8 @@ test "GAP-825b: loadOneGraphFromAdapter rebuilds nodes_by_graph and node_labels_
 // Test 3 — addNodeLabel + rollback via the transactional undo log must
 // restore the node labels AND keep `label_index` consistent.
 //
-// This is a defensive regression net: the undo-log path is suspected to
-// already handle the simple case (the rollback calls
-// removeNodeLabelNoSave, which mirrors removeNodeLabel including
+// This is a defensive regression net: the undo-log path already handles
+// the simple case (the rollback calls removeNodeLabel, including
 // label_index maintenance).  Keeping the test so any future change to
 // the undo path that drops the label-index updates is caught.
 // -----------------------------------------------------------------------

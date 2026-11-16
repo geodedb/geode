@@ -556,20 +556,6 @@ fn PrefixedStream(comptime Inner: type) type {
     };
 }
 
-const ReplicationPayload = struct {
-    shard_id: u64 = 0,
-    snapshot: []const u8 = "",
-
-    pub const _desc_table = .{
-        .shard_id = fd(1, .{ .scalar = .uint64 }),
-        .snapshot = fd(2, .{ .scalar = .bytes }),
-    };
-
-    pub fn deinit(self: *ReplicationPayload, allocator: std.mem.Allocator) void {
-        protobuf.deinit(allocator, self);
-    }
-};
-
 /// SEC-D009: Replay protection guard for Raft frames.
 const ReplayGuard = struct {
     mutex: std.Io.Mutex = std.Io.Mutex.init,
@@ -703,7 +689,6 @@ pub const ClusterCoordinator = struct {
     raft_pool: ?*pooled.ThreadPool = null,
     network_pool: ?*pooled.ThreadPool = null,
     health_pool: ?*pooled.ThreadPool = null,
-    replication_pool: ?*pooled.ThreadPool = null,
     connection_pool: ?*pooled.ThreadPool = null,
     /// Dedicated polling thread for the intra-cluster QUIC endpoint.
     /// `accept()` blocks on `accepted.items.len > 0` via a CV — connections
@@ -967,6 +952,11 @@ pub const ClusterCoordinator = struct {
         // this process): the apply under `inner_mutex` then scans nothing.
         raft.prehydrate_callback = &raft_apply.prehydrateForApply;
         raft.prehydrateUnapplied();
+        // SONNY-6636 (b): the node snapshots its store past a threshold
+        // (GEODE_RAFT_SNAPSHOT_ENTRIES / GEODE_RAFT_SNAPSHOT_BYTES) and
+        // compacts its Raft log there.
+        raft.snapshot_create_callback = &raft_apply.createSnapshotCallbackFn;
+        raft.snapshot_policy = raft_consensus.SnapshotPolicy.fromEnv(allocator);
 
         // GAP-0870: register the applied-membership view and the 2PC
         // coordinator so committed config_change / txn_prepare / txn_decide
@@ -995,6 +985,28 @@ pub const ClusterCoordinator = struct {
         idem_dedup.* = cluster_replication.IdempotencyDedup.init(allocator);
         errdefer idem_dedup.deinit();
         raft_apply.setGlobalIdempotencyDedup(idem_dedup);
+        // SONNY-6636 (b): the keys the compacted entries recorded come back
+        // from this node's own snapshot; the replay rebuilds the rest. A
+        // snapshot that cannot be read refuses the start (a retried
+        // statement would otherwise be applied twice).
+        // SONNY-6665: raft v0.2.6 persists a snapshot received from the
+        // leader before the store is restored from it; a node that stopped
+        // in between has a Raft log compacted past what its store reflects
+        // (raft_store.index, which a restore and this node's own snapshots
+        // record), and restores it now, before any entry after it replays.
+        if (try raft.localSnapshotData(allocator)) |snap_data| {
+            defer allocator.free(snap_data);
+            const point = raft.snapshotPoint();
+            if (point.index > raft_apply.storeRaftIndex() and raft_apply.isRestorableSnapshot(snap_data)) {
+                log.warn("raft: the store is behind this node's Raft snapshot (stopped before restoring it); restoring it now", &.{
+                    Attr.uint("snapshot_index", point.index),
+                    Attr.uint("store_raft_index", raft_apply.storeRaftIndex()),
+                });
+                try raft_apply.restoreSnapshotCallbackFn(allocator, snap_data, point.index, point.term);
+            } else {
+                try raft_apply.seedFromLocalSnapshot(snap_data);
+            }
+        }
 
         var cluster_state = try initClusterState(allocator);
         // Task A5 (2026-05-25 plan): seed cluster_state.nodes from PeerConfig
@@ -1075,6 +1087,10 @@ pub const ClusterCoordinator = struct {
 
     pub fn deinit(self: *ClusterCoordinator) void {
         self.stop();
+        // SONNY-6667: nothing ticks or steps the node now; its restore and
+        // snapshot threads, which use the store and the apply targets freed
+        // below (the idempotency table), end before any of them is freed.
+        self.raft.quiesce();
         // RC-A: `stop()` has joined every worker + the health loop, so no thread
         // can still touch the inbound registry. Free any record a worker left
         // behind (defensive — the normal path deregisters on exit) and release the
@@ -1278,11 +1294,6 @@ pub const ClusterCoordinator = struct {
             self.health_pool.?.deinit();
             self.health_pool = null;
         }
-        self.replication_pool = try startLoopPool(self, runReplicationLoop);
-        errdefer {
-            self.replication_pool.?.deinit();
-            self.replication_pool = null;
-        }
     }
 
     pub fn stop(self: *ClusterCoordinator) void {
@@ -1317,10 +1328,6 @@ pub const ClusterCoordinator = struct {
         if (self.health_pool) |pool| {
             pool.deinit();
             self.health_pool = null;
-        }
-        if (self.replication_pool) |pool| {
-            pool.deinit();
-            self.replication_pool = null;
         }
         if (self.connection_pool) |pool| {
             pool.deinit();
@@ -1556,15 +1563,6 @@ pub const ClusterCoordinator = struct {
         }
     }
 
-    fn replicationLoop(self: *ClusterCoordinator) !void {
-        while (!self.shutdown.load(.acquire)) {
-            if (self.raft.state == .leader) {
-                try self.performReplication();
-            }
-            compat_sleepNs(100 * std.time.ns_per_ms);
-        }
-    }
-
     const ConnectionTaskCtx = struct {
         allocator: Allocator,
         coordinator: *ClusterCoordinator,
@@ -1622,13 +1620,6 @@ pub const ClusterCoordinator = struct {
         const self: *ClusterCoordinator = @ptrCast(@alignCast(ctx));
         self.healthLoop() catch |err| {
             log.err("Health loop failed", &.{Attr.string("error", @errorName(err))});
-        };
-    }
-
-    fn runReplicationLoop(ctx: *anyopaque) void {
-        const self: *ClusterCoordinator = @ptrCast(@alignCast(ctx));
-        self.replicationLoop() catch |err| {
-            log.err("Replication loop failed", &.{Attr.string("error", @errorName(err))});
         };
     }
 
@@ -2310,40 +2301,6 @@ pub const ClusterCoordinator = struct {
                 shard.replica_nodes = new_replicas;
             }
         }
-    }
-
-    fn performReplication(self: *ClusterCoordinator) !void {
-        for (self.cluster_state.shards.items) |shard| {
-            if (shard.primary_node != self.node_id) continue;
-
-            for (shard.replica_nodes) |replica| {
-                try self.replicateShardToNode(shard.id, replica);
-            }
-        }
-    }
-
-    fn replicateShardToNode(self: *ClusterCoordinator, shard_id: u64, node_id: u64) !void {
-        // Checkpoint adapter storage before snapshotting.
-        try self.store.saveToFile();
-        // Serialize all nodes and edges as JSON-lines for replication.
-        const snapshot = try self.store.serializeSnapshot(self.allocator);
-
-        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 256);
-        defer aw.deinit();
-        const payload_msg = ReplicationPayload{
-            .shard_id = shard_id,
-            .snapshot = snapshot,
-        };
-        try protobuf.encode(&aw.writer, self.allocator, payload_msg);
-        const payload = try self.allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
-        defer self.allocator.free(payload);
-
-        const msg = Message{
-            .msg_type = .REPLICATE_DATA,
-            .data = payload,
-        };
-
-        try self.sendToNode(node_id, msg);
     }
 
     // Helper functions

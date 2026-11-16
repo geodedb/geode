@@ -89,6 +89,8 @@ const node_scan_stream = geode.node_scan_stream;
 const query_plan_cache = geode.query_plan_cache;
 const geode_auth = @import("geode_auth");
 const grpc_tls = @import("grpc_tls.zig");
+// SONNY-6593: the RPCs served, exactly the ones geode.proto declares.
+const grpc_service_methods = geode.grpc_service_methods;
 // Issue #515: Backup types for new gRPC handlers
 const backup_mgr = geode.backup_manager;
 const SimplifiedBackupManager = backup_mgr.SimplifiedBackupManager;
@@ -203,6 +205,22 @@ fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
 /// principal holds `max_sessions_per_principal` sessions, all in use. Any
 /// other error is the handler's.
 fn helloSessionRefused(allocator: std.mem.Allocator, caps: std.ArrayList([]const u8), err: anyerror) ![]u8 {
+    // CANARY: REQ=REQ-SONNY-6645-GRPC-CONNECTION-QUOTA; FEATURE="TenantQuota"; ASPECT=GrpcHandshakeRefusal; STATUS=TESTED; TEST=tests/test_sonny3313_grpc_peer_ip.zig; OWNER=transport; UPDATED=2026-11-16
+    // SONNY-6645: past the tenant's connection quota the Handshake is
+    // refused with QUIC's SQLSTATE, "53300: <message>" (the gRPC
+    // convention for a refusal, as the CDC frames send it).
+    if (err == error.TenantConnectionQuotaExceeded) {
+        const quota = proto_util.mapError(err);
+        const message = try std.fmt.allocPrint(allocator, "{s}: {s}", .{ quota.code, quota.message });
+        defer allocator.free(message);
+        const resp = schema.HelloResponse{
+            .success = false,
+            .session_id = "",
+            .error_message = message,
+            .capabilities = caps,
+        };
+        return encodeMessage(allocator, resp);
+    }
     if (err != error.TooManySessions) return err;
     const resp = schema.HelloResponse{
         .success = false,
@@ -539,7 +557,9 @@ pub const SessionStore = struct {
                 if (tenant_quota.getGlobalQuotaManager()) |qm| {
                     qm.acquireConnection(tenant) catch {
                         self.allocator.free(tenant_copy);
-                        return error.OutOfMemory; // quota exceeded
+                        // SONNY-6645: refused as QUIC refuses it (53300,
+                        // `helloSessionRefused`); it was an OutOfMemory.
+                        return error.TenantConnectionQuotaExceeded;
                     };
                 }
                 state.session_config = server_state.SessionConfiguration.init(self.allocator);
@@ -1319,27 +1339,12 @@ pub const GeodeGrpcServer = struct {
     /// method the packet wrapper understands must be registered under its
     /// full `/geode.GeodeService/<Method>` path. Anything absent gets a
     /// `grpc-status: 12` (UNIMPLEMENTED) trailer from the vendor listener
-    /// before `handlePacket` is ever reached. Keep this list in sync with the
-    /// suffix dispatch in `handlePacket` and with `src/proto/geode.proto`.
-    const method_paths = [_][]const u8{
-        "/geode.GeodeService/Handshake",
-        "/geode.GeodeService/Execute",
-        "/geode.GeodeService/Ping",
-        "/geode.GeodeService/Begin",
-        "/geode.GeodeService/Commit",
-        "/geode.GeodeService/Rollback",
-        "/geode.GeodeService/Savepoint",
-        "/geode.GeodeService/RollbackTo",
-        // SONNY-6570: the names src/proto/geode.proto declares (the clients'
-        // generated stubs call these), and the older short names.
-        "/geode.GeodeService/GetCdcDiagnostics",
-        "/geode.GeodeService/ControlCdc",
-        "/geode.GeodeService/CdcDiag",
-        "/geode.GeodeService/CdcCtrl",
-        "/geode.GeodeService/Backup",
-        "/geode.GeodeService/Restore",
-        "/geode.GeodeService/UploadBackup",
-    };
+    /// before `handlePacket` is ever reached. SONNY-6593: the list is
+    /// `grpc_service_methods.paths`, the RPCs src/proto/geode.proto declares
+    /// (it served Savepoint, RollbackTo, Backup, Restore and UploadBackup,
+    /// which the .proto did not declare, and the undeclared CdcDiag /
+    /// CdcCtrl aliases). Keep the suffix dispatch in `handlePacket` in step.
+    const method_paths = grpc_service_methods.paths;
 
     fn registerHandlers(self: *GeodeGrpcServer) !void {
         for (method_paths) |path| {
@@ -1418,7 +1423,7 @@ fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTrans
             defer allocator.free(resp);
             return sendUnaryResponse(trans, resp);
         } else if (std.mem.endsWith(u8, method, "/Savepoint")) {
-            // Issue #515: Savepoint handler (stub — matches QUIC behavior)
+            // Issue #515: Savepoint handler (matches QUIC behavior)
             const resp = try handleSavepoint(request_bytes, allocator);
             defer allocator.free(resp);
             return sendUnaryResponse(trans, resp);
@@ -1426,9 +1431,9 @@ fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTrans
             const resp = try handleRollbackTo(request_bytes, allocator);
             defer allocator.free(resp);
             return sendUnaryResponse(trans, resp);
-        } else if (std.mem.endsWith(u8, method, "/GetCdcDiagnostics") or std.mem.endsWith(u8, method, "/CdcDiag")) {
+        } else if (std.mem.endsWith(u8, method, "/GetCdcDiagnostics")) {
             return sendCdcReply(trans, try handleCdcDiag(request_bytes, allocator), allocator);
-        } else if (std.mem.endsWith(u8, method, "/ControlCdc") or std.mem.endsWith(u8, method, "/CdcCtrl")) {
+        } else if (std.mem.endsWith(u8, method, "/ControlCdc")) {
             return sendCdcReply(trans, try handleCdcCtrl(request_bytes, allocator), allocator);
         } else if (std.mem.endsWith(u8, method, "/Backup")) {
             const resp = try handleBackup(request_bytes, allocator);
@@ -3258,7 +3263,9 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             if (grpc_query_tenant) |tid| {
                 if (tenant_quota.getGlobalQuotaManager()) |qm| {
                     qm.acquireQuery(tid) catch {
-                        var resp = try buildErrorResponse(allocator, "42000", "Query quota exceeded for tenant", &.{}, &.{});
+                        // SONNY-6645: a resource limit, 53400 (it was 42000).
+                        const quota = proto_util.mapError(error.TenantQueryQuotaExceeded);
+                        var resp = try buildErrorResponse(allocator, quota.code, quota.message, &.{}, &.{});
                         defer resp.deinit(allocator);
                         return encodeMessage(allocator, resp);
                     };
@@ -4304,7 +4311,16 @@ pub fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
             return encodeMessage(allocator, resp);
         };
         const store_ptr = graph_store.getGlobalStore(allocator);
-        txn_undo_log.getGlobalUndoLog(allocator).commit(store_ptr);
+        // SONNY-2979: the durable undo log's COMMITTED record is the commit
+        // point; without it the transaction is rolled back and COMMIT fails.
+        txn_undo_log.getGlobalUndoLog(allocator).commit(store_ptr) catch {
+            txn_undo_log.getGlobalUndoLog(allocator).rollback(graph_store.getWritableGlobalStore(allocator)) catch |err| {
+                log.warn("transaction rollback after a failed commit failed", &.{Attr.string("error", @errorName(err))});
+            };
+            state.endTransaction();
+            const resp = schema.CommitResponse{ .success = false, .@"error" = txnEndError(error.SessionCommitFailed) };
+            return encodeMessage(allocator, resp);
+        };
 
         state.global_commit_ts += 1;
         state.endTransaction();

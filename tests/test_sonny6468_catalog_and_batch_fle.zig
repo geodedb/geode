@@ -211,7 +211,7 @@ test "SONNY-6468 (2): a batch edge property write seals an FLE value once (the s
     defer e.deinit();
     try e.encrypt("R6468", "p");
     try e.run("CREATE (:A6468)-[:R6468 {k: 1}]->(:B6468)");
-    const edges = e.f.st.getEdgesByType(testing.allocator, "R6468", null, graph_store.DEFAULT_GRAPH_NAME);
+    const edges = try e.f.st.getEdgesByType(testing.allocator, "R6468", null, graph_store.DEFAULT_GRAPH_NAME);
     defer testing.allocator.free(edges);
     try testing.expectEqual(@as(usize, 1), edges.len);
 

@@ -87,6 +87,8 @@ const Value = geode.value_types.Value;
 // The separate `tests/test_count_nodes_pushdown_audit.sh` pins the static
 // shape of the fix in `match_operations.zig` itself.
 
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+
 // Test harness that provisions a per-test global store so we can seed it
 // directly via the storage API (fast) and then run GQL against it via the
 // execution layer (so the full planner/match path is exercised).
@@ -107,6 +109,13 @@ const Harness = struct {
         const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
         errdefer allocator.free(data_dir);
 
+        // SONNY-6637 item 6: the seed is one node write at a time (20,000
+        // to 30,000 of them per test); under the default sync_each_commit
+        // each fdatasyncs the WAL, which made this file take 51 minutes on a
+        // loaded disk. The timings it gates are of the count queries, not
+        // of the seed. Deferred WAL sync, as tests/test_point_write_fastpath.zig
+        // (SONNY-6634); set before the first getGlobalStore.
+        _ = setenv("GEODE_WAL_SYNC", "deferred", 1);
         graph_store.setDataDirOverride(allocator, data_dir);
         _ = graph_store.getGlobalStore(allocator);
 

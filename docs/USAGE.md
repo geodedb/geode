@@ -42,15 +42,16 @@
 
 ## Feature Overview (Current State)
 
-### Distributed Query Federation (Always On)
+### Single node, or a Raft cluster
 
-Federated query execution across shards is always enabled:
+`geode serve` runs a single node. Setting `GEODE_CLUSTER_TOKEN` turns on
+cluster mode (Raft replication between the nodes that share the token; see
+[DISTRIBUTED_QUERY_COORDINATION.md](DISTRIBUTED_QUERY_COORDINATION.md)).
+There is no shard federation configured from a config file, and no
+federation status procedure (SONNY-6593).
 
 ```bash
-# Queries automatically consider federation
-./geode query "MATCH (n:Person) RETURN n ORDER BY n.name LIMIT 100"
-
-# View distributed plan
+# The plan of a query
 ./geode query "EXPLAIN MATCH (n) RETURN n ORDER BY n.id"
 ```
 
@@ -100,10 +101,13 @@ which `cdc.*` procedures answer and which are refused with 0A000.
 
 ### Cost-Based Optimizer (Always On)
 
-The optimizer runs by default; `EXPLAIN (VERBOSE)` shows its decisions:
+The optimizer runs by default; `EXPLAIN <statement>` shows its plan and
+`PROFILE <statement>` runs it and reports what each operator did (`EXPLAIN`
+takes no options):
 
 ```bash
-./geode query "EXPLAIN (VERBOSE) MATCH (n) RETURN n"
+./geode query "EXPLAIN MATCH (n) RETURN n"
+./geode query "PROFILE MATCH (n) RETURN n"
 ```
 
 ## Query Language (GQL)
@@ -181,36 +185,25 @@ DELETE p
 
 ### Server Configuration
 
+`geode serve --config <path>` reads these top-level keys (YAML, TOML or
+JSON); a command-line option overrides the file. No other key is read: the
+`server:`, `tls:`, `storage:`, `federation:` and `optimizer:` sections this
+page used to show were never read (SONNY-6593).
+
 ```yaml
 # geode.yaml
-server:
-  listen: '0.0.0.0:3141'
-  data_dir: '/var/lib/geode'
-
-tls:
-  cert: '/etc/geode/cert.pem'
-  key: '/etc/geode/key.pem'
-  auto_generate: true
-
-storage:
-  page_size: 8192
-  cache_size: '1GB'
-  wal_dir: '/var/lib/geode/wal'
-
-federation:
-  # (Always active) Configuration focuses on shard endpoints
-  coordinator: true
-  shards:
-    - id: 'shard1'
-      endpoint: 'node1.cluster:3141'
-    - id: 'shard2'
-      endpoint: 'node2.cluster:3141'
-
-optimizer:
-  # Enable/disable removed; only tuning parameters remain
-  small_n_threshold: 100
-  trace: false
+listen_quic: '0.0.0.0:3141'
+listen_grpc: '0.0.0.0:50051'
+data_dir: '/var/lib/geode'
+cert_path: '/etc/geode/cert.pem'
+key_path: '/etc/geode/key.pem'
+log_level: 'info'
 ```
+
+The others are `idle_timeout`, `persist_interval`,
+`idle_in_transaction_timeout`, `grpc_session_idle_timeout`,
+`grpc_max_sessions_per_principal` and `require_capability_profile`
+(`src/server/cli_args.zig` `mergeFileConfig`).
 
 ### Environment Variables (Updated Set)
 
@@ -229,71 +222,67 @@ GEODE_TDE_KEY=<64 hex chars>   # Encrypts pages and the WAL of new data
 
 ### Metrics Endpoints
 
+The metrics listener runs only when `GEODE_METRICS_PORT` is set, on that
+port, bound to `GEODE_METRICS_BIND` (default `127.0.0.1`). It serves two
+paths; there is no `/ready`:
+
 ```bash
 # Prometheus metrics
-curl http://localhost:9090/metrics
+curl http://localhost:$GEODE_METRICS_PORT/metrics
 
-# Health check
-curl http://localhost:8080/health
-
-# Ready check
-curl http://localhost:8080/ready
+# Liveness ({"status":"ok"}, answered off the query path)
+curl http://localhost:$GEODE_METRICS_PORT/health
 ```
 
 ### Key Metrics
 
+`/metrics` carries geode's OpenTelemetry metrics
+([OBSERVABILITY_ARCHITECTURE.md](OBSERVABILITY_ARCHITECTURE.md)) and these
+counters and gauges (`src/monitoring/prometheus.zig`):
+
 ```
-# Query metrics
-geode_query_total{status="success|error"}
-geode_query_duration_ms{percentile="50|95|99"}
-
-# Federation metrics
-geode_federation_queries_total
-geode_federation_shard_errors_total
-geode_federation_merge_duration_ms
-
-# Storage metrics
-geode_storage_pages_total
-geode_storage_wal_segments_total
-geode_storage_cache_hit_ratio
-
-# Backup metrics
-geode_backup_last_success_timestamp
-geode_backup_size_bytes
-geode_backup_duration_ms
+geode_queries_total
+geode_queries_failed_total
+geode_query_duration_seconds
+geode_connections_active
+geode_connections_total
+geode_transactions_total
+geode_transactions_failed_total
+geode_nodes_total
+geode_edges_total
+geode_memory_bytes
 ```
+
+The `geode_federation_*`, `geode_storage_*` and `geode_backup_*` names this
+page used to list do not exist (SONNY-6593).
 
 ## Troubleshooting
 
 ### Common Issues
 
-#### Federation Troubleshooting
+#### Cluster Troubleshooting
 
-```bash
-# Verify shard connectivity
-geode query "CALL system.federation.status()"
-
-# Check logs for errors
-grep "federation" /var/log/geode/geode.log
-```
+There is no cluster or federation status procedure (`system.federation.status()`
+does not exist). A write refused on a follower answers `ClusterNotLeader`.
 
 #### Performance Problems
 
 ```bash
-# View query plan for insight
-geode query "EXPLAIN (ANALYZE) <your-query>"
+# The plan, and what each operator did
+geode query "PROFILE <your-query>"
 
-# Check system resources
-geode query "CALL system.resources()"
+# Node, edge and label counts, page size and WAL position
+geode query "CALL geode.storage.stats()"
 ```
+
+There is no `system.resources()` procedure; process memory is the
+`geode_memory_bytes` metric.
 
 ### Log Locations
 
-```
-/var/log/geode/geode.log        # Main server log
-/var/log/geode/query.log        # Query audit log
-/var/log/geode/federation.log   # Federation operations
-```
+`geode serve` writes no log file of its own and has no log-file option:
+read its output with `journalctl -u geode` (systemd) or `docker logs`. The
+audit log is `<data-dir>/audit.jsonl`, or `GEODE_AUDIT_LOG_PATH`.
 
 ## Best Practices
 
@@ -304,12 +293,11 @@ geode query "CALL system.resources()"
 3. **Use EXPLAIN to understand query plans** - Identify bottlenecks
 4. **Limit path expansion depth** - Prevents combinatorial explosion
 
-### Federation
+### Cluster mode
 
-1. **Start with read-only workloads** - Writes not yet distributed
-2. **Monitor shard balance** - Ensure even distribution
-3. **Use appropriate timeouts** - Prevent hanging queries
-4. **Test failover scenarios** - Ensure resilience
+1. **Test failover** - stop the leader and check a follower takes over
+2. **Use appropriate timeouts** - `--timeout` on clients, so a query
+   waiting on an election does not hang
 
 ### Backups
 
@@ -345,9 +333,7 @@ geode query "MATCH (n) RETURN COUNT(*)"
 
 ### Breaking Changes
 
-- Federation must be explicitly enabled
-- CBO remains off by default
-- No other breaking changes
+See [CHANGELOG.md](CHANGELOG.md) for the breaking changes of each release.
 
 ## Support
 

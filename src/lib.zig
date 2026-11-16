@@ -157,6 +157,8 @@ pub const temporal = @import("temporal.zig");
 pub const query_traits = @import("query/query_traits.zig");
 pub const planned_read_runtime = @import("execution/planned_read_runtime.zig");
 pub const graph_storage_adapter = @import("storage/graph_storage_adapter.zig");
+/// SONNY-6636: the GEODBAK1 file archive (backups, durable Raft snapshots).
+pub const graph_archive = @import("storage/graph_archive.zig");
 // SONNY-6524: opening a graph whose shard label dictionaries disagree.
 pub const label_dict_divergence = @import("storage/label_dict_divergence.zig");
 // Task 19: per-graph group-commit coordinator.
@@ -175,6 +177,8 @@ pub const sharded_store = @import("graph_storage").sharded_store;
 pub const pooled = @import("transport/thread_pool");
 // Re-export evaluator for expression tests and demos
 pub const eval = @import("eval.zig");
+/// SONNY-6637: the shared function operand-count table.
+pub const function_arity = @import("eval/function_arity.zig");
 pub const diagnostics = @import("diagnostics.zig");
 // Re-export type promotion utilities for advanced types roundtrip tests
 pub const type_promotion = @import("eval/type_promotion.zig");
@@ -239,6 +243,8 @@ pub const enhanced_materialized_views = @import("query/enhanced_materialized_vie
 pub const txn_undo_log = @import("txn_undo_log.zig");
 /// SONNY-3348 (round 18): the statement undo record.
 pub const statement_undo = @import("statement_undo.zig");
+/// SONNY-2979: the durable transaction undo log (`txn_undo.wal`).
+pub const txn_durable_undo = @import("txn_durable_undo.zig");
 
 // Machine Learning and Analytics
 pub const ml = struct {
@@ -394,6 +400,10 @@ pub const quic_query_runner = @import("client/quic_query_runner.zig");
 pub const query_runner = @import("client/query_runner.zig");
 pub const query_scope = @import("client/query_scope.zig");
 pub const grpc_query_transport = @import("client/grpc_query_transport.zig");
+// SONNY-6647: JSON to wire values, for geode query --param and the MCP query tool.
+pub const param_json = @import("client/param_json.zig");
+// SONNY-6593: the gRPC RPCs the server registers (geode.proto's service).
+pub const grpc_service_methods = @import("transport/grpc_service_methods.zig");
 // Bug 731 (#2): HELLO-response decode seam shared with src/cli/main.zig so the
 // CLI login ownership contract is reachable from a test binary.
 pub const hello_decode = @import("client/hello_decode.zig");
@@ -473,6 +483,8 @@ pub const security = struct {
     pub const policy_catalog = @import("security/policy_catalog.zig");
     /// SONNY-6329: one auth / policy DDL operation at a time.
     pub const auth_ddl_lock = @import("security/auth_ddl_lock.zig");
+    // SONNY-6586: the per-graph grant rule (online GRANT and offline geode grant).
+    pub const graph_grant_rules = @import("security/graph_grant_rules.zig");
     // GPS Phase 5 (Task 5-4): minimal expression compiler for GPS policy predicates.
     pub const policy_expression = @import("security/policy_expression.zig");
     // GPS Phase 6 (Task 6-1): global monotonic policy version counter for cache invalidation.
@@ -729,6 +741,19 @@ pub fn parseErrorCode(err: anyerror) []const u8 {
 }
 
 // Parse but capture parser error details instead of throwing; allocation errors still throw.
+// CANARY: REQ=REQ-SONNY-6543-PARSE-REFUSAL-STATUS; FEATURE="GQLStatus"; ASPECT=CliParseRefusalCode; STATUS=TESTED; TEST=tests/conformance_tests.zig; OWNER=parser; UPDATED=2026-11-16
+/// SONNY-6543: the GQL status a parse refusal is reported with outside the
+/// wire (the gql CLI's JSON diagnostic): the refusal's own SQLSTATE (`code`:
+/// 42000 for a syntax error, 54000 / 54001 for a parser limit), the code the
+/// QUIC and gRPC front ends send, with its message, position and token. The
+/// CLI reported every refusal with the gql library's `syntaxError` code,
+/// 42601 before gql v0.1.22.
+pub fn parseErrorStatus(pe: @FieldType(ParseOutcome, "Err")) gql.status.GqlStatus {
+    var st = gql.status.syntaxError(pe.msg, pe.line, pe.column, @tagName(pe.token));
+    if (pe.code.len == st.sqlstate.len) @memcpy(&st.sqlstate, pe.code);
+    return st;
+}
+
 pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: ParseOptions) !ParseOutcome {
     var arena = std.heap.ArenaAllocator.init(allocator);
     var lx = Lexer{ .src = src };

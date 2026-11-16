@@ -204,6 +204,35 @@ pub fn refuseMismatchedMasterKey(allocator: std.mem.Allocator, data_dir: []const
     return geode.fle_master_key_check.verifyOrRecord(allocator, data_dir, .serve);
 }
 
+/// SONNY-2979: open `txn_undo.wal` beside the stores (sealed under the
+/// stores' at-rest key), undo what it holds of transactions that never
+/// ended, and install it for this run's transactions.
+fn openTxnUndoLog(allocator: std.mem.Allocator, store: *graph_store.GraphStore) !void {
+    const adapter = graph_store.getGlobalAdapter() orelse return error.StorageAdapterUnavailable;
+    const l = geode.txn_durable_undo.Log.open(allocator, adapter.data_dir, adapter.config.encryption_key) catch |err| {
+        printTxnUndoLogUnavailable(adapter.data_dir, "opening", err);
+        return error.TxnUndoLogUnavailable;
+    };
+    errdefer l.close();
+    const report = geode.txn_durable_undo.recoverAtStartup(l, store) catch |err| {
+        printTxnUndoLogUnavailable(adapter.data_dir, "undoing the transactions open at the last stop from", err);
+        return error.TxnUndoLogUnavailable;
+    };
+    if (report.txns > 0) {
+        std.debug.print("[startup] undid {d} transaction(s) left open at the last stop ({d} change(s), {d} could not be undone)\n", .{ report.txns, report.entries, report.failed_entries });
+    }
+    geode.txn_durable_undo.install(l);
+}
+
+fn printTxnUndoLogUnavailable(data_dir: []const u8, what: []const u8, err: anyerror) void {
+    std.debug.print("[startup] {s} the transaction undo log (txn_undo.wal) failed in {s} ({s}); refusing to start: the store may hold changes of a transaction that never committed\n", .{ what, data_dir, @errorName(err) });
+    log.err("cannot recover the transaction undo log; refusing to start", &.{
+        Attr.string("step", what),
+        Attr.string("data_dir", data_dir),
+        Attr.string("error", @errorName(err)),
+    });
+}
+
 /// SONNY-6339: the startup refusal for any other failure to establish the
 /// durable auth state. No secrets.
 fn printAuthStateUnavailable(data_dir: []const u8, what: []const u8, err: anyerror) void {
@@ -607,6 +636,14 @@ pub fn initialize(
         printAuthStateUnavailable(data_dir, "opening the storage engine", err);
         return error.StorageUnavailable;
     };
+
+    // CANARY: REQ=REQ-SONNY-2979-DURABLE-UNDO; FEATURE="TransactionManagement"; ASPECT=StartupRecovery; STATUS=TESTED; TEST=tests/test_sonny2979_txn_crash_atomicity.zig; OWNER=storage; UPDATED=2026-11-16
+    // SONNY-2979: undo every transaction the last run left open (killed,
+    // crashed, power lost), before anything else reads or writes the store,
+    // then keep the durable undo log for this run's transactions. A log that
+    // cannot be opened or read refuses startup: the store may hold changes
+    // of a transaction that never committed.
+    try openTxnUndoLog(allocator, store);
 
     // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-007; FEATURE="AuthGraphManager Integration"; ASPECT=ServerStartup; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
     // Initialize AuthGraphManager: resolve HMAC key, verify or bootstrap auth chain

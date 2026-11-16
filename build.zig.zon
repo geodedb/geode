@@ -337,9 +337,23 @@
         // handler (src/mcp/server.zig) therefore returns allocator-owned bytes,
         // never a literal. Same json/thread_pool/otel pins as v0.1.21. See
         // docs/MCP_SERVER.md.
+        // 2026-11-15: v0.1.23 (472a64bb, SONNY-6585): ToolNotFound and
+        // PromptNotFound answer -32602 (were -32002, the resource code);
+        // a notification or a peer-cancelled request gets no reply; error
+        // messages and string ids are JSON-escaped; mcp.setErrorDetail lets
+        // a handler give the error message and data; a handler result that
+        // is not exactly one JSON value is answered -32603; the built-in
+        // "barrier" tool is gone. Same json/thread_pool/otel/fips pins.
+        // 2026-11-16: v0.1.26 (c0c0178c, SONNY-6644): Streamable HTTP
+        // sessions (initialize answers an Mcp-Session-Id every later request
+        // must carry: 400 without, 404 unknown; per-client streams), a
+        // thread per HTTP connection, full-body reads; v0.1.24/25: a client's
+        // reply resolves a server request, duplicate in-flight ids are
+        // -32600. createTask/getTask return copies (geode uses neither).
+        // Same json/thread_pool/otel/fips pins.
         .mcp = .{
-            .url = "git+https://gitlab.com/devnw/zig/mcp.git?ref=v0.1.22#eb9da27bc4b278eb73cefa4120a53eb92e419c0c",
-            .hash = "mcp-0.1.22-exAeBLBXCAC7RucZzI7lrQOB9D6KbKrHbv6-p4qmTpvJ",
+            .url = "git+https://gitlab.com/devnw/zig/mcp.git?ref=v0.1.26#c0c0178cbdd037abf46d9cbc3338a16bd09fb256",
+            .hash = "mcp-0.1.26-exAeBPQiCwDRiWMeX2tjdmmFeAq0JiM99ZujsNjCcT0Z",
         },
 
         // Protocol Buffers - Zig 0.15.2 compatible
@@ -499,7 +513,7 @@
         // on data they cannot read; only a genuine torn tail is truncated on
         // open.
         // 2026-11-15: v0.1.25 (eca478c, SONNY-6628, SONNY-738) — truncateAfter fails
-        // closed too. graph-storage v0.4.20 pins it; raft v0.2.2 and
+        // closed too. graph-storage v0.4.20 pins it; raft v0.2.3 and
         // timeseries-storage v0.2.22 still pin v0.1.24. build.zig points
         // all three libraries' "wal" import at this module, so exactly one
         // wal (v0.1.25) is compiled; the v0.1.24 entries in their manifests
@@ -709,8 +723,28 @@
             // before a page's new image is on disk. No API change; same
             // dependencies as v0.4.20. Tagged on the MR merge 160046c, same
             // tree as the release commit 3ffeba7.
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.21#160046ced08ff09c0da6c4a32949d6c2a49d6763",
-            .hash = "graph_storage-0.4.21-9UyJS1xFNABIc04s56XcQVFmjRKQ1LooloHJbu2v36F7",
+            // v0.4.22 (2026-11-16, SONNY-6599, SONNY-6595 item 5): recovery
+            // fsyncs the directory and truncates the WAL it replayed, and an
+            // open drains a WAL whose contents the pages already cover (a
+            // shard not written after a crash restart kept its tail); a
+            // double delete no longer under-counts; `removeEdgeTxn` also
+            // removes legacy `adj_in` entries; edge-property slab slots are
+            // attributed (GSRVIX2); an overflow replacement is freed at commit
+            // (undoable); iterator wrappers release on OOM. Tagged on
+            // 8271e65. Same dependencies as v0.4.21 (wal v0.1.25,
+            // thread_pool v0.2.11, otel v0.1.28); same wal routing (build.zig
+            // points its "wal" import at geode's v0.1.25).
+            // v0.4.25 (2026-11-16, SONNY-6659): a page has one open writer: a
+            // second open transaction's write to a page another open one
+            // wrote fails with `error.WriteConflict` (it cannot commit; its
+            // abort undoes it in memory). Each open transaction fills slab
+            // pages of its own, and `allocNodeTxn` (GraphEngine,
+            // ShardedGraphEngine) gives it node ids from a node page of its
+            // own; plain `allocNode` while another transaction is open
+            // shares a node page and conflicts. Same dependencies as v0.4.24.
+            // Tagged on f92e685, same tree as the release commit 9d84132.
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.25#f92e685bca0a493c9879bf83921af0d93db8dc79",
+            .hash = "graph_storage-0.4.25-9UyJS2s7NwDrdZBB4UFjWjLoMhLm9_jcMEAawQypt9c1",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -745,9 +779,32 @@
         // advanceApply()); fast backtracking (AppendEntriesResponse
         // conflict_index / conflict_term, match_index = the rejected
         // prev_log_index); saving a snapshot trims the log.
+        // 2026-11-15: v0.2.3 (27b2b22, SONNY-6636, breaking) — still wal
+        // v0.1.24; InProcessTransport copies an InstallSnapshot's data and
+        // configuration (it read the freed chunk); a refused snapshot is
+        // re-sent after 16, 32, 64 ... rounds (at most 256,
+        // SNAPSHOT_RESEND_MAX_TICKS), not at the next round, and a
+        // successful install resets the backoff.
+        // 2026-11-16: v0.2.5 (SONNY-6652, SONNY-6653; v0.2.4 only moved wal to
+        // v0.1.26 and otel to v0.1.29, routed to geode's wal in build.zig) --
+        // InstallSnapshotResponse gains last_index / next_offset: a follower
+        // acknowledges a snapshot it already holds, and reports the offset to
+        // resume at after a lost chunk instead of refusing the rest; staged
+        // snapshot save (snapshotPoint / Storage.stageSnapshot off the lock,
+        // commitSnapshot under it); Config.stream_snapshots hands sends to
+        // the consumer (Ready.snapshot_sends, streamSnapshot); FileStorage
+        // commits a snapshot's data before its metadata.
+        // 2026-11-16: v0.2.6 (SONNY-6666) -- Config.stage_received_snapshots:
+        // a follower writes each InstallSnapshot chunk to a staged file
+        // (Ready.staged_snapshot; Storage.syncStagedSnapshot off the lock,
+        // advancePersist() commits it with renames; with FileStorage
+        // Ready.snapshot then carries metadata only); stepping the node
+        // between ready() and advancePersist() is safe (every Ready owns
+        // copies of its committed entries); RaftNode.init reads only the
+        // snapshot's metadata.
         .raft = .{
-            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.2.2#25614ee74e6b06169922fc6c713508b3c0d31318",
-            .hash = "raft-0.2.2-PqJyvvLZCQA6yz61iyXPkRk3bc8sxUPK5G3J-VRwIoLC",
+            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.2.6#daf2d8df6ef650a8ee23e21b51ee3b5c926d4c33",
+            .hash = "raft-0.2.6-PqJyvlfYCwDzmyuXk_AUFH_0QshAW2leYO7tyJxqAAbe",
         },
 
         // =======================================================================
@@ -788,8 +845,8 @@
 
         // GQL - ISO/IEC 39075:2024 Graph Query Language front-end (lexer, parser, AST)
         .gql = .{
-            .url = "git+https://gitlab.com/devnw/zig/gql.git?ref=v0.1.21#a65956014c391e69a9451c14f5c01d354b0946a3",
-            .hash = "gql-0.1.21-T1ANDaRJDABmb-hJIGWLWeEgrA0pvBaYzC8cDJb7zY5N",
+            .url = "git+https://gitlab.com/devnw/zig/gql.git?ref=v0.1.22#d9dfb9ec4806f0eaa9e8fb6c4ecd4068a62bda42",
+            .hash = "gql-0.1.22-T1ANDchWDAAgAach6i-xfzgh8MTjPPTEfIJGfNCkAsMU",
         },
 
         // Timeseries - Pattern matching, DTW, matrix profile, PELT change-point detection

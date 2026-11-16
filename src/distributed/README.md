@@ -151,9 +151,11 @@ SONNY-6279.
   `RaftStoragePersistFailed`) and each tick retries the write with backoff
   until it succeeds (`test-sonny6617-raft-persist-failure`). raft v0.2.2:
   a snapshot a follower installs is restored into the store before it is
-  persisted or anything after it applies, and a store that cannot take it
-  (the durable store, for now) pauses the node the same way; nothing in
-  the server takes Raft snapshots yet. A rejected AppendEntries carries the
+  persisted or anything after it applies (on a restore thread while the
+  node stays paused, SONNY-6636), and a store that cannot take it pauses
+  the node the same way. Every node snapshots its own store past a
+  threshold and compacts its Raft log there (see below). A rejected
+  AppendEntries carries the
   follower's `conflict_index` / `conflict_term`. A Raft log with a damaged
   record refuses startup (`RaftStorageLogCorrupted`, `...LogAuthFailed`,
   `...LogEncryptionMismatch`) and is left as it is
@@ -161,60 +163,201 @@ SONNY-6279.
   hydrated when the entry enters the log or before a restarted node
   replays it, not under `inner_mutex`
   (`test-sonny6631-apply-hydration-off-mutex`). A label or relationship type
-  new to a graph is still written to its label dictionary durably (two
-  fsyncs per shard set) under `inner_mutex` (SONNY-6633 item 4, open).
+  new to a graph an entry writes is given its id (a durable label-dictionary
+  write, two fsyncs per shard set) at the same point, under the graph's
+  `replicated_apply_mutex`, not under `inner_mutex`; only into a graph
+  already open, never creating one (SONNY-6633 item 4, SONNY-6636).
   InstallSnapshot
   carries its chunk data, BLAKE3 digest and configuration on the wire, and a
   refused snapshot reaches the leader as a refusal; a snapshot carries the
-  idempotency-key table (`test-sonny6633-snapshot-wire`).
+  idempotency-key table (`test-sonny6633-snapshot-wire`). raft v0.2.3: the
+  leader re-sends a refused snapshot after 16, 32, 64 ... rounds (at most
+  256), not at the next round; a successful install resets the backoff.
 
-### Raft snapshots into the durable store (SONNY-6633 item 2: blocked)
+### Raft snapshots into the durable store (SONNY-6633 item 2, SONNY-6636)
 
-A snapshot cannot be restored into the server's durable store, so the
-follower refuses it (`RaftSnapshotRestoreNotDurable`) and pauses, and the
-server takes no Raft snapshots (the log grows without bound). Two things
-block it:
+**Works now:** every node (leader and followers) snapshots its durable
+store once its log has grown past a threshold and compacts its Raft log
+there, so the log is bounded; a follower behind the leader's compacted
+log restores the leader's snapshot into its durable store. Shown in one
+process and in a cluster of `geode serve` processes. See "Still open"
+below for what is left.
 
-1. **No live engine swap.** A graph's storage engine cannot be closed and
-   reopened on other files while the server runs: requests hold pins and
-   `rwlock`s on it, and neither graph-storage nor `StorageAdapter` has a
-   swap (`storage/backup.zig` `restoreBesideDataDir` restores beside the
-   data directory and asks for a restart for the same reason).
-   `installSnapshotData` only rebuilds memory (`clearNodes`, `*NoSave`).
-2. **A lossy snapshot.** The JSON-lines snapshot
-   (`GraphStore.serializeSnapshot`) writes every `ExtValue` property
-   (vectors, temporal, network, spatial values) as the string `"<ext>"`, and
-   it carries no empty graphs,
-   tenants, indexes, constraints or catalog entries.
+- **Taking a snapshot (`RaftNode.maybeStartSnapshot`, SONNY-6636 (b)):**
+  once `SnapshotPolicy.entries` entries (`GEODE_RAFT_SNAPSHOT_ENTRIES`,
+  default 10000) or `SnapshotPolicy.bytes` bytes of entry data
+  (`GEODE_RAFT_SNAPSHOT_BYTES`, default 64 MiB) were applied since the last
+  snapshot (0 turns a criterion off, both 0 turn snapshots off), the node,
+  under `inner_mutex` and with every committed entry applied, records the
+  applied index I and *holds its applies*: from then on committed entries
+  are copied into a queue (`held_entries`), in order, not applied. The
+  store then reflects exactly I. The snapshot thread
+  (`snapshot_create_callback` = `raft_apply.createSnapshotCallbackFn`)
+  checkpoints the store and archives every user graph's files into a GRS3
+  snapshot (`encodeDurableSnapshot`), each graph under its read lock and
+  its `replicated_apply_mutex` (`StorageAdapter.holdGraphForSnapshot`), so
+  no local writer, checkpoint or label interning writes the files while
+  they are read. It never takes `inner_mutex`. Meanwhile the node keeps
+  ticking, heartbeating, persisting, voting and committing; only the
+  applies wait. When the thread ends, `tick` (under `inner_mutex`) saves
+  the snapshot to the Raft storage and compacts the log at I (raft
+  `reportSnapshot`'s steps, at I rather than `log.applied`), then applies
+  the held entries, at most `SnapshotPolicy.apply_budget_ns` (10 ms) per
+  tick. A failure backs off and retries; an in-memory store turns
+  snapshots off (`RaftSnapshotNeedsDurableStore`).
+- **What the held applies cost:** a write is acknowledged when it commits
+  (`waitForCommittedThenApplied`), so writes go on during a snapshot; they
+  become visible on the snapshotting node only once the copy ends and the
+  held entries are applied (a read of one's own write on that node can
+  miss it for the length of the copy: about 4 s for a 4.4 MB store in a
+  Debug build on a busy disk). Measured by
+  `test-sonny6636-server-snapshot`: no tick or message delivery took more
+  than 147 ms during a snapshot (budget: a quarter of the 1000 ms election
+  timeout) while the copy took 3.7-4.2 s; the longest of them is the save
+  and compaction under `inner_mutex` (141-167 ms for that store).
+- **A restart replays from the snapshot:** the log starts at the node's
+  last snapshot I, and the store (checkpointed at I before the log was
+  compacted) reflects some J >= I. The entries after I are applied again;
+  `test-sonny6636-replay-idempotency` shows that replaying any suffix of a
+  log covering every apply kind onto a store that reflects it changes
+  nothing (an update, MERGE or edge naming a node a later entry deleted
+  skips that node and goes on). The idempotency table comes back from the
+  node's own snapshot (`raft_apply.seedFromLocalSnapshot`, at
+  `ClusterCoordinator.init`): the compacted entries no longer rebuild it.
+- **Snapshot and restore exclude each other** (`state_machine_io_mutex`):
+  a snapshot of the leader that arrives while the node copies its own
+  waits for the copy; the copy is then dropped, and the held entries the
+  restored snapshot covers are dropped with it.
 
-Design to unblock it:
+- **Snapshot format (GRS3, `raft_snapshot_manager.encodeDurableSnapshot`):**
+  the storage engine's own files of every graph except `__geode_security`
+  (whose contents belong to each node), byte for byte (`storage/graph_archive.zig`,
+  the GEODBAK1 archive that backups also use), with each graph's name
+  and uuid, plus the idempotency table. Nothing is converted, so every
+  property value (including `ExtValue`s), label, edge, tenant tag, empty
+  graph and per-graph index (fulltext, exact property) arrives unchanged.
+  The default graph is included. The receiver checks the whole snapshot
+  before it writes anything: the CRC, the graph list (a snapshot that
+  names `__geode_security` is refused with `SnapshotNamesSecurityGraph`),
+  that every archive entry name is safe and under a listed graph, and the
+  idempotency table. Under at-rest encryption the files stay sealed, so the
+  nodes must share `GEODE_TDE_KEY`. A durable store refuses the old
+  JSON-lines snapshot (GRS2, which wrote every `ExtValue` as `"<ext>"`
+  and carried no empty graphs) is gone: its encoder
+  (`GraphStore.serializeSnapshot`, `encodeRaftSnapshot`) and its installer
+  (`installSnapshotData`, `installRaftSnapshot`) were deleted, with the
+  shard replication path that sent it (`ClusterCoordinator.
+  replicateShardToNode`). Any other payload is refused
+  (`RaftSnapshotUnknownFormat`), and so is any snapshot for an in-memory
+  store (`RaftSnapshotNeedsDurableStore`).
+- **Restore off `inner_mutex`:** `drainReady` pauses the node with the
+  Ready (`stalled_ready`, the SONNY-6617 machinery) and runs
+  `snapshot_restore_callback` on a restore thread. `tick` waits for that
+  thread. On success it persists the snapshot (`advancePersist`) and
+  applies the entries after it. On failure it starts the restore again
+  after a backoff. While paused, the node sends nothing, applies nothing
+  and refuses proposals. `inner_mutex` is never held across the restore's
+  file I/O or graph locks.
+- **Restore steps (`raft_snapshot_manager.restoreDurableSnapshot`):**
+  1. Each graph is staged under `<data_dir>/<uuid>.restore`
+     (`StorageAdapter.beginGraphRestoreAt`). The intent (fsynced, sealed
+     under at-rest encryption) records the snapshot's Raft index and term.
+     Each graph is then written and verified byte for byte. Nothing a
+     reader sees changes during this step.
+  2. The store's write lock is taken, so no request runs during the rest.
+     For each graph, `GraphStore.forgetGraphBeforeRestore` drops what is
+     resident and leaves the graph unbuilt, so no checkpoint can write the
+     old graph's IdMap or hydration snapshots into the restored directory.
+  3. The swap is committed (`commitGraphRestore`, unchanged below).
+  4. `resetGraphAfterRestore` registers each graph for a build from its
+     new files: resident nodes and edges, label postings and counts, MERGE
+     entries (resident or not), lean backfill marks and the IdMap are gone,
+     and the restored uuid is recorded.
+  5. Each graph the snapshot does not carry is dropped. The default graph
+     and `__geode_security` are never dropped.
+  6. The idempotency table is replaced. The server's hook
+     (`index_manager.rebuildVectorIndexesForRestoredGraph`) rebuilds the
+     vector indexes, which are not per graph. Fulltext and exact-property
+     indexes come with the files.
+- **Applied index:** finishing a restore (in the running process, or in
+  `StorageAdapter.init` after a crash past the commit point) writes
+  `<data_dir>/raft_store.index` (index and term, CRC'd, fsynced) before the
+  intent is removed. `raft_apply` loads it with the store and applies no
+  entry at or below it. A node that restarts before its Raft log persisted
+  the snapshot replays its older entries; those are skipped instead of
+  being applied over the restored store. A damaged file halts the apply.
+- **Swap (`StorageAdapter.beginGraphRestore` / `commitGraphRestore`):** a
+  restored graph keeps the uuid its files were written under. graph-storage
+  binds a graph's uuid into its manifest, WAL header (`UuidMismatch`),
+  shard uuids and, under at-rest encryption, its keys, and it has no re-key,
+  so files cannot move to another uuid. `commitGraphRestore` works in this
+  order:
+  1. It rewrites the intent as committed. This is the commit point.
+  2. It detaches the old engines: they are dropped, drained under their
+     whole-graph lock, and freed by the last unpin with no checkpoint.
+  3. It renames each staged directory into place. A graph restored again
+     under its own uuid first has its live directory renamed aside to
+     `<uuid>.old`.
+  4. It points the registry at the restored uuids.
+  5. It deletes the old directories, records the Raft index and deletes the
+     intent.
 
-- **Snapshot format:** a lossless per-graph engine export, the backup
-  archive (`storage/backup.zig`), of the user graphs only (not
-  `__geode_security`, whose contents are per node), plus the idempotency
-  table, taken at the leader's applied index: checkpoint every graph, then
-  copy (hard-link) its files while the apply path is paused, outside
-  `inner_mutex`.
-- **Swap:** `StorageAdapter.swapGraphFiles(name, staged_dir)` (new, and a
-  graph-storage reopen-from-directory if the engine needs one): drain pins,
-  take the graph's `rwlock` EXCLUSIVE and `replicated_apply_mutex`, close
-  the engine, `rename` live -> `<name>.old` and staged -> live on the same
-  file system, fsync the parent, reopen, drop the graph's resident caches
-  and mark it pending hydration, delete `<name>.old`.
-- **Crash safety:** before the first rename write
-  `<data_dir>/raft/restore.intent` (snapshot index and term, staged paths),
-  fsynced; startup finishes or rolls back an intent it finds before the
-  store opens. The Raft snapshot is persisted (`advancePersist`) only after
-  every graph is swapped and the intent removed: a crash before leaves the
-  node behind, and the leader sends the snapshot again.
-- **Off `inner_mutex`:** the swap takes graph locks, so `drainReady` must
-  hand a Ready with a snapshot to a restore thread and keep the node paused
-  (as `stalled_ready` does) until it finishes.
-- **Applied index:** the store records the Raft index it reflects
-  (with the intent and at each checkpoint), so a restarted node replays only
-  the entries after it.
-- Then the server takes snapshots (`reportSnapshot`) past an entry/size
-  threshold (raft `Config.snapshot_threshold`, `Ready.should_snapshot`).
+  A uuid that belongs to another graph here is refused
+  (`GraphRestoreUuidInUse`).
+- **Crash safety:** `StorageAdapter.init` reads the intent before any graph
+  opens. If the intent is not committed, the staged directories are deleted
+  and the old graphs stay. If it is committed, the swap is finished. A
+  damaged intent refuses the open. A crash after the swap but before the
+  drops (step 5 of the restore) leaves the graphs the snapshot lacks until
+  the leader sends the snapshot again: the Raft snapshot is persisted only
+  after the restore returns. Tests:
+  - `test-sonny6636-graph-restore-swap`: the swap alone, stopped at every
+    step, with and without at-rest encryption.
+  - `test-sonny6636-resident-reset`: the store's resident state.
+  - `test-sonny6636-durable-snapshot-restore`: three Raft nodes in one
+    process. A follower behind a compacted log catches up into the durable
+    store. `inner_mutex` is free during the restore. Covered entries are
+    never applied again, including after a restart. Restores stopped at
+    every swap step reopen on all-old or all-restored data. A damaged or
+    `__geode_security`-naming snapshot changes nothing.
+  - `test-sonny6636-server-snapshot`: three Raft nodes on FileStorage in
+    one process; the leader, then a follower, snapshots a 1500-node store
+    past the threshold and compacts its log; a follower cut off behind the
+    leader's compaction installs the leader's snapshot; the timing above;
+    after a restart the log starts at the snapshot and a retried key is not
+    applied twice.
+  - `test-sonny6636-cluster-snapshot`: three `geode serve` processes with
+    `GEODE_RAFT_SNAPSHOT_ENTRIES=25`: every node snapshots under sustained
+    writes; a follower SIGKILLed while the leader compacts past it restores
+    the leader's snapshot when it restarts; killed again and restarted, it
+    and every other node hold each row exactly once.
+  - `test-sonny6622-raft-v022-adapt`, `test-sonny6633-snapshot-wire`,
+    `test-sonny6636-snapshot-over-quic`: a durable follower takes a GRS3
+    snapshot of a closed leader data directory (library messages, geode
+    frames, real QUIC).
+- **Still open (SONNY-6636):**
+  - **The Raft library writes the snapshot under the caller's lock.**
+    `FileStorage.saveSnapshot` writes and fsyncs the whole snapshot (and,
+    under TDE, seals it) inside `inner_mutex`, and a leader reads it back
+    from disk under `inner_mutex` each time it sends it to a lagging
+    follower (`sendSnapshotTo`). Both grow with the store (141-167 ms for
+    4.4 MB measured): for a store of gigabytes they delay heartbeats past
+    the election timeout. A raft API that stages the data off the lock
+    and commits it under it is owed.
+  - **The Raft index is recorded only by a restore,** not at each
+    checkpoint.
+  - **Applies are held for the whole copy,** so a snapshotting node serves
+    reads that lag its commits by the length of the copy.
+  - **Catalog rows are not in the snapshot.** Index and constraint
+    definitions live in the engine-wide `geode_catalog.dat`. In cluster mode
+    their DDL, and tenant DDL, is refused (`gateUnreplicatedWrite`), so
+    nodes bootstrapped alike hold the same rows. A snapshot carries the
+    graphs' files and the per-graph indexes inside them, but not those
+    rows.
+  - **A snapshot is built and held in memory whole** (the raft library
+    takes a `[]const u8`), once on the node that takes it and again each
+    time a leader sends it.
+
 - **Cluster:** membership is the static `--peers` / `GEODE_PEERS` list read
   at startup; there is no dynamic join or leave (a JOIN_CLUSTER message is
   answered with ERR; the uncompilable, never-called `handleJoinCluster` and
@@ -224,7 +367,9 @@ Design to unblock it:
 - **Shards:** nothing in production fills `cluster_state.shards`, so shard
   forwarding (`forwardToShard`), replica promotion on node failure
   (`promoteReplica`) and the replication-factor repair
-  (`ensureReplicationFactor`) never run outside tests
+  (`ensureReplicationFactor`) never run outside tests; the shard data
+  replication loop that sent a lossy JSON-lines copy of the whole store to
+  a shard's replicas (`replicateShardToNode`) was deleted (SONNY-6636)
   (`zig build test-cluster-forward-to-shard` populates shards by hand). A
   failed node's raft role is taken over by raft leader election, not by
   shard failover.

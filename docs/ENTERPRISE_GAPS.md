@@ -302,7 +302,7 @@ counts. The non-aggregated `RETURN p` form respects the filter correctly.
 **Fix:** `validateGroupByResolvable` (execution.zig, called next to
 `validateGroupBy`) rejects identifier-shaped GROUP BY keys that resolve to no
 RETURN alias, pattern/path variable, or WITH/LET/UNWIND binding with
-`error.UnknownGroupKey` (SQLSTATE 42703). Regression:
+`error.UnknownGroupKey` (SQLSTATE 42002 since SONNY-6543; 42703 before). Regression:
 `zig build test-gap0914` (`tests/test_gap0914_0916_aggregation_semantics.zig`).
 **Symptom:** `RETURN n.cat AS s, count(*) AS c GROUP BY nosuch` (unresolvable
 group key) silently collapses every row into a single null group instead of
@@ -566,7 +566,7 @@ over-strict validation broke 14 GPS tests:
   supported workflow (see GAP-0922), so a nonexistent-target rejection is unsafe.
 - **Non-grouped column / HAVING unknown alias** — **both closed by SONNY-2675
   (v0.8.23):** a HAVING name that is no column, binding or parameter is refused
-  with 42703 (`error.UnknownHavingReference`); a RETURN that mixes aggregates
+  with 42002 (42703 before SONNY-6543) (`error.UnknownHavingReference`); a RETURN that mixes aggregates
   with a non-aggregated, non-grouped expression is refused with 42803
   (`error.GroupingError`), with or without a GROUP BY
   (`zig build test-sonny2675-aggregate-semantics`,

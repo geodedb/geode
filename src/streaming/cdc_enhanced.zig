@@ -466,8 +466,6 @@ pub const CDCEngine = struct {
         // SONNY-6570: a failed start leaves the engine stopped.
         errdefer self.is_running = false;
         self.start_time_ms = compat_milliTimestamp();
-        // record lifecycle diagnostic
-        self.diag_events.append(self.allocator, .start) catch {}; // Diagnostic - silently ignore OOM
         const pool = try pooled.ThreadPool.init(self.allocator, .{
             .num_threads = 1,
             .queue_capacity = 4,
@@ -478,6 +476,12 @@ pub const CDCEngine = struct {
             .callback = runProcessingLoop,
         });
         self.worker_pool = pool;
+        // CANARY: REQ=REQ-SONNY-6593-CDC-START-LIFECYCLE; FEATURE="CDCControl"; ASPECT=StartRecordedOnSuccessOnly; STATUS=TESTED; TEST=tests/test_sonny6593_cdc_start_lifecycle.zig; OWNER=cdc; UPDATED=2026-11-15
+        // SONNY-6593: the start is recorded once it has happened. It was
+        // recorded before the worker pool, so a start that then failed left
+        // a start event for an engine that never ran. Diagnostic only: an
+        // allocation failure here leaves the engine running, unrecorded.
+        self.diag_events.append(self.allocator, .start) catch {};
     }
 
     pub fn stop(self: *Self) void {
@@ -666,7 +670,8 @@ pub const CDCEngine = struct {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         const out = try allocator.alloc(DiagEvent, self.diag_events.items.len);
-        std.mem.copy(DiagEvent, out, self.diag_events.items);
+        // SONNY-6593: std.mem.copy is gone in Zig 0.16 (this did not compile).
+        @memcpy(out, self.diag_events.items);
         return out;
     }
 

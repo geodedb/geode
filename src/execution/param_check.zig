@@ -28,6 +28,9 @@
 //! - SONNY-6496, variable scope after a projection (42000,
 //!   `VariableNotInScope`): after a WITH or NEXT only the variables it
 //!   projects are in scope (scope_check.zig).
+//! - SONNY-6637, function operand counts (42000, `WrongArgumentCount`): a
+//!   call takes the number of operands the shared arity table gives
+//!   (`scope_check.checkCallArity`, src/eval/function_arity.zig).
 //!
 //! The walk goes over the whole statement like the write walk
 //! (write_walk.zig): iteratively, and by reflection over every AST type, so
@@ -44,7 +47,7 @@ const scope_check = @import("scope_check.zig");
 /// (42P02), `VariableKindConflict` (42000), `RepeatedSetTarget` (22G0M),
 /// `InvalidWindowParameter` (22G03), `OptionalPathVariable` (0A000) and
 /// `VariableNotInScope` (42000).
-pub const Error = error{ MissingParameter, OutOfMemory, VariableKindConflict, RepeatedSetTarget, InvalidWindowParameter, OptionalPathVariable, InvalidInsertPattern, VariableNotInScope };
+pub const Error = error{ MissingParameter, OutOfMemory, VariableKindConflict, RepeatedSetTarget, InvalidWindowParameter, OptionalPathVariable, InvalidInsertPattern, VariableNotInScope, WrongArgumentCount };
 
 /// Every statement of `program` names only parameters in `supplied` (or ones
 /// it defines with LET). `values`: the supplied parameters' values (empty:
@@ -93,6 +96,9 @@ pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8, 
             },
             .expr => {
                 const e: *const ast.Expr = @ptrCast(@alignCast(item.ptr));
+                if (!c.isProcedure(e)) scope_check.checkCallArity(e) catch {
+                    c.wrong_arity = true;
+                };
                 switch (e.*) {
                     .Param => |name| c.use(name),
                     inline else => |*p| c.visit(@TypeOf(p.*), p),
@@ -105,6 +111,7 @@ pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8, 
     if (c.repeated_set_target) return error.RepeatedSetTarget;
     if (c.optional_path) return error.OptionalPathVariable;
     if (c.invalid_insert) return error.InvalidInsertPattern;
+    if (c.wrong_arity) return error.WrongArgumentCount;
     for (c.used.items) |u| {
         if (has(supplied, u.name) or c.defines(u.scope, u.name)) continue;
         return error.MissingParameter;
@@ -246,8 +253,13 @@ const Collector = struct {
     /// SONNY-6496: the projection-scope check, and whether it refused.
     vars: scope_check.Checker,
     out_of_scope: bool = false,
+    /// SONNY-6637: a function call with an operand count the arity table
+    /// refuses; and the procedures CALL names, which are no function calls.
+    wrong_arity: bool = false,
+    procedures: std.ArrayList(*const ast.Expr) = .empty,
 
     fn deinit(c: *Collector) void {
+        c.procedures.deinit(c.alloc);
         c.vars.deinit();
         c.stack.deinit(c.alloc);
         c.used.deinit(c.alloc);
@@ -278,7 +290,19 @@ const Collector = struct {
         return false;
     }
 
+    fn isProcedure(c: *const Collector, e: *const ast.Expr) bool {
+        for (c.procedures.items) |p| {
+            if (p == e) return true;
+        }
+        return false;
+    }
+
     fn visit(c: *Collector, comptime T: type, v: *const T) void {
+        if (T == ast.CallProcedure or T == ast.CallClause) {
+            c.procedures.append(c.alloc, &v.procedure) catch {
+                c.failed = true;
+            };
+        }
         if (T == ast.GraphPattern) {
             // A CREATE, INSERT or MERGE statement's own pattern (a query's
             // patterns are checked together in `visitFields`).

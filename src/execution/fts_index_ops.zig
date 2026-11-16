@@ -25,7 +25,6 @@ const adapter_mod = @import("../storage/fts_storage_adapter.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 const catalog_mod = @import("../schema/catalog.zig");
 const cluster_replication = @import("../distributed/cluster_replication.zig");
-const raft_snapshot_manager = @import("../distributed/raft_snapshot_manager.zig");
 
 const log = std.log.scoped(.fts_index_ops);
 
@@ -532,8 +531,8 @@ pub fn validateTextProperty(
 /// here (this function doing its own `getNodesByLabel` call) could observe a
 /// DIFFERENT (longer) id list than the caller's snapshot if a write raced in
 /// between the two reads, corrupting the drain's "already covered by
-/// backfill" check. `createFulltextIndex` and `rebuildAllFulltextIndexes`
-/// pass `null` (unchanged behavior — no drain phase follows their backfill).
+/// backfill" check. `createFulltextIndex` passes
+/// `null` (unchanged behavior — no drain phase follows their backfill).
 ///
 /// Returns the count of nodes actually submitted to `fa.indexNode`
 /// SUCCESSFULLY — nodes carrying `label` are NOT all counted; a node with no
@@ -1021,13 +1020,13 @@ fn indexNodeDocument(
 }
 
 // ===========================================================================
-// Raft apply / snapshot-install FTS maintenance (cluster FTS symmetry,
-// 2026-06-10 audit slice 3 — see tests/test_fts_apply_symmetry.zig)
+// Raft apply FTS maintenance (cluster FTS symmetry, 2026-06-10 audit slice
+// 3 — see tests/test_fts_apply_symmetry.zig)
 // ===========================================================================
 //
-// The raft apply path (src/distributed/cluster_replication.zig) and the
-// snapshot installer (src/distributed/raft_snapshot_manager.zig) mutate the
-// store directly, bypassing the executor's `maintainFulltextOnWrite` call
+// The raft apply path (src/distributed/cluster_replication.zig) mutates the
+// store directly (a Raft snapshot restore swaps in the leader's files, the
+// fulltext indexes with them, SONNY-6636), bypassing the executor's `maintainFulltextOnWrite` call
 // sites — so a follower's fulltext indexes silently diverged from the leader.
 // Those modules can NOT @import this file (they are compiled in module roots
 // where the executor's deps aren't mapped), so they expose callback seams and
@@ -1041,14 +1040,12 @@ fn indexNodeDocument(
 // owning-thread note on `maintainFulltextOnWrite` above describes the
 // historical assert that this config disables.
 
-/// Register the FTS maintenance wrappers on the raft apply + snapshot-install
-/// seams. Idempotent (re-registering installs the same function pointers).
+/// Register the FTS maintenance wrappers on the raft apply seam. Idempotent (re-registering installs the same function pointers).
 /// Called once at server startup (src/server/main.zig) and from in-process
 /// apply tests that exercise FTS.
 pub fn registerFtsApplyHook() void {
     cluster_replication.setFtsApplyHook(&ftsApplyMaintenanceHook);
     cluster_replication.setFtsApplyTextHooks(.{ .removed = &ftsApplyRemovedTextHook, .flush = &ftsApplyFlushHook });
-    raft_snapshot_manager.setFtsSnapshotRebuildHook(&ftsSnapshotRebuildHook);
 }
 
 // CANARY: REQ=REQ-SONNY-6433-FOLLOWER-FTS-REBUILD; FEATURE="FullText"; ASPECT=ApplyRemovedTextRebuild; STATUS=TESTED; TEST=tests/test_sonny6433_follower_fts_rebuild.zig; OWNER=fts; UPDATED=2026-11-12
@@ -1109,92 +1106,4 @@ fn ftsApplyMaintenanceHook(
     maintainFulltextOnWrite(arena.allocator(), graph_name, node_id, node_ptr.labels, write_op) catch |err| {
         log.warn("fts maintain (raft apply, {s}) failed for node {d}: {}", .{ @tagName(op), node_id, err });
     };
-}
-
-/// Snapshot-install wrapper: drop + recreate + re-backfill every catalogued
-/// fulltext index from the restored store. Never fails the install.
-///
-/// PRECONDITION: no concurrent searches — see `rebuildAllFulltextIndexes`.
-fn ftsSnapshotRebuildHook(store: *graph_store.GraphStore) void {
-    const global = graph_store.getCurrentGlobalStore() orelse return;
-    if (store != global) return;
-
-    var arena = std.heap.ArenaAllocator.init(graph_store.global_allocator());
-    defer arena.deinit();
-
-    rebuildAllFulltextIndexes(arena.allocator()) catch |err| {
-        log.warn("fts snapshot rebuild failed: {}", .{err});
-    };
-}
-
-/// Rebuild EVERY catalogued fulltext index on every open graph: drop the
-/// engine (on-disk tree included) + cached facade, recreate a fresh engine,
-/// and re-backfill from the CURRENT store contents. The label→index registry
-/// is left intact (it is the catalog being rebuilt from).
-///
-/// Why drop+recreate instead of incremental repair: a snapshot install wipes
-/// and rewrites the whole store, and fts-storage tombstones are permanent per
-/// doc_id (docs/bugs/2026-06-07-fts-search-returns-zero-results-at-runtime.md)
-/// — a node deleted pre-snapshot and restored by the snapshot would stay
-/// invisible without a fresh engine. Cost: O(total indexed nodes) — accepted;
-/// snapshot install is already a full-store rewrite. Per-index failures are
-/// logged and skipped so one broken index cannot wedge the install.
-///
-/// PRECONDITION: no concurrent searches — installSnapshotData currently has
-/// NO production caller (reportSnapshot wiring pending); before wiring
-/// InstallSnapshot into raft_consensus, the facade/engine drop-recreate here
-/// must be made safe against concurrent QUIC-worker searches (unlocked
-/// fts_facades map + engine deinit race).
-pub fn rebuildAllFulltextIndexes(scratch: std.mem.Allocator) !void {
-    const adapter = graph_store.getGlobalAdapter() orelse return;
-
-    const graph_names = try adapter.listOpenGraphNames(scratch);
-    for (graph_names) |gname| {
-        const mg = adapter.lookupManagedGraph(gname) catch continue;
-        const fa = mg.fts_adapter orelse continue; // no FTS on this graph
-        // CANARY: REQ=REQ-SONNY-6595-FTS-SNAPSHOT-AFTER-RESTART; FEATURE="FullText"; ASPECT=SnapshotRebuildArmsRegistry; STATUS=TESTED; TEST=tests/test_sonny6595_fts_snapshot_restart.zig; OWNER=fts; UPDATED=2026-11-15
-        // SONNY-6595: the registry read below is filled from the catalog by
-        // the first write hook after a restart (SONNY-6591); a snapshot
-        // installed before any write found it empty and rebuilt nothing.
-        armLabelRegistry(adapter, mg, fa, gname);
-
-        const entries = mg.snapshotFtsLabelIndex(scratch) catch |err| {
-            log.warn("fts snapshot rebuild: registry copy failed for graph '{s}': {}", .{ gname, err });
-            continue;
-        };
-
-        // De-dup by index name (the registry is keyed per label; CREATE INDEX
-        // registers one label per index, but stay defensive).
-        var seen: std.StringHashMapUnmanaged(void) = .empty;
-        defer seen.deinit(scratch);
-
-        for (entries) |entry| {
-            const gop = try seen.getOrPut(scratch, entry.name);
-            if (gop.found_existing) continue;
-
-            // Facade borrows the engine — drop it before the engine.
-            mg.dropFulltextFacade(adapter.allocator, entry.name);
-
-            fa.dropIndex(entry.name) catch |err| switch (err) {
-                adapter_mod.Error.IndexNotFound => {}, // never opened — fine
-                else => {
-                    log.warn("fts snapshot rebuild: drop '{s}' on '{s}' failed: {}", .{ entry.name, gname, err });
-                    continue;
-                },
-            };
-            fa.createIndex(entry.name) catch |err| {
-                log.warn("fts snapshot rebuild: recreate '{s}' on '{s}' failed: {}", .{ entry.name, gname, err });
-                continue;
-            };
-
-            _ = backfillExistingNodes(scratch, gname, entry.name, entry.label, entry.properties, fa, null) catch |err| {
-                log.warn("fts snapshot rebuild: backfill '{s}' on '{s}' failed: {}", .{ entry.name, gname, err });
-                continue;
-            };
-
-            fa.flush(entry.name) catch |err| {
-                log.warn("fts snapshot rebuild: flush '{s}' on '{s}' failed: {}", .{ entry.name, gname, err });
-            };
-        }
-    }
 }

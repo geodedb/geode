@@ -100,6 +100,8 @@ const server_cli_args = @import("../server/cli_args.zig");
 const protobuf = @import("protobuf");
 const json_lib = @import("json");
 const schema = @import("schema");
+// `geode query --param` values (JSON) as wire values (shared with MCP).
+const param_json = geode.param_json;
 const query_runner = geode.query_runner;
 const query_scope = geode.query_scope;
 const grpc_query_transport = geode.grpc_query_transport;
@@ -435,6 +437,7 @@ fn printAuthUsage() void {
         "  init                   Bootstrap admin user into graph store (offline)\n" ++
         "  reseal                 Recompute HMAC chain (offline)\n" ++
         "  verify                 Check HMAC chain integrity (offline)\n" ++
+        "  prune-legacy-permissions  Remove the inert permission records the old offline grant stored (offline; --dry-run lists them)\n" ++
         "\n" ++
         "Login Options:\n" ++
         "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
@@ -1007,7 +1010,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             }
             const param_name = argv[i + 1];
             const param_value = argv[i + 2];
-            const parsed_value = parseParamValue(allocator, param_value) catch |err| {
+            const parsed_value = param_json.parseParamValue(allocator, param_value) catch |err| {
                 const stderr_fd = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
                 try stderr_fd.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Parameter parse error\n");
                 log.err("parameter parse failed", &.{Attr.string("error", @errorName(err))});
@@ -1054,13 +1057,11 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             };
             i += 1;
         } else if (std.mem.eql(u8, arg, "--log-level")) {
-            // Handle --log-level flag (ignored for query command but must consume its argument)
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --log-level requires a level (debug, info, warn, error)\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.usage_error));
-            }
-            // Just skip the log level value - query command doesn't use it but we need to consume it
-            i += 1;
+            // CANARY: REQ=REQ-SONNY-6586-QUERY-LOG-LEVEL; FEATURE="CliOptions"; ASPECT=LogLevelRefused; STATUS=TESTED; TEST=tests/test_sonny6586_cli_truth.zig; OWNER=cli; UPDATED=2026-11-15
+            // SONNY-6586: accepted and ignored (geode query writes no log;
+            // `geode tenant` forwards it here). It is a geode serve option.
+            std.debug.print("Error: geode query: option '--log-level' is not supported: geode query writes no log (--log-level is a geode serve option)\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         } else if (std.mem.eql(u8, arg, "--role")) {
             // GAP-0271: FLE role for field-level access control
             if (i + 1 >= argv.len) {
@@ -1613,45 +1614,6 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     if (query_failed) std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
-const PARAM_MAX_SIZE: usize = 1 * 1024 * 1024; // 1 MB max param payload
-const PARAM_MAX_DEPTH: usize = 64;
-
-fn parseParamValue(allocator: std.mem.Allocator, input: []const u8) !schema.Value {
-    if (input.len > PARAM_MAX_SIZE) return error.ParamsTooLarge;
-    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, input, .{});
-    defer parsed.deinit();
-    return jsonToProtoValue(allocator, parsed.value, 0);
-}
-
-fn jsonToProtoValue(allocator: std.mem.Allocator, value: std.json.Value, depth: usize) !schema.Value {
-    if (depth > PARAM_MAX_DEPTH) return error.ParamsTooDeep;
-    return switch (value) {
-        .null => .{ .kind = .{ .null_val = .{} } },
-        .bool => |b| .{ .kind = .{ .bool_val = b } },
-        .integer => |i| .{ .kind = .{ .int_val = .{ .value = i, .kind = .INT } } },
-        .float => |f| .{ .kind = .{ .double_val = .{ .value = f, .kind = .DOUBLE } } },
-        .number_string => |s| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, s), .kind = .STRING } } },
-        .string => |s| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, s), .kind = .STRING } } },
-        .array => |arr| blk: {
-            var values = std.ArrayList(schema.Value).initCapacity(allocator, arr.items.len) catch return error.OutOfMemory;
-            for (arr.items) |item| {
-                try values.append(allocator, try jsonToProtoValue(allocator, item, depth + 1));
-            }
-            break :blk .{ .kind = .{ .list_val = .{ .values = values } } };
-        },
-        .object => |obj| blk: {
-            var entries = std.ArrayList(schema.MapEntry).initCapacity(allocator, obj.count()) catch return error.OutOfMemory;
-            var it = obj.iterator();
-            while (it.next()) |entry| {
-                const key = try allocator.dupe(u8, entry.key_ptr.*);
-                const val = try jsonToProtoValue(allocator, entry.value_ptr.*, depth + 1);
-                try entries.append(allocator, .{ .key = key, .value = val });
-            }
-            break :blk .{ .kind = .{ .map_val = .{ .entries = entries } } };
-        },
-    };
-}
-
 // GAP-0113 SECURITY FIX: Add TLS certificate verification support
 // CANARY: REQ=REQ-TLS-CERT-002; FEATURE="TLSCertVerification"; ASPECT=Core; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-12
 // CANARY: REQ=REQ-CLI-GRAPH-FLAG-004; FEATURE="GraphFlag"; ASPECT=ExecuteQuicQuery; STATUS=TESTED; TEST=geodetestlab/specs/query_file_flag_comprehensive.yml; OWNER=cli; UPDATED=2026-06-10
@@ -1973,8 +1935,7 @@ fn executeQueryOnGrpc(
         },
         .{ .on_progress = touchActiveQueryDeadlineWatchdog },
     ) catch |err| {
-        const msg = std.fmt.allocPrint(allocator, "Error: gRPC handshake failed: {}\n", .{err}) catch "Error: gRPC handshake failed\n";
-        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
+        writeErrorFmt(allocator, stderr_handle, "Error: gRPC handshake failed: {}\n", .{err}, "Error: gRPC handshake failed\n");
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer {
@@ -1983,8 +1944,7 @@ fn executeQueryOnGrpc(
     }
 
     if (!hello_resp.success) {
-        const err_msg = std.fmt.allocPrint(allocator, "Error: {s}\n\n", .{hello_resp.error_message}) catch "Error: Authentication failed\n\n";
-        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+        writeErrorFmt(allocator, stderr_handle, "Error: {s}\n\n", .{hello_resp.error_message}, "Error: Authentication failed\n\n");
         std.process.exit(@intFromEnum(ExitCode.auth_error));
     }
 
@@ -2132,16 +2092,14 @@ fn executeBatchQueries(
             null,
             .{ .timeout_ms = zig_quic_bridge.timeoutMsFromSeconds(timeout_secs) },
         ) catch |err| {
-            const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to initialize client: {}\n", .{err}) catch "Error: Failed to initialize client\n";
-            stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+            writeErrorFmt(allocator, stderr, "Error: Failed to initialize client: {}\n", .{err}, "Error: Failed to initialize client\n");
             return error.ConnectionFailed;
         };
         c.connect() catch |err| {
             c.deinit();
             const name = @errorName(err);
             if (connect_attempt + 1 >= max_connect_attempts or std.mem.indexOf(u8, name, "ConnectionRefused") != null) {
-                const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to connect: {s}\n", .{name}) catch "Error: Failed to connect\n";
-                stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+                writeErrorFmt(allocator, stderr, "Error: Failed to connect: {s}\n", .{name}, "Error: Failed to connect\n");
                 return error.ConnectionFailed;
             }
             compat_sleepNs(50 * std.time.ns_per_ms);
@@ -3004,6 +2962,21 @@ fn resolveQueryGraphBinding(
     };
 }
 
+// CANARY: REQ=REQ-SONNY-6662-CLI-ERROR-MSG-FREED; FEATURE="QueryCli"; ASPECT=ConnectErrorsFreed; STATUS=TESTED; TEST=tests/test_sonny6662_cli_auth_leak.zig; OWNER=cli; UPDATED=2026-11-16
+/// SONNY-6662: write a formatted error message to `file` and free it, or
+/// write `fallback` when it cannot be formatted. The connect and HELLO
+/// failure paths allocPrinted their message and never freed it, which the
+/// Debug build reported as a leak on every refused login under --batch.
+fn writeErrorFmt(allocator: std.mem.Allocator, file: std.Io.File, comptime fmt: []const u8, args: anytype, fallback: []const u8) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const msg = std.fmt.allocPrint(allocator, fmt, args) catch {
+        file.writeStreamingAll(io, fallback) catch {};
+        return;
+    };
+    defer allocator.free(msg);
+    file.writeStreamingAll(io, msg) catch {};
+}
+
 // CANARY: REQ=REQ-CLI-BATCH-MODE-005; FEATURE="QueryBatchMode"; ASPECT=HelloOnce; STATUS=TESTED; TEST=tests/test_cli_batch_mode.zig; OWNER=cli; UPDATED=2026-08-29
 /// ENG-3914: perform the HELLO handshake on the CURRENT stream of `raw_client`.
 /// Extracted from `executeQueryOnConnection` so `--batch` can HELLO exactly
@@ -3036,8 +3009,7 @@ fn helloOnConnection(
 
     log.debug("Client sending HELLO (Protobuf)", &.{});
     writeProtoMessageViaZigClient(allocator, raw_client, .{ .hello = hello_req }) catch |err| {
-        const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to send HELLO: {}\n", .{err}) catch "Error: Failed to send HELLO\n";
-        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+        writeErrorFmt(allocator, stderr_handle, "Error: Failed to send HELLO: {}\n", .{err}, "Error: Failed to send HELLO\n");
         return error.ConnectionFailed;
     };
 
@@ -3046,8 +3018,7 @@ fn helloOnConnection(
     defer hello_arena.deinit();
 
     const hello_resp_msg = readProtoMessageViaZigClient(hello_arena.allocator(), raw_client, timeout_secs) catch |err| {
-        const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to receive HELLO response: {}\n", .{err}) catch "Error: Failed to receive HELLO response\n";
-        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+        writeErrorFmt(allocator, stderr_handle, "Error: Failed to receive HELLO response: {}\n", .{err}, "Error: Failed to receive HELLO response\n");
         return error.ConnectionFailed;
     };
 
@@ -3055,8 +3026,7 @@ fn helloOnConnection(
         .hello => |h| {
             log.debug("Client received HELLO response", &.{Attr.boolean("success", h.success)});
             if (!h.success) {
-                const err_msg = std.fmt.allocPrint(allocator, "Error: {s}\n\n", .{h.error_message}) catch "Error: Authentication failed\n\n";
-                stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+                writeErrorFmt(allocator, stderr_handle, "Error: {s}\n\n", .{h.error_message}, "Error: Authentication failed\n\n");
                 return error.AuthenticationFailed;
             }
             return allocator.dupe(u8, h.session_id);
@@ -3372,13 +3342,9 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         } else if (std.mem.eql(u8, argv[i], "--plain")) {
             plain_mode = true;
         } else if (std.mem.eql(u8, argv[i], "--log-level")) {
-            // Handle --log-level flag (ignored for shell command but must consume its argument)
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --log-level requires a level (debug, info, warn, error)\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.usage_error));
-            }
-            // Just skip the log level value - shell command doesn't use it but we need to consume it
-            i += 1;
+            // SONNY-6586: accepted and ignored, as in geode query.
+            std.debug.print("Error: geode shell: option '--log-level' is not supported: geode shell writes no log (--log-level is a geode serve option)\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         } else if (std.mem.eql(u8, argv[i], "--username") or std.mem.eql(u8, argv[i], "--user") or std.mem.eql(u8, argv[i], "-U")) {
             // Issue #387: Username for authentication
             if (i + 1 >= argv.len) {
@@ -3542,6 +3508,9 @@ fn cmdAuth(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
     } else if (std.mem.eql(u8, subcmd, "reseal")) {
         // CANARY: REQ=REQ-AUTH-INIT-CLI-004; FEATURE="AuthInitCLI"; ASPECT=Reseal; STATUS=TESTED; TEST=geodetestlab/specs/auth_chain_cli_offline.yml; OWNER=cli; UPDATED=2026-06-11
         try auth_init_cli.cmdAuthReseal(allocator, argv, subcmd_idx + 1);
+    } else if (std.mem.eql(u8, subcmd, "prune-legacy-permissions")) {
+        // SONNY-6647: remove the inert Permission records of the old offline grant.
+        try auth_cli.cmdAuthPruneLegacyPermissions(allocator, argv, subcmd_idx + 1);
     } else if (std.mem.eql(u8, subcmd, "verify")) {
         // CANARY: REQ=REQ-AUTH-INIT-CLI-005; FEATURE="AuthInitCLI"; ASPECT=Verify; STATUS=TESTED; TEST=geodetestlab/specs/auth_chain_cli_offline.yml; OWNER=cli; UPDATED=2026-06-11
         try auth_init_cli.cmdAuthVerify(allocator, argv, subcmd_idx + 1);

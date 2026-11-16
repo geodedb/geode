@@ -2597,6 +2597,101 @@ pub const Parser = struct {
         return out;
     }
 
+    /// SONNY-6637 item 1: the operands of `shortestPath(a, b)` (the `(` read),
+    /// making `base`, the callee, the call. Out of line: its Expr temporaries
+    /// stay off the recursive postfix frame.
+    noinline fn parseShortestPathNodes(self: *Parser, base: *ast.Expr) ParserError!void {
+        const a = self.arena.allocator();
+        const args = try a.alloc(*ast.Expr, 2);
+        args[0] = try a.create(ast.Expr);
+        args[0].* = try self.parseOrExpr();
+        if (self.cur.kind != .comma) return self.unexpected("expected a graph pattern, or two node expressions, in shortestPath / allShortestPaths");
+        self.advance();
+        args[1] = try a.create(ast.Expr);
+        args[1].* = try self.parseOrExpr();
+        _ = try self.expect(.r_paren);
+        const cp = try a.create(ast.Expr);
+        cp.* = base.*;
+        base.* = .{ .Call = .{ .callee = cp, .args = args } };
+    }
+
+    const LetStages = struct { stages: []ast.Query, tail: *ast.Query };
+
+    // CANARY: REQ=REQ-SONNY-6637-LET-SEQUENTIAL; FEATURE="LetStatement"; ASPECT=DefinitionsSeeEarlierOnes; STATUS=TESTED; TEST=tests/test_sonny6637_query_items.zig; OWNER=parser; UPDATED=2026-11-15
+    /// SONNY-6637 item 5: ISO/IEC 39075:2024 14.7 SR 9-11 run a LET's
+    /// definitions as one <binding variable definition block>, each seeing
+    /// the ones before it (9.2 SR 2 f). A leading LET was parsed as one
+    /// initial WITH, whose items see none of each other, so `LET a = 1, b =
+    /// a + 1` read `a` as NULL. When a definition reads an earlier one, the
+    /// LET runs as a chain of parts, one per definition, each passing the
+    /// earlier ones on (SONNY-6645: also when one reads its own or a later
+    /// one) (`RETURN d1 NEXT RETURN a1, d2 NEXT ...`), and the
+    /// query that follows the LET is the part after them (`tail`), reading
+    /// every definition from the record the chain passes it, as a part
+    /// after `MATCH ... WITH` does. Null when no definition reads an earlier
+    /// one.
+    noinline fn letStages(self: *Parser, items: []ast.ReturnItem) ParserError!?LetStages {
+        if (items.len == 0) return null;
+        const a = self.arena.allocator();
+        const names = try a.alloc([]const u8, items.len);
+        for (items, names) |item, *name| name.* = item.alias.?;
+        // SONNY-6645 item 3: and when one reads its own name or a later
+        // definition's. Each part's items are checked against what comes in
+        // (14.7 SR 7), so a definition read before it is defined is refused
+        // (42000) rather than read as NULL; an outer variable of that name
+        // is still read, as SR 7 allows.
+        const reads_definition = for (items) |item| {
+            if (letMentions(&item.expr, names)) break true;
+        } else false;
+        if (!reads_definition) return null;
+        const stages = try a.alloc(ast.Query, items.len);
+        const tail = try a.create(ast.Query);
+        for (stages, 0..) |*stage, k| {
+            stage.* = .{
+                .optional_match = false,
+                .match = .{ .chains = &.{} },
+                .create_pattern = null,
+                .where_clause = null,
+                .with_clause = null,
+                .set_clauses = &.{},
+                .remove_clauses = &.{},
+                .ret = .{ .items = try self.letStageItems(items, k), .distinct = false },
+                .order_by = null,
+                .limit = null,
+                .offset = null,
+                .next_query = if (k + 1 < stages.len) &stages[k + 1] else tail,
+                .group_by = null,
+                .having = null,
+            };
+        }
+        return .{ .stages = stages, .tail = tail };
+    }
+
+    /// The query parsed after a staged LET becomes the part after its
+    /// stages (`let_tail`), and the first stage the query.
+    noinline fn finishLetStages(stages: []ast.Query, tail: *ast.Query, out: *ast.Query) void {
+        tail.* = out.*;
+        out.* = stages[0];
+    }
+
+    /// The items of LET part `k`: the definitions before it passed on, then
+    /// its own.
+    fn letStageItems(self: *Parser, items: []const ast.ReturnItem, k: usize) ParserError![]ast.ReturnItem {
+        const a = self.arena.allocator();
+        const out = try a.alloc(ast.ReturnItem, k + 1);
+        const unicode = @import("../unicode/unicode_tables.zig");
+        for (items[0..k], out[0..k]) |item, *o| {
+            const name = item.alias.?;
+            const cnf = unicode.caseFoldToUpper(a, name) catch |fold_err| switch (fold_err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => name,
+            };
+            o.* = .{ .expr = .{ .Ident = .{ .orig = name, .cnf = cnf } }, .alias = name };
+        }
+        out[k] = items[k];
+        return out;
+    }
+
     fn parseQueryInto(self: *Parser, out: *ast.Query) ParserError!void {
         // SONNY-3244: queries nest at most `max_query_nesting` deep.
         try self.enterQuery();
@@ -2613,6 +2708,16 @@ pub const Parser = struct {
         // projection `WITH 4 AS x` (each definition adds a column, GR 2), and
         // is parsed as that initial WITH. It was a syntax error ("expected $").
         var leading_let_items: ?[]ast.ReturnItem = null;
+        // SONNY-6637 item 5: the chain parts a leading LET whose definitions
+        // read earlier ones runs as (`letStages`); the query parsed below
+        // becomes the last part, `let_tail`, once it is whole.
+        var let_stages: ?[]ast.Query = null;
+        var let_tail: *ast.Query = undefined;
+        // A call, not the copies inline: the defer is expanded at every
+        // return of this recursive function, and each inline Query copy took
+        // its own stack slot (SONNY-3133's depth guard counts this frame).
+        defer if (let_stages) |stages| finishLetStages(stages, let_tail, out);
+        errdefer let_stages = null;
         if (self.cur.kind == .LET and self.peekKind() != .dollar) {
             self.advance();
             var items = std.ArrayList(ast.ReturnItem).empty;
@@ -2625,6 +2730,11 @@ pub const Parser = struct {
             }
             if (self.cur.kind == .WITH or self.cur.kind == .LET) return self.refuseShape("a statement-leading LET followed by WITH or another LET is not supported: write the definitions in one LET, or as a WITH");
             leading_let_items = try items.toOwnedSlice(self.arena.allocator());
+            if (try self.letStages(leading_let_items.?)) |staged| {
+                let_stages = staged.stages;
+                let_tail = staged.tail;
+                leading_let_items = null;
+            }
         }
         if (self.cur.kind == .LET) {
             self.advance();
@@ -4675,10 +4785,19 @@ pub const Parser = struct {
                         self.advance(); // consume '('
                         // CANARY: REQ=REQ-GQL-PATH-NULL-001; FEATURE="ShortestPath"; ASPECT=NullHandling; STATUS=TESTED; TEST=geodetestlab/specs/gap_0087_0089_resolution.yml; OWNER=parser; UPDATED=2026-01-25
                         // Handle NULL input - shortestPath(null) should return NULL
-                        if (self.cur.kind == .NULL) {
+                        if (self.cur.kind == .NULL and self.peekKind() == .r_paren) {
                             self.advance(); // consume NULL
                             _ = try self.expect(.r_paren);
                             base = .Null;
+                            continue;
+                        }
+                        // CANARY: REQ=REQ-SONNY-6637-SHORTEST-PATH-NODES; FEATURE="ShortestPath"; ASPECT=TwoArgumentForm; STATUS=TESTED; TEST=tests/test_sonny6637_query_items.zig; OWNER=parser; UPDATED=2026-11-15
+                        // SONNY-6637 item 1: `shortestPath(a, b)`, two node
+                        // expressions, is the call the evaluator walks
+                        // between them (`eval.evalShortestPathBetween`). A
+                        // graph pattern starts with `(`, or with `p =`.
+                        if (self.cur.kind != .l_paren and self.peekKind() != .eq) {
+                            try self.parseShortestPathNodes(&base);
                             continue;
                         }
                         // Parse graph pattern argument
@@ -8963,4 +9082,65 @@ test "#733 parser - unterminated nested map literal is a clean parse error" {
     var parser = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
     const result = parser.parseProgram();
     try std.testing.expectError(error.UnexpectedToken, result);
+}
+
+/// SONNY-6637 item 5: whether `e` may read one of `names`. A pattern, a
+/// subquery or anything else this cannot see into counts as reading them.
+fn letMentions(e: *const ast.Expr, names: []const []const u8) bool {
+    return switch (e.*) {
+        .Ident => |id| letNameIn(names, id.orig),
+        .PropertyAccess => |p| letNameIn(names, p.object),
+        .HasLabel => |h| letNameIn(names, h.node),
+        inline else => |payload| letPayloadMentions(@TypeOf(payload), payload, names),
+    };
+}
+
+fn letNameIn(names: []const []const u8, name: []const u8) bool {
+    for (names) |n| {
+        if (std.ascii.eqlIgnoreCase(n, name)) return true;
+    }
+    return false;
+}
+
+fn letPayloadMentions(comptime T: type, v: T, names: []const []const u8) bool {
+    switch (@typeInfo(T)) {
+        .@"struct" => |st| {
+            inline for (st.fields) |field| {
+                if (letPayloadMentions(field.type, @field(v, field.name), names)) return true;
+            }
+            return false;
+        },
+        .optional => return if (v) |inner| letPayloadMentions(@TypeOf(inner), inner, names) else false,
+        .@"union" => |u| {
+            if (u.tag_type == null) return true;
+            switch (v) {
+                inline else => |inner| return letPayloadMentions(@TypeOf(inner), inner, names),
+            }
+        },
+        .pointer => |p| {
+            if (p.child == ast.Expr) {
+                if (p.size == .one) return letMentions(v, names);
+                for (v) |*x| {
+                    if (letMentions(x, names)) return true;
+                }
+                return false;
+            }
+            if (p.size == .slice and p.child == u8) return false;
+            if (p.size == .slice and p.child == []const u8) return false;
+            if (p.size == .slice and @typeInfo(p.child) == .pointer and @typeInfo(p.child).pointer.child == ast.Expr) {
+                for (v) |x| {
+                    if (letMentions(x, names)) return true;
+                }
+                return false;
+            }
+            if (p.size == .slice and @typeInfo(p.child) == .@"struct" and p.child != ast.Query and p.child != ast.GraphPattern and p.child != ast.Chain) {
+                for (v) |x| {
+                    if (letPayloadMentions(p.child, x, names)) return true;
+                }
+                return false;
+            }
+            return true;
+        },
+        else => return false,
+    }
 }

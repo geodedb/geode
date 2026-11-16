@@ -265,6 +265,13 @@ const Reader = struct {
         self.pos += n;
         return s;
     }
+    // CANARY: REQ=REQ-SONNY-6651-EMPTY-GRAPH-PAYLOAD; FEATURE="DistributedCluster"; ASPECT=DecodeEmptyGraphAsDefault; STATUS=TESTED; TEST=tests/test_sonny6651_empty_graph_payload.zig; OWNER=distributed; UPDATED=2026-11-16
+    /// SONNY-6651: a payload's graph name; an empty one is the default
+    /// graph, as raft_apply maps an entry's empty graph.
+    fn graphName(self: *Reader) ![]const u8 {
+        const g = try self.str16();
+        return if (g.len > 0) g else graph_store.DEFAULT_GRAPH_NAME;
+    }
 };
 
 /// Deterministically apply a node-create payload to `store`, using `node_id`
@@ -281,7 +288,7 @@ pub fn applyNodeCreatePayload(allocator: std.mem.Allocator, store: *GraphStore, 
     if (!isNodeCreatePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC.len };
 
-    const graph = try r.str16();
+    const graph = try r.graphName();
     store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
@@ -560,7 +567,7 @@ fn applyMultiCreatePayloadAt(
     if (!isMultiCreatePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC2.len };
 
-    const graph = try r.str16();
+    const graph = try r.graphName();
     store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
@@ -616,16 +623,26 @@ fn applyMultiCreatePayloadAt(
         const to_id = resolveEndpointAt(to_ep, lane_base, node_count) orelse return CodecError.CorruptPayload;
         const edge_id = lane_base + MAX_MULTI_NODES + @as(u64, @intCast(j));
 
+        // SONNY-6636 (b): an endpoint that is not there (a later entry
+        // deleted it, and a restarted node replays this one) skips the edge,
+        // not the rest of the entry: a GBAT batch's later writes must still
+        // land, or the store keeps what an earlier replayed entry put back.
+        // Every replica applies an entry onto the same state, so all of them
+        // skip it or none does.
+        var created = true;
         store.createEdgeWithId(edge_id, from_id, to_id, edge_type, graph) catch |err| switch (err) {
             error.EdgeAlreadyExists => {}, // idempotent re-apply
+            error.NodeSlotMappingMissing, error.NodeNotFound => created = false,
             else => return err,
         };
 
         var pi: usize = 0;
         while (pi < nprops) : (pi += 1) {
             const p = try readProp(&r);
-            // Idempotent: setEdgeProperty no-ops if the edge is absent and
-            // overwrites in place otherwise (repairs a partial first-apply).
+            if (!created) continue;
+            // Idempotent: overwrites in place (repairs a partial first-apply).
+            // The edge exists (created or already there, above); a missing
+            // one is error.EdgeNotFound (SONNY-6302), not a no-op.
             try store.setEdgeProperty(edge_id, p.key, p.value);
         }
     }
@@ -720,7 +737,7 @@ pub fn applyDeletePayload(allocator: std.mem.Allocator, store: *GraphStore, data
     if (!isDeletePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC_DEL.len };
 
-    const graph = try r.str16();
+    const graph = try r.graphName();
     store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
@@ -843,7 +860,7 @@ pub fn applyMergePayload(allocator: std.mem.Allocator, store: *GraphStore, data:
     if (!isMergePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC_MERGE.len };
 
-    const graph = try r.str16();
+    const graph = try r.graphName();
     store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
@@ -856,9 +873,12 @@ pub fn applyMergePayload(allocator: std.mem.Allocator, store: *GraphStore, data:
     while (pi < nprops) : (pi += 1) {
         const p = try readProp(&r);
         const lost = losesText(store, node_id, p.key, p.value); // SONNY-6433
-        // Idempotent: setNodeProperty no-ops if the node is absent and overwrites
-        // in place otherwise.
-        try store.setNodeProperty(node_id, p.key, p.value);
+        // Idempotent: overwrites in place. SONNY-6636 (b): a node that is not
+        // there (deleted by a later entry, this one replayed) is skipped.
+        store.setNodeProperty(node_id, p.key, p.value) catch |err| switch (err) {
+            error.NodeNotFound => continue,
+            else => return err,
+        };
         if (lost) fireFtsRemovedText(store, graph, node_id, p.key);
     }
 
@@ -966,7 +986,7 @@ pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data
     if (!isUpdatePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC_UPDATE.len };
 
-    const graph = try r.str16();
+    const graph = try r.graphName();
     store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
@@ -985,9 +1005,13 @@ pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data
         while (si < nset) : (si += 1) {
             const p = try readProp(&r);
             const lost = losesText(store, node_id, p.key, p.value); // SONNY-6433
-            // Idempotent: setNodeProperty no-ops if the node is absent and
-            // overwrites in place otherwise.
-            try store.setNodeProperty(node_id, p.key, p.value);
+            // Idempotent: overwrites in place. SONNY-6636 (b): a node that is
+            // not there (deleted by a later entry, this one replayed) is
+            // skipped, and the entry goes on to the next node.
+            store.setNodeProperty(node_id, p.key, p.value) catch |err| switch (err) {
+                error.NodeNotFound => continue,
+                else => return err,
+            };
             if (lost) fireFtsRemovedText(store, graph, node_id, p.key);
         }
 
@@ -1099,6 +1123,13 @@ pub const IDEMPOTENCY_DEDUP_CAP: usize = 64 * 1024;
 /// reaches the same table and the same eviction state.
 ///
 /// The fixer owns the exact shape; the apply functions consult & populate it.
+///
+/// CANARY: REQ=REQ-SONNY-6667-DEDUP-OWNER-LOCK; FEATURE="DistributedCluster"; ASPECT=DedupSerialised; STATUS=TESTED; TEST=tests/test_sonny6667_dedup_restore_race.zig; OWNER=distributed; UPDATED=2026-11-16
+/// SONNY-6667: `mutex` serialises every use of the table: apply (`record`,
+/// `lookup`, under the Raft `inner_mutex`), a snapshot restore
+/// (`replaceFrom`, on the restore thread without `inner_mutex`), and a
+/// snapshot copy (`serialize`, on the snapshot thread). A leaf lock: held
+/// only inside these methods, never while taking another lock.
 pub const IdempotencyDedup = struct {
     allocator: std.mem.Allocator,
     /// key (owned copy) -> original raft index where the key was first applied.
@@ -1110,6 +1141,7 @@ pub const IdempotencyDedup = struct {
     /// Front cursor into `order` (the next key to evict). Entries before it have
     /// already been evicted (their slots are stale/null-equivalent).
     head: usize = 0,
+    mutex: std.Io.Mutex = .init,
 
     pub fn init(allocator: std.mem.Allocator) IdempotencyDedup {
         return .{
@@ -1119,6 +1151,17 @@ pub const IdempotencyDedup = struct {
         };
     }
 
+    fn lock(self: *const IdempotencyDedup) void {
+        @constCast(&self.mutex).lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    fn unlock(self: *const IdempotencyDedup) void {
+        @constCast(&self.mutex).unlock(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    /// Frees the table. Its owner calls it once nothing else can use it
+    /// (SONNY-6667: after the Raft node's restore and snapshot threads
+    /// were joined, `RaftNode.quiesce`).
     pub fn deinit(self: *IdempotencyDedup) void {
         var it = self.map.keyIterator();
         while (it.next()) |k| self.allocator.free(k.*);
@@ -1128,6 +1171,8 @@ pub const IdempotencyDedup = struct {
 
     /// The original raft index a key was first applied at, or null if unseen.
     pub fn lookup(self: *const IdempotencyDedup, key: []const u8) ?u64 {
+        self.lock();
+        defer self.unlock();
         return self.map.get(key);
     }
 
@@ -1136,6 +1181,12 @@ pub const IdempotencyDedup = struct {
     /// FIRST recorded index is authoritative and stable across replays. Evicts
     /// the oldest-inserted key once the cap is exceeded (deterministic LRU).
     pub fn record(self: *IdempotencyDedup, key: []const u8, raft_index: u64) !void {
+        self.lock();
+        defer self.unlock();
+        return self.recordLocked(key, raft_index);
+    }
+
+    fn recordLocked(self: *IdempotencyDedup, key: []const u8, raft_index: u64) !void {
         if (self.map.contains(key)) return; // first index wins; replay is a no-op
         const owned = try self.allocator.dupe(u8, key);
         errdefer self.allocator.free(owned);
@@ -1167,6 +1218,8 @@ pub const IdempotencyDedup = struct {
     /// snapshot carries it: the table is otherwise rebuilt by replaying the
     /// committed log, and a snapshot replaces the entries it covers.
     pub fn serialize(self: *const IdempotencyDedup, out: *std.ArrayList(u8), allocator: std.mem.Allocator) !void {
+        self.lock();
+        defer self.unlock();
         try appendU32(out, allocator, self.map.count());
         for (self.order.items[self.head..]) |key| {
             const index = self.map.get(key) orelse continue;
@@ -1188,8 +1241,16 @@ pub const IdempotencyDedup = struct {
             try fresh.record(key, try r.readU64());
         }
         if (r.pos != data.len) return CodecError.CorruptPayload;
-        self.deinit();
-        self.* = fresh;
+        // SONNY-6667: swapped in under the lock; the old table is freed
+        // outside it (`fresh` takes it).
+        {
+            self.lock();
+            defer self.unlock();
+            std.mem.swap(std.StringHashMap(u64), &self.map, &fresh.map);
+            std.mem.swap(std.ArrayList([]const u8), &self.order, &fresh.order);
+            std.mem.swap(usize, &self.head, &fresh.head);
+        }
+        fresh.deinit();
     }
 };
 
@@ -1511,7 +1572,7 @@ fn parseBatch(allocator: std.mem.Allocator, data: []const u8) !ParsedBatch {
         const tag = try r.byte();
         if (tag > @intFromEnum(BatchMutation.merge)) return CodecError.CorruptPayload;
         const mutation: BatchMutation = @enumFromInt(tag);
-        const graph = try r.str16();
+        const graph = try r.graphName();
         const body = try r.str32();
         const ok = switch (mutation) {
             .create => isKeyedPayload(body) or isNodeCreatePayload(body) or isMultiCreatePayload(body),
@@ -1526,12 +1587,13 @@ fn parseBatch(allocator: std.mem.Allocator, data: []const u8) !ParsedBatch {
     return .{ .key = key, .entries = entries };
 }
 
-/// SONNY-6631: call `f(ctx, graph)` for the graph each entry of a batch
-/// writes (borrowing into `data`), without allocating: the Raft receive
-/// paths hydrate them before the apply. Stops at the first malformed entry
+/// SONNY-6631: call `f(ctx, graph, payload)` for each entry of a batch: the
+/// graph it writes and its lone-entry payload (borrowing into `data`),
+/// without allocating: the Raft receive paths hydrate the graphs and intern
+/// the names before the apply. Stops at the first malformed entry
 /// (its apply refuses the batch); a version this build does not know is
 /// `UnsupportedBatchVersion`.
-pub fn forEachBatchGraph(data: []const u8, ctx: anytype, comptime f: fn (@TypeOf(ctx), []const u8) void) !void {
+pub fn forEachBatchGraph(data: []const u8, ctx: anytype, comptime f: fn (@TypeOf(ctx), []const u8, []const u8) void) !void {
     if (!isBatchPayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC_BATCH.len };
     if (try r.byte() != BATCH_VERSION) return BatchError.UnsupportedBatchVersion;
@@ -1540,8 +1602,8 @@ pub fn forEachBatchGraph(data: []const u8, ctx: anytype, comptime f: fn (@TypeOf
     if (count == 0 or count > MAX_BATCH_ENTRIES) return CodecError.CorruptPayload;
     for (0..count) |_| {
         _ = try r.byte();
-        f(ctx, try r.str16());
-        _ = try r.str32();
+        const graph = try r.graphName();
+        f(ctx, graph, try r.str32());
     }
 }
 
@@ -1616,6 +1678,8 @@ pub const Effect = struct {
     /// Property keys and labels it sets or removes on existing nodes.
     written_keys: []const []const u8 = &.{},
     written_labels: []const []const u8 = &.{},
+    /// SONNY-6633 (4): relationship types the entry creates edges with.
+    edge_types: []const []const u8 = &.{},
 };
 
 fn readProps(allocator: std.mem.Allocator, r: *Reader) ![]const Prop {
@@ -1640,15 +1704,16 @@ pub fn effectOf(allocator: std.mem.Allocator, data: []const u8) !Effect {
     var ids = std.ArrayList(u64).empty;
     var keys = std.ArrayList([]const u8).empty;
     var labels = std.ArrayList([]const u8).empty;
+    var edge_types = std.ArrayList([]const u8).empty;
     if (isNodeCreatePayload(data)) {
         var r = Reader{ .data = data, .pos = MAGIC.len };
-        out.graph = try r.str16();
+        out.graph = try r.graphName();
         const created = try allocator.alloc(CreatedNode, 1);
         created[0] = .{ .labels = try readLabels(allocator, &r), .props = try readProps(allocator, &r) };
         out.created = created;
     } else if (isMultiCreatePayload(data)) {
         var r = Reader{ .data = data, .pos = MAGIC2.len };
-        out.graph = try r.str16();
+        out.graph = try r.graphName();
         const node_count = try r.readU16();
         const created = try allocator.alloc(CreatedNode, node_count);
         for (created) |*c| c.* = .{ .labels = try readLabels(allocator, &r), .props = try readProps(allocator, &r) };
@@ -1660,12 +1725,12 @@ pub fn effectOf(allocator: std.mem.Allocator, data: []const u8) !Effect {
             for ([_]Endpoint{ try readEndpoint(&r), try readEndpoint(&r) }) |ep| {
                 if (ep == .absolute_id) try ids.append(allocator, ep.absolute_id);
             }
-            _ = try r.str16();
+            try edge_types.append(allocator, try r.str16());
             _ = try readProps(allocator, &r);
         }
     } else if (isDeletePayload(data)) {
         var r = Reader{ .data = data, .pos = MAGIC_DEL.len };
-        out.graph = try r.str16();
+        out.graph = try r.graphName();
         const edge_count = try r.readU16();
         out.deletes_edges = edge_count > 0;
         var i: usize = 0;
@@ -1675,12 +1740,12 @@ pub fn effectOf(allocator: std.mem.Allocator, data: []const u8) !Effect {
         while (i < node_count) : (i += 1) try ids.append(allocator, try r.readU64());
     } else if (isMergePayload(data)) {
         var r = Reader{ .data = data, .pos = MAGIC_MERGE.len };
-        out.graph = try r.str16();
+        out.graph = try r.graphName();
         try ids.append(allocator, try r.readU64());
         for (try readProps(allocator, &r)) |p| try keys.append(allocator, p.key);
     } else if (isUpdatePayload(data)) {
         var r = Reader{ .data = data, .pos = MAGIC_UPDATE.len };
-        out.graph = try r.str16();
+        out.graph = try r.graphName();
         const count = try r.readU16();
         var i: usize = 0;
         while (i < count) : (i += 1) {
@@ -1694,6 +1759,7 @@ pub fn effectOf(allocator: std.mem.Allocator, data: []const u8) !Effect {
     out.ids = ids.items;
     out.written_keys = keys.items;
     out.written_labels = labels.items;
+    out.edge_types = edge_types.items;
     return out;
 }
 

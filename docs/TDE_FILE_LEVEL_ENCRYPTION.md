@@ -227,7 +227,8 @@ front of it (`src/distributed/raft_tde_storage.zig`):
 | File | Under TDE |
 | --- | --- |
 | `entries.wal` | each entry's data sealed (AES-256-GCM), authenticated with the entry's index, term and kind; the index and term themselves are in clear |
-| `snapshot.data` | sealed |
+| `snapshot.data` | sealed: one record (a snapshot saved whole), or, for a snapshot staged off the Raft lock (a node's own, or one received from the leader; SONNY-6670), 64 KiB segments, each authenticated with its position and whether it is the last |
+| `snapshot.stage.<n>.data` | a staged snapshot, sealed as it is written (segments as above); removed when it is committed or discarded, and on start |
 | `snapshot.meta` | in clear: index, term, voter ids |
 | `hard_state` | in clear: current term and vote (no graph data) |
 | `tde.marker` | marks the directory encrypted; holds a salt and a key check value derived from `GEODE_TDE_KEY`, never the key |
@@ -242,7 +243,10 @@ Each record carries its salt, so records written in earlier sessions stay
 readable. Durability is `FileStorage`'s unchanged: the log is appended and
 fdatasync'ed by the wal library, the hard state and snapshots are written
 to a temp file, fsync'ed, renamed and the directory fsync'ed, and a vote is
-durable before the reply granting it is sent (SONNY-6563).
+durable before the reply granting it is sent (SONNY-6563). A snapshot is
+sealed, written and fsync'ed in its staged file without the Raft node lock,
+and only renamed into place under it (SONNY-6670): a crash before the
+rename leaves the previous snapshot.
 
 On start, a cluster node with a data directory:
 

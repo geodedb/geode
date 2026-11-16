@@ -67,6 +67,7 @@ const builtin = @import("builtin");
 const graph_store = @import("graph_store.zig");
 const txn_undo_log = @import("txn_undo_log.zig");
 const write_budget = @import("write_budget.zig");
+const txn_durable_undo = @import("txn_durable_undo.zig");
 const logging = @import("logging");
 const log = logging.scoped("statement_undo");
 const Attr = logging.Attr;
@@ -97,6 +98,17 @@ pub const Record = struct {
     /// create that fails after its `reserve` leaves its slot reserved, which
     /// only keeps the record's capacity one entry larger.
     reserved: usize = 0,
+    /// SONNY-6658: the statement runs outside an explicit transaction (set
+    /// when it opens).
+    auto_commit: bool = false,
+    /// SONNY-6658: its id in the durable undo log once a change of it
+    /// committed an engine transaction of its own (`beforeOwnEngineCommit`),
+    /// else 0; `entries[0..logged]` are on disk.
+    durable_id: u64 = 0,
+    logged: usize = 0,
+    /// SONNY-6658: create intents (`noteCreateIntents`) not on disk yet. They
+    /// own no memory (the graph's name is not kept).
+    intents: std.ArrayListUnmanaged(UndoEntry) = .empty,
 
     fn lock(self: *Record) void {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -129,6 +141,44 @@ pub var attached_threads_total: std.atomic.Value(u64) = .init(0);
 /// statement's replay or a transaction's rollback, fail as an engine error
 /// would.
 pub var test_fail_undo_entries: std.atomic.Value(u32) = .init(0);
+
+// CANARY: REQ=REQ-SONNY-6658-STATEMENT-KILL-HOOK; FEATURE="TransactionManagement"; ASPECT=CrashPointHook; STATUS=TESTED; TEST=tests/test_sonny6658_autocommit_crash_atomicity.zig; OWNER=storage; UPDATED=2026-11-16
+/// SONNY-6658: a crash point for tests, compiled only into test and Debug
+/// builds (release builds are ReleaseSafe or ReleaseFast and have none of
+/// it). Armed with a property key and a count `n` (`armTestKill`): the
+/// process kills itself (SIGKILL) when a statement is about to set that key
+/// on a node for the (n+1)th time, so exactly `n` such changes were made
+/// before it. A spawned Debug `geode serve` arms it from
+/// GEODE_TEST_STATEMENT_KILL_KEY and GEODE_TEST_STATEMENT_KILL_AFTER.
+pub const kill_hook_available = builtin.is_test or builtin.mode == .Debug;
+var kill_key_buf: [64]u8 = undefined;
+var kill_key_len: usize = 0;
+var kill_after: std.atomic.Value(u32) = .init(0);
+var kill_seen: std.atomic.Value(u32) = .init(0);
+
+pub fn armTestKill(key: []const u8, after: u32) error{ KillHookUnavailable, NameTooLong }!void {
+    if (comptime !kill_hook_available) return error.KillHookUnavailable;
+    if (key.len > kill_key_buf.len) return error.NameTooLong;
+    kill_after.store(0, .release);
+    @memcpy(kill_key_buf[0..key.len], key);
+    kill_key_len = key.len;
+    kill_seen.store(0, .release);
+    kill_after.store(after, .release);
+}
+
+fn testKillPoint(entry: UndoEntry) void {
+    if (comptime !kill_hook_available) return;
+    const after = kill_after.load(.acquire);
+    if (after == 0) return;
+    const key = switch (entry) {
+        .SetNodeProperty => |e| e.key,
+        else => return,
+    };
+    if (!std.mem.eql(u8, key, kill_key_buf[0..kill_key_len])) return;
+    if (kill_seen.fetchAdd(1, .acq_rel) < after) return;
+    log.warn("TEST HOOK: killing the process at a statement's change (Debug build only)", &.{Attr.uint("changes_made", after)});
+    std.posix.raise(.KILL) catch {};
+}
 
 /// SONNY-3348 (round 19, m3): should this undo entry fail (the test seam)?
 pub fn takeTestUndoFailure() bool {
@@ -265,7 +315,111 @@ pub fn begin(owns: bool) void {
     if (!owns or t_attached) return;
     discardAll();
     t_own.budget_exceeded = false;
+    t_own.auto_commit = !txn_undo_log.threadInTxn();
     t_record = &t_own;
+}
+
+// CANARY: REQ=REQ-SONNY-6658-AUTOCOMMIT-ATOMIC; FEATURE="TransactionManagement"; ASPECT=StatementDurableUndo; STATUS=TESTED; TEST=tests/test_sonny6658_autocommit_crash_atomicity.zig; OWNER=storage; UPDATED=2026-11-16
+// SONNY-6658: an auto-commit statement is crash-atomic. Its changes on the
+// shard of its engine transaction commit together when it ends
+// (`graph_storage_adapter.commitAutoStatementTxn`); a change that commits an
+// engine transaction of its own (another shard, or a write the engine
+// commits itself) is not the statement's last commit, so before it the
+// statement's record is written to the durable undo log (`txn_durable_undo`,
+// one fsync for every entry not on disk yet, create intents included), under
+// an id of its own. When the statement ends it writes what is left, commits
+// its engine transaction, and seals itself with COMMITTED; a failed one,
+// once its undo committed, with ROLLED_BACK. A restart undoes a statement
+// with neither, as a transaction. A statement whose changes all join its
+// engine transaction writes nothing to the log.
+
+/// The record of an auto-commit statement this thread changes data for
+/// (its own, or one it joined), with the durable undo log installed; null
+/// otherwise (an explicit transaction logs every entry itself).
+fn autoCommitRecord() ?*Record {
+    if (!capturing()) return null;
+    const rec = t_record.?;
+    if (!rec.auto_commit or txn_durable_undo.current() == null) return null;
+    return rec;
+}
+
+/// Is an auto-commit statement of this thread's own open (the thread that
+/// ends it), with the durable undo log installed?
+pub fn autoCommitStatementOpen() bool {
+    return t_record == &t_own and t_suspended == 0 and t_own.auto_commit and txn_durable_undo.current() != null;
+}
+
+/// Does a create about to be made need its intent noted
+/// (`noteCreateIntents`)?
+pub fn wantsCreateIntents() bool {
+    return autoCommitRecord() != null;
+}
+
+/// Creates are about to make the ids of `intents` (CreateNode or CreateEdge,
+/// owning no memory): kept in memory, written by the next flush.
+pub fn noteCreateIntents(intents: []const UndoEntry) error{OutOfMemory}!void {
+    const rec = autoCommitRecord() orelse return;
+    rec.lock();
+    defer rec.unlock();
+    try rec.intents.appendSlice(allocator, intents);
+}
+
+/// What a write is refused with when its statement's undo cannot be put on
+/// disk before it.
+pub const DurableError = error{StatementUndoNotDurable};
+
+/// Write the entries and intents of `rec` not on disk yet, with one fsync,
+/// under its durable id (given now if it has none). `rec` locked.
+fn flushLocked(rec: *Record) DurableError!void {
+    if (rec.durable_id == 0) rec.durable_id = txn_durable_undo.newStatementId();
+    const pending = rec.entries.items[rec.logged..];
+    if (pending.len == 0 and rec.intents.items.len == 0) return;
+    const batch = allocator.alloc(UndoEntry, rec.intents.items.len + pending.len) catch return refuseNotDurable(error.OutOfMemory);
+    defer allocator.free(batch);
+    @memcpy(batch[0..rec.intents.items.len], rec.intents.items);
+    @memcpy(batch[rec.intents.items.len..], pending);
+    txn_durable_undo.logStatementEntries(rec.durable_id, batch) catch |err| return refuseNotDurable(err);
+    rec.logged = rec.entries.items.len;
+    rec.intents.clearRetainingCapacity();
+}
+
+fn refuseNotDurable(err: anyerror) DurableError {
+    log.err("could not write an auto-commit statement's undo to the durable undo log; the change is refused and the statement fails", &.{Attr.string("error", @errorName(err))});
+    return error.StatementUndoNotDurable;
+}
+
+/// A change of the statement this thread works for is about to commit an
+/// engine transaction that is not the statement's last: its undo, and every
+/// other change's, goes to disk first. No-op outside an auto-commit
+/// statement or without the durable undo log.
+pub fn beforeOwnEngineCommit() DurableError!void {
+    const rec = autoCommitRecord() orelse return;
+    rec.lock();
+    defer rec.unlock();
+    try flushLocked(rec);
+}
+
+/// The open auto-commit statement of this thread succeeded: when it went
+/// durable, what is not on disk yet is written, before its engine
+/// transaction commits. Its workers have joined.
+pub fn flushBeforeStatementCommit() DurableError!void {
+    if (t_own.durable_id == 0) return;
+    t_own.lock();
+    defer t_own.unlock();
+    try flushLocked(&t_own);
+}
+
+/// The durable id of this thread's statement, 0 when it never went durable.
+pub fn durableId() u64 {
+    return t_own.durable_id;
+}
+
+/// The durable id of this thread's statement, which is no longer its
+/// (sealed, or handed to the failed statement's end).
+pub fn takeDurableId() u64 {
+    const id = t_own.durable_id;
+    t_own.durable_id = 0;
+    return id;
 }
 
 /// The statement that opened the scope `owns` failed: undo its changes.
@@ -314,6 +468,15 @@ pub fn append(store: *graph_store.GraphStore, entry: UndoEntry) error{OutOfMemor
         txn_undo_log.freeEntryWith(allocator, entry);
         return;
     }
+    testKillPoint(entry); // SONNY-6658
+    // SONNY-2979: inside an explicit transaction the entry is on disk
+    // before the change it undoes is made (write-ahead), so a crash cannot
+    // leave a change no restart can undo. A failure refuses the write.
+    txn_durable_undo.logForThread(&.{entry}) catch |err| {
+        txn_undo_log.freeEntryWith(allocator, entry);
+        log.err("could not write a transaction's undo entry to the durable undo log; the change is refused", &.{Attr.string("error", @errorName(err))});
+        return error.OutOfMemory;
+    };
     const rec = t_record.?;
     rec.lock();
     defer rec.unlock();
@@ -336,11 +499,20 @@ pub fn append(store: *graph_store.GraphStore, entry: UndoEntry) error{OutOfMemor
 /// (the graph's name is not kept: the undo deletes by id).
 pub fn appendCreated(store: *graph_store.GraphStore, entry: UndoEntry) void {
     if (!capturing()) return;
+    // SONNY-2979: a create path that logged no intent before the create
+    // (`txn_durable_undo.noteCreateIntent`) logs the create now.
+    txn_durable_undo.noteCreated(entry) catch |err| {
+        log.err("could not write a created entity to the durable undo log; the statement fails and is undone", &.{Attr.string("error", @errorName(err))});
+        @import("eval.zig").recordLimitError(error.OutOfMemory);
+    };
     const rec = t_record.?;
     rec.lock();
     defer rec.unlock();
     // The create happened: it is recorded, so it can be undone, and past
     // the budget the statement fails.
+    // SONNY-6658: the creates whose intents were noted are done: each one's
+    // own entry is recorded now, so the intents are no longer needed.
+    rec.intents.clearRetainingCapacity();
     const bytes = entryBytes(entry);
     if (overBudget(rec, bytes)) refuseOverBudget(rec) catch {};
     if (rec.reserved > 0 and rec.entries.unusedCapacitySlice().len > 0) {
@@ -392,6 +564,9 @@ fn discardAll() void {
     t_own.store = null;
     t_own.bytes = 0;
     t_own.reserved = 0;
+    t_own.intents.clearAndFree(allocator); // SONNY-6658
+    t_own.durable_id = 0;
+    t_own.logged = 0;
 }
 
 /// Entries the open record holds (tests).

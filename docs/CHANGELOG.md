@@ -3138,6 +3138,739 @@
 
 ### Fixed
 
+- **A discarded engine abort is counted and documented; the
+  `AbortNotUndone` quarantine test forces the case that still fails closed
+  (SONNY-6657, SONNY-6529).** Since the graph-storage v0.4.24 pin, an abort
+  its undo journal cannot undo (a caller-imaged page, a legacy property
+  chain) is completed by discarding the transaction's pages and redoing the
+  committed state: the abort succeeds and the graph is not quarantined.
+  `test-sonny6529-abort-quarantine` expected that abort to fail closed and
+  failed (`AbortWasUndone`). Its quarantine case now begins a second
+  transaction on the shard during the aborted one (graph-storage's overlap
+  rule, under which it cannot discard), and a new case checks that the
+  same abort without the overlap leaves the graph writable, checkpointing
+  and not quarantined, also after a reopen. New counter
+  `geode.runtime.storage_txn_aborts_discarded_total`;
+  docs/TRANSACTION_MANAGEMENT.md and the quarantine code comments describe
+  when `AbortNotUndone` still happens (overlap, cross-shard WAL tail
+  records, `abort_undo = .keep_writes`).
+
+- **A group-commit worker writes only its own engine shard (SONNY-6671).**
+  The coordinator routed a relationship op (bulk insert, bulk MERGE,
+  `MATCH ... CREATE`) to the worker of `shardIndex(source public id)`, and
+  the bulk relationship paths locked that shard. A relationship is written
+  on its source's engine shard, which is that shard only for a node the
+  bulk insert created; the executor places a node's slot round-robin. So a
+  relationship from an executor-created node was written by another
+  shard's worker, beside the owning worker and its open batch transaction
+  and without that shard's lock. Relationship ops now route to, and lock,
+  the source's engine shard (`StorageAdapter.nodeEngineShard`). New
+  counter `graph_storage_adapter.group_commit_foreign_shard_writes_total`
+  (writes a worker made on another shard; zero in a correct server).
+  Regression: `zig build test-sonny6671-group-commit-routing` (96 of 96
+  relationships from executor-created nodes were written by another
+  worker; 0 after).
+
+- **Transactions open on one shard that create nodes there no longer
+  conflict; graph-storage v0.4.25 (SONNY-6659).** graph-storage v0.4.25 has
+  one open writer per page: a second open transaction's write to a page
+  another open one wrote fails with `WriteConflict`. Each open transaction
+  fills slab pages of its own, and `allocNodeTxn` gives it node ids from a
+  node page of its own. geode took every new node's id from the shard's
+  shared tail page (`allocNode`): `createNode`, a node batch
+  (`createNodesBatch`) and the bulk insert of the group-commit workers
+  (`bulkInsertNodeWithReservedId*`). With another transaction open on the
+  shard (a group-commit batch and a writer beside it, an embedding caller)
+  the create was refused, its statement transaction could not commit, and
+  the graph was quarantined. They now open (or join) the shard's
+  transaction first and take the id from it. A ROLLBACK in the request that
+  made the writes undoes them in the session's open engine transaction (its
+  undo writes join it), so it does not conflict with itself. Regression:
+  `zig build test-sonny6659-open-writers` (four transactions open on one
+  shard: 0 conflicts, was 4 writers refused and 8 engine conflicts; over a
+  real server, concurrent explicit transactions and one node's concurrent
+  increments answer no 40001; rollbacks and a SIGKILL keep the committed
+  state).
+
+- **A write on the shard of an open statement or session engine
+  transaction joins it (SONNY-6659).** graph-storage v0.4.25 refuses a
+  second open transaction's write to a page another open transaction wrote
+  (`WriteConflict`): a full-page WAL image one of them committed carried
+  the other's uncommitted bytes, and recovery replayed them. Two geode
+  writes began such a second transaction: a relationship between nodes on
+  different shards (stored on its source's shard) committed its own there
+  while the statement's or session's transaction was open on that shard,
+  and a node batch (`CREATE (:L), (:L), (:L)`, `createNodesBatch`) opened
+  one per shard, that shard included. Both now write in the open
+  transaction on its shard, so they commit, roll back and vanish at a
+  crash with it, and cost one engine commit fewer. Every other write
+  already joined it (SONNY-6472, SONNY-6529, SONNY-6658). **User-visible:**
+  a `WriteConflict` from the engine (a concurrent writer on the same shard)
+  answers SQLSTATE 40001 (it was 58000), and an auto-commit statement it
+  refused, which is undone, runs again up to 3 times first; see
+  docs/TRANSACTION_MANAGEMENT.md. Regression: `zig build
+  test-sonny6659-geode-single-writer`.
+- **Raft snapshots under `GEODE_TDE_KEY` are sealed and written off the
+  Raft node lock (SONNY-6670).** The TDE-wrapped Raft storage had no staged
+  snapshot API, so raft kept a snapshot in memory and sealed, wrote and
+  fsynced it whole at commit, under `inner_mutex`, for a node's own
+  snapshots and for ones received from the leader (the SONNY-6665
+  residual). `TdeRaftStorage` now implements it: the data is sealed in 64
+  KiB segments (AES-256-GCM, each authenticated with its position and
+  whether it is the last) as it is staged in FileStorage's staged file,
+  synced there off the lock, and committed by FileStorage's renames under
+  it. A received snapshot is no longer held in memory (no size cap). The
+  older one-record format still reads. Measured
+  (`test-sonny6670-tde-staged-snapshot`, 64 MiB, Debug): the longest wait
+  for `inner_mutex` fell from 2683 ms to 17 ms for a follower's install
+  and from 2656 ms to 40 ms for a leader's own snapshot; the staged file
+  holds no plaintext, and a crash between stage and commit leaves the
+  previous snapshot whole.
+
+- **A snapshot restore no longer uses a freed idempotency table
+  (SONNY-6667).** Under load `test-sonny6633-snapshot-wire` panicked
+  "incorrect alignment" in `IdempotencyDedup.deinit` from `replaceFrom` on
+  the restore thread. `ClusterCoordinator.deinit` freed the table (and the
+  applied configuration and 2PC coordinator) before `RaftNode.deinit`
+  joined the restore and snapshot threads, which run without
+  `inner_mutex` since SONNY-6636; and nothing serialised the table between
+  apply, restore and the snapshot copy. The table now has one owner lock
+  (`IdempotencyDedup.mutex`, a leaf: `record`, `lookup`, `serialize`, and
+  `replaceFrom`'s swap), and `deinit` first calls `RaftNode.quiesce`, which
+  joins both threads. The test itself freed its table before its nodes and
+  counted rounds a paused (restoring) node spent; both fixed. The
+  "InstallSnapshot ... failed: ChecksumMismatch" warnings in that run are
+  its second test, which damages the digest on purpose.
+  `test-sonny6631-apply-hydration-off-mutex` reports the longest Raft
+  `advancePersist()` (`RaftNode.stats.persist_max_ns`, new) and bounds the
+  probe's wait less that: its one failure under load (276 ms against a
+  250 ms election timeout, 0 ms apply) was disk and scheduling time, not
+  hydration. Test: `test-sonny6667-dedup-restore-race`.
+
+- **Raft snapshots: a lost chunk resumes, and no snapshot I/O runs under
+  the Raft node lock (SONNY-6665; raft v0.2.6).** geode's Raft frame and
+  its conversions dropped `InstallSnapshotResponse.last_index` and
+  `next_offset` (raft v0.2.5): when one InstallSnapshot chunk was lost the
+  leader saw a refusal, backed off and sent the whole snapshot again from
+  offset 0. Both now cross the wire (raft_schema fields 3 and 4; absent
+  from an older peer they read as 0, as raft 0.2.4 behaved), and the
+  leader resumes at the chunk the follower expects. The digest and
+  configuration of an InstallSnapshot were already carried (SONNY-6633).
+  The snapshot I/O left `inner_mutex`: a node's own snapshot is staged
+  (written and synced) on the snapshot thread with raft
+  `snapshotPoint` / `Storage.stageSnapshot` and only committed (renames,
+  log compaction) under the lock (`commitSnapshot`; a snapshot installed
+  meanwhile drops it); a leader streams a follower's snapshot chunk by
+  chunk after releasing the lock (`Config.stream_snapshots`,
+  `Ready.snapshot_sends`, `streamSnapshot` from
+  `FileStorage.openSnapshotReader`) instead of reading it whole inside
+  `tick()`; a follower writes the chunks it receives to a staged file
+  (`Config.stage_received_snapshots`, no size cap with FileStorage) and
+  syncs it with the lock released between `ready()` and
+  `advancePersist()`, which only renames it. The state machine is now
+  restored after `advancePersist()`, from the committed snapshot file; a
+  node stopped in between restores it at startup (its store's
+  `raft_store.index`, which its own snapshots now record too, is behind
+  the Raft snapshot). Measured (`test-sonny6665-install-lock-hold`, 64
+  MiB snapshot, Debug): the longest wait for a follower's `inner_mutex`
+  during the install fell from 2269 ms to 44 ms. Under GEODE_TDE_KEY the
+  sealed snapshot was still written under the lock (fixed by SONNY-6670).
+  Tests: `test-sonny6665-wire-fields`,
+  `test-sonny6665-snapshot-resume`, `test-sonny6665-install-lock-hold`,
+  `test-sonny6665-cluster-snapshot-resume` (three `geode serve`
+  processes; the Debug-only `GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS` hook
+  loses one chunk).
+
+- **`geode query` frees its connect and login error messages
+  (SONNY-6662).** The HELLO handshake formatted "Error: <server message>"
+  (a refused login), "Failed to send HELLO" and "Failed to receive HELLO
+  response", and `--batch` formatted "Failed to initialize client" and
+  "Failed to connect", with the process allocator and never freed them.
+  `--batch` returns those failures through `main`, so a Debug build
+  printed a DebugAllocator leak report after every refused login or
+  connection. The messages are freed after they are written; output and
+  exit codes are unchanged. Regression: `zig build
+  test-sonny6662-cli-auth-leak`.
+
+- **`geode mcp --port` serves; MCP HTTP clients get sessions; mcp
+  v0.1.26 (SONNY-6644).** The HTTP transport (the transport unless
+  `--stdio` is given) printed "MCP server listening on port N" and exited
+  0: the library's `serveHttp` returns once its listener thread runs, and
+  the command returned and stopped the server. It now serves until SIGINT
+  or SIGTERM. With mcp v0.1.26 the transport keeps Streamable HTTP
+  sessions: `initialize` answers an `Mcp-Session-Id` the client sends on
+  every later request; a request without one is 400 and an unknown one
+  404; each client has its own session, so one client no longer receives
+  another's notifications. **User-visible:** an HTTP client must send
+  `initialize` first and keep the session id. Regression: `zig build
+  test-sonny6644-mcp-http-session`.
+
+- **An online `REVOKE` of nothing is refused; `geode user permissions`
+  shows real grants; legacy permission records can be pruned
+  (SONNY-6647).** `REVOKE <privilege> ON GRAPH <graph> FROM <user>`
+  (`geode.auth.revoke`) answered "Revoked ..." whether or not the user held
+  the privilege there. **User-visible:** it is refused with SQLSTATE 42704
+  (`GrantNotHeld`) and nothing changes, as offline `geode revoke` refuses
+  it; `REVOKE ALL` succeeds when any of the three was held. `geode user
+  permissions <user>` listed every stored permission record, whoever's
+  (records no authorization path reads), and printed `read` for a user
+  with none or a user that does not exist; it now prints the user's role
+  and its per-graph grants, and refuses an unknown user. New `geode auth
+  prune-legacy-permissions [--dry-run]` lists or removes the inert records
+  the offline `geode grant` stored before SONNY-6586. Regressions: `zig
+  build test-sonny6647-revoke-not-held`, `zig build
+  test-sonny6647-user-permissions`.
+
+- **One JSON-to-wire parameter converter; the CDC lifecycle canary runs
+  (SONNY-6647).** `geode query --param` and the MCP query tool share
+  `src/client/param_json.zig` (`geode.param_json`; it was
+  `src/cli/param_json.zig`, and `src/mcp/client.zig` had its own copy).
+  `tests/canary_cdc_lifecycle.zig` is the named step `zig build
+  test-canary-cdc-lifecycle` (no step compiled it).
+  `docs/DOCKER_OVERVIEW.md` no longer lists `GEODE_QUERY_MEM_LIMIT_BYTES`
+  and `GEODE_SPILL_THRESHOLD_BYTES`, which no source reads (SONNY-6596
+  above records their removal).
+
+- **Offline `geode grant` / `geode revoke` are the online `GRANT ... ON
+  GRAPH` (SONNY-6586).** They stored a free-form permission record (any
+  name, the user in its conditions) that no authorization path reads, and
+  printed "Granted"; their only rule refused `admin` unless the grantee was
+  named `admin`. They now apply the online rule, shared in
+  `src/security/graph_grant_rules.zig` (used by `geode.auth.grant` too):
+  `READ`, `WRITE`, `SCHEMA` or `ALL` on one `--graph` (none and `*` are
+  refused) to a user that exists, stored as the `GraphGrant` records
+  `GRANT` stores and the server loads at startup. **User-visible:**
+  `geode grant <name> --to <user>` without `--graph`, any other privilege
+  name (`admin` included: it is a role, `geode user assign-role`) and an
+  unknown user are refused; `--graph` is new (`--resource` still works).
+  Records the old command stored stay inert. Also: an allocation failure
+  while reading the arguments is reported (it was dropped). Regression:
+  `zig build test-sonny6586-offline-grant-rule`.
+
+- **`geode query --param` frees a list or map that fails part-way
+  (SONNY-6586).** The conversion (`src/cli/param_json.zig`, moved out of
+  `src/cli/main.zig`) leaked the elements, keys and arrays built before an
+  allocation failure or a value nested past the depth limit. Regression:
+  `zig build test-sonny6586-param-json-alloc`.
+
+- **A CDC start that fails records no start (SONNY-6593).**
+  `CDCEngine.start()` recorded its `.start` lifecycle event before creating
+  its worker pool, so a start that then failed left a start event for an
+  engine that never ran. `diagnosticsLifecycle` used `std.mem.copy`, which
+  Zig 0.16 does not have (it did not compile when called). Regression:
+  `zig build test-sonny6593-cdc-start-lifecycle`.
+
+- **`docs/USAGE.md` and `docs/REAL_TIME_ANALYTICS.md` describe what geode
+  does (SONNY-6593).** USAGE.md documented `system.federation.status()`
+  and `system.resources()` (no such procedures), "always on" shard
+  federation and a nested config file (`server:`, `tls:`, `storage:`,
+  `federation:`, `optimizer:`) that `geode serve` never reads,
+  `EXPLAIN (VERBOSE)` / `EXPLAIN (ANALYZE)` (EXPLAIN takes no options),
+  metrics on fixed ports with a `/ready` path and metric names that do not
+  exist, and log files geode does not write. REAL_TIME_ANALYTICS.md
+  presented CDC as an input to an engine `geode serve` does not start, and
+  a CDC conversion that ignores the event it is given.
+
+- **MCP errors say what was wrong; mcp v0.1.23 (SONNY-6585).** A
+  JSON-RPC error from `geode mcp` carried the Zig error's name as its
+  message (`InvalidParams`, `ResourceNotFound`) and no data. With mcp
+  v0.1.23's `setErrorDetail` (`src/mcp/error_detail.zig`, data serialized
+  with escaping): an unknown tool is `Unknown tool: <name>` and an unknown
+  prompt `Unknown prompt: <name>` (both -32602, with `data.name`; geode
+  now returns `ToolNotFound` / `PromptNotFound`, which v0.1.23 maps to
+  -32602 instead of -32002), a refused prompt argument names it, an
+  unknown resource is `Resource not found: <uri>` (-32002, `data.uri`),
+  and a cursor on `tools/list`, `resources/list` or `prompts/list` says
+  geode issues none (-32602, `data.cursor`). From the library: a failing
+  notification and a peer-cancelled `tools/call` get no reply, error
+  messages and string ids are JSON-escaped, a handler result that is not
+  one JSON value is answered -32603, and the built-in `barrier` tool is
+  gone (it was an unknown tool to geode's handler anyway). Regression:
+  `zig build test-sonny6585-mcp-error-detail`.
+
+- **Offline auth commands name a missing data directory; `grant` /
+  `revoke` answer `--help` without the auth store; `query` / `shell`
+  refuse `--log-level`; the MCP server reports no data from an unreachable
+  server and passes list and map parameters (SONNY-6586).** `geode user`,
+  `role`, `policy`, `grant`, `revoke` and `auth reseal` given a data
+  directory that does not exist failed with `DataDirLockUnavailable` (the
+  lock file cannot be created in it); they now say the directory does not
+  exist, change nothing and create nothing (`geode auth init` still
+  creates it). `geode grant` and `geode revoke` opened the auth store, and
+  took the data directory's lock, before looking at `--help` or their
+  arguments, so `--help` and a usage error failed while a server held the
+  directory or when it did not exist; they also took the value of
+  `--data-dir` as the grantee when no `--to` / `--from` was given, and
+  took whatever followed the command (`--data-dir` included) as the
+  permission. The permission is now the first positional argument.
+  `geode query --log-level` and `geode shell --log-level` were accepted and
+  ignored (neither writes a log; `geode tenant` forwards it to query).
+  **User-visible:** they now exit 2; `--log-level` is a `geode serve`
+  option. With the server unreachable, the MCP `schema` and `stats`
+  resources answered `"node_labels": []` / `"node_count": 0`, which read
+  as an empty graph; every resource now answers
+  `{"error": "Server unavailable (<error>): nothing was read"}`. The MCP
+  `query` tool refused a list or map parameter (`UnsupportedParamType`);
+  a JSON array is now a LIST and an object a MAP (nested up to 64 deep,
+  freed on a part-way failure). `docs/NIX_DEPLOYMENT.md` told operators
+  to run `geode --config=... --validate-config`, an option that does not
+  exist; it now says `geode serve` refuses to start on a config it cannot
+  load. `geode authn stepup-check` / `stepup-mark` were already refused
+  (SONNY-6554). Regression: `zig build test-sonny6586-cli-truth`.
+
+- **The gRPC listener serves exactly the RPCs `geode.proto` declares
+  (SONNY-6593).** It served `Savepoint`, `RollbackTo`, `Backup`, `Restore`
+  and `UploadBackup`, which `src/proto/geode.proto` (the contract the
+  clients ship and generate from) did not declare, so no generated client
+  could call them; they are now declared with the request and response
+  messages the QUIC transport already uses (additive: the wire format and
+  existing RPCs are unchanged). It also served `CdcDiag` / `CdcCtrl`,
+  undeclared aliases of `GetCdcDiagnostics` / `ControlCdc` that no client
+  calls. **User-visible:** they now answer grpc-status 12
+  (UNIMPLEMENTED). The served list is
+  `src/transport/grpc_service_methods.zig`. Regression: `zig build
+  test-sonny6593-grpc-service-contract` (the list against the .proto, and
+  every declared and undeclared name probed on a real `geode serve
+  --listen-grpc`).
+- **An explicit transaction is crash-atomic (SONNY-2979).** A transaction
+  open at a crash (kill -9, OOM kill, power loss) kept, after the restart,
+  every change its requests had committed in the storage engine (each
+  request commits its engine transaction when its program ends, the other
+  15 shards per change, and the undo log was memory-only). Inside an
+  explicit transaction every change's undo entry is now appended to
+  `<data dir>/txn_undo.wal` and fsynced before the change is made (a create
+  first logs the id it is about to create); COMMIT writes a COMMITTED
+  record after the engine commit, and that record is its commit point; a
+  rollback writes ROLLED_BACK after its undo commits; at startup, before
+  anything is served, every transaction with neither record is undone
+  (idempotently, through the ROLLBACK path) and the file is emptied. Under
+  `GEODE_TDE_KEY` every record is sealed (AES-256-GCM side-file envelope).
+  **Behaviour change:** one extra fsync per change inside an explicit
+  transaction, and one at COMMIT and ROLLBACK; COMMIT fails (and the
+  transaction is rolled back) if its COMMITTED record cannot be written; a
+  `txn_undo.wal` that cannot be opened, or a record that does not decode or
+  authenticate, refuses startup. Auto-commit statements are not covered.
+  Metrics `txn_undo_wal_records_written_total`,
+  `txn_undo_wal_recovered_txns_total`, `txn_undo_wal_recovered_entries_total`,
+  `txn_undo_wal_recovery_failures_total`. Regressions: `zig build
+  test-sonny2979-txn-crash-atomicity` (now in the aggregate), `zig build
+  test-sonny2979-txn-commit-durable`, `zig build
+  test-sonny2979-undo-wal-format`.
+- **An auto-commit statement is crash-atomic (SONNY-6658).** A statement
+  outside BEGIN ... COMMIT whose changes spanned engine transactions (a
+  change on another shard than its engine transaction's, and every change
+  of a `MATCH ... SET`, `MATCH ... DELETE` or `MATCH ... REMOVE`, which had
+  none) committed them as it ran, so a kill mid-statement kept them after
+  the restart (red: 8 of a 32-node `SET` survived a SIGKILL). An
+  auto-commit statement's engine transaction is now committed when the
+  statement ends, and a statement that has none opens one at its first
+  write, on that write's shard. Before a change that commits an engine
+  transaction of its own, the statement's undo is written to
+  `<data dir>/txn_undo.wal` (one fsync); when it ends it is sealed with
+  COMMITTED (ROLLED_BACK when it failed), and startup undoes a statement
+  with neither, as a transaction. **Behaviour change:** a statement whose
+  changes are all on one shard writes nothing to the log and commits one
+  engine transaction (a one-node `MATCH ... SET` of several properties
+  committed one per property); one that spans shards costs one extra fsync
+  per change committed on another shard, plus two at its end. A write
+  whose undo cannot be logged is refused and the statement undone (40000).
+  A Debug-only crash point (`GEODE_TEST_STATEMENT_KILL_KEY`,
+  `GEODE_TEST_STATEMENT_KILL_AFTER`) kills the server mid-statement for
+  tests. Regressions: `zig build test-sonny6658-autocommit-crash-atomicity`
+  (a real server killed after 8 of a statement's changes), `zig build
+  test-sonny6658-statement-undo-log` (no log record and one engine commit
+  for one-shard statements; logged and sealed for multi-shard and failed
+  ones).
+
+- **A WITH item does not read a sibling item's alias; a gRPC Handshake
+  past the tenant's connection quota is refused with 53300 (SONNY-6645).**
+  **BREAKING:** `WITH b AS a, 1 AS b` and `WITH 1 AS a, a + 1 AS b` read a
+  name nothing had bound yet and answered NULL; each item is evaluated over
+  the incoming record (ISO/IEC 39075 20.12 SR 8), so they are refused with
+  42000 (`VariableNotInScope`). The WITH's ORDER BY, its WHERE and the next
+  part still read its aliases. **BREAKING:** a RETURN item likewise (`RETURN
+  1 AS a, a + 1 AS b` answered NULL for b; also a CREATE / INSERT / MERGE
+  or FOR RETURN); the RETURN's GROUP BY, HAVING and ORDER BY still read its
+  aliases. A gRPC Handshake for a tenant at its
+  connection quota failed with an internal error (the quota was raised as
+  `OutOfMemory`); it is refused with `53300: Connection quota exceeded for
+  tenant`, as QUIC refuses it. Regressions: `zig build
+  test-sonny6645-query-followups`, `zig build test-sonny3313-grpc-peer-ip`.
+
+- **The gql CLI reports a parse refusal with its own SQLSTATE
+  (SONNY-6543).** `zig-out/bin/gql` printed every parse refusal as the gql
+  library's `syntaxError` (42601), a parser limit included; it prints the
+  refusal's own code (`geode.parseErrorStatus`): 42000 for a syntax error,
+  54000 / 54001 for a parser limit, as the QUIC and gRPC front ends send.
+  The library side is gql v0.1.22, now pinned (`d9dfb9ec`): **BREAKING**
+  for an embedder of the gql library, `SQLSTATE.SYNTAX_ERROR` is 42000
+  (was 42601), `UNDEFINED_OBJECT` 42002 (was 42703), and
+  `invalidCharacter` is `invalidCharacterValueForCast`.
+  `tests/conformance_tests.zig` reads the library's constant. Regression: `zig build test-conformance-patch` (a new
+  named step for that file).
+
+- **A function, procedure, parameter, index, constraint or user that does
+  not exist answers 42002; a tenant quota answers class 53 (SONNY-6645).**
+  **BREAKING:** `UnknownFunction` and `UnknownProcedure` were the
+  PostgreSQL 42883, `MissingParameter` 42P02, and `IndexNotFound`,
+  `ConstraintNotFound`, `UserNotFound`, `FleRoleUserNotFound` and
+  `UserAttributeNotSet` 42704; each is an invalid reference, which ISO/IEC
+  39075 Table 8 gives the subclass 42002 (an implementation-defined
+  subclass is for a condition the table gives none, 23.1). The tenant
+  connection and query quotas answered 42000 (syntax error or access rule
+  violation); Table 8 has no resource class, so they take the
+  implementation-defined class 53 Geode's other resource limits use: 53300
+  for the connection quota, 53400 for the query quota, on QUIC and gRPC.
+  Kept, as 23.1 allows: 42501, 42702, 42710, 42P07, 42803, 42804, 42939,
+  42704 for an invalid option value, and 3F000 (ISO/IEC 9075's invalid
+  schema name) for a graph or schema that does not exist. Regression: `zig
+  build test-sonny6543-iso-status-codes`.
+
+- **A chained part's WITH before its MATCH is bound; list-form shortest
+  paths are refused; a LET reads no later definition; NULL cast operands
+  are NULL (SONNY-6645).** `WITH 1 AS a WITH a, 2 AS b MATCH (n) RETURN
+  n.k, b` answered NULL for `n.k` and a WHERE on the WITH's values matched
+  nothing: the part ran its WITH as a projection of the matched rows. It
+  is now bound as parameters for the part's MATCH, as at the start of a
+  statement, also under an aggregate. `shortest_path([a, b])` and
+  `all_shortest_paths([a, b])` built a two-node path with no relationships
+  from a list; a list or another non-path operand is 22G03 (a path is
+  itself, a node the path of that node). `LET a = b, b = 1` and `LET a =
+  a + 1` read the name as NULL; a definition reads only what comes in and the
+  definitions before it (ISO 14.7 SR 7), else 42000. A NULL operand of
+  bigint, smallint, real, double, toReal, datetime, power and knn was
+  22G03; it is NULL. The FLE catalog's /tmp fallback was already removed
+  (SONNY-6274). Regression: `zig build test-sonny6645-query-followups`.
+
+- **A vector index dropped while the knn path builds it leaves no runtime
+  index behind (SONNY-2795).** The knn path's lazy build
+  (`ensureAdvancedVectorIndexForProperty`) copied the catalog row under the
+  shared catalog lock and built after releasing it, so a DROP INDEX in
+  between found nothing to tear down and the build left a runtime index and
+  its dimension pin with no catalog row until the next DROP or restart. The
+  build reads the row again under the shared lock and tears down what it
+  built when the row is gone (the lock is released first: the teardown
+  takes `rebuild_mutex`, a lower tier). Regression: `zig build
+  test-sonny2795-drop-index-catalog`.
+
+- **A `+` concatenation and a map literal's repeated key are freed
+  (SONNY-3148).** `+` of two strings or two lists allocates its result as
+  `||` does, but only `||` was freed after an initial WITH or a WITH stage
+  before a write; a map literal that repeats a key (`{a: 'x' || '1', a:
+  2}`) dropped the earlier value with what its expression allocated. Both
+  are freed now. Regression: `zig build test-sonny3148-write-leaks`.
+
+- **Invalid references answer 42002 and a UNION column-count mismatch 42000,
+  as ISO/IEC 39075 Table 8 and 4.7.3 define them (SONNY-6543).**
+  **BREAKING:** a GROUP BY key, a HAVING (or WHERE after RETURN) name and a
+  knn() property that name nothing in scope (`UnknownGroupKey`,
+  `UnknownHavingReference`, `UnknownProperty`) were sent as 42703, the
+  PostgreSQL undefined_column code; they are "syntax error or access rule
+  violation - invalid reference", 42002. A UNION whose parts have different
+  column counts was sent as the PostgreSQL 42601; a Syntax Rule refusal
+  with no explicit condition is 42000, as every other one Geode sends. A
+  client that matched 42703 or 42601 must match 42002 or 42000. The CDC
+  Admin refusal was already 42501 on QUIC and gRPC (SONNY-6561) and is
+  pinned. The gql library's own constants (`SQLSTATE.UNDEFINED_OBJECT`,
+  `SYNTAX_ERROR`, `INVALID_CHARACTER` and the 42501 comment) are owed
+  upstream. Regression: `zig build test-sonny6543-iso-status-codes`.
+
+- **`shortestPath(a, b)` walks the graph; MATCH ... SET with no RETURN
+  answers no rows; one function arity table; quantified-list and MERGE
+  path leaks; a LET definition sees the ones before it (SONNY-6637).**
+  The two-node forms `shortestPath(a, b)` / `allShortestPaths(a, b)` (and
+  `shortest_path` / `all_shortest_paths`) built a two-node path with no
+  relationships whether or not the nodes were connected, and answered the
+  list [1, 2] for `shortestPath(1, 2)`; the camel-case spelling was a
+  syntax error. They now take the walk `shortestPath((a)-[*0..]-(b))`
+  takes, in the session's scope, any type and direction; no path is NULL
+  (the empty list), a non-node operand 22G03. `allShortestPaths` found one
+  path to an end reached by several parents; it finds every shortest path.
+  A `MATCH ... SET` or `REMOVE` with no RETURN answered the matched rows,
+  at top level and in a FOR body; it answers none (ISO 13.3 GR 10, 13.4
+  GR 5). `src/eval/function_arity.zig` holds every built-in, extension and
+  timeseries function's operand count: the statement check refuses another
+  count with 42000 before anything runs (a call no row reached ran, and an
+  aggregate such as `sum(1, 2)` was never checked), and the evaluator
+  checks it before dispatch. docs/TYPE_QUICK_REFERENCE.md listed fifteen
+  functions no dispatch answered (`now()`, `age()`, `bit_or()`, ...); they
+  are removed. A quantified relationship list on a comma or multi-hop
+  pattern was copied per binding onto the result's allocator and never
+  freed, and a MERGE RETURN's path relationship array likewise; both are
+  lent from the statement's scratch arena. `LET a = 1, b = a + 1` read `a`
+  as NULL (ISO 14.7 runs the definitions in order); it now runs as one
+  chained part per definition when one reads another. test-count-pushdown
+  seeds with deferred WAL sync (51 minutes on a loaded disk). Regressions:
+  `zig build test-sonny6637-query-items`, `zig build
+  test-sonny6637-function-arity`.
+- **A graph's WAL drains after a crash restart once the graph is opened;
+  graph-storage v0.4.22 (SONNY-6595 item 5, SONNY-6599).** After a SIGKILL
+  and a restart, a shard nothing made dirty kept its whole replayed WAL
+  through every checkpoint and the clean shutdown. graph-storage v0.4.22
+  fsyncs the directory and truncates the WAL recovery replayed, and an open
+  drains a WAL whose contents the pages already cover (also: a double delete
+  no longer under-counts; `removeEdgeTxn` removes legacy `adj_in` entries;
+  edge-property slab slots are attributed; an overflow replacement is freed
+  at commit, so it is undoable; iterator wrappers release on OOM).
+  **Contract (geode keeps opening graphs lazily, for startup cost):** at
+  startup geode opens only a graph with an IdMap snapshot, and that open
+  drains its WAL; a graph never checkpointed before the crash is opened by
+  the first statement that touches it, and until then its WAL holds exactly
+  the crash's tail. That tail is harmless (every record in it is below the
+  manifest's `last_checkpoint_lsn`) and bounded (one crash's tail). The
+  first statement on the graph drains it to 0, and a clean shutdown leaves
+  0 WAL bytes whether or not a statement ran. Regression: `zig build
+  test-sonny6595-wal-drain` (with and without TDE; now in the aggregate).
+
+- **A failed auto-commit write whose abort graph-storage cannot undo
+  quarantines its graph; a half-done property write inside a statement
+  transaction is proven not to commit (SONNY-6601 items 3 and 1).** The
+  adapter's auto-commit engine writes (label add and remove, relationship
+  create and delete, relationship property remove, outside a statement
+  transaction on the shard) leave the abort to graph-storage, which returns
+  the write's own error; when that abort could not undo the write the shard
+  refuses every later write, commit and checkpoint, and geode kept serving
+  the graph from memory beside it. geode now reads the shard's
+  `abort_not_undone` after such a failure and quarantines the graph (58000
+  `AbortNotUndone` until a restart), as an explicit abort does. Item 1: a
+  test-only seam (`property_write_midpoint_hook`, compiled only under
+  `builtin.is_test`) fails a property write between `putPropertyTxn` and
+  `putNodeTxn`; the statement's undo and the engine's abort leave nothing of
+  it, in memory or after a reopen (no defect found). Regressions: `zig build
+  test-sonny6601-autocommit-abort-quarantine`, `zig build
+  test-sonny6601-half-write-rollback`. **Still open (SONNY-6601 item 7,
+  SONNY-2979):** a transaction is not crash-atomic.
+
+- **Silent failures in the storage readers and writers (SONNY-6646).**
+  `removeNodeLabelNoSave`, which nothing called, freed the removed label
+  before allocating the node's new label array and left the freed slice in
+  the node when that allocation failed (a double free at teardown); it is
+  deleted. The label and relationship-type counts (`countNodesByLabel` with
+  and without a tenant, `countEdgesByTypeForGraph`) answered 0 when the
+  allocation of a key past 512 bytes failed; they look the key up without
+  building it. `getEdgesByType` answered any failure (an allocation, an
+  engine read) as no relationships, or left a graph's out; it returns the
+  error (**API:** `![]u64`). The bulk reserved-id node insert copied the
+  node's properties into memory after its engine commit and reported a
+  failure there for a committed node; the copy is made before the commit,
+  and a failure takes the node back out. A node property write
+  (`setNodeProperty`, `setNodePropertiesBatch`, a removal) moved its exact
+  (label, key, value) index entries after the commit: the old one's remover
+  `catch return`ed an allocation (the node stayed findable by a value it no
+  longer held) and the new one's `try` failed a committed write. The hashes
+  are computed before the write, the new entries added before the commit
+  (taken back on failure), the old ones removed after it without
+  allocating; `GraphStore.setNodePropertiesBatch` prepares its in-memory
+  copy before the storage write, as `setNodeProperty` does (it reported a
+  committed batch failed). A failed FULL engine checkpoint is counted
+  (`adapter_checkpoint_failures_total`) and logged at ERROR once per cause
+  (`full checkpoint failed; ...`), as the light one is; it was a WARN on
+  every call; `checkpointAll` (an explicit checkpoint, a backup's save, a
+  cluster snapshot) returns `error.CheckpointFailed` once every graph was
+  tried, instead of reporting success, and `saveToFileEx(false)` writes the
+  other graphs' snapshots before returning it, leaving the store dirty.
+  `addNodeLabelNoSave` frees its label copy when the label array cannot be
+  allocated (it leaked). Regressions: `zig build test-sonny6646-store-silent-failures`,
+  `test-sonny6646-bulk-insert-post-commit`,
+  `test-sonny6646-exact-index-property-write`,
+  `test-sonny6646-full-checkpoint-failure-log`.
+
+- **An aborted bulk node insert leaves no exact-index entry; QUIC runs
+  `START TRANSACTION ... ROLLBACK` with mutations in one message, as gRPC
+  does (SONNY-6601 items 2 and 6).** The bulk reserved-id insert (the QUIC
+  bulk CREATE / MERGE fast path) adds each property to the exact
+  (label, key, value) index before its engine transaction commits; a
+  failure after that aborted the transaction and gave the slot back but
+  left the entries, naming a node that does not exist under a slot the
+  next insert reuses. They are taken back now, by the value hash computed
+  when added. QUIC refused a program with START TRANSACTION, a CREATE,
+  MERGE or DELETE and ROLLBACK in one message with 25001 (#830, from when
+  that path ignored inline transaction control); the executor runs and
+  rolls it back, and gRPC already accepted it. **User-visible:** such a
+  program now runs on QUIC. Regressions: `zig build
+  test-sonny6601-bulk-insert-index-abort`, `zig build
+  test-sonny6601-quic-inline-rollback`. Items 1 and 3: see the entry
+  above. **Still open (SONNY-6601):** item 7 (multi-shard transactions are
+  not crash-atomic; design work, SONNY-2979).
+
+- **Label counters stay exact for names past 512 bytes; the label and
+  relationship-type index readers find such names; `setEdgeProperty` of a
+  missing edge fails (SONNY-6302 items 4 and 5).** Adding a node to a
+  label posting bumped the (graph, label) count with a key that, past its
+  512-byte stack buffer, was allocated after the insert and `catch
+  return`ed (the count stayed low); removing a label built the keys of its
+  counter decrements (graph and label, graph and tenant, label and
+  property) after the label was gone, with the same `catch return` (the
+  counts stayed high, and the tenant's label listing kept the label). The
+  key and the counter entry are now made before the insert, and
+  `removeNodeLabel`, `removeNodeLabelNoSave` and the create-path rollback
+  reserve the removers' key room first (`RemoverKeyRoom`, as the deletes
+  do). `getNodesByLabel`, `snapshotNodesByLabel`, `getEdgeIdsByType` and
+  the edge-type scan built their key on the stack only and answered "no
+  such label / type" past 512 bytes (`MATCH (n:L)` found nothing for such
+  a label); they look the key up without building it now.
+  **User-visible:** `setEdgeProperty` of an edge that does not exist is
+  `EdgeNotFound` (it returned success), as `setEdgePropertiesBatch` was.
+  Regression: `zig build test-sonny6302-label-count-and-missing-edge`.
+
+- **The storage adapter's engine-direct property reads report a read error
+  instead of an absent property (SONNY-6640).** The bulk relationship-MERGE
+  endpoint resolvers (`lookupNodeIdByLabelAndAllProps`,
+  `lookupPublicNodeIdByLabelAndAllProps`) verified each candidate with
+  `getNodeProperty(...) catch null`, so a read that failed reported an
+  existing endpoint as missing (the edge was skipped), and the ordered-index
+  column probe (`probeOrderedColumnClass`) declined the column on a read
+  error as if a value broke it. The error is returned now (a candidate the
+  engine no longer holds, `NodeNotFound`, is still no match), and so is a
+  failure to decode the value read. **API:** `probeOrderedColumnClass`
+  returns `!bool`. Regression: `zig build
+  test-sonny6640-adapter-property-read-errors`.
+
+- **A reload that runs out of memory fails instead of crashing the server;
+  a reload clears every hydration latch (SONNY-6639).**
+  `GraphStore.clearNodes` (the first step of `loadFromFile`, and of a Raft
+  snapshot install) registered the default graph again with allocations
+  that ended in `@panic` on OutOfMemory. The new registries are now built
+  before the reset frees anything: `clearNodes` returns
+  `error{OutOfMemory}!void` and changes nothing when it fails, and
+  `loadFromFile` reserves the registries of its failure-path reset up
+  front, so that reset cannot fail. `loadFromFile` also clears
+  `needs_reset` (SONNY-6605) with `done` and `failed`. **API:**
+  `clearNodes` callers handle the error (`try`). Regression: `zig build
+  test-sonny6639-reload-oom`.
+
+- **A graph whose WAL is damaged mid-log answers 58000 `WalCorrupted` with
+  an operator message (SONNY-6642).** graph-storage >= 0.4.20 refuses to
+  open a graph whose shard WAL has a damaged record followed by valid ones
+  (`WalCorrupted`; the log is left as it is). geode did not list the error
+  among the quarantine causes, so the graph answered the generic
+  "GraphQuarantined: the graph's indexes could not be loaded ...". It is
+  its own cause now, with a 58000 message that says the log is damaged and
+  to restore the graph from a backup or drop it (`docs/SERVER_FEATURES.md`).
+  Regression: `zig build test-sonny6642-wal-corrupted-quarantine` (a real
+  server SIGKILLed with its graph logs un-checkpointed, a middle record
+  damaged, the restarted server asked).
+- **A replicated write whose payload names no graph writes to the default
+  graph (SONNY-6651).** The Raft apply path maps an entry's empty graph to
+  `default`, but the payload decoders in `cluster_replication.zig` took the
+  payload's own empty graph name as it was: a GNC1/GNC2/GN1K/GN2K create, a
+  GMRG merge, a GUPD update, a GDEL delete or a GBAT batch entry created and
+  wrote a graph named `""`, and `effectOf` / `forEachBatchGraph` reported
+  `""`. Every graph-name decode now reads an empty name as `default`.
+  Regression: `zig build test-sonny6651-empty-graph-payload`.
+
+- **The server takes Raft snapshots of its durable store, so the Raft log
+  is bounded (SONNY-6636).** Nothing called `reportSnapshot`: no node ever
+  compacted its Raft log, and a leader had no snapshot to send a follower
+  that fell behind. Every node, leader or follower, now snapshots its store
+  once `GEODE_RAFT_SNAPSHOT_ENTRIES` entries (default 10000) or
+  `GEODE_RAFT_SNAPSHOT_BYTES` bytes of entry data (default 64 MiB) were
+  applied since its last snapshot (0 turns a criterion off), and compacts
+  its log at that index. The node holds its applies (committed entries
+  queue in order) so the store reflects exactly one index, and a snapshot
+  thread checkpoints the store and archives every user graph's files (GRS3)
+  without `inner_mutex`, each graph under its read lock and
+  `replicated_apply_mutex`; heartbeats, votes, persistence and commits go
+  on, and the held entries are applied afterwards, at most 10 ms per tick.
+  A restarted node takes its idempotency table back from its own snapshot.
+  Measured (`test-sonny6636-server-snapshot`, 4.4 MB store, Debug): the
+  copy took 3.7-4.2 s while no tick or message delivery took more than
+  147 ms (a quarter of the 1000 ms election timeout is the bound). **BREAKING
+  (behaviour):** a cluster node now compacts its Raft log; during a
+  snapshot copy its writes are acknowledged on commit but become visible on
+  that node only after the copy. **Still open:** the raft library writes
+  the snapshot (and a leader re-reads it to send it) under `inner_mutex`,
+  141-167 ms for that store and growing with it (`src/distributed/README.md`).
+  Regressions: `zig build test-sonny6636-server-snapshot`, `zig build
+  test-sonny6636-cluster-snapshot` (three `geode serve` processes: bounded
+  logs, a follower down past the leader's compaction catches up from its
+  snapshot and survives SIGKILL and restart with every row exactly once).
+
+- **A peer's Raft outbox keeps one send of the leader's snapshot (SONNY-6636).**
+  The raft library sends a snapshot as a burst of 64 KiB InstallSnapshot
+  chunks and, while the peer does not answer, the whole burst again every
+  few rounds; the per-peer outbox coalesced only AppendEntries. A follower
+  down for a minute came back to thousands of queued chunks of older
+  snapshots (6410 `UnexpectedOffset` and 609 `StaleSnapshot` refusals in a
+  three-process cluster), restored the oldest first and never caught up
+  with the newest. A chunk at offset 0 now replaces every snapshot chunk
+  still queued for that peer. Regression: `zig build
+  test-sonny6636-outbox-snapshot`.
+
+- **The lossy JSON-lines Raft snapshot (GRS2) and the shard replication
+  loop are removed (SONNY-6636).** `GraphStore.serializeSnapshot`,
+  `raft_snapshot_manager.createSnapshotData` / `installSnapshotData` /
+  `encodeRaftSnapshot` / `installRaftSnapshot` and the fulltext rebuild
+  hook they needed are deleted, and so is
+  `ClusterCoordinator.replicateShardToNode` with the replication loop that
+  sent a JSON-lines copy of the whole store to a hand-populated shard's
+  replicas (nothing in production fills shards). A durable snapshot (GRS3)
+  is the only Raft snapshot. `test-sonny6622-raft-v022-adapt`,
+  `test-sonny6633-snapshot-wire` and `test-sonny6636-snapshot-over-quic`
+  now restore a GRS3 snapshot of a closed leader data directory into a
+  durable follower; the GRS2-only tests (`tests/test_raft_snapshot_manager.zig`,
+  `test-sonny2810-snapshot-float`, `test-sonny6595-fts-snapshot-restart`)
+  and the GRS2 tests in `test-fts-apply-symmetry`,
+  `test-sonny3317-round15-minors` and `test-startup-lazy-hydrate` are
+  removed. **BREAKING:** any Raft snapshot that is not GRS3 is refused
+  (`RaftSnapshotUnknownFormat`), and so is every snapshot for an in-memory
+  store (`RaftSnapshotNeedsDurableStore`): a cluster node runs on a durable
+  store.
+
+- **A replayed Raft entry skips a node or edge endpoint a later entry
+  deleted, and applies the rest (SONNY-6636).** A restarted node replays
+  the entries after its last snapshot onto a store that already reflects
+  some of them. An update or MERGE ON MATCH SET of a node a later entry
+  deleted failed the whole entry (`NodeNotFound`), and so did an edge to
+  one (`NodeSlotMappingMissing`): a statement batch's later writes to a
+  surviving node never landed again, and the node kept the older value an
+  earlier replayed entry had put back. **BREAKING (behaviour):** such an
+  entry applies its remaining writes; a node on an older build still stops
+  it there. Regression: `zig build test-sonny6636-replay-idempotency`
+  (every suffix of a log covering every apply kind, replayed, leaves the
+  store unchanged).
+
+- **DROP GRAPH leaves none of the graph's MERGE entries or lean backfill
+  marks (SONNY-6636).** It removed the MERGE entries of the graph's resident
+  nodes only: the entries of nodes evicted from the bounded node cache, and
+  the graph's lean backfill marks, stayed for the life of the process (300
+  entries before a drop, 268 after, with a 32-entry node cache). Lookups
+  resolved them (their holder was gone), so the cost was memory and a mark
+  claiming a re-created graph's key was backfilled. Regression: `zig build
+  test-sonny6636-drop-graph-merge-purge`.
+
+- **A follower restores a Raft snapshot into the durable store, losslessly
+  and off `inner_mutex`; a restored graph shows no trace of the old one
+  (SONNY-6636).** A follower behind the leader's compacted log refused every
+  snapshot into the server's durable store (`RaftSnapshotRestoreNotDurable`)
+  and stayed paused. It now takes a durable snapshot (`GRS3`,
+  `raft_snapshot_manager.encodeDurableSnapshot`): the storage engine's own
+  files of every graph except `__geode_security`, byte for byte, through
+  the GEODBAK1 archive, which moved from `storage/backup.zig` to
+  `storage/graph_archive.zig` so the adapter and the Raft layer can use it.
+  Every `ExtValue` property, empty graph, tenant tag and per-graph index
+  arrives as the leader wrote it. The restore runs on a restore thread
+  while the Raft node stays paused, never under `inner_mutex`. It stages
+  each graph beside the data, then under the store's write lock swaps the
+  graphs in crash-safely, resets each graph's resident state and drops the
+  graphs the leader no longer has.
+  `GraphStore.forgetGraphBeforeRestore` / `resetGraphAfterRestore` exist
+  because hydration re-inserts and removes nothing: the old graph's nodes,
+  edges, label counts and MERGE entries stayed visible, and a MERGE matched
+  a node on a value it no longer had. Once the restore finishes (also after
+  a crash past its commit point), the data directory records the Raft index
+  the store reflects (`raft_store.index`), and no entry at or below it is
+  applied again, including after a restart. The swap now accepts the
+  default graph. **BREAKING (behaviour):** the restore intent is written as
+  `GEODRIN3` (a `GEODRIN2` intent still reads), and a durable store refuses
+  a JSON-lines (`GRS2`) snapshot outright, which never restored correctly
+  anyway. **Still open:** the server takes no Raft snapshots
+  (`reportSnapshot` is never called), so its Raft log still grows without
+  bound, and the restore is not yet tested across `geode serve` processes
+  (`src/distributed/README.md`). Regressions: `zig build
+  test-sonny6636-durable-snapshot-restore`, `zig build
+  test-sonny6636-resident-reset`.
+
 - **Cluster Raft snapshots travel on the wire and carry the idempotency
   table; wal v0.1.25 (SONNY-6633, SONNY-6628).** geode's InstallSnapshot frame dropped the chunk data, the
   BLAKE3 digest and the configuration (a follower refused every snapshot),
@@ -8713,6 +9446,12 @@
   `zig build test-sonny2672-read-semantics-batch`.
 
 ### Removed
+
+- **`tests/stress_storage_massive.zig` and its `zig build stress` step
+  (SONNY-6640):** it did not compile (no `geode` import, `std.rand`,
+  `std.time.Timer`), and what it checked, a second `GraphStore` reloading
+  the first one's legacy per-store file, no longer exists (`loadFromFile`
+  reads the global storage adapter).
 
 - **`src/client/repl/repl_config.zig` `Config.load` / `save` (SONNY-6554):**
   written against removed Zig APIs and never compiled (no caller), with

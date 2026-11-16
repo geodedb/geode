@@ -14,8 +14,8 @@
 // (unknown / user / active). It now follows the SONNY-6269 rule: a user may
 // see itself, another user needs Admin (42501, audited); a missing user is
 // an error, the same refusal as "not permitted" for a non-admin (no
-// existence oracle), 42704 for an Admin. `user_permissions` for a missing
-// user is 42704 for an Admin (it listed the `user` role's permissions).
+// existence oracle), 42002 for an Admin. `user_permissions` for a missing
+// user is 42002 for an Admin (it listed the `user` role's permissions).
 //
 // The statements run through the in-process gRPC Execute handler with
 // authorization on.
@@ -216,7 +216,7 @@ test "SONNY-6291: an admin sees any user with user_show; a missing user is an er
     try testing.expectEqualStrings("bob@example.com", bob[0][1].?);
     try testing.expectEqualStrings("readwrite", bob[0][2].?);
 
-    _ = try fx.expectRefused(ga, w.admin, "CALL geode.auth.user_show('nobody6291')", "42704");
-    _ = try fx.expectRefused(ga, w.admin, "CALL geode.auth.user_permissions('nobody6291')", "42704");
-    _ = try fx.expectRefused(ga, w.admin, "SHOW PERMISSIONS FOR nobody6291", "42704");
+    _ = try fx.expectRefused(ga, w.admin, "CALL geode.auth.user_show('nobody6291')", "42002");
+    _ = try fx.expectRefused(ga, w.admin, "CALL geode.auth.user_permissions('nobody6291')", "42002");
+    _ = try fx.expectRefused(ga, w.admin, "SHOW PERMISSIONS FOR nobody6291", "42002");
 }

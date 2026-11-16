@@ -1948,6 +1948,9 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "smallint")) {
         if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        // SONNY-6645 item 4: a NULL operand is NULL (ISO/IEC 39075:2024
+        // 20.22 GR 1 b); it was 22G03.
+        if (arg == .Null) return Value{ .Null = {} };
         const result = evaluator_functions.SmallInt(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -1955,6 +1958,9 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "bigint")) {
         if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        // SONNY-6645 item 4: a NULL operand is NULL (ISO/IEC 39075:2024
+        // 20.22 GR 1 b); it was 22G03.
+        if (arg == .Null) return Value{ .Null = {} };
         const result = evaluator_functions.BigInt(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -1962,6 +1968,9 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "real")) {
         if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        // SONNY-6645 item 4: a NULL operand is NULL (ISO/IEC 39075:2024
+        // 20.22 GR 1 b); it was 22G03.
+        if (arg == .Null) return Value{ .Null = {} };
         const result = evaluator_functions.Real(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -1969,6 +1978,9 @@ pub fn evalAdvancedTypeFunction(
     if (std.mem.eql(u8, function_name, "double")) {
         if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
+        // SONNY-6645 item 4: a NULL operand is NULL (ISO/IEC 39075:2024
+        // 20.22 GR 1 b); it was 22G03.
+        if (arg == .Null) return Value{ .Null = {} };
         const result = evaluator_functions.Double(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }

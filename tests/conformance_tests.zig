@@ -159,7 +159,9 @@ test "GQL Status JSON format" {
 
     const json = buffer.written();
     // Check stable key order and exact format
-    try testing.expect(std.mem.indexOf(u8, json, "\"sqlstate\":\"42601\"") != null);
+    // SONNY-6543: the library's own code for a syntax error (42601 before
+    // gql v0.1.22, 42000 after it: ISO/IEC 39075:2024 4.7.3 step 4 a).
+    try testing.expect(std.mem.indexOf(u8, json, "\"sqlstate\":\"" ++ status.SQLSTATE.SYNTAX_ERROR ++ "\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\"class\":\"ERROR\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\"message\":\"unexpected token\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\"line\":3") != null);
@@ -190,4 +192,33 @@ test "Unicode UTF-16 input support" {
 
     const bom_utf16le = [_]u8{ 0xFF, 0xFE, 'A', 0 };
     try testing.expectEqual(unicode.Encoding.Utf16Le, unicode.detectBom(&bom_utf16le));
+}
+
+// SONNY-6543: the gql CLI reports a parse refusal with the refusal's own
+// SQLSTATE, the code the QUIC and gRPC front ends send (42000 for a syntax
+// error, 54001 for queries nested too deep), not the library's
+// syntaxError code (42601 before gql v0.1.22) for every refusal.
+test "SONNY-6543: a parse refusal's JSON status carries the refusal's own SQLSTATE" {
+    const cases = [_]struct { src: []const u8, code: []const u8 }{
+        .{ .src = "MATCH (n RETURN n", .code = "42000" },
+        .{ .src = "WITH 1 AS a WITH a AS b WITH b AS c WITH c AS d WITH d AS e WITH e AS f WITH f AS g WITH g AS h WITH h AS i WITH i AS j WITH j AS k RETURN k", .code = "54001" },
+    };
+    for (cases) |c| {
+        var out = try geode.parseGqlOutcome(c.src, testing.allocator, .{});
+        defer out.deinit();
+        const pe = switch (out) {
+            .Ok => return error.ExpectedParseRefusal,
+            .Err => |e| e,
+        };
+        try testing.expectEqualStrings(c.code, pe.code);
+        const st = geode.parseErrorStatus(pe);
+        try testing.expectEqualStrings(c.code, &st.sqlstate);
+        try testing.expectEqual(pe.line, st.line.?);
+        var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer buffer.deinit();
+        try status.writeJson(&buffer.writer, st);
+        var want_buf: [32]u8 = undefined;
+        const want = try std.fmt.bufPrint(&want_buf, "\"sqlstate\":\"{s}\"", .{c.code});
+        try testing.expect(std.mem.indexOf(u8, buffer.written(), want) != null);
+    }
 }

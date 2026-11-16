@@ -334,7 +334,7 @@ test "SONNY-6341: grantRole and revokeRole are Admin only (42501, audited), vali
     }
     try testing.expect(!fle_role_grants.holds("ro6341", "pii"));
     // An unknown user, a role outside the HELLO alphabet, wrong arity.
-    try expectSqlstate(e.refusedWith(admin, "CALL geode.fle.grantRole('nobody6341', 'pii')"), "42704");
+    try expectSqlstate(e.refusedWith(admin, "CALL geode.fle.grantRole('nobody6341', 'pii')"), "42002");
     try expectSqlstate(e.refusedWith(admin, "CALL geode.fle.grantRole('ro6341', 'p;ii')"), "22023");
     try expectSqlstate(e.refusedWith(admin, "CALL geode.fle.grantRole('ro6341')"), "22023");
 

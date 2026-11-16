@@ -531,7 +531,7 @@ test "SONNY-2799: the undo log keeps each transaction's changes and savepoints t
     try testing.expectError(error.SavepointNotFound, log.rollbackToSavepoint("sp", st));
 
     // B commits (its entry goes); A rolls back (U1 is undone).
-    log.commit(null);
+    try log.commit(null);
     txn_undo_log.setThreadTxnId(a);
     try log.rollback(st);
     try testing.expectEqual(@as(usize, 0), countLabel(st, "default", "U1"));

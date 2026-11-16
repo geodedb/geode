@@ -520,13 +520,16 @@ pub fn repair(allocator: Allocator, adapter: *graph_storage_adapter.StorageAdapt
 }
 
 /// SONNY-6529: abort a repair transaction after the repair failed. The
-/// repair's writes are ones graph-storage 0.4.16 cannot undo (a node record
-/// rewritten with another `label_count`, an incoming entry rewritten through
-/// `logPagePublic`), so the abort fails with `AbortNotUndone` and the shard
-/// refuses every later write, commit and checkpoint: the repair's error is
-/// returned, the offline repair's adapter closes the store without a
-/// checkpoint, and the next open recovers the committed state. Logged, not
-/// ignored.
+/// repair's writes are ones graph-storage's undo journal cannot undo (a node
+/// record rewritten with another `label_count`, an incoming entry rewritten
+/// through `logPagePublic`). From v0.4.24 (SONNY-6657) graph-storage
+/// completes such an abort by discarding the transaction's pages and redoing
+/// the committed state (the repair runs one transaction at a time, so none
+/// overlaps it), and the shard stays writable. Where it cannot discard, the
+/// abort fails with `AbortNotUndone` and the shard refuses every later
+/// write, commit and checkpoint: the repair's error is returned either way,
+/// the offline repair's adapter closes the store without a checkpoint, and
+/// the next open recovers the committed state. Logged, not ignored.
 fn abortRepairTxn(shard: *gs.GraphEngine, txn: u64) void {
     shard.abortTxn(txn) catch |err| slog.err("TDE page-tail repair: aborting the failed repair transaction left the shard refusing writes until the store is reopened; nothing uncommitted was made durable (SONNY-6529)", &.{
         @import("logging").Attr.err("error", err),

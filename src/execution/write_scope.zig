@@ -148,7 +148,9 @@ pub const WriteScope = struct {
     /// by the store's edge, for a value that outlives the scope (a RETURN).
     /// Round 4b-1 review m-4: a copy inside a map (`RETURN {rel: r}`) or a
     /// path was left in place, and the value held the copy `deinit` frees. A
-    /// path's edge list is replaced by one `allocator` owns (the result's).
+    /// path's edge list is replaced by one allocated on `allocator`, which
+    /// must be where the value's own arrays live (SONNY-6637: a borrowed
+    /// RETURN row's cell is lent, so its caller passes the lent allocator).
     pub fn residentEdges(self: *const WriteScope, allocator: std.mem.Allocator, store: *graph_store.GraphStore, v: *Value) !void {
         switch (v.*) {
             .Edge => |edge| if (self.ownsBox(edge) != null) {

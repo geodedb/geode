@@ -3784,7 +3784,7 @@ pub fn orderedScanFastPath(
         // classes, a non-canonical string, a value of no ordered class; the
         // `orderedIndexColumn` decline below) is declined before the build
         // starts; it was built, and persisted, for nothing.
-        if (!adapter.probeOrderedColumnClass(filter_graph, label, ret_key)) return null;
+        if (!try adapter.probeOrderedColumnClass(filter_graph, label, ret_key)) return null;
         adapter.spawnOrderedIndexBuildAsync(filter_graph, label, ret_key);
         return null;
     }
@@ -5308,6 +5308,8 @@ fn expandVarLengthHop(
     prop_env: Env,
     path_mode: ast.PathMode,
     out: *std.ArrayList(VarLenTarget),
+    /// What each target's relationship list is allocated on (SONNY-6637).
+    list_alloc: std.mem.Allocator,
 ) !void {
     const min_len = hop.rel.min_len orelse 0;
     const max_len = hop.rel.max_len;
@@ -5340,7 +5342,7 @@ fn expandVarLengthHop(
         if (!matchesLabels(end_node, hop.right.labels)) continue;
         if (!try nodeMatchesProps(allocator, end_node, hop.right.props, prop_env)) continue;
 
-        var edge_values = try allocator.alloc(Value, path.edges.items.len);
+        var edge_values = try list_alloc.alloc(Value, path.edges.items.len);
         var edges_ok = true;
         for (path.edges.items, 0..) |eid, i| {
             const ep = (try store.getEdgePtrHydratedChecked(eid)) orelse {
@@ -5360,11 +5362,14 @@ fn expandVarLengthHop(
             edge_values[i] = Value{ .Edge = ep };
         }
         if (!edges_ok) {
-            allocator.free(edge_values);
+            list_alloc.free(edge_values);
             continue;
         }
 
-        try out.append(allocator, .{ .node = end_node, .edges = edge_values });
+        out.append(allocator, .{ .node = end_node, .edges = edge_values }) catch |err| {
+            list_alloc.free(edge_values);
+            return err;
+        };
     }
 }
 
@@ -5696,7 +5701,7 @@ const MultiChainJoin = struct {
                 }
                 if (quantified) {
                     var targets: std.ArrayList(VarLenTarget) = .empty;
-                    try expandVarLengthHop(scratch, self.store, self.nodes, self.scope, left, hop, self.prop_env, self.path_mode, &targets);
+                    try expandVarLengthHop(scratch, self.store, self.nodes, self.scope, left, hop, self.prop_env, self.path_mode, &targets, scratch);
                     for (targets.items) |target| {
                         if (hop.right.name) |rv| if (b.vars.get(rv)) |bound| if (bound.id != target.node.id) continue;
                         try out.append(self.allocator, .{ .node = target.node, .edges = target.edges });
@@ -6327,7 +6332,11 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
             defer targets.deinit(allocator);
             for (left_candidates.items) |left_node| {
                 targets.clearRetainingCapacity();
-                try expandVarLengthHop(allocator, store, &node_cache, &hop_scope, left_node, hop, prop_env, effectivePathMode(q), &targets);
+                // SONNY-6637 item 4: a binding's relationship list is lent
+                // to the rows that read it (they borrow their cells), so it
+                // is allocated where the rows' computed values are; on
+                // `allocator` nothing freed it.
+                try expandVarLengthHop(allocator, store, &node_cache, &hop_scope, left_node, hop, prop_env, effectivePathMode(q), &targets, value_utilities.lentAllocator(allocator));
                 for (targets.items) |target| {
                     var binding = MatchBinding.init(allocator);
                     errdefer binding.deinit();
@@ -6490,7 +6499,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 // to reject cross-graph edges; that works but is wasteful
                 // and any future caller that forgets the post-filter would
                 // leak. The storage layer now enforces isolation directly.
-                const typed_edge_ids = store.getEdgesByType(allocator, rt, storageTenantFilter(filter_tenant), filter_graph);
+                const typed_edge_ids = try store.getEdgesByType(allocator, rt, storageTenantFilter(filter_tenant), filter_graph);
                 defer if (typed_edge_ids.len > 0) allocator.free(typed_edge_ids);
 
                 for (typed_edge_ids) |edge_id| {
@@ -6809,8 +6818,11 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q_in: ast.Qu
                 errdefer copy.deinit();
                 // A quantified hop's relationship list lives in the join's
                 // scratch: the binding kept owns a copy.
+                // SONNY-6637 item 4: the rows borrow it, and nothing freed a
+                // copy made on the result's allocator; it is lent from the
+                // statement's scratch arena, as the rows' computed values are.
                 var lists = copy.rel_list_vars.iterator();
-                while (lists.next()) |entry| entry.value_ptr.* = try self.alloc.dupe(Value, entry.value_ptr.*);
+                while (lists.next()) |entry| entry.value_ptr.* = try value_utilities.lentAllocator(self.alloc).dupe(Value, entry.value_ptr.*);
                 try self.out.append(self.alloc, copy);
                 if (self.cap) |c| if (self.out.items.len >= c) return false;
                 return true;
@@ -8553,8 +8565,8 @@ fn setRemoveNeedsWriteStep(q: ast.Query) bool {
 /// read as any read reads them, without the SET and REMOVE
 /// (`readPatternRows`), and the SET and REMOVE applied to the elements each
 /// row binds (`applySetRemoveOverRows`). The RETURN is computed after, over
-/// the same rows, so it sees what was written; with no RETURN the rows are the
-/// result, as the executors' were. The SKIP / LIMIT window is the caller's.
+/// the same rows, so it sees what was written; with no RETURN there is no
+/// result table (SONNY-6637). The SKIP / LIMIT window is the caller's.
 fn executeSetRemoveStep(
     allocator: std.mem.Allocator,
     q: ast.Query,
@@ -8568,9 +8580,15 @@ fn executeSetRemoveStep(
     try stabilizeBindings(allocator, &bindings.rows);
     try applySetRemoveOverRows(allocator, q.set_clauses, q.set_clause_ends, q.remove_clauses, &bindings.rows, param_names, param_values);
     if (q.ret.items.len != 0) return projectReturnOverRows(allocator, q, &bindings.rows, param_names, param_values);
-    const rows = bindings.rows;
-    bindings.rows = .{ .columns = &.{}, .rows = &.{}, .flags = .empty };
-    return rows;
+    // CANARY: REQ=REQ-SONNY-6637-SET-OMITTED-RESULT; FEATURE="WriteStep"; ASPECT=NoReturnNoRows; STATUS=TESTED; TEST=tests/test_sonny6637_query_items.zig; OWNER=engine; UPDATED=2026-11-15
+    // SONNY-6637 item 2: with no RETURN the statement's result is omitted
+    // (ISO/IEC 39075:2024 13.3 GR 10, 13.4 GR 5): no columns, no rows. The
+    // matched rows were answered, at top level and in a FOR body.
+    return .{
+        .columns = try allocator.alloc([]const u8, 0),
+        .rows = try allocator.alloc([]Value, 0),
+        .flags = .empty,
+    };
 }
 
 /// The column of `rows` named `name`.

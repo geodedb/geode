@@ -127,14 +127,12 @@ library's own logger does). Corrected 2026-11-12, SONNY-6435.
 | `GEODE_ENABLE_QUERY_OPTIMIZER` | `1` | Enable cost-based query optimization |
 | `GEODE_INLINE_RESULTS` | `1` | Enable inline result streaming |
 | `GEODE_INLINE_RESULTS_MAX_ROWS` | - | Maximum rows for inline results |
-| `GEODE_QUERY_MEM_LIMIT_BYTES` | - | Not read (SONNY-6596): no per-query memory limit is enforced and the executor never spills |
 | `GEODE_NULLS_LAST` | - | Sort NULLs last in ORDER BY |
 
 ### Storage & WAL
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GEODE_SPILL_THRESHOLD_BYTES` | - | Not read (SONNY-6596): the executor never spills to disk |
 | `GEODE_WAL_SYNC` | `each_commit` | `each_commit` (fsync per commit) or `deferred` (durable at the next checkpoint; replayable bulk loads only) |
 
 The server reads none of `GEODE_WAL_COMPACT_INTERVAL`,

@@ -36,8 +36,28 @@
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const grouped_having = @import("grouped_having.zig");
+const function_arity = @import("../eval/function_arity.zig");
 
 pub const Error = error{ VariableNotInScope, OutOfMemory };
+
+// CANARY: REQ=REQ-SONNY-6637-ARITY-TABLE; FEATURE="BuiltinFunctions"; ASPECT=BindTimeArity; STATUS=TESTED; TEST=tests/test_sonny6637_function_arity.zig; OWNER=engine; UPDATED=2026-11-15
+/// SONNY-6637 item 3: a call of a function in the shared arity table
+/// (src/eval/function_arity.zig) with another number of operands violates a
+/// Syntax Rule: 42000 (`WrongArgumentCount`) before anything runs (ISO/IEC
+/// 39075:2024 4.7.3 step 4 e). Checked on every call expression of the
+/// statement by the walk `param_check.checkStatement` runs; a call that no
+/// row reaches is refused too (the dispatch alone refused only an evaluated
+/// one, and an aggregate's never). A procedure a CALL names is not a
+/// function call (its caller skips it).
+pub fn checkCallArity(e: *const ast.Expr) error{WrongArgumentCount}!void {
+    const call = switch (e.*) {
+        .Call => |c| c,
+        else => return,
+    };
+    var buf: [256]u8 = undefined;
+    const name = function_arity.calleeName(call.callee, &buf) orelse return;
+    try function_arity.check(name, call.args.len);
+}
 
 /// The variables in scope at a point: every name (`open`: not known, so
 /// every name), and the expression-local ones around it.
@@ -150,8 +170,9 @@ pub const Checker = struct {
     }
 
     fn returnItems(c: *Checker, rc: ast.ReturnClause, s: Scope) Error!void {
-        const with_ret = try c.merged(s, try c.names(rc.items, s));
-        for (rc.items) |*item| try c.expr(&item.expr, with_ret);
+        // SONNY-6645: an item reads the incoming record, not a sibling
+        // item's alias (as a WITH's, `projection`).
+        for (rc.items) |*item| try c.expr(&item.expr, s);
     }
 
     /// `q` and the parts chained after it, `in` in scope before `q`.
@@ -270,8 +291,13 @@ pub const Checker = struct {
         if (q.next_query != null) return post;
         // The RETURN, unless it is the WITH's items standing in for one.
         if (!sameItems(q.ret.items, post_with) and !sameItems(q.ret.items, initial)) {
+            // CANARY: REQ=REQ-SONNY-6645-WITH-SIBLING-ALIAS; FEATURE="LinearComposition"; ASPECT=ReturnItemsReadIncoming; STATUS=TESTED; TEST=tests/test_sonny6645_query_followups.zig; OWNER=engine; UPDATED=2026-11-16
+            // SONNY-6645: each RETURN item reads the incoming record (ISO/IEC
+            // 39075:2024 20.12 SR 8), not a sibling item's alias: `RETURN 1
+            // AS a, a + 1 AS b` answered NULL for b. Its GROUP BY, HAVING
+            // and ORDER BY read the aliases too.
+            for (q.ret.items) |*item| try c.expr(&item.expr, post);
             const with_ret = try c.merged(post, try c.names(q.ret.items, post));
-            for (q.ret.items) |*item| try c.expr(&item.expr, with_ret);
             if (q.returnStageGroupBy()) |g| for (g.keys) |*k| try c.expr(k, with_ret);
             if (q.returnStageHaving()) |*h| try c.expr(h, with_ret);
             if (q.order_by) |ob| try c.orderKeys(ob, q.ret.items, q.ret.distinct, q.returnStageGroupBy(), with_ret);
@@ -282,8 +308,14 @@ pub const Checker = struct {
     /// A WITH's items, ORDER BY: against `s` and the names it projects (an
     /// item may read an alias before it; its ORDER BY reads both).
     fn projection(c: *Checker, wc: ast.WithClause, s: Scope, group_by: ?ast.GroupBy) Error!void {
+        // CANARY: REQ=REQ-SONNY-6645-WITH-SIBLING-ALIAS; FEATURE="LinearComposition"; ASPECT=ProjectionItemsReadIncoming; STATUS=TESTED; TEST=tests/test_sonny6645_query_followups.zig; OWNER=engine; UPDATED=2026-11-16
+        // SONNY-6645: each item is evaluated over the incoming record
+        // (ISO/IEC 39075:2024 20.12 SR 8), so an item does not read a
+        // sibling item's alias: `WITH b AS a, 1 AS b` and `WITH 1 AS a, a +
+        // 1 AS b` read a name nothing binds yet (they answered NULL). The
+        // ORDER BY reads both.
+        for (wc.items) |*item| try c.expr(&item.expr, s);
         const both = try c.merged(s, try c.names(wc.items, s));
-        for (wc.items) |*item| try c.expr(&item.expr, both);
         if (wc.order_by) |ob| try c.orderKeys(ob.*, wc.items, wc.distinct, group_by, both);
     }
 
@@ -489,8 +521,9 @@ pub const Checker = struct {
             return;
         }
         if (f.return_clause) |rc| {
+            // SONNY-6645: as a RETURN item anywhere, the incoming record only.
+            for (rc.items) |*item| try c.expr(&item.expr, s);
             const with_ret = try c.merged(s, try c.names(rc.items, s));
-            for (rc.items) |*item| try c.expr(&item.expr, with_ret);
             if (f.group_by) |g| for (g.keys) |*k| try c.expr(k, with_ret);
             if (f.order_by) |ob| try c.orderKeys(ob, rc.items, rc.distinct, f.group_by, with_ret);
         }

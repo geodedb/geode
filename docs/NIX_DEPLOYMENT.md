@@ -600,8 +600,8 @@ spec:
         - containerPort: 9090
           name: metrics
           protocol: TCP
-        # The server's config file is `serve --config <path>`: GEODE_CONFIG
-        # is read only by `geode shell` (SONNY-6435).
+        # The server's config file is `serve --config <path>`; no
+        # environment variable names it (SONNY-6593).
         env:
         - name: POD_NAME
           valueFrom:
@@ -1409,8 +1409,10 @@ nix flake check
 systemctl status geode
 journalctl -u geode -f
 
-# Check configuration
-geode --config=/etc/geode/geode.conf --validate-config
+# Check configuration: geode has no check-only mode. `geode serve --config`
+# loads the file at startup and refuses to start on one it cannot load,
+# printing "[startup] config load failed; refusing to start: <error>".
+journalctl -u geode | grep 'refusing to start'
 
 # Check permissions
 ls -la /var/lib/geode /var/log/geode /etc/geode

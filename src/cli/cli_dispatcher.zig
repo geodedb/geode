@@ -1283,6 +1283,34 @@ fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         }
         const actual_port = try server.serveHttp();
         std.debug.print("MCP server listening on port {d}\n", .{actual_port});
+        // CANARY: REQ=REQ-SONNY-6644-MCP-HTTP-SESSION; FEATURE="MCPServer"; ASPECT=HttpTransportStaysUp; STATUS=TESTED; TEST=tests/test_sonny6644_mcp_http_session.zig; OWNER=mcp; UPDATED=2026-11-16
+        // SONNY-6644: serveHttp returns once its listener thread runs. This
+        // returned with it, and the deferred deinit stopped the server: the
+        // HTTP transport printed its port and exited 0. It serves until
+        // SIGINT or SIGTERM.
+        waitForMcpShutdownSignal();
+        std.debug.print("MCP server stopping\n", .{});
+    }
+}
+
+var g_mcp_shutdown = std.atomic.Value(bool).init(false);
+
+fn handleMcpShutdownSignal(_: std.posix.SIG) callconv(.c) void {
+    g_mcp_shutdown.store(true, .release);
+}
+
+/// Block until SIGINT or SIGTERM.
+fn waitForMcpShutdownSignal() void {
+    const sa = std.posix.Sigaction{
+        .handler = .{ .handler = handleMcpShutdownSignal },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+    std.posix.sigaction(std.posix.SIG.TERM, &sa, null);
+    std.posix.sigaction(std.posix.SIG.INT, &sa, null);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    while (!g_mcp_shutdown.load(.acquire)) {
+        io.sleep(.fromNanoseconds(100 * std.time.ns_per_ms), .awake) catch {};
     }
 }
 

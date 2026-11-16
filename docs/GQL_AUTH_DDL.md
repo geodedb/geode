@@ -122,13 +122,13 @@ permissions. With `FOR <username>`, an Admin role is required unless
 like the admin-only procedures (SONNY-6269, the `SHOW GRANTS` rule below).
 `CALL geode.auth.user_permissions([<username>])` has the same rule; without
 a username it lists the caller's permissions. For a user that does not
-exist an Admin gets 42704 (`User does not exist`); it used to be answered
+exist an Admin gets 42002 (`User does not exist`); it used to be answered
 with the `user` role's permissions (SONNY-6291).
 
 `CALL geode.auth.user_show([<username>])` (username, email, role, status)
 follows the same rule (SONNY-6291): a user may show itself; another user
 needs the Admin role, and a refusal answers 42501 and is audited. A user
-that does not exist is an error: 42704 for an Admin, and for anyone else
+that does not exist is an error: 42002 for an Admin, and for anyone else
 the same 42501 refusal as another user's, so a non-admin cannot probe
 which users exist. It used to show any user to any authenticated user, and
 made up a row (`unknown` / `user` / `active`) for a missing one.
@@ -137,13 +137,13 @@ Failures are GQLSTATUS errors, never a 00000 status row starting `error:`
 (SONNY-6359): `CREATE USER` / `geode.auth.user_create` of a user that exists
 fails with 42710 and of a reserved name (`geode-cluster`) with 42939;
 `geode.auth.user_assign_role` without a user or role fails with 22023 and of
-a user that does not exist with 42704 for an Admin; a privilege other than
+a user that does not exist with 42002 for an Admin; a privilege other than
 `READ`, `WRITE`, `SCHEMA` or `ALL` fails with 22023; and an
 `ALTER USER ... ENABLE | DISABLE` or role change that fails for another
 reason (the security graph cannot be read) fails with that error (58000).
 
 The other `geode.auth.*` procedures follow the same rule (SONNY-6367). A
-user that does not exist fails with 42704 for an Admin (42501 for anyone
+user that does not exist fails with 42002 for an Admin (42501 for anyone
 else, as above): `ALTER USER ... ENABLE | DISABLE` /
 `geode.auth.user_enable` / `user_disable` (they answered `enabled <user>`),
 `user_set_attribute`, `mfa_setup`, `mfa_verify`, `mfa_enable` and
@@ -183,7 +183,7 @@ secret is protected at rest.
 
 `GRANT <priv> ON GRAPH g TO <user>` and `REVOKE <priv> ON GRAPH g FROM
 <user>` (and `geode.auth.grant` / `revoke`) of a user that does not exist
-fail with 42704 (`User does not exist`) and change nothing (SONNY-6345).
+fail with 42002 (`User does not exist`) and change nothing (SONNY-6345).
 They used to succeed (SQLSTATE 00000) with a status row `error: user not
 found: <user>`. Without a security graph to look users up in (an embedded
 executor with no persistence wired), they fail with 58030 and grant or
@@ -311,7 +311,7 @@ All auth DDL mutations persist to the HMAC-chained `__geode_security` graph via
 
 - **`CREATE USER`** → a `User` node is created in `__geode_security`.
 - **`DROP USER`** → the `User` node is removed from `__geode_security`. A user
-  that does not exist fails with 42704 (SONNY-6609; it answered `deleted
+  that does not exist fails with 42002 (SONNY-6609; it answered `deleted
   <name>`); `DROP USER IF EXISTS` answers `no user <name>; nothing dropped`.
 - **`ALTER USER … SET PASSWORD`** → the `password_hash` property is updated on
   the `User` node and `auth_version` is bumped (invalidating live sessions).
@@ -404,6 +404,45 @@ not loaded hides nothing). A stored FLE role grant whose user was deleted is
 not loaded (it names no one). Hydration still tolerates the records it always
 tolerated by design: a duplicate or uncompilable stored policy (GAP-0923).
 
+### Offline `geode grant` / `geode revoke` (SONNY-6586)
+
+With no server holding the data directory, `geode grant` and `geode revoke`
+do what `GRANT ... ON GRAPH` and `REVOKE ... ON GRAPH` do, under the same
+rule (`src/security/graph_grant_rules.zig`, used by both):
+
+```bash
+geode grant  <READ|WRITE|SCHEMA|ALL> --graph <graph> --to   <user> [--data-dir <dir>]
+geode revoke <READ|WRITE|SCHEMA|ALL> --graph <graph> --from <user> [--data-dir <dir>]
+```
+
+- The privilege is `READ`, `WRITE`, `SCHEMA` or `ALL`; anything else is
+  refused (exit 2). `admin` is a role, not a privilege: use
+  `geode user assign-role <user> admin` (`GRANT ROLE admin TO <user>`).
+- One named graph is required (exit 2 without `--graph`); a grant on `*`
+  is refused.
+- The user must exist (exit 1).
+- The grant is stored as the `GraphGrant` records `GRANT` stores (all of
+  `ALL`'s three, or none) and is in force when the server next starts.
+  `geode revoke` of a privilege the user does not hold on the graph is
+  refused (exit 1) and changes nothing.
+
+Before SONNY-6586 they stored a free-form permission record (any name, the
+user in its conditions) that no authorization path reads, and printed
+"Granted"; their only rule refused `admin` unless the grantee was named
+`admin`.
+
+`geode user permissions <user>` prints the user's role and its per-graph
+grants (`<graph>: READ, WRITE, ...`), and refuses a user that does not
+exist. It listed every stored permission record, whoever's, and printed
+`read` for a user with none (SONNY-6647).
+
+The permission records the old `geode grant` stored stay in
+`__geode_security`, inert. `geode auth prune-legacy-permissions --dry-run`
+lists them; `geode auth prune-legacy-permissions` removes them and seals
+the HMAC chain (offline, like every `geode auth` store command). Nothing
+removes them at startup: whether to keep them as a record is the
+operator's choice.
+
 ### Per-graph grant semantics
 
 **Security fix (2026-10, REQ-SEC-PER-GRAPH-GRANTS).** For every role:
@@ -415,7 +454,7 @@ tolerated by design: a duplicate or uncompilable stored policy (GAP-0923).
 | `GRANT WRITE ON GRAPH g TO u` | `u` may change data on `g`, and on no other graph. |
 | `GRANT SCHEMA ON GRAPH g TO u` | `u` may create, replace or drop graph `g` (`CREATE GRAPH g`, `DROP GRAPH g`). Graph DDL also passes the write and bind gates, so a role without global write needs `WRITE` on `g` too (and `READ`, if it cannot bind `g` otherwise). Index and constraint DDL apply to every graph and still need the global schema permission (or a `FOR SCHEMA` policy on `*`). |
 | `GRANT ALL ON GRAPH g TO u` | All three, on `g`. |
-| `REVOKE ... ON GRAPH g FROM u` | Takes the privilege away. |
+| `REVOKE ... ON GRAPH g FROM u` | Takes the privilege away. A privilege `u` does not hold on `g` is refused with SQLSTATE 42704 and nothing changes (`REVOKE ALL` succeeds when `u` held any of the three); it answered "Revoked" before SONNY-6647. |
 | A deny policy covering `g` | Overrides a grant on `g`. |
 
 - **Additive.** A grant widens access beyond the global role, on its graph
@@ -546,7 +585,7 @@ the store or the auth graph cannot be opened (`[startup] HMAC key unusable`,
 6. **`IF EXISTS` on `DROP ROLE` is effectively always-satisfied.** The
    underlying `geode.auth.role_delete` degrades gracefully on a missing role
    rather than returning an error. `DROP USER` of a missing user fails with
-   42704 (SONNY-6609), and `DROP USER IF EXISTS` is the no-op form.
+   42002 (SONNY-6609), and `DROP USER IF EXISTS` is the no-op form.
 
 7. **`CREATE POLICY`, FLE DDL, and tenant DDL are not part of this surface.**
    Use `CALL geode.fle.*` for field-level encryption schema management and the

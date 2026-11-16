@@ -375,6 +375,34 @@ pub fn hasAuthState(allocator: std.mem.Allocator, data_dir: []const u8) !bool {
 
 // -- Offline Auth Manager Initialization --
 
+// CANARY: REQ=REQ-SONNY-6586-CLI-MISSING-DATA-DIR; FEATURE="OfflineAuthStoreSafety"; ASPECT=MissingDataDirNamed; STATUS=TESTED; TEST=tests/test_sonny6586_cli_truth.zig; OWNER=cli; UPDATED=2026-11-15
+/// SONNY-6586: an offline auth command opens a data directory that exists.
+/// With a missing one it failed with DataDirLockUnavailable (the lock file
+/// cannot be created in it), which does not name the cause; creating the
+/// directory would run the command against an empty store at a mistyped
+/// path. `geode auth init` creates the directory before it gets here.
+fn requireExistingDataDir(dir: []const u8) error{ DataDirNotFound, DataDirNotADirectory }!void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const opened = std.Io.Dir.cwd().openDir(io, dir, .{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            std.debug.print(
+                "Error: the data directory {s} does not exist; nothing was changed.\n" ++
+                    "Pass the server's --data-dir (or set GEODE_DATA_DIR), or create a store there with 'geode auth init'.\n",
+                .{dir},
+            );
+            return error.DataDirNotFound;
+        },
+        error.NotDir => {
+            std.debug.print("Error: the data directory {s} is not a directory; nothing was changed.\n", .{dir});
+            return error.DataDirNotADirectory;
+        },
+        // Anything else (permissions, ...) is reported by the lock and the
+        // store open that follow, as before.
+        else => return,
+    };
+    opened.close(io);
+}
+
 /// Initialise an AuthGraphManager for CLI offline operations.
 ///
 /// Opens the graph store at the given data directory (from --data-dir flag
@@ -387,6 +415,7 @@ pub fn initCliAuthManager(allocator: std.mem.Allocator, data_dir: ?[]const u8) !
     // `deinitAndSaveCliAuth` (`resolvedDataDir` reads it).
     const resolved_dir: []const u8 = try resolveCliDataDir(allocator, data_dir);
     errdefer allocator.free(resolved_dir);
+    try requireExistingDataDir(resolved_dir);
 
     // CANARY: REQ=REQ-ENG-3921-DATA-DIR-LOCK-002; FEATURE="DataDirLock"; ASPECT=OfflineCliWriter; STATUS=TESTED; TEST=tests/test_datadir_lock_subprocess.zig; OWNER=storage; UPDATED=2026-08-29
     // ENG-3921: these offline CLI entry points open the data directory

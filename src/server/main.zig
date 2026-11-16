@@ -2199,6 +2199,21 @@ pub fn main() !void {
         break :blk instance_id_buf[0..];
     };
 
+    // SONNY-6665: test hook, Debug builds only (see
+    // raft_consensus.armTestDropSnapshotChunks): this node loses, up to N
+    // times, the inbound InstallSnapshot chunk right after a snapshot's
+    // first one.
+    if (comptime geode.distributed.raft_consensus.snapshot_chunk_drop_hook_available) {
+        const drops = envUsize(gpa, "GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS", 0, 0, 1_000_000);
+        if (drops > 0) {
+            geode.distributed.raft_consensus.armTestDropSnapshotChunks(@intCast(drops)) catch |err| {
+                log.err("GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS refused", &.{Attr.string("error", @errorName(err))});
+                return err;
+            };
+            log.warn("TEST HOOK: inbound InstallSnapshot chunks will be dropped (Debug build only)", &.{Attr.int("count", @intCast(drops))});
+        }
+    }
+
     const cluster_token = getEnvVarOwned(gpa, "GEODE_CLUSTER_TOKEN") catch null;
     defer if (cluster_token) |t| gpa.free(t);
     const node_id = getEnvVarOwned(gpa, "GEODE_NODE_ID") catch null;
@@ -2239,6 +2254,9 @@ pub fn main() !void {
     // here would silently skip FTS maintenance for the replayed entries.
     // CANARY: REQ=REQ-DIST-CLUSTER-FTS-APPLY-SYMMETRY; FEATURE="DistributedCluster"; ASPECT=ServerInitFtsApplyHook; STATUS=TESTED; TEST=tests/test_fts_apply_symmetry.zig; OWNER=distributed; UPDATED=2026-06-10
     geode.execution.fts_index_ops.registerFtsApplyHook();
+    // SONNY-6636: after a Raft snapshot restore replaced a graph's files,
+    // the vector indexes (not per graph) are rebuilt from it.
+    geode.distributed.raft_snapshot_manager.setGraphRestoredHook(&geode.index_manager.rebuildVectorIndexesForRestoredGraph);
 
     if (cluster_token != null) {
         // Build a small EnvMap with just the keys cluster_bootstrap needs.
@@ -2467,6 +2485,26 @@ pub fn main() !void {
                 log.warn("TEST HOOK: password verifications of this user will fail their Argon2id allocation (Debug build only)", &.{
                     Attr.string("user", fault_user),
                     Attr.int("count", @intCast(fault_count)),
+                });
+            }
+        } else |_| {}
+    }
+
+    // SONNY-6658: test hook, Debug builds only (see
+    // statement_undo.armTestKill): the process kills itself when a statement
+    // is about to make its (n+1)th change of one node property key.
+    if (comptime geode.statement_undo.kill_hook_available) {
+        if (getEnvVarOwned(gpa, "GEODE_TEST_STATEMENT_KILL_KEY")) |kill_key| {
+            defer gpa.free(kill_key);
+            const kill_after = envUsize(gpa, "GEODE_TEST_STATEMENT_KILL_AFTER", 0, 0, 1_000_000);
+            if (kill_after > 0) {
+                geode.statement_undo.armTestKill(kill_key, @intCast(kill_after)) catch |err| {
+                    log.err("GEODE_TEST_STATEMENT_KILL_KEY refused", &.{Attr.string("error", @errorName(err))});
+                    return err;
+                };
+                log.warn("TEST HOOK: the process kills itself at a statement's change of this property (Debug build only)", &.{
+                    Attr.string("key", kill_key),
+                    Attr.int("after", @intCast(kill_after)),
                 });
             }
         } else |_| {}
@@ -3511,6 +3549,7 @@ pub fn main() !void {
         // SONNY-3348 (round 19, m3): statement undo replays, undo failures,
         // and writes refused by the undo record's budget.
         try geode.statement_undo.registerAll(metrics_registry);
+        try geode.txn_durable_undo.registerAll(metrics_registry); // SONNY-2979
 
         // Phase C1: bridge the now-fully-populated runtime metrics registry into
         // OTLP as geode.runtime.* observable gauges. MUST run after every

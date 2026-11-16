@@ -31,7 +31,6 @@ pub const GeodeClientError = error{
     OutOfMemory,
     ServerError,
     InvalidParams,
-    UnsupportedParamType,
     /// SONNY-6617 (3): a gRPC endpoint with TLS on (geode-client-zig's gRPC
     /// client has no TLS); `endpointErrorMessage` says what to do.
     TlsNotImplemented,
@@ -180,18 +179,6 @@ pub const GeodeClient = struct {
         self.connected = true;
     }
 
-    fn jsonToProtoValue(allocator: std.mem.Allocator, value: std.json.Value) !schema.Value {
-        return switch (value) {
-            .null => .{ .kind = .{ .null_val = .{} } },
-            .bool => |b| .{ .kind = .{ .bool_val = b } },
-            .integer => |i| .{ .kind = .{ .int_val = .{ .value = i, .kind = .INT } } },
-            .float => |f| .{ .kind = .{ .double_val = .{ .value = f, .kind = .DOUBLE } } },
-            .number_string => |v| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, v), .kind = .STRING } } },
-            .string => |v| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, v), .kind = .STRING } } },
-            .array, .object => GeodeClientError.UnsupportedParamType,
-        };
-    }
-
     fn parseParamsJson(self: *Self, params_json: ?[]const u8) !std.ArrayList(schema.Param) {
         var params: std.ArrayList(schema.Param) = .empty;
         errdefer {
@@ -212,7 +199,14 @@ pub const GeodeClient = struct {
         while (it.next()) |entry| {
             const name = try self.allocator.dupe(u8, entry.key_ptr.*);
             errdefer self.allocator.free(name);
-            var value = try jsonToProtoValue(self.allocator, entry.value_ptr.*);
+            // CANARY: REQ=REQ-SONNY-6586-MCP-LIST-MAP-PARAMS; FEATURE="MCPBackendTools"; ASPECT=ListAndMapParameters; STATUS=TESTED; TEST=tests/test_sonny6586_cli_truth.zig; OWNER=mcp; UPDATED=2026-11-15
+            // SONNY-6586: arrays are LISTs and objects MAPs. SONNY-6647: the
+            // converter geode query --param uses (geode.param_json); a
+            // value nested too deep is invalid params, as before.
+            var value = geode.param_json.jsonToProtoValue(self.allocator, entry.value_ptr.*, 0) catch |err| switch (err) {
+                error.ParamsTooDeep => return GeodeClientError.InvalidParams,
+                else => |e| return e,
+            };
             errdefer value.deinit(self.allocator);
             try params.append(self.allocator, .{ .name = name, .value = value });
         }

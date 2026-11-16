@@ -863,35 +863,52 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         const username = argv[subcmd_idx + 1];
-        // List permissions from graph store
-        printOut("Permissions for {s}: ", .{username});
-        var first = true;
-        var it = mgr.storage.permissionIterator();
-        while (it.next()) |record| {
-            if (!first) printOut(", ", .{});
-            // Output permission names in lowercase to match CLI conventions
-            const name = record.getName();
-            var lower_buf: [256]u8 = undefined;
-            const lower_name = if (name.len <= lower_buf.len)
-                std.ascii.lowerString(lower_buf[0..name.len], name)
-            else
-                name;
-            printOut("{s}", .{lower_name});
-            first = false;
+        // CANARY: REQ=REQ-SONNY-6647-USER-PERMISSIONS; FEATURE="OfflineAuthStoreSafety"; ASPECT=PermissionsAreGraphGrants; STATUS=TESTED; TEST=tests/test_sonny6647_user_permissions.zig; OWNER=security; UPDATED=2026-11-15
+        // SONNY-6647: the user's role and its per-graph grants (the
+        // GraphGrant records GRANT ... ON GRAPH stores and the server
+        // enforces). It listed every stored Permission record, whoever's
+        // (records no authorization path reads), and invented "read" (or
+        // "admin, read, write, query") for a user with none, or no user.
+        const u = mgr.storage.getUserByUsername(username) orelse {
+            std.debug.print("Error: user '{s}' does not exist\n", .{username});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        const uid = (try mgr.findUserIdByName(username)) orelse {
+            std.debug.print("Error: user '{s}' does not exist\n", .{username});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        printOut("User: {s}\nRole: {s}\n", .{ username, storedRoleName(&mgr, u) });
+        const grants = try mgr.listGraphGrantsForUser(allocator, uid);
+        defer allocator.free(grants);
+        if (grants.len == 0) {
+            printOut("Grants: no per-graph grants\n", .{});
+            return;
         }
-        if (first) {
-            // No permissions found; show default role-based permissions
-            if (mgr.storage.getUserByUsername(username)) |u| {
-                if (u.is_superuser) {
-                    printOut("admin, read, write, query", .{});
-                } else {
-                    printOut("read", .{});
-                }
-            } else {
-                printOut("read", .{});
+        const Grant = @TypeOf(grants[0]);
+        std.mem.sort(Grant, grants, {}, struct {
+            fn lessThan(_: void, x: Grant, y: Grant) bool {
+                const order = std.mem.order(u8, x.getGraphName(), y.getGraphName());
+                return order == .lt or (order == .eq and x.action < y.action);
             }
+        }.lessThan);
+        printOut("Grants:\n", .{});
+        var i: usize = 0;
+        while (i < grants.len) {
+            const graph = grants[i].getGraphName();
+            printOut("  {s}: ", .{graph});
+            var first = true;
+            while (i < grants.len and std.mem.eql(u8, grants[i].getGraphName(), graph)) : (i += 1) {
+                const name = switch (grants[i].action) {
+                    0 => "READ",
+                    1 => "WRITE",
+                    2 => "SCHEMA",
+                    else => "UNKNOWN",
+                };
+                printOut("{s}{s}", .{ if (first) "" else ", ", name });
+                first = false;
+            }
+            printOut("\n", .{});
         }
-        printOut("\n", .{});
         return;
     }
 

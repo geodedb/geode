@@ -77,7 +77,6 @@ pub const entries = [_]Entry{
     .{ .path = "tests/canary_cdc_e2e_umbrella.zig", .reason = "TODO(SONNY-6542): imports ../src/streaming/cdc_enhanced.zig by relative path, outside a tests/ module root; port to named modules" },
     .{ .path = "tests/canary_cdc_events.zig", .reason = "TODO(SONNY-6542): imports ../src/streaming/cdc_enhanced.zig by relative path, outside a tests/ module root; port to named modules" },
     .{ .path = "tests/canary_cdc_jitter_thresholds.zig", .reason = "TODO(SONNY-6542): passes but leaks under the testing allocator" },
-    .{ .path = "tests/canary_cdc_lifecycle.zig", .reason = "TODO(SONNY-6542): imports ../src/streaming/cdc_enhanced.zig by relative path, outside a tests/ module root; port to named modules" },
     .{ .path = "tests/canary_cdc_ordering.zig", .reason = "TODO(SONNY-6542): imports ../src/streaming/cdc_enhanced.zig by relative path, outside a tests/ module root; port to named modules" },
     .{ .path = "tests/canary_cdc_ordering_concurrency.zig", .reason = "TODO(SONNY-6542): imports ../src/streaming/cdc_enhanced.zig by relative path, outside a tests/ module root; port to named modules" },
     .{ .path = "tests/canary_cdc_resume_token.zig", .reason = "TODO(SONNY-6542): imports ../src/streaming/cdc_enhanced.zig by relative path, outside a tests/ module root; port to named modules" },

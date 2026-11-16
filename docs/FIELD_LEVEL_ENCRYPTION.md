@@ -412,7 +412,7 @@ refused in cluster mode, and stored as `FleRoleGrant` records in the
 HMAC-chained `__geode_security` graph (loaded at startup; a dropped user's
 grants go with it). A grant that cannot be saved is not applied (58030); a
 revoke is in force at once and, if it cannot be saved, reports 58030 (retry
-it). `user` must exist (42704); `role` is non-empty, letters, digits, `_`
+it). `user` must exist (42002); `role` is non-empty, letters, digits, `_`
 and `-` only (22023). Returns one row: `status` (`granted`, `revoked` or
 `not granted`).
 

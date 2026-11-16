@@ -444,7 +444,12 @@ fn chainFinalAggregate(allocator: std.mem.Allocator, current_result_in: Executio
     const is_chaining_return = if (final_query.with_clause) |wc| final_query.ret.items.ptr == wc.items.ptr and final_query.ret.items.len == wc.items.len else false;
     if (!is_chaining_return) try validateGroupBy(final_query.ret, final_query.returnStageGroupBy());
     var names: std.ArrayList([]const u8) = .empty;
-    if (last.with_clause != null) {
+    if (last.with_clause != null and last.is_initial_with) {
+        // SONNY-6645 item 1: a WITH before the part's MATCH passes on its
+        // items, and the MATCH binds its pattern's variables after it.
+        for (try partOutputNames(aa, last.*, incoming)) |n| try appendNameOnce(aa, &names, n);
+        try appendPatternNames(aa, &names, last.*);
+    } else if (last.with_clause != null) {
         for (try partOutputNames(aa, last.*, incoming)) |n| try appendNameOnce(aa, &names, n);
     } else {
         for (incoming) |n| try appendNameOnce(aa, &names, n);
@@ -1216,6 +1221,15 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
         allocator.free(combined.values);
     };
     // CANARY: REQ=REQ-MULTI-GRAPH-012; FEATURE="MultiGraphIsolation"; ASPECT=QueryExecution; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
+    // CANARY: REQ=REQ-SONNY-6645-CHAINED-INITIAL-WITH; FEATURE="ChainedWithClauseExecution"; ASPECT=InitialWithInChainedPart; STATUS=TESTED; TEST=tests/test_sonny6645_query_followups.zig; OWNER=execution; UPDATED=2026-11-16
+    // SONNY-6645 item 1: a chained part that starts with a WITH and then
+    // matches (`WITH 1 AS a WITH a, 2 AS b MATCH (n) ...`) binds the WITH's
+    // values as parameters for its MATCH, WHERE and RETURN, as the same part
+    // does at the start of a statement (`executeQueryWithContext`, SONNY-3139
+    // C1). It went to the legacy executor with the WITH read as a projection
+    // of the matched rows: the MATCH variables read NULL and a WHERE on the
+    // WITH's values matched nothing.
+    if (write_shape.bindsInitialWithRead(q)) return executeWithInitialWith(allocator, q, context, combined.names, combined.values, .query);
     // Extract current graph from session context for graph-isolated query execution
     const current_graph = if (context.session_state) |session| session.graph else null;
     return executeMatchQueryImpl(allocator, q, combined.names, combined.values, &.{}, current_graph);
