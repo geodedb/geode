@@ -3073,6 +3073,19 @@
 
 ### Fixed
 
+- **`geode mcp --port` serves; MCP HTTP clients get sessions; mcp
+  v0.1.26 (SONNY-6644).** The HTTP transport (the transport unless
+  `--stdio` is given) printed "MCP server listening on port N" and exited
+  0: the library's `serveHttp` returns once its listener thread runs, and
+  the command returned and stopped the server. It now serves until SIGINT
+  or SIGTERM. With mcp v0.1.26 the transport keeps Streamable HTTP
+  sessions: `initialize` answers an `Mcp-Session-Id` the client sends on
+  every later request; a request without one is 400 and an unknown one
+  404; each client has its own session, so one client no longer receives
+  another's notifications. **User-visible:** an HTTP client must send
+  `initialize` first and keep the session id. Regression: `zig build
+  test-sonny6644-mcp-http-session`.
+
 - **An online `REVOKE` of nothing is refused; `geode user permissions`
   shows real grants; legacy permission records can be pruned
   (SONNY-6647).** `REVOKE <privilege> ON GRAPH <graph> FROM <user>`
