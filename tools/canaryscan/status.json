@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T05:50:35.714964645Z",
+  "generated_at": "2026-11-16T05:50:40.83542299Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -82413,6 +82413,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6645-GRPC-CONNECTION-QUOTA",
+      "features": [
+        {
+          "feature": "TenantQuota",
+          "aspect": "GrpcHandshakeRefusal",
+          "status": "TESTED",
+          "files": [
+            "src/transport/grpc_server.zig"
+          ],
+          "tests": [
+            "tests/test_sonny3313_grpc_peer_ip.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6645-QUERY-FOLLOWUPS",
       "features": [
         {
@@ -82446,6 +82465,25 @@
           ],
           "benches": [],
           "owner": "eval",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6645-WITH-SIBLING-ALIAS",
+      "features": [
+        {
+          "feature": "LinearComposition",
+          "aspect": "ProjectionItemsReadIncoming",
+          "status": "TESTED",
+          "files": [
+            "src/execution/scope_check.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6645_query_followups.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
           "updated": "2026-11-16"
         }
       ]
@@ -87601,7 +87639,7 @@
       "EXEMPT": 209,
       "IMPL": 565,
       "STUB": 18,
-      "TESTED": 4329
+      "TESTED": 4331
     },
     "by_aspect": {
       "2PC": 3,
@@ -89096,6 +89134,7 @@
       "GrpcHandlerWire": 1,
       "GrpcHandlerWiring": 1,
       "GrpcHandshakeEnforcement": 1,
+      "GrpcHandshakeRefusal": 1,
       "GrpcHello": 1,
       "GrpcHelloCheck": 1,
       "GrpcNoAuthGraph": 1,
@@ -90240,6 +90279,7 @@
       "ProgramWriteLock": 1,
       "ProgressPrintedOncePerStep": 1,
       "ProgressTracking": 1,
+      "ProjectionItemsReadIncoming": 1,
       "ProjectionScope": 1,
       "ProjectionWalker": 1,
       "PrometheusBridge": 1,

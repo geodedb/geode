@@ -302,8 +302,14 @@ pub const Checker = struct {
     /// A WITH's items, ORDER BY: against `s` and the names it projects (an
     /// item may read an alias before it; its ORDER BY reads both).
     fn projection(c: *Checker, wc: ast.WithClause, s: Scope, group_by: ?ast.GroupBy) Error!void {
+        // CANARY: REQ=REQ-SONNY-6645-WITH-SIBLING-ALIAS; FEATURE="LinearComposition"; ASPECT=ProjectionItemsReadIncoming; STATUS=TESTED; TEST=tests/test_sonny6645_query_followups.zig; OWNER=engine; UPDATED=2026-11-16
+        // SONNY-6645: each item is evaluated over the incoming record
+        // (ISO/IEC 39075:2024 20.12 SR 8), so an item does not read a
+        // sibling item's alias: `WITH b AS a, 1 AS b` and `WITH 1 AS a, a +
+        // 1 AS b` read a name nothing binds yet (they answered NULL). The
+        // ORDER BY reads both.
+        for (wc.items) |*item| try c.expr(&item.expr, s);
         const both = try c.merged(s, try c.names(wc.items, s));
-        for (wc.items) |*item| try c.expr(&item.expr, both);
         if (wc.order_by) |ob| try c.orderKeys(ob.*, wc.items, wc.distinct, group_by, both);
     }
 

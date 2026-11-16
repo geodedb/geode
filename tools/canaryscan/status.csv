@@ -5219,8 +5219,10 @@ REQ-SONNY-6642-WAL-CORRUPTED-QUARANTINE,StorageIntegrity,Regression,TESTED,tests
 REQ-SONNY-6644-MCP-HTTP-SESSION,MCPServer,HttpTransportStaysUp,TESTED,src/cli/cli_dispatcher.zig,tests/test_sonny6644_mcp_http_session.zig,,mcp,2026-11-16
 REQ-SONNY-6644-MCP-HTTP-SESSION,MCPServer,HttpTransportSessions,TESTED,tests/test_sonny6644_mcp_http_session.zig,tests/test_sonny6644_mcp_http_session.zig,,mcp,2026-11-16
 REQ-SONNY-6645-CHAINED-INITIAL-WITH,ChainedWithClauseExecution,InitialWithInChainedPart,TESTED,src/execution/query_execution.zig,tests/test_sonny6645_query_followups.zig,,execution,2026-11-16
+REQ-SONNY-6645-GRPC-CONNECTION-QUOTA,TenantQuota,GrpcHandshakeRefusal,TESTED,src/transport/grpc_server.zig,tests/test_sonny3313_grpc_peer_ip.zig,,transport,2026-11-16
 REQ-SONNY-6645-QUERY-FOLLOWUPS,ChainedWithClauseExecution,InitialWithInChainedPart,TESTED,tests/test_sonny6645_query_followups.zig,tests/test_sonny6645_query_followups.zig,,engine,2026-11-16
 REQ-SONNY-6645-SHORTEST-PATH-ONE,ShortestPath,OneOperandForm,TESTED,src/eval.zig,tests/test_sonny6645_query_followups.zig,,eval,2026-11-16
+REQ-SONNY-6645-WITH-SIBLING-ALIAS,LinearComposition,ProjectionItemsReadIncoming,TESTED,src/execution/scope_check.zig,tests/test_sonny6645_query_followups.zig,,engine,2026-11-16
 REQ-SONNY-6647-PRUNE-LEGACY-PERMISSIONS,OfflineAuthStoreSafety,PruneInertPermissionRecords,TESTED,src/cli/auth_cli.zig,tests/test_sonny6647_user_permissions.zig,,security,2026-11-15
 REQ-SONNY-6647-REVOKE-NOT-HELD,GQL Auth DDL,RevokeOfNothingRefused,TESTED,src/execution/auth_dispatch.zig,tests/test_sonny6647_revoke_not_held.zig,,security,2026-11-15
 REQ-SONNY-6647-REVOKE-NOT-HELD,GQL Auth DDL,RevokeOfNothingRefused,TESTED,tests/test_sonny6647_revoke_not_held.zig,,,security,2026-11-15

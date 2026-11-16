@@ -205,6 +205,22 @@ fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
 /// principal holds `max_sessions_per_principal` sessions, all in use. Any
 /// other error is the handler's.
 fn helloSessionRefused(allocator: std.mem.Allocator, caps: std.ArrayList([]const u8), err: anyerror) ![]u8 {
+    // CANARY: REQ=REQ-SONNY-6645-GRPC-CONNECTION-QUOTA; FEATURE="TenantQuota"; ASPECT=GrpcHandshakeRefusal; STATUS=TESTED; TEST=tests/test_sonny3313_grpc_peer_ip.zig; OWNER=transport; UPDATED=2026-11-16
+    // SONNY-6645: past the tenant's connection quota the Handshake is
+    // refused with QUIC's SQLSTATE, "53300: <message>" (the gRPC
+    // convention for a refusal, as the CDC frames send it).
+    if (err == error.TenantConnectionQuotaExceeded) {
+        const quota = proto_util.mapError(err);
+        const message = try std.fmt.allocPrint(allocator, "{s}: {s}", .{ quota.code, quota.message });
+        defer allocator.free(message);
+        const resp = schema.HelloResponse{
+            .success = false,
+            .session_id = "",
+            .error_message = message,
+            .capabilities = caps,
+        };
+        return encodeMessage(allocator, resp);
+    }
     if (err != error.TooManySessions) return err;
     const resp = schema.HelloResponse{
         .success = false,
@@ -541,7 +557,9 @@ pub const SessionStore = struct {
                 if (tenant_quota.getGlobalQuotaManager()) |qm| {
                     qm.acquireConnection(tenant) catch {
                         self.allocator.free(tenant_copy);
-                        return error.OutOfMemory; // quota exceeded
+                        // SONNY-6645: refused as QUIC refuses it (53300,
+                        // `helloSessionRefused`); it was an OutOfMemory.
+                        return error.TenantConnectionQuotaExceeded;
                     };
                 }
                 state.session_config = server_state.SessionConfiguration.init(self.allocator);
