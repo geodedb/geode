@@ -3073,6 +3073,25 @@
 
 ### Fixed
 
+- **A write on the shard of an open statement or session engine
+  transaction joins it (SONNY-6659).** graph-storage v0.4.26 refuses a
+  second open transaction's write to a page another open transaction wrote
+  (`WriteConflict`): a full-page WAL image one of them committed carried
+  the other's uncommitted bytes, and recovery replayed them. Two geode
+  writes began such a second transaction: a relationship between nodes on
+  different shards (stored on its source's shard) committed its own there
+  while the statement's or session's transaction was open on that shard,
+  and a node batch (`CREATE (:L), (:L), (:L)`, `createNodesBatch`) opened
+  one per shard, that shard included. Both now write in the open
+  transaction on its shard, so they commit, roll back and vanish at a
+  crash with it, and cost one engine commit fewer. Every other write
+  already joined it (SONNY-6472, SONNY-6529, SONNY-6658). **User-visible:**
+  a `WriteConflict` from the engine (a concurrent writer on the same shard)
+  answers SQLSTATE 40001 (it was 58000), and an auto-commit statement it
+  refused, which is undone, runs again up to 3 times first; see
+  docs/TRANSACTION_MANAGEMENT.md. Regression: `zig build
+  test-sonny6659-geode-single-writer`.
+
 - **`geode query` frees its connect and login error messages
   (SONNY-6662).** The HELLO handshake formatted "Error: <server message>"
   (a refused login), "Failed to send HELLO" and "Failed to receive HELLO

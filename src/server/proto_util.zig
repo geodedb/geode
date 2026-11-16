@@ -356,6 +356,13 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // constraint was just created in; a retry runs through the executor,
         // which checks it.
         error.UniqueConstraintFastPathConflict => .{ .code = "40001", .message = "UniqueConstraintFastPathConflict: a constraint (UNIQUE, NODE KEY, NOT NULL or EXISTS) now applies in this graph; the write was not applied, retry it" },
+        // CANARY: REQ=REQ-SONNY-6659-SINGLE-WRITER; FEATURE="TransactionManagement"; ASPECT=WriteConflictSqlstate; STATUS=TESTED; TEST=tests/test_sonny6659_geode_single_writer.zig; OWNER=storage; UPDATED=2026-11-16
+        // SONNY-6659: graph-storage (from v0.4.26) refused a write to a page
+        // another open engine transaction had written: a concurrent writer
+        // on the same shard. The refused transaction is aborted and the
+        // statement undone; 40001 = serialization_failure, retry it. Matched
+        // by name, so it compiles against engines without the error.
+        error.WriteConflict => .{ .code = "40001", .message = "WriteConflict: another open transaction was writing the same storage page; the write was not applied, retry it" },
         // GAP-0923: ABAC policy DDL validation (duplicate name rejected).
         error.PolicyAlreadyExists => .{ .code = "42710", .message = "Duplicate policy name" },
         error.IncompatibleIndexDataType => .{ .code = "42804", .message = "Incompatible index data type" },
@@ -853,6 +860,8 @@ pub fn statementErrorInfo(err: anyerror) ?ErrorInfo {
         error.DiskQuota,
         error.WouldBlock,
         error.DeviceBusy,
+        // SONNY-6659: retryable (40001), not an internal error.
+        error.WriteConflict,
         => mapError(err),
         else => null,
     };

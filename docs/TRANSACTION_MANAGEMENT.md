@@ -389,8 +389,8 @@ Auto-commit statements (SONNY-6658), with the durable undo log installed
   instead of twice.
 - **The undo goes to disk only when the statement spans engine
   transactions.** A change that commits an engine transaction of its own
-  (one on another shard, a relationship between two shards, a batch create,
-  a change the engine commits itself) is not the statement's last commit.
+  (one on another shard, a relationship from a node on another shard, a
+  batch create's nodes on other shards) is not the statement's last commit.
   Before it, every entry of the statement's undo record (`statement_undo`)
   not yet on disk, and the intents of the creates it is about to make, are
   appended to `txn_undo.wal` under the statement's own id (top bit set, so
@@ -450,6 +450,57 @@ transactions survive whole, that a rolled-back one is not undone again, and
 the sealed log under `GEODE_TDE_KEY`; `zig build
 test-sonny2979-undo-wal-format` covers the record format, torn tails, the
 choice of transactions to undo, and the file's lifecycle.
+
+## One Open Writer per Shard (SONNY-6659)
+
+graph-storage logs full-page images, so a page has at most one open engine
+transaction writing it: from v0.4.26 a second open transaction's write to a
+page the first has written (a node page, or a shared slab block that
+labels, properties and adjacency fill) fails with `WriteConflict`, and that
+transaction cannot commit. Before, the image the second one committed
+carried the first one's uncommitted bytes and recovery replayed them.
+
+geode keeps at most one engine transaction open per shard for a request:
+
+- **Every write joins the open transaction on its shard.** While a
+  statement's or session's engine transaction is open on a shard, every
+  write geode makes there (node create, delete, property and label
+  changes, relationship create and delete, relationship properties, a node
+  batch's nodes on that shard) writes in it, so it commits or is rolled
+  back with that transaction and vanishes with it at a crash. A write on
+  another shard commits its own engine transaction, with no transaction of
+  the request open there. Until SONNY-6659 a relationship between nodes on
+  different shards (stored on its source's shard) and a node batch
+  (`CREATE (:L), (:L), (:L)`) committed their own transaction on the open
+  transaction's shard.
+- **Writers are serialized per graph.** An executor statement holds the
+  graph's write lock, its engine transactions end before the lock is
+  released, and no thread holds it while a group-commit batch transaction is
+  open (SONNY-3029). The bulk fast paths take the graph SHARED and the
+  shard's lock for their own transaction.
+- **A concurrent writer's refusal is retryable.** Where two writers still
+  meet on a shard (an embedding caller that runs writes without the graph
+  lock, or a bulk fast-path write beside an open group-commit batch on the
+  same shard), the refused write's own engine transaction is aborted (the
+  engine undoes it; the store had not taken it) and the error answers
+  SQLSTATE 40001 (serialization failure, `WriteConflict: ... retry it`). An
+  auto-commit statement it refused is undone and runs again, up to 3 times
+  (after 1, 2 and 4 ms; `execution.write_conflict_retries_total`), before
+  the 40001 reaches the client. A statement in an explicit transaction is
+  not retried: the transaction fails, and the client retries it whole.
+- **Residual.** A conflict on the statement's or session's own engine
+  transaction (the other writer took the page first) makes that
+  transaction uncommittable: its commit fails, it is aborted and the graph
+  is quarantined, as for any failed commit (SONNY-6529), until a restart.
+  geode's locking keeps every other writer off a shard while such a
+  transaction is open, so no path is known to reach it.
+
+`zig build test-sonny6659-geode-single-writer` checks, with a statement
+transaction open on a chosen shard, that a cross-shard relationship and a
+node batch begin no transaction on that shard and leave it not overlapped
+(graph-storage's own flag), that `WriteConflict` answers 40001, and, over a
+real server killed with SIGKILL, that both writes inside an explicit
+transaction commit, roll back and vanish at the kill with it.
 
 ## Future Enhancements
 
