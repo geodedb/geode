@@ -161,8 +161,10 @@ SONNY-6279.
   hydrated when the entry enters the log or before a restarted node
   replays it, not under `inner_mutex`
   (`test-sonny6631-apply-hydration-off-mutex`). A label or relationship type
-  new to a graph is still written to its label dictionary durably (two
-  fsyncs per shard set) under `inner_mutex` (SONNY-6633 item 4, open).
+  new to a graph an entry writes is given its id (a durable label-dictionary
+  write, two fsyncs per shard set) at the same point, under the graph's
+  `replicated_apply_mutex`, not under `inner_mutex`; only into a graph
+  already open, never creating one (SONNY-6633 item 4, SONNY-6636).
   InstallSnapshot
   carries its chunk data, BLAKE3 digest and configuration on the wire, and a
   refused snapshot reaches the leader as a refusal; a snapshot carries the
