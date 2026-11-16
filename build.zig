@@ -19679,6 +19679,23 @@ pub fn build(b: *std.Build) void {
     const sonny6369_step = b.step("test-sonny6369-query-exit-auth-residuals", "Run the SONNY-6369 regression (geode query exits 1 when the query fails; a superuser cannot be given another role; geode.rls add / remove and user_remove_attribute failures are GQLSTATUS errors and the attribute results own their rows; GQL_AUTH_DDL / gql_conformance docs; EXPLAIN POLICY reports the procedure gate, the DDL schema gates and the USE GRAPH bind check; BLAKE2b hashes become Argon2id at login, the legacy check takes Argon2id's time; spawns the CLI and a server)");
     sonny6369_step.dependOn(&run_sonny6369_tests.step);
 
+    // SONNY-6662: geode query frees its connect / HELLO error messages (a
+    // refused login or connection under --batch was reported as leaked by
+    // the Debug build). Spawns the CLI and a server.
+    const sonny6662_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6662_cli_auth_leak.zig"), .target = target, .optimize = optimize });
+    sonny6662_test_mod.link_libc = true;
+    sonny6662_test_mod.addImport("geode", root_mod);
+    sonny6662_test_mod.addImport("schema", schema_mod);
+    sonny6662_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6662_test_mod.addImport("logging", logging_mod);
+    sonny6662_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6662_tests = b.addTest(.{ .root_module = sonny6662_test_mod });
+    const run_sonny6662_tests = b.addRunArtifact(sonny6662_tests);
+    spawnsBuiltGeode(sonny6662_tests);
+    shardDep(test_step, &run_sonny6662_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6662_step = b.step("test-sonny6662-cli-auth-leak", "Run the SONNY-6662 regression (geode query with wrong credentials, single / --file / --batch, and --batch to a closed port report the error and the Debug build reports no leak; spawns the CLI and a server)");
+    sonny6662_step.dependOn(&run_sonny6662_tests.step);
+
     // SONNY-6377 (item 1): geode query never sends a write again once the
     // server may have applied it (a chunk that timed out is not replayed; a
     // gRPC connection that fails after the Execute request is not retried).
