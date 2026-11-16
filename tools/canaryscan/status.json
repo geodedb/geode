@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T15:52:48.522442781Z",
+  "generated_at": "2026-11-16T16:31:22.867176081Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -81983,6 +81983,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6635-REGISTRY-BINDING",
+      "features": [
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "DataDirIdentityAndSealedMarker",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6635_registry_binding.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TDEFileLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6635_registry_binding.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6635_registry_binding.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6636-CLUSTER-SNAPSHOT",
       "features": [
         {
@@ -88536,7 +88569,7 @@
       "EXEMPT": 209,
       "IMPL": 568,
       "STUB": 18,
-      "TESTED": 4381
+      "TESTED": 4383
     },
     "by_aspect": {
       "2PC": 3,
@@ -89273,6 +89306,7 @@
       "DEGREES": 1,
       "DML": 1,
       "DataDirCreation": 1,
+      "DataDirIdentityAndSealedMarker": 1,
       "DataDirPermissions": 1,
       "DataDirPermissionsHelper": 1,
       "DataExceptionGqlstatus": 1,
@@ -91452,7 +91486,7 @@
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
       "RegistrySwap": 1,
-      "Regression": 429,
+      "Regression": 430,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,

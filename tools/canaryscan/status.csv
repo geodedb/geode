@@ -5192,6 +5192,8 @@ REQ-SONNY-6633-DEDUP-IN-SNAPSHOT,DistributedCluster,DedupSerialized,TESTED,src/d
 REQ-SONNY-6633-INTERN-LABELS-BEFORE-APPLY,DistributedCluster,PrehydrateInternsNames,TESTED,src/distributed/raft_apply.zig,tests/test_sonny6631_apply_hydration_off_mutex.zig,,distributed,2026-11-15
 REQ-SONNY-6633-INTERN-LABELS-BEFORE-APPLY,DistributedCluster,InternOffRaftMutex,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6631_apply_hydration_off_mutex.zig,,distributed,2026-11-15
 REQ-SONNY-6633-SNAPSHOT-WIRE,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6633_snapshot_wire.zig,tests/test_sonny6633_snapshot_wire.zig,,distributed,2026-11-16
+REQ-SONNY-6635-REGISTRY-BINDING,TDEFileLevelEncryption,DataDirIdentityAndSealedMarker,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6635_registry_binding.zig,,security,2026-11-15
+REQ-SONNY-6635-REGISTRY-BINDING,TDEFileLevelEncryption,Regression,TESTED,tests/test_sonny6635_registry_binding.zig,tests/test_sonny6635_registry_binding.zig,,security,2026-11-15
 REQ-SONNY-6636-CLUSTER-SNAPSHOT,Raft Snapshot Persistence,MultiProcessRegression,TESTED,tests/test_sonny6636_cluster_snapshot.zig,tests/test_sonny6636_cluster_snapshot.zig,,distributed,2026-11-16
 REQ-SONNY-6636-CRASH-SAFE-GRAPH-SWAP,Raft Snapshot Persistence,RegistrySwap,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6636_graph_restore_swap.zig,,storage,2026-11-15
 REQ-SONNY-6636-CRASH-SAFE-GRAPH-SWAP,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6636_graph_restore_swap.zig,tests/test_sonny6636_graph_restore_swap.zig,,storage,2026-11-15
