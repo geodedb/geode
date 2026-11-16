@@ -62,6 +62,12 @@ const cases = [_]Case{
     .{ .q = "WITH 1 AS a, a + 1 AS b RETURN b", .err = error.VariableNotInScope },
     .{ .q = "MATCH (n:Ch6645) WITH n.k AS k, k * 2 AS d RETURN d", .err = error.VariableNotInScope },
     .{ .q = "MATCH (n:Ch6645) WITH n, n.k AS k, n.k + k AS d RETURN d", .err = error.VariableNotInScope },
+    // So does a RETURN item.
+    .{ .q = "RETURN 1 AS a, a + 1 AS b", .err = error.VariableNotInScope },
+    .{ .q = "RETURN b AS a, 1 AS b", .err = error.VariableNotInScope },
+    .{ .q = "MATCH (n:Ch6645) RETURN n.k AS k, k * 2 AS d", .err = error.VariableNotInScope },
+    .{ .q = "MATCH (n:Ch6645) RETURN n.k AS k, n.k * 2 AS d ORDER BY k", .want = &.{ "1, 2", "2, 4" }, .ordered = true },
+    .{ .q = "MATCH (n:Ch6645) RETURN n.k AS k, count(*) AS c GROUP BY k ORDER BY c, k", .want = &.{ "1, 1", "2, 1" }, .ordered = true },
     // An alias is read after the projection: its ORDER BY, its WHERE, the
     // next part.
     .{ .q = "MATCH (n:Ch6645) WITH n.k AS k ORDER BY k DESC RETURN k", .want = &.{ "2", "1" }, .ordered = true },

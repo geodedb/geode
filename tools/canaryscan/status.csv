@@ -5225,6 +5225,7 @@ REQ-SONNY-6645-CHAINED-INITIAL-WITH,ChainedWithClauseExecution,InitialWithInChai
 REQ-SONNY-6645-GRPC-CONNECTION-QUOTA,TenantQuota,GrpcHandshakeRefusal,TESTED,src/transport/grpc_server.zig,tests/test_sonny3313_grpc_peer_ip.zig,,transport,2026-11-16
 REQ-SONNY-6645-QUERY-FOLLOWUPS,ChainedWithClauseExecution,InitialWithInChainedPart,TESTED,tests/test_sonny6645_query_followups.zig,tests/test_sonny6645_query_followups.zig,,engine,2026-11-16
 REQ-SONNY-6645-SHORTEST-PATH-ONE,ShortestPath,OneOperandForm,TESTED,src/eval.zig,tests/test_sonny6645_query_followups.zig,,eval,2026-11-16
+REQ-SONNY-6645-WITH-SIBLING-ALIAS,LinearComposition,ReturnItemsReadIncoming,TESTED,src/execution/scope_check.zig,tests/test_sonny6645_query_followups.zig,,engine,2026-11-16
 REQ-SONNY-6645-WITH-SIBLING-ALIAS,LinearComposition,ProjectionItemsReadIncoming,TESTED,src/execution/scope_check.zig,tests/test_sonny6645_query_followups.zig,,engine,2026-11-16
 REQ-SONNY-6646-BULK-INSERT-POST-COMMIT,StorageIntegrity,ReservedNodeUndo,TESTED,src/graph_store.zig,tests/test_sonny6646_bulk_insert_post_commit.zig,,storage,2026-11-15
 REQ-SONNY-6646-BULK-INSERT-POST-COMMIT,StorageIntegrity,InMemoryCopyBeforeCommit,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6646_bulk_insert_post_commit.zig,,storage,2026-11-15

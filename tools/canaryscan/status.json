@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T07:16:39.840690652Z",
+  "generated_at": "2026-11-16T07:39:33.986003266Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -82550,6 +82550,20 @@
       "features": [
         {
           "feature": "LinearComposition",
+          "aspect": "ReturnItemsReadIncoming",
+          "status": "TESTED",
+          "files": [
+            "src/execution/scope_check.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6645_query_followups.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "LinearComposition",
           "aspect": "ProjectionItemsReadIncoming",
           "status": "TESTED",
           "files": [
@@ -87894,7 +87908,7 @@
       "EXEMPT": 209,
       "IMPL": 565,
       "STUB": 18,
-      "TESTED": 4346
+      "TESTED": 4347
     },
     "by_aspect": {
       "2PC": 3,
@@ -90910,6 +90924,7 @@
       "ReturnAndSorting": 1,
       "ReturnFix": 1,
       "ReturnGroupBy": 1,
+      "ReturnItemsReadIncoming": 1,
       "ReturnOwnedBeforeDelete": 1,
       "ReturnProjection": 1,
       "ReturnThroughMain": 2,

@@ -170,8 +170,9 @@ pub const Checker = struct {
     }
 
     fn returnItems(c: *Checker, rc: ast.ReturnClause, s: Scope) Error!void {
-        const with_ret = try c.merged(s, try c.names(rc.items, s));
-        for (rc.items) |*item| try c.expr(&item.expr, with_ret);
+        // SONNY-6645: an item reads the incoming record, not a sibling
+        // item's alias (as a WITH's, `projection`).
+        for (rc.items) |*item| try c.expr(&item.expr, s);
     }
 
     /// `q` and the parts chained after it, `in` in scope before `q`.
@@ -290,8 +291,13 @@ pub const Checker = struct {
         if (q.next_query != null) return post;
         // The RETURN, unless it is the WITH's items standing in for one.
         if (!sameItems(q.ret.items, post_with) and !sameItems(q.ret.items, initial)) {
+            // CANARY: REQ=REQ-SONNY-6645-WITH-SIBLING-ALIAS; FEATURE="LinearComposition"; ASPECT=ReturnItemsReadIncoming; STATUS=TESTED; TEST=tests/test_sonny6645_query_followups.zig; OWNER=engine; UPDATED=2026-11-16
+            // SONNY-6645: each RETURN item reads the incoming record (ISO/IEC
+            // 39075:2024 20.12 SR 8), not a sibling item's alias: `RETURN 1
+            // AS a, a + 1 AS b` answered NULL for b. Its GROUP BY, HAVING
+            // and ORDER BY read the aliases too.
+            for (q.ret.items) |*item| try c.expr(&item.expr, post);
             const with_ret = try c.merged(post, try c.names(q.ret.items, post));
-            for (q.ret.items) |*item| try c.expr(&item.expr, with_ret);
             if (q.returnStageGroupBy()) |g| for (g.keys) |*k| try c.expr(k, with_ret);
             if (q.returnStageHaving()) |*h| try c.expr(h, with_ret);
             if (q.order_by) |ob| try c.orderKeys(ob, q.ret.items, q.ret.distinct, q.returnStageGroupBy(), with_ret);
@@ -515,8 +521,9 @@ pub const Checker = struct {
             return;
         }
         if (f.return_clause) |rc| {
+            // SONNY-6645: as a RETURN item anywhere, the incoming record only.
+            for (rc.items) |*item| try c.expr(&item.expr, s);
             const with_ret = try c.merged(s, try c.names(rc.items, s));
-            for (rc.items) |*item| try c.expr(&item.expr, with_ret);
             if (f.group_by) |g| for (g.keys) |*k| try c.expr(k, with_ret);
             if (f.order_by) |ob| try c.orderKeys(ob, rc.items, rc.distinct, f.group_by, with_ret);
         }
