@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T15:39:57.967840838Z",
+  "generated_at": "2026-11-16T16:04:55.118311656Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83334,6 +83334,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6672-MERGE-ONMATCH-SHARD",
+      "features": [
+        {
+          "feature": "High-Concurrency Mutations",
+          "aspect": "MatchedNodeShard",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6672_bulk_merge_onmatch_shard.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "High-Concurrency Mutations",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6672_bulk_merge_onmatch_shard.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6672_bulk_merge_onmatch_shard.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -88425,7 +88458,7 @@
       "EXEMPT": 209,
       "IMPL": 566,
       "STUB": 18,
-      "TESTED": 4377
+      "TESTED": 4379
     },
     "by_aspect": {
       "2PC": 3,
@@ -90397,6 +90430,7 @@
       "MatchRLSPrincipalUsername": 1,
       "MatchRelationshipProperties": 1,
       "MatchSetResolution": 1,
+      "MatchedNodeShard": 1,
       "MaterializeCapNeedsLimit": 1,
       "MaterializeKnownOnly": 1,
       "MaterializeLimitFails": 1,
@@ -91337,7 +91371,7 @@
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
       "RegistrySwap": 1,
-      "Regression": 428,
+      "Regression": 429,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,

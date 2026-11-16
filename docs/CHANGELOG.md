@@ -3090,6 +3090,23 @@
   when `AbortNotUndone` still happens (overlap, cross-shard WAL tail
   records, `abort_undo = .keep_writes`).
 
+- **A bulk node MERGE that matches an existing node writes it from that
+  node's shard worker, under its shard lock (SONNY-6672).** A node MERGE
+  through group commit (`bulk_merge_node`, `bulk_merge_node_props`) went to
+  the worker of its reserved id's shard. When it matched an existing node
+  and applied its SET properties (`apply_on_match`), it wrote them on the
+  matched node's engine shard (another one for an executor-created node)
+  from that worker's thread, holding the MERGE tuple lock and the graph
+  lock SHARED but no shard lock. The coordinator now looks the match up at
+  submit and routes such a MERGE to the matched node's shard (reserving
+  its id there); the match branch takes the matched node's shard lock
+  (tuple lock -> rwlock SHARED, held across probe and write -> shard lock),
+  so a node matched only by the time the MERGE runs is still written under
+  its lock. The other group-commit writes to nodes they did not create are
+  relationships (routed by their source's shard, SONNY-6671). Regression:
+  `zig build test-sonny6672-bulk-merge-onmatch-shard` (152 foreign-shard
+  writes from 64 ON MATCH MERGEs; 0 after).
+
 - **A group-commit worker writes only its own engine shard (SONNY-6671).**
   The coordinator routed a relationship op (bulk insert, bulk MERGE,
   `MATCH ... CREATE`) to the worker of `shardIndex(source public id)`, and

@@ -102,6 +102,15 @@ fn reserveNodeIdForActiveWriteShard() u64 {
     }
 }
 
+/// SONNY-6672: a fresh node id whose shard is `shard`.
+fn reserveNodeIdOnShard(shard: usize) u64 {
+    const store = graph_store.getGlobalStore(graph_store.global_allocator());
+    while (true) {
+        const id = store.reserveNodeId();
+        if (graph_storage.sharded_store.shardIndex(id) == shard) return id;
+    }
+}
+
 // CANARY: REQ=REQ-QUIC-HC-175; FEATURE="HighConcurrencyMutations"; ASPECT=CoordinatorPhaseMetrics; STATUS=IMPL; TEST=test_group_commit_coordinator; OWNER=storage; UPDATED=2026-05-29
 //
 // Detailed coordinator phase timings are intentionally opt-in. They require
@@ -554,11 +563,20 @@ pub const ShardedCoordinator = struct {
             .bulk_insert_node => |*p| {
                 p.assigned_id = reserveNodeIdForActiveWriteShard();
             },
+            // SONNY-6672: an ON MATCH MERGE whose node exists goes to the
+            // worker of that node's engine shard (and reserves its id there,
+            // should the node be gone by then), which writes the matched
+            // node's properties.
             .bulk_merge_node => |*p| {
-                p.assigned_id = reserveNodeIdForActiveWriteShard();
+                const matched = if (p.apply_on_match) self.adapter.mergeMatchEngineShard(self.graph_name, p.label, p.merge_key, p.merge_value, p.tenant) else null;
+                p.assigned_id = if (matched) |s| reserveNodeIdOnShard(s) else reserveNodeIdForActiveWriteShard();
             },
             .bulk_merge_node_props => |*p| {
-                p.assigned_id = reserveNodeIdForActiveWriteShard();
+                const matched = if (p.apply_on_match and p.merge_props.len > 0)
+                    self.adapter.mergeMatchEngineShard(self.graph_name, p.label, p.merge_props[0].key, p.merge_props[0].value, p.tenant)
+                else
+                    null;
+                p.assigned_id = if (matched) |s| reserveNodeIdOnShard(s) else reserveNodeIdForActiveWriteShard();
             },
             .bulk_insert_edge => {},
             // FIX #3: endpoints pre-resolved by the dispatcher (composite-key

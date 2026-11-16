@@ -5274,6 +5274,8 @@ REQ-SONNY-6670-TDE-STAGED-SNAPSHOT,TDEFileLevelEncryption,Regression,TESTED,test
 REQ-SONNY-6671-WORKER-SHARD,High-Concurrency Mutations,ForeignShardWriteCounter,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6671_group_commit_routing.zig,,storage,2026-11-16
 REQ-SONNY-6671-WORKER-SHARD,High-Concurrency Mutations,EngineShardOfPublicId,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6671_group_commit_routing.zig,,storage,2026-11-16
 REQ-SONNY-6671-WORKER-SHARD,High-Concurrency Mutations,Regression,TESTED,tests/test_sonny6671_group_commit_routing.zig,tests/test_sonny6671_group_commit_routing.zig,,storage,2026-11-16
+REQ-SONNY-6672-MERGE-ONMATCH-SHARD,High-Concurrency Mutations,MatchedNodeShard,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6672_bulk_merge_onmatch_shard.zig,,storage,2026-11-16
+REQ-SONNY-6672-MERGE-ONMATCH-SHARD,High-Concurrency Mutations,Regression,TESTED,tests/test_sonny6672_bulk_merge_onmatch_shard.zig,tests/test_sonny6672_bulk_merge_onmatch_shard.zig,,storage,2026-11-16
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13
