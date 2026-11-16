@@ -750,6 +750,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6688-fle-migrate-encrypt", .reason = "intentionally red TDD reproduction (SONNY-6688); compiled by test-compile; registered through shardDep by the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -18390,6 +18391,21 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6334_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6334_step = b.step("test-sonny6334-fle-authorization", "Run SONNY-6334 regression (FLE administration -- configureField, grantPlaintext, revokePlaintext, key-affecting tde.* -- is Admin only, refusals 42501 + audited, catalog unchanged; plaintext needs the FLE role in the field's list AND GPS decrypt_field; gRPC installs and clears the FLE request context like QUIC; grant/revoke/configure are audit events; a ReadWrite user cannot obtain plaintext over the executor, gRPC or QUIC)");
     sonny6334_step.dependOn(&run_sonny6334_tests.step);
+
+    // SONNY-6688: geode.fle.migrateEncrypt / geode fle migrate-encrypt.
+    const sonny6688_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6688_fle_migrate_encrypt.zig"), .target = target, .optimize = optimize });
+    sonny6688_test_mod.link_libc = true; // setenv/unsetenv
+    sonny6688_test_mod.addImport("geode", root_mod);
+    sonny6688_test_mod.addImport("schema", schema_mod);
+    sonny6688_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6688_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6688_test_mod.addImport("logging", logging_mod);
+    sonny6688_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6688_tests = b.addTest(.{ .root_module = sonny6688_test_mod });
+    const run_sonny6688_tests = b.addRunArtifact(sonny6688_tests);
+    spawnsBuiltGeode(sonny6688_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6688_tests.step);
+    b.step("test-sonny6688-fle-migrate-encrypt", "Run SONNY-6688 regression (CALL geode.fle.migrateEncrypt and geode fle migrate-encrypt against a real server encrypt a field's values stored before it was configured as encrypted: none is on disk in plaintext afterwards, the permitted role reads them and others read [REDACTED]; edges too; batched, idempotent, a run stopped after a batch is finished by running it again; only the session's tenant; bad arguments, a foreign tenant, an internal graph and an explicit transaction refused)").dependOn(&run_sonny6688_tests.step);
 
     const sonny6341_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6341_fle_role_binding.zig"), .target = target, .optimize = optimize });
     sonny6341_test_mod.link_libc = true; // setenv/unsetenv
