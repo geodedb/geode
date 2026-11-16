@@ -3073,6 +3073,23 @@
 
 ### Fixed
 
+- **A function, procedure, parameter, index, constraint or user that does
+  not exist answers 42002; a tenant quota answers class 53 (SONNY-6645).**
+  **BREAKING:** `UnknownFunction` and `UnknownProcedure` were the
+  PostgreSQL 42883, `MissingParameter` 42P02, and `IndexNotFound`,
+  `ConstraintNotFound`, `UserNotFound`, `FleRoleUserNotFound` and
+  `UserAttributeNotSet` 42704; each is an invalid reference, which ISO/IEC
+  39075 Table 8 gives the subclass 42002 (an implementation-defined
+  subclass is for a condition the table gives none, 23.1). The tenant
+  connection and query quotas answered 42000 (syntax error or access rule
+  violation); Table 8 has no resource class, so they take the
+  implementation-defined class 53 Geode's other resource limits use: 53300
+  for the connection quota, 53400 for the query quota, on QUIC and gRPC.
+  Kept, as 23.1 allows: 42501, 42702, 42710, 42P07, 42803, 42804, 42939,
+  42704 for an invalid option value, and 3F000 (ISO/IEC 9075's invalid
+  schema name) for a graph or schema that does not exist. Regression: `zig
+  build test-sonny6543-iso-status-codes`.
+
 - **A chained part's WITH before its MATCH is bound; list-form shortest
   paths are refused; a LET reads no later definition; NULL cast operands
   are NULL (SONNY-6645).** `WITH 1 AS a WITH a, 2 AS b MATCH (n) RETURN

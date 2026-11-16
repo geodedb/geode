@@ -232,6 +232,12 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-6543: a Syntax Rule refusal with no explicit condition is
         // 42000 (ISO/IEC 39075:2024 4.7.3 step 4 e); it was the PostgreSQL
         // 42601. BREAKING for a client matching it.
+        // SONNY-6645: a tenant quota is a resource limit; Table 8 has no
+        // class for one, so the implementation-defined class 53 (23.1: a
+        // class code beginning with '5'), with Geode's other resource
+        // limits. Both transports sent 42000. BREAKING.
+        error.TenantConnectionQuotaExceeded => .{ .code = "53300", .message = "Connection quota exceeded for tenant" },
+        error.TenantQueryQuotaExceeded => .{ .code = "53400", .message = "Query quota exceeded for tenant" },
         error.UnionColumnCountMismatch => .{ .code = "42000", .message = "UNION column count mismatch" },
         // SONNY-2755: `YIELD path, path` used to free that column twice.
         error.DuplicateYieldColumn => .{ .code = "42702", .message = "YIELD names the same column more than once; name each column once" },
@@ -263,7 +269,7 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-6341: CALL geode.fle.grantRole / revokeRole.
         error.FleRoleGrantNotPersisted => .{ .code = "58030", .message = "The FLE role grant could not be saved to the security graph; it was not applied. Retry it" },
         error.FleRoleRevokeNotPersisted => .{ .code = "58030", .message = "The FLE role revoke is in effect but could not be saved to the security graph; the role may return at the next start. Retry it" },
-        error.FleRoleUserNotFound => .{ .code = "42704", .message = "User does not exist" },
+        error.FleRoleUserNotFound => .{ .code = "42002", .message = "User does not exist" },
         error.InvalidFleRole => .{ .code = "22023", .message = "An FLE role name is non-empty and uses only letters, digits, '_' and '-'" },
         error.FleCatalogUnavailable => .{ .code = "58030", .message = "The FLE catalog could not be loaded, so which fields are encrypted is unknown; string property writes and reads are refused until it is restored (see the server log)" },
         // SONNY-6327: an encrypted value the principal may read does not
@@ -315,8 +321,8 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // CANARY: REQ=REQ-SONNY-6294-DROP-INDEX-RULES; FEATURE="SchemaCatalog"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny6294_drop_index_rules.zig; OWNER=catalog; UPDATED=2026-11-11
         // SONNY-6294: a missing index or constraint is undefined_object
         // (42704); both reached clients as 58000 (system error).
-        error.IndexNotFound => .{ .code = "42704", .message = "Index does not exist" },
-        error.ConstraintNotFound => .{ .code = "42704", .message = "Constraint does not exist in the session's graph" },
+        error.IndexNotFound => .{ .code = "42002", .message = "Index does not exist" },
+        error.ConstraintNotFound => .{ .code = "42002", .message = "Constraint does not exist in the session's graph" },
         error.FulltextIndexInDefaultGraph => .{ .code = "0A000", .message = "A fulltext index lives in the default graph: drop it from the default graph (USE GRAPH default; DROP INDEX <name>)" },
         // SONNY-1319: the name is held in another graph by an index whose
         // runtime structure is keyed by name alone (vector and other advanced
@@ -468,7 +474,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-3248 (round 4b-1 review m-2): a SKIP or LIMIT parameter that
         // is no non-negative integer read as "no window" (every row).
         error.InvalidWindowParameter => .{ .code = "22G03", .message = "Invalid SKIP or LIMIT value: a SKIP or LIMIT parameter must be a non-negative integer" },
-        error.MissingParameter => .{ .code = "42P02", .message = "Undefined parameter: the statement references a parameter ($name or $n) that the request does not supply" },
+        // SONNY-6645: a parameter the request does not supply is an invalid
+        // reference (ISO/IEC 39075:2024 22.1 SR 5 d ii 1, Table 8: 42002);
+        // it was the PostgreSQL 42P02. BREAKING.
+        error.MissingParameter => .{ .code = "42002", .message = "Undefined parameter: the statement references a parameter ($name or $n) that the request does not supply" },
         // GAP-0926: nested aggregate (sum(avg(...))) is invalid.
         error.NestedAggregate => .{ .code = "42803", .message = "Aggregate functions cannot be nested" },
         // SONNY-2675: a HAVING over groups reads each group's keys, projected
@@ -544,11 +553,14 @@ pub fn mapError(err: anyerror) ErrorInfo {
             break :blk .{ .code = "22000", .message = PasswordPolicy.geodeSecure().message(PasswordPolicy.violationOf(err).?) };
         },
         error.PasswordReuse => .{ .code = "22000", .message = "New password must not match the current password" },
-        error.UnknownProcedure => .{ .code = "42883", .message = "Unknown procedure" },
+        // SONNY-6645: a procedure or function name that identifies none is an
+        // invalid reference (Table 8: 42002); both were the PostgreSQL 42883
+        // undefined_function. BREAKING.
+        error.UnknownProcedure => .{ .code = "42002", .message = "Unknown procedure" },
         // docs/@BUGS_731.md bug 8b: an unresolved scalar function used to
         // silently evaluate to NULL; surface it with the same
         // undefined_function SQLSTATE the procedure path uses.
-        error.UnknownFunction => .{ .code = "42883", .message = "Unknown function" },
+        error.UnknownFunction => .{ .code = "42002", .message = "Unknown function" },
         // geode#877 (c): knn()/vector_knn() named a property no row supplies.
         // Previously an empty list with SQLSTATE 00000 — indistinguishable from
         // "no neighbours". Same diagnostic posture as UnknownFunction above.
@@ -614,10 +626,13 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.ApiKeysNotSupported => .{ .code = "0A000", .message = "API keys are not supported by the server: the geode.auth.apikey_* procedures create, list, check and revoke nothing, and the handshake does not authenticate by key" },
         // SONNY-6291: user_show / user_permissions (SHOW PERMISSIONS FOR) of
         // a user that does not exist, for an Admin.
-        error.UserNotFound => .{ .code = "42704", .message = "User does not exist" },
+        // SONNY-6645: a user, index, constraint or attribute that does not
+        // exist is an invalid reference, 42002 (it was the PostgreSQL 42704
+        // undefined_object). BREAKING.
+        error.UserNotFound => .{ .code = "42002", .message = "User does not exist" },
         // SONNY-6369: user_remove_attribute of an attribute the user does not
         // have (it answered 00000 "attribute ... not set").
-        error.UserAttributeNotSet => .{ .code = "42704", .message = "The user has no such attribute; nothing was removed" },
+        error.UserAttributeNotSet => .{ .code = "42002", .message = "The user has no such attribute; nothing was removed" },
         // SONNY-6359: auth procedure failures that answered 00000 with a
         // status row starting "error:" or "note:".
         error.UserAlreadyExists => .{ .code = "42710", .message = "User already exists" },

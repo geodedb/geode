@@ -122,13 +122,13 @@ permissions. With `FOR <username>`, an Admin role is required unless
 like the admin-only procedures (SONNY-6269, the `SHOW GRANTS` rule below).
 `CALL geode.auth.user_permissions([<username>])` has the same rule; without
 a username it lists the caller's permissions. For a user that does not
-exist an Admin gets 42704 (`User does not exist`); it used to be answered
+exist an Admin gets 42002 (`User does not exist`); it used to be answered
 with the `user` role's permissions (SONNY-6291).
 
 `CALL geode.auth.user_show([<username>])` (username, email, role, status)
 follows the same rule (SONNY-6291): a user may show itself; another user
 needs the Admin role, and a refusal answers 42501 and is audited. A user
-that does not exist is an error: 42704 for an Admin, and for anyone else
+that does not exist is an error: 42002 for an Admin, and for anyone else
 the same 42501 refusal as another user's, so a non-admin cannot probe
 which users exist. It used to show any user to any authenticated user, and
 made up a row (`unknown` / `user` / `active`) for a missing one.
@@ -137,13 +137,13 @@ Failures are GQLSTATUS errors, never a 00000 status row starting `error:`
 (SONNY-6359): `CREATE USER` / `geode.auth.user_create` of a user that exists
 fails with 42710 and of a reserved name (`geode-cluster`) with 42939;
 `geode.auth.user_assign_role` without a user or role fails with 22023 and of
-a user that does not exist with 42704 for an Admin; a privilege other than
+a user that does not exist with 42002 for an Admin; a privilege other than
 `READ`, `WRITE`, `SCHEMA` or `ALL` fails with 22023; and an
 `ALTER USER ... ENABLE | DISABLE` or role change that fails for another
 reason (the security graph cannot be read) fails with that error (58000).
 
 The other `geode.auth.*` procedures follow the same rule (SONNY-6367). A
-user that does not exist fails with 42704 for an Admin (42501 for anyone
+user that does not exist fails with 42002 for an Admin (42501 for anyone
 else, as above): `ALTER USER ... ENABLE | DISABLE` /
 `geode.auth.user_enable` / `user_disable` (they answered `enabled <user>`),
 `user_set_attribute`, `mfa_setup`, `mfa_verify`, `mfa_enable` and
@@ -183,7 +183,7 @@ secret is protected at rest.
 
 `GRANT <priv> ON GRAPH g TO <user>` and `REVOKE <priv> ON GRAPH g FROM
 <user>` (and `geode.auth.grant` / `revoke`) of a user that does not exist
-fail with 42704 (`User does not exist`) and change nothing (SONNY-6345).
+fail with 42002 (`User does not exist`) and change nothing (SONNY-6345).
 They used to succeed (SQLSTATE 00000) with a status row `error: user not
 found: <user>`. Without a security graph to look users up in (an embedded
 executor with no persistence wired), they fail with 58030 and grant or
@@ -311,7 +311,7 @@ All auth DDL mutations persist to the HMAC-chained `__geode_security` graph via
 
 - **`CREATE USER`** → a `User` node is created in `__geode_security`.
 - **`DROP USER`** → the `User` node is removed from `__geode_security`. A user
-  that does not exist fails with 42704 (SONNY-6609; it answered `deleted
+  that does not exist fails with 42002 (SONNY-6609; it answered `deleted
   <name>`); `DROP USER IF EXISTS` answers `no user <name>; nothing dropped`.
 - **`ALTER USER … SET PASSWORD`** → the `password_hash` property is updated on
   the `User` node and `auth_version` is bumped (invalidating live sessions).
@@ -546,7 +546,7 @@ the store or the auth graph cannot be opened (`[startup] HMAC key unusable`,
 6. **`IF EXISTS` on `DROP ROLE` is effectively always-satisfied.** The
    underlying `geode.auth.role_delete` degrades gracefully on a missing role
    rather than returning an error. `DROP USER` of a missing user fails with
-   42704 (SONNY-6609), and `DROP USER IF EXISTS` is the no-op form.
+   42002 (SONNY-6609), and `DROP USER IF EXISTS` is the no-op form.
 
 7. **`CREATE POLICY`, FLE DDL, and tenant DDL are not part of this surface.**
    Use `CALL geode.fle.*` for field-level encryption schema management and the

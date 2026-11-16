@@ -12,7 +12,7 @@
 //!     recovery codes, so `authenticateWithMFA` could not redeem a stored
 //!     code.
 //! (2) `geode.auth.user_delete` (DROP USER) answered "deleted <name>" for a
-//!     user that does not exist; it is 42704 now (DROP USER IF EXISTS stays
+//!     user that does not exist; it is 42002 now (DROP USER IF EXISTS stays
 //!     a no-op).
 //!
 //! No mocks: the real executor through the gRPC handlers, the real
@@ -320,11 +320,11 @@ test "SONNY-6609 (2): DROP USER of a user that does not exist is an error; IF EX
     try w.init();
     defer w.deinit();
     const ga = w.arena.allocator();
-    const err = try fx.expectRefused(ga, w.admin, "DROP USER nobody6609", "42704");
+    const err = try fx.expectRefused(ga, w.admin, "DROP USER nobody6609", "42002");
     _ = err;
-    _ = try fx.expectRefused(ga, w.admin, "CALL geode.auth.user_delete('nobody6609')", "42704");
+    _ = try fx.expectRefused(ga, w.admin, "CALL geode.auth.user_delete('nobody6609')", "42002");
     try fx.expectRuns(ga, w.admin, "DROP USER IF EXISTS nobody6609");
     try fx.expectRuns(ga, w.admin, "CREATE USER dr6609 SET PASSWORD '" ++ user_pw ++ "'");
     try fx.expectRuns(ga, w.admin, "DROP USER dr6609");
-    _ = try fx.expectRefused(ga, w.admin, "DROP USER dr6609", "42704");
+    _ = try fx.expectRefused(ga, w.admin, "DROP USER dr6609", "42002");
 }

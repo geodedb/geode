@@ -3258,7 +3258,9 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             if (grpc_query_tenant) |tid| {
                 if (tenant_quota.getGlobalQuotaManager()) |qm| {
                     qm.acquireQuery(tid) catch {
-                        var resp = try buildErrorResponse(allocator, "42000", "Query quota exceeded for tenant", &.{}, &.{});
+                        // SONNY-6645: a resource limit, 53400 (it was 42000).
+                        const quota = proto_util.mapError(error.TenantQueryQuotaExceeded);
+                        var resp = try buildErrorResponse(allocator, quota.code, quota.message, &.{}, &.{});
                         defer resp.deinit(allocator);
                         return encodeMessage(allocator, resp);
                     };

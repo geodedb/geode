@@ -1,5 +1,5 @@
 // SONNY-6294 regression: DROP INDEX is deterministic, locks the graph it
-// changes, and its "not found" errors are 42704.
+// changes, and its "not found" errors are 42002 (SONNY-6645; 42704 before).
 //
 //   (1) CREATE INDEX accepted one index name on two labels of a graph, and
 //       DROP INDEX <name> then dropped whichever row hash iteration met
@@ -20,7 +20,7 @@
 //       from another graph's session is refused (0A000; `USE GRAPH default;
 //       DROP INDEX <name>` drops it, under default's lock).
 //   (3) IndexNotFound and ConstraintNotFound reached clients as 58000
-//       (system error). They are 42704 (undefined_object).
+//       (system error). They are 42002 (invalid reference; 42704 before SONNY-6645).
 //
 // Real executor, catalog, gRPC handler and graph locks; no mocks.
 //
@@ -418,7 +418,7 @@ fn waitsFor(ga: std.mem.Allocator, session_id: []const u8, graph: []const u8, qu
     return holder.letting_go.load(.acquire);
 }
 
-test "SONNY-6294 (2)+(3): over gRPC, DROP INDEX in a named graph holds that graph's write lock, not default's; fulltext stays in default; not-found is 42704" {
+test "SONNY-6294 (2)+(3): over gRPC, DROP INDEX in a named graph holds that graph's write lock, not default's; fulltext stays in default; not-found is 42002" {
     harness.silenceEngineLogs();
     var h = try harness.Harness.init(testing.allocator);
     defer h.deinit();
@@ -470,11 +470,11 @@ test "SONNY-6294 (2)+(3): over gRPC, DROP INDEX in a named graph holds that grap
     }
     try testing.expect(adapter.getFulltextIndexNamed(default_graph, "doc_idx") == null);
 
-    // (3) On the wire: 42704 for a missing index or constraint, 42P07 /
+    // (3) On the wire: 42002 for a missing index or constraint, 42P07 /
     // 42710 for a taken name.
     try expectRuns(ga, s, "USE GRAPH g2");
-    try expectWireCode(ga, s, "DROP INDEX never_6294", "42704");
-    try expectWireCode(ga, s, "DROP CONSTRAINT never_6294", "42704");
+    try expectWireCode(ga, s, "DROP INDEX never_6294", "42002");
+    try expectWireCode(ga, s, "DROP CONSTRAINT never_6294", "42002");
     try expectRuns(ga, s, "CREATE INDEX taken_6294 FOR (n:Item) ON (n.k)");
     try expectWireCode(ga, s, "CREATE INDEX taken_6294 FOR (n:Other) ON (n.k)", "42P07");
     try expectRuns(ga, s, "CREATE CONSTRAINT taken_c_6294 FOR (n:Item) REQUIRE n.k IS NOT NULL");
@@ -484,8 +484,8 @@ test "SONNY-6294 (2)+(3): over gRPC, DROP INDEX in a named graph holds that grap
 test "SONNY-6294 (3): the catalog's errors map to their SQLSTATEs" {
     const Case = struct { err: anyerror, code: []const u8 };
     const cases = [_]Case{
-        .{ .err = error.IndexNotFound, .code = "42704" },
-        .{ .err = error.ConstraintNotFound, .code = "42704" },
+        .{ .err = error.IndexNotFound, .code = "42002" },
+        .{ .err = error.ConstraintNotFound, .code = "42002" },
         .{ .err = error.DuplicateIndex, .code = "42P07" },
         .{ .err = error.IndexAlreadyExists, .code = "42P07" },
         .{ .err = error.IndexNameInUseByOtherGraph, .code = "42P07" },

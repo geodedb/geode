@@ -304,7 +304,7 @@ test "SONNY-6359: user_create, user_enable / user_disable, user_assign_role and 
 
     // user_assign_role: no arguments; a user that does not exist.
     try expectCode(ga, w.admin, "CALL geode.auth.user_assign_role('', '')", "22023");
-    try expectCode(ga, w.admin, "CALL geode.auth.user_assign_role('nobody6359', 'readonly')", "42704");
+    try expectCode(ga, w.admin, "CALL geode.auth.user_assign_role('nobody6359', 'readonly')", "42002");
 
     // GRANT / REVOKE: an unknown privilege; no ON GRAPH.
     try expectCode(ga, w.admin, "CALL geode.auth.grant('FLY', 'carol', 'g1')", "22023");
