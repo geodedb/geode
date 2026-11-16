@@ -12844,7 +12844,11 @@ pub const GraphStore = struct {
             if (light) {
                 try adapter.checkpointAllLight();
             } else {
-                try adapter.checkpointAll();
+                // SONNY-6646: a graph whose checkpoint failed fails the save
+                // (`CheckpointFailed`), after the snapshots of the others are
+                // written as before (each is counter-gated at the next open)
+                // and with the store still dirty.
+                const checkpointed = adapter.checkpointAll();
                 // PHASE 1b: only the FULL checkpoint (clean shutdown / explicit
                 // save / backup) re-serialises the mmap IdMap snapshots so a
                 // later open can bulk-load them (sub-second ready). The LIGHT
@@ -12857,6 +12861,7 @@ pub const GraphStore = struct {
                 // O(graph) engine scan. Same gate discipline as the IdMap
                 // snapshots (never persist a deferred graph's empty state).
                 self.saveHydrationSnapshots(adapter);
+                try checkpointed;
             }
         }
         self.cleanupLegacySidecars();
@@ -17249,7 +17254,12 @@ pub const GraphStore = struct {
             }
 
             const label_copy = try self.allocator.dupe(u8, label);
-            const new_labels = try self.allocator.alloc([]const u8, node.labels.len + 1);
+            // SONNY-6646: the copy is freed if the array cannot be allocated
+            // (it leaked).
+            const new_labels = self.allocator.alloc([]const u8, node.labels.len + 1) catch |err| {
+                self.allocator.free(label_copy);
+                return err;
+            };
             @memcpy(new_labels[0..node.labels.len], node.labels);
             new_labels[node.labels.len] = label_copy;
 

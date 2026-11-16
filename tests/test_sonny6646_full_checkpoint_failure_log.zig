@@ -1,10 +1,12 @@
 // SONNY-6646 (7): a FULL engine checkpoint that failed
 // (`checkpointAll`, run at close, by an explicit checkpoint and by the
-// deferred-mode cadence) was logged at WARN on every failing call and
-// counted nowhere. SONNY-6523 (6) gave the LIGHT checkpoint a count
+// deferred-mode cadence) was logged at WARN on every failing call, counted
+// nowhere, and not returned: an explicit checkpoint reported success.
+// SONNY-6523 (6) gave the LIGHT checkpoint a count
 // (`adapter_checkpoint_failures_total`) and an ERROR once per cause, then at
 // most every `checkpoint_failure_log_interval_ms`; the full checkpoint now
-// goes through the same count and limit.
+// goes through the same count and limit, and `checkpointAll` returns
+// `error.CheckpointFailed` once every graph was tried.
 //
 // The failure is a real one, as in test-sonny6523-checkpoint-settings: a
 // directory at every shard's `free.store.tmp` makes graph-storage's bitmap
@@ -83,7 +85,8 @@ test "SONNY-6646 (7): a failing full checkpoint is counted and logged once per c
     try std.testing.expect(try obstructFreeStore(allocator, data_dir, true) > 0);
     for (0..6) |_| {
         _ = try store.createNodeWithGraph(&labels, G); // something to checkpoint
-        adapter.checkpointAll() catch {};
+        // The caller is told (an explicit checkpoint reported success).
+        try std.testing.expectError(error.CheckpointFailed, adapter.checkpointAll());
     }
     _ = try obstructFreeStore(allocator, data_dir, false);
     std.debug.print("SONNY-6646 (7): 6 full checkpoints with the graph's bitmap save failing: counted {d}, logged at ERROR {d} time(s)\n", .{ adapter.checkpointFailuresTotal() - failures0, adapter.checkpointFailureErrorLogs() - logs0 });

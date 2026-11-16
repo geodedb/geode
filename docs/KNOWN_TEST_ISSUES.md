@@ -22,10 +22,11 @@ below — under GAP-0860.
 > sharded aggregate `zig build test` or is listed in `build.zig`'s
 > `not_in_aggregate_steps` (see "Which named steps the aggregate runs"); the
 > intentionally red reproductions on that list on 2026-11-16 are
-> `test-sonny2848-tenant-subquery-aggregation`,
-> `test-sonny2979-txn-crash-atomicity` and `test-sonny6571-schema-names`
-> (rows below); `test-sonny6595-wal-drain` was resolved on 2026-11-16 and
-> runs in the aggregate.
+> `test-sonny2848-tenant-subquery-aggregation` and
+> `test-sonny2979-txn-crash-atomicity` (rows below).
+> `test-sonny6571-schema-names` (resolved 2026-11-15, SONNY-6590; green
+> twice more on graph-storage v0.4.22) and `test-sonny6595-wal-drain`
+> (resolved 2026-11-16) run in the aggregate.
 
 | Field | Value |
 |---|---|

@@ -10633,11 +10633,14 @@ pub const StorageAdapter = struct {
     ///
     /// SONNY-6646 (7): a graph's failed engine checkpoint is counted and
     /// logged as a light one's is (`noteCheckpointFailure`); it was a WARN
-    /// on every call, counted nowhere.
+    /// on every call, counted nowhere. And it fails the call
+    /// (`error.CheckpointFailed`, once every graph was tried): an explicit
+    /// checkpoint reported success.
     pub fn checkpointAll(self: *StorageAdapter) !void {
         const failures_before = self.checkpoint_failures_total.load(.acquire);
         self.checkpointAllEx(false, true) catch |err| {
-            self.noteCheckpointFailure(null, err, .full);
+            // A graph's failure was counted where it happened.
+            if (err != error.CheckpointFailed) self.noteCheckpointFailure(null, err, .full);
             return err;
         };
         if (self.checkpoint_failures_total.load(.acquire) == failures_before) self.noteCheckpointSuccess();
@@ -10888,12 +10891,18 @@ pub const StorageAdapter = struct {
         // actually lands. With bug #1's writer-preference the skip should not
         // happen, but this keeps the memory bound sound even if it ever does.
         var any_skipped = false;
+        // SONNY-6646: a FULL pass returns `CheckpointFailed` once it is done
+        // when a graph's engine checkpoint failed (counted and logged per
+        // graph); an explicit checkpoint reported success. A LIGHT pass only
+        // counts it (SONNY-6523 (6)): the persistence tick carries on.
+        var any_engine_failed = false;
         for (graphs_buf[0..graph_count]) |mg| {
             // Bounded rwlock deadline for the periodic LIGHT checkpoint;
             // unbounded (null) for the durability-critical FULL checkpoint.
             const timeout_ns: ?u64 = if (light) 5 * std.time.ns_per_s else null;
             switch (self.checkpointOneGraph(mg, light, set_writer_pref, timeout_ns, null)) {
-                .ok, .engine_failed => {},
+                .ok => {},
+                .engine_failed => any_engine_failed = true,
                 // GAP-0900 bug #2: an rwlock-deadline skip leaves the graph's
                 // dirty pages un-flushed — any_skipped keeps the backpressure
                 // counter high (see below). An engine checkpoint FAILURE is
@@ -10980,6 +10989,7 @@ pub const StorageAdapter = struct {
             self.pending_bulk_ops.store(0, .release);
         }
         self.last_checkpoint_mono_ns.store(monoNanosNow(), .release);
+        if (!light and any_engine_failed) return error.CheckpointFailed;
     }
 
     /// SONNY-1574: what a FULL checkpoint's exact-index persist decision
