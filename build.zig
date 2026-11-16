@@ -750,8 +750,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny2979-txn-commit-durable", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): needs the durable undo log; compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny6595-wal-drain", .reason = "intentionally red TDD reproduction (SONNY-6595 item 5, KNOWN_TEST_ISSUES): a shard not written after a crash restart keeps its replayed WAL tail through every checkpoint and the clean shutdown; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
@@ -11077,10 +11075,6 @@ pub fn build(b: *std.Build) void {
     const sonny6594_read_step = b.step("test-sonny6594-read-failure", "Run SONNY-6594 item 4 regression (a durable store, gRPC in process, every edge body evicted and its rebuild made to fail: MATCH one- and two-hop patterns, path variables, variable-length patterns, COUNT { } and pattern comprehensions, shortestPath, BFS and centrality, top level and inside a transaction, fail or answer exactly the healthy answer)");
     sonny6594_read_step.dependOn(&run_sonny6594_read_tests.step);
 
-    // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a Geode
-    // transaction open at a SIGKILL must leave nothing after the restart
-    // (multi-request, and one request left open). Not in shardDep until the
-    // design fix lands; compiled by test-compile.
     // SONNY-2409: zeroed page headers and zeroed pages (page 0 included) fail
     // labeled and unlabeled reads closed, with and without rebuilt indexes.
     const sonny2409_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2409_zeroed_page_header.zig"), .target = target, .optimize = optimize });
@@ -11230,15 +11224,14 @@ pub fn build(b: *std.Build) void {
     const sonny2979_tests = b.addTest(.{ .root_module = sonny2979_test_mod });
     const run_sonny2979_tests = b.addRunArtifact(sonny2979_tests);
     spawnsBuiltGeode(sonny2979_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny2979_tests.step);
-    const sonny2979_step = b.step("test-sonny2979-txn-crash-atomicity", "Run SONNY-2979 reproduction (intentionally red: a transaction open at a SIGKILL of a real server, over several requests or left open by one, leaves nothing after the restart)");
+    shardDep(test_step, &run_sonny2979_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2979_step = b.step("test-sonny2979-txn-crash-atomicity", "Run SONNY-2979 regression (a transaction open at a SIGKILL of a real server, over several requests or left open by one, leaves nothing after the restart: the durable undo log txn_undo.wal undoes it)");
     sonny2979_step.dependOn(&run_sonny2979_tests.step);
 
-    // SONNY-2979 (intentionally red, docs/KNOWN_TEST_ISSUES.md): a committed
-    // transaction survives a SIGKILL whole beside an open one that is undone;
-    // a rolled-back one is not undone again; under GEODE_TDE_KEY the durable
-    // undo log is sealed. Not in shardDep until the fix; compiled by
-    // test-compile.
+    // SONNY-2979: the durable undo log undoes only what was open. A committed
+    // transaction (several requests, or one) survives a SIGKILL whole beside
+    // an open one that is undone; a rolled-back one is not undone again; under
+    // GEODE_TDE_KEY the log is sealed (no plaintext value) and still undoes.
     const sonny2979c_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_txn_commit_durable.zig"), .target = target, .optimize = optimize });
     sonny2979c_test_mod.link_libc = true;
     sonny2979c_test_mod.addImport("geode", root_mod);
@@ -11248,8 +11241,18 @@ pub fn build(b: *std.Build) void {
     const sonny2979c_tests = b.addTest(.{ .root_module = sonny2979c_test_mod });
     const run_sonny2979c_tests = b.addRunArtifact(sonny2979c_tests);
     spawnsBuiltGeode(sonny2979c_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny2979c_tests.step);
-    b.step("test-sonny2979-txn-commit-durable", "Run SONNY-2979 reproduction (intentionally red: SIGKILL of a real server; a committed transaction survives whole beside an open one that must be undone; a rolled-back one is not undone again; under GEODE_TDE_KEY txn_undo.wal is sealed)").dependOn(&run_sonny2979c_tests.step);
+    shardDep(test_step, &run_sonny2979c_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny2979-txn-commit-durable", "Run SONNY-2979 regression (SIGKILL of a real server: a committed transaction, over several requests or in one, survives whole beside an open one that is undone; a rolled-back one is not undone again; under GEODE_TDE_KEY txn_undo.wal is sealed and still undoes)").dependOn(&run_sonny2979c_tests.step);
+
+    // SONNY-2979: txn_undo.wal's record codec (plain and sealed), torn-tail
+    // handling, loser selection per boot, and the file's lifecycle.
+    const sonny2979w_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_undo_wal_format.zig"), .target = target, .optimize = optimize });
+    sonny2979w_test_mod.link_libc = true;
+    sonny2979w_test_mod.addImport("geode", root_mod);
+    const sonny2979w_tests = b.addTest(.{ .root_module = sonny2979w_test_mod });
+    const run_sonny2979w_tests = b.addRunArtifact(sonny2979w_tests);
+    shardDep(test_step, &run_sonny2979w_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny2979-undo-wal-format", "Run SONNY-2979 txn_undo.wal unit tests (entries round-trip plain and sealed; a torn last record ends the log at every cut; losers are the transactions with no COMMITTED or ROLLED_BACK record, newest first, per boot; a sealed log needs its key; the file empties once no transaction is open)").dependOn(&run_sonny2979w_tests.step);
 
     // SONNY-2824: a QUIC or gRPC HELLO binds the graph it names through the
     // session-graph gate (internal, permission, existence) and creates a

@@ -4324,7 +4324,16 @@ pub fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
             return encodeMessage(allocator, resp);
         };
         const store_ptr = graph_store.getGlobalStore(allocator);
-        txn_undo_log.getGlobalUndoLog(allocator).commit(store_ptr);
+        // SONNY-2979: the durable undo log's COMMITTED record is the commit
+        // point; without it the transaction is rolled back and COMMIT fails.
+        txn_undo_log.getGlobalUndoLog(allocator).commit(store_ptr) catch {
+            txn_undo_log.getGlobalUndoLog(allocator).rollback(graph_store.getWritableGlobalStore(allocator)) catch |err| {
+                log.warn("transaction rollback after a failed commit failed", &.{Attr.string("error", @errorName(err))});
+            };
+            state.endTransaction();
+            const resp = schema.CommitResponse{ .success = false, .@"error" = txnEndError(error.SessionCommitFailed) };
+            return encodeMessage(allocator, resp);
+        };
 
         state.global_commit_ts += 1;
         state.endTransaction();

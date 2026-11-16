@@ -3073,6 +3073,31 @@
 
 ### Fixed
 
+- **An explicit transaction is crash-atomic (SONNY-2979).** A transaction
+  open at a crash (kill -9, OOM kill, power loss) kept, after the restart,
+  every change its requests had committed in the storage engine (each
+  request commits its engine transaction when its program ends, the other
+  15 shards per change, and the undo log was memory-only). Inside an
+  explicit transaction every change's undo entry is now appended to
+  `<data dir>/txn_undo.wal` and fsynced before the change is made (a create
+  first logs the id it is about to create); COMMIT writes a COMMITTED
+  record after the engine commit, and that record is its commit point; a
+  rollback writes ROLLED_BACK after its undo commits; at startup, before
+  anything is served, every transaction with neither record is undone
+  (idempotently, through the ROLLBACK path) and the file is emptied. Under
+  `GEODE_TDE_KEY` every record is sealed (AES-256-GCM side-file envelope).
+  **Behaviour change:** one extra fsync per change inside an explicit
+  transaction, and one at COMMIT and ROLLBACK; COMMIT fails (and the
+  transaction is rolled back) if its COMMITTED record cannot be written; a
+  `txn_undo.wal` that cannot be opened, or a record that does not decode or
+  authenticate, refuses startup. Auto-commit statements are not covered.
+  Metrics `txn_undo_wal_records_written_total`,
+  `txn_undo_wal_recovered_txns_total`, `txn_undo_wal_recovered_entries_total`,
+  `txn_undo_wal_recovery_failures_total`. Regressions: `zig build
+  test-sonny2979-txn-crash-atomicity` (now in the aggregate), `zig build
+  test-sonny2979-txn-commit-durable`, `zig build
+  test-sonny2979-undo-wal-format`.
+
 - **A WITH item does not read a sibling item's alias; a gRPC Handshake
   past the tenant's connection quota is refused with 53300 (SONNY-6645).**
   **BREAKING:** `WITH b AS a, 1 AS b` and `WITH 1 AS a, a + 1 AS b` read a

@@ -261,7 +261,7 @@ test "GAP-0511: commitDeferRebuilds leaves pending rebuilds for separate flush" 
 
     // commitDeferRebuilds should clear entries/savepoints and deactivate,
     // but NOT flush pending rebuilds.
-    undo_log.commitDeferRebuilds();
+    try undo_log.commitDeferRebuilds();
     try testing.expect(!undo_log.active);
     try testing.expectEqual(@as(u64, 0), idx_mgr.statistics.rebuild_count);
 

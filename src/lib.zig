@@ -241,6 +241,8 @@ pub const enhanced_materialized_views = @import("query/enhanced_materialized_vie
 pub const txn_undo_log = @import("txn_undo_log.zig");
 /// SONNY-3348 (round 18): the statement undo record.
 pub const statement_undo = @import("statement_undo.zig");
+/// SONNY-2979: the durable transaction undo log (`txn_undo.wal`).
+pub const txn_durable_undo = @import("txn_durable_undo.zig");
 
 // Machine Learning and Analytics
 pub const ml = struct {

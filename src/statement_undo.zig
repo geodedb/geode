@@ -67,6 +67,7 @@ const builtin = @import("builtin");
 const graph_store = @import("graph_store.zig");
 const txn_undo_log = @import("txn_undo_log.zig");
 const write_budget = @import("write_budget.zig");
+const txn_durable_undo = @import("txn_durable_undo.zig");
 const logging = @import("logging");
 const log = logging.scoped("statement_undo");
 const Attr = logging.Attr;
@@ -314,6 +315,14 @@ pub fn append(store: *graph_store.GraphStore, entry: UndoEntry) error{OutOfMemor
         txn_undo_log.freeEntryWith(allocator, entry);
         return;
     }
+    // SONNY-2979: inside an explicit transaction the entry is on disk
+    // before the change it undoes is made (write-ahead), so a crash cannot
+    // leave a change no restart can undo. A failure refuses the write.
+    txn_durable_undo.logForThread(&.{entry}) catch |err| {
+        txn_undo_log.freeEntryWith(allocator, entry);
+        log.err("could not write a transaction's undo entry to the durable undo log; the change is refused", &.{Attr.string("error", @errorName(err))});
+        return error.OutOfMemory;
+    };
     const rec = t_record.?;
     rec.lock();
     defer rec.unlock();
@@ -336,6 +345,12 @@ pub fn append(store: *graph_store.GraphStore, entry: UndoEntry) error{OutOfMemor
 /// (the graph's name is not kept: the undo deletes by id).
 pub fn appendCreated(store: *graph_store.GraphStore, entry: UndoEntry) void {
     if (!capturing()) return;
+    // SONNY-2979: a create path that logged no intent before the create
+    // (`txn_durable_undo.noteCreateIntent`) logs the create now.
+    txn_durable_undo.noteCreated(entry) catch |err| {
+        log.err("could not write a created entity to the durable undo log; the statement fails and is undone", &.{Attr.string("error", @errorName(err))});
+        @import("eval.zig").recordLimitError(error.OutOfMemory);
+    };
     const rec = t_record.?;
     rec.lock();
     defer rec.unlock();

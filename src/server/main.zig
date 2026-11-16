@@ -3511,6 +3511,7 @@ pub fn main() !void {
         // SONNY-3348 (round 19, m3): statement undo replays, undo failures,
         // and writes refused by the undo record's budget.
         try geode.statement_undo.registerAll(metrics_registry);
+        try geode.txn_durable_undo.registerAll(metrics_registry); // SONNY-2979
 
         // Phase C1: bridge the now-fully-populated runtime metrics registry into
         // OTLP as geode.runtime.* observable gauges. MUST run after every

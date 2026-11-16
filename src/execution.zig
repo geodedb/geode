@@ -2359,7 +2359,17 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                     };
                     return error.SessionCommitFailed;
                 };
-                undo_log.commit(body_store);
+                // SONNY-2979: the durable undo log's COMMITTED record is the
+                // body's commit point; without it the body is rolled back.
+                undo_log.commit(body_store) catch {
+                    undo_log.rollback(body_store) catch |rb_err| {
+                        log.err("Failed to roll back a transaction body", &.{
+                            Attr.string("error", @errorName(rb_err)),
+                        });
+                        return error.RollbackIncomplete;
+                    };
+                    return error.SessionCommitFailed;
+                };
 
                 // Return result from last statement
                 if (last_result) |result| {
@@ -2408,7 +2418,11 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 // Commit the undo log - clears the log and keeps changes
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
                 const commit_store = graph_store.getWritableGlobalStore(allocator);
-                undo_log.commit(commit_store);
+                // SONNY-2979: the durable undo log's COMMITTED record is the
+                // commit point. Without it the COMMIT fails like a failed
+                // engine commit (the transaction is then rolled back,
+                // GAP-0917).
+                undo_log.commit(commit_store) catch return error.SessionCommitFailed;
                 // SONNY-3191 (N-4): the transaction is over; its session lets
                 // the graph hold (SONNY-3134) go now, not after the program,
                 // so `COMMIT; DROP GRAPH g` runs.

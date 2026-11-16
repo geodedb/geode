@@ -21,6 +21,7 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 const fle_integration = @import("fle_integration.zig");
 // SONNY-3348 (round 18): the statement undo record the write methods fill.
 const statement_undo = @import("statement_undo.zig");
+const txn_durable_undo = @import("txn_durable_undo.zig");
 const value_types = @import("value_types.zig");
 
 /// SONNY-6567 (6c): depth of `GraphStore.enterReplicatedApply` on this thread.
@@ -5719,6 +5720,8 @@ pub const GraphStore = struct {
         try refuseFlaggedNodeId(reserved_id); // SONNY-6362
         try statementWriteFence(); // SONNY-3348
         try statement_undo.reserve(1); // SONNY-3348 (round 18): room to record the node
+        // SONNY-2979: in a transaction, the id is on disk before the create.
+        try txn_durable_undo.noteCreateIntent(.{ .CreateNode = .{ .node_id = reserved_id, .graph_name = "" } });
         // PHASE 1b chokepoint: build the graph's resident indexes BEFORE this
         // write so loop2 (run on first touch) can't later double-count the
         // node/labels this create is about to insert.
@@ -5897,6 +5900,11 @@ pub const GraphStore = struct {
         // src/storage/graph_storage_adapter.zig:2237 and the regression
         // guard at tests/test_bsp_race_regression.zig.
 
+        // Generate UUIDv7-based time-sortable unique ID. SONNY-2979: before
+        // the create, so a transaction's durable undo log names it first.
+        const id = generateTimeBasedId();
+        try txn_durable_undo.noteCreateIntent(.{ .CreateNode = .{ .node_id = id, .graph_name = "" } });
+
         const adapter_node: ?struct {
             vt: AdapterVTable,
             slot_id: u64,
@@ -5912,8 +5920,6 @@ pub const GraphStore = struct {
         // node in the engine for the next open to hydrate.
         errdefer if (adapter_node) |persisted_node| rollbackAdapterNode(persisted_node.vt, graph_name, persisted_node.slot_id);
         try self.ensureGraph(graph_name);
-        // Generate UUIDv7-based time-sortable unique ID
-        const id = generateTimeBasedId();
 
         // Store UUID→slot mapping in IdMap for adapter translation
         if (adapter_node) |persisted_node| {
@@ -6005,6 +6011,19 @@ pub const GraphStore = struct {
         // GAP-0891 (RC-1 step 3): context-preferring tenant resolution.
         const tenant = fle_integration.tenantPreferringActiveContext();
 
+        // Allocate result slice (caller-owned, caller's allocator) and mint
+        // the public ids. SONNY-2979: before the engine slots are created, so
+        // a transaction's durable undo log names every one of them first.
+        const public_ids = try out_allocator.alloc(u64, n);
+        errdefer out_allocator.free(public_ids);
+        for (public_ids) |*pid| pid.* = generateTimeBasedId();
+        if (txn_durable_undo.active()) {
+            const intents = try self.allocator.alloc(txn_undo.UndoEntry, n);
+            defer self.allocator.free(intents);
+            for (intents, public_ids) |*e, pid| e.* = .{ .CreateNode = .{ .node_id = pid, .graph_name = "" } };
+            try txn_durable_undo.noteCreateIntents(intents);
+        }
+
         // --- Adapter path: one mutex acquisition for all N slots. ---
         var adapter_slot_ids: ?[]u64 = null;
         defer if (adapter_slot_ids) |s| self.allocator.free(s);
@@ -6037,10 +6056,6 @@ pub const GraphStore = struct {
             try self.ensureLabelPostingCapacity(graph_name, label, n);
         }
 
-        // Allocate result slice (caller-owned, caller's allocator).
-        const public_ids = try out_allocator.alloc(u64, n);
-        errdefer out_allocator.free(public_ids);
-
         // Pre-resolve IdMap once (graph name already ensured above).
         const id_map_opt: ?*id_map_mod.IdMap = if (adapter_slot_ids != null) try self.getOrCreateIdMap(graph_name) else null;
 
@@ -6056,8 +6071,7 @@ pub const GraphStore = struct {
             if (global_vtable) |vt| for (slots[i..]) |slot| rollbackAdapterNode(vt, graph_name, slot);
         };
         while (i < n) : (i += 1) {
-            const public_id = generateTimeBasedId();
-            public_ids[i] = public_id;
+            const public_id = public_ids[i];
 
             // Persist the public ID + IdMap entry via the adapter (each
             // call takes its own adapter mutex once — this is unavoidable
@@ -10451,6 +10465,10 @@ pub const GraphStore = struct {
         // adapter create so it rides INLINE in the durable adjacency records
         // (GAP-ENT-0024) — no `__geode_internal_edge_id` property page.
         const id = generateTimeBasedId();
+        // SONNY-2979: in a transaction, the id is on disk before the create
+        // (its engine transaction is on shard(from), which commits it at once
+        // when that is not the session's shard).
+        try txn_durable_undo.noteCreateIntent(.{ .CreateEdge = .{ .edge_id = id, .graph_name = "" } });
 
         const adapter_edge: ?struct {
             vt: AdapterVTable,

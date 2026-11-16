@@ -265,74 +265,96 @@ These features implement ISO/IEC 39075:2024 GQL standard:
 
 ## Crash Durability and Atomicity (SONNY-2979)
 
-A transaction is atomic in the running server, NOT across a crash (kill -9,
-OOM kill, power loss). What holds, as of the SONNY-738 sweep:
+An explicit transaction (BEGIN or START TRANSACTION ... COMMIT, over one
+request or several) is atomic across a crash (kill -9, OOM kill, power
+loss): after the restart either all of it is there (it committed) or none
+of it (it was open, or rolled back).
+
+How:
 
 - **Write-through.** Each change is written to the storage engine as it
   runs. Within one request, the changes on the shard of the session's engine
-  transaction (opened by the request's first change; the request's new nodes
-  are allocated there, SONNY-6425) commit together, with one WAL fsync, when
-  the request's program ends. A change on any of the other 15 shards commits
-  its own engine transaction when it runs; so do a REMOVE of a property, a
-  DELETE of a node and a REMOVE of a relationship property, wherever they
-  are.
-- **No engine transaction outlives a request** (SONNY-2823). A transaction
-  over several requests is committed in the engine request by request.
-- **ROLLBACK, a failed statement and a session's teardown** undo the
-  transaction through the in-memory undo log (`txn_undo_log`, and a
-  statement's own record, `statement_undo`), which writes compensating
-  changes to the engine. The undo log is memory-only.
-- **The undo joins the open engine transaction** (SONNY-6529). A failed
-  statement's engine transaction, a transaction body's and the session's
-  are ended AFTER the undo replays, by a commit: the replay's compensating
-  writes join them, so the failed writes and their undo reach the WAL as
-  one unit, and a crash before that commit loses both. Where the undo runs
-  after the request (the handler's rollback of a request that failed in an
-  explicit transaction), the request's engine transaction is committed at
-  its end and the undo commits its compensations on its own, as for every
-  committed request of an open transaction (the window above). geode used to
-  abort the engine transaction first (SONNY-2823, SONNY-3135); graph-storage
-  0.4.16 makes `abortTxn` undo the transaction's writes, and the replay then
-  undid them a second time (a node it created was gone, its delete failed
-  with 40003, and the server kept the node in memory).
-- **The engine's own undo** is used for a transaction the adapter opened
-  for one write call that failed before the server's in-memory copy took
-  the write: graph-storage 0.4.16 `abortTxn` undoes it (node record, slot,
-  count and id, properties, labels, relationships). An abort it cannot undo
-  exactly (`AbortNotUndone`: a page the caller imaged itself, a property
-  change on a legacy chain, a chain pointer of an existing node moved, more
-  than 1,048,576 writes) leaves the writes in the shard's pages and makes the
-  shard refuse every write, commit and checkpoint; geode then refuses the
-  graph's reads and writes with 58000 `AbortNotUndone` until the server
-  restarts, which reopens the graph at its committed state (nothing
-  uncommitted reached disk). A commit that fails after the in-memory copy
-  took the writes aborts the transaction and refuses the graph the same way
-  (58000 `CommitFailed`). Neither is reopened in place: geode keeps the
-  graph's nodes, relationships, label counts and indexes in memory beside
-  the engine and has no path that rebuilds them for one graph while the
-  server runs. Counters: `geode.runtime.storage_txn_aborts_undone_total`,
-  `geode.runtime.storage_txn_aborts_not_undone_total`.
-- **COMMIT is durable.** Once COMMIT returns, every change of the
-  transaction has been fsynced to the engine WAL (per-commit fsync), and a
-  committed change made inside the transaction is never undone by recovery
-  (SONNY-2978: the session's engine transaction no longer batches its WAL
-  page images past other transactions' commits on its shard).
+  transaction commit together when the request's program ends; a change on
+  any of the other 15 shards commits its own engine transaction when it
+  runs. No engine transaction outlives a request (SONNY-2823). So the engine
+  holds an open transaction's earlier requests, and some of its current one.
+- **Durable undo log, `<data dir>/txn_undo.wal`** (`src/txn_durable_undo.zig`).
+  Inside an explicit transaction every change's undo entry (the
+  `txn_undo_log.UndoEntry` ROLLBACK uses: a created node or relationship, a
+  property's old value or its absence, a deleted node or relationship with
+  its labels, properties and tenant, a label added or removed) is appended
+  and fsynced **before** the change is made: `statement_undo.append` records
+  the state a write is about to change, and a create first logs an intent
+  naming the public id it is about to create (node creates, batch creates
+  and relationship creates; a relationship is written on shard(from), which
+  commits it at once when that is not the session's shard). So no engine
+  commit ever carries a change whose undo is not on disk.
+- **COMMIT** commits the request's engine transaction, then appends and
+  fsyncs a COMMITTED record. That record is the transaction's commit point:
+  COMMIT is acknowledged only after it, and if it cannot be written COMMIT
+  fails and the transaction is rolled back.
+- **ROLLBACK** (a ROLLBACK, a failed transaction body, a failed COMMIT, a
+  session's teardown) undoes the transaction through the in-memory undo log,
+  commits the undo's engine transaction, then writes a ROLLED_BACK record, so
+  a restart never undoes it again (a later committed change to the same value
+  survives).
+- **Recovery.** At startup, after the stores open and before anything else
+  reads or writes them (`server_init.openTxnUndoLog`), every transaction in
+  the log with entries and neither record is undone, newest entry first
+  across all of them, through the store's logged write methods (the ROLLBACK
+  path). Each entry checks what is there (a node never created is not
+  deleted, a property is set back to its old value), so a change whose entry
+  was written but which was never made, or never committed, costs nothing,
+  and a crash during recovery repeats it. Then the file is emptied. A torn
+  last record (its write never finished, so its change was never made) is
+  dropped. A log that cannot be opened, or a record that frames but does not
+  decode or authenticate, refuses startup. An entry that cannot be undone is
+  logged and counted (`txn_undo_wal_recovery_failures_total`) and the rest
+  are undone, as ROLLBACK does (where it answers 40003).
+- **At-rest encryption.** With `GEODE_TDE_KEY` each record is sealed with
+  graph-storage's side-file envelope (AES-256-GCM, kind consumer 3): an entry
+  holds property values. A sealed log without the key, a plaintext log with
+  one, or a record that fails authentication refuses startup.
+- **The file** is emptied whenever no transaction of the running server has
+  an open entry. Records carry a random per-start `boot` id beside the
+  transaction id, which restarts at 1 in every process.
+- **Cost.** One fsync of `txn_undo.wal` per change inside an explicit
+  transaction (one per batch of creates), plus one at COMMIT and one at
+  ROLLBACK. Auto-commit statements write nothing to it.
 
-What does NOT hold: after a crash with a transaction open, recovery keeps
-every change the transaction's requests already committed in the engine.
-Nothing on disk records that the transaction was open, so nothing undoes
-them. `zig build test-sonny2979-txn-crash-atomicity` (intentionally red,
-[KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md)) kills a real server with two
-transactions open and finds all their nodes, and a property one of them
-SET, after the restart.
+Residuals:
 
-Making a transaction crash-atomic needs one durable commit decision for the
-whole transaction, across requests and shards: either a durable undo log
-(write an entry, fsynced, before each change reaches the engine; at
-recovery, undo every transaction with no durable commit record), or a
-transaction-wide redo buffer applied at COMMIT through a cross-shard commit
-record in graph-storage, whose 16 per-shard WALs have no shared commit
-record today.
+- **Auto-commit statements** are not covered: a statement outside an
+  explicit transaction that changes several shards and is cut by a crash
+  keeps the changes already committed in the engine (one engine transaction
+  on the statement's shard, one per change on the others). Run it inside
+  BEGIN ... COMMIT to make it crash-atomic.
+- **Isolation is unchanged.** As at ROLLBACK, the undo at recovery restores
+  the values the transaction found; a change another session committed on
+  top of an uncommitted change of the transaction is overwritten by it.
+- **Write paths outside the statement undo record** (the bulk MERGE fast
+  path, the group-commit node path that allocates the engine slot before
+  the store records the create) log a create after it, not before; those
+  paths are not used inside an explicit transaction today.
+- **Why not one commit record in graph-storage (SONNY-2979 option B).** The
+  engine's WAL holds full page after-images, and transactions on one shard
+  share pages, so another transaction's committed image of a page carries an
+  open transaction's bytes: recovery that skips the open transaction's own
+  records still restores them (shown with a real crash: an open
+  transaction's node is resurrected by a second transaction's commit of the
+  same node page). Rolling them back inside the engine needs a complete,
+  durable logical undo there, and the engine refuses one for writes geode
+  makes (a label on an existing node, an edge-property page geode images
+  itself, a legacy property chain: `AbortNotUndone`). geode's own undo
+  entries are complete and logical, so the log lives in geode.
+
+`zig build test-sonny2979-txn-crash-atomicity` kills a real server with two
+transactions open and finds nothing of them after the restart;
+`zig build test-sonny2979-txn-commit-durable` checks that committed
+transactions survive whole, that a rolled-back one is not undone again, and
+the sealed log under `GEODE_TDE_KEY`; `zig build
+test-sonny2979-undo-wal-format` covers the record format, torn tails, the
+choice of transactions to undo, and the file's lifecycle.
 
 ## Future Enhancements
 
