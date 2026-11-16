@@ -4,6 +4,25 @@
 
 ### Security
 
+- **A TDE data directory refuses a deleted or donor identity after the
+  upgrade, and a restore intent or undo log moved from another directory
+  (SONNY-6689).** With `data_dir.identity` deleted, a registry sealed under
+  graph-storage's shared `SEAL_UUID` was adopted as a SONNY-6616 build's,
+  so a registry from any directory under the key could be substituted; and
+  the graph-restore intent and `txn_undo.wal` were sealed under
+  `SEAL_UUID`, so either could be moved between directories sharing a
+  key. The first open now records the upgrade in a sealed marker
+  (`data_dir.seal`); afterwards a missing identity
+  (`DataDirIdentityMissing`) or one the marker does not name
+  (`DataDirIdentityMismatch`) refuses the directory. The restore intent and
+  undo log are sealed under the identity; a `SEAL_UUID`-sealed one an
+  earlier build left is read (the undo log resealed) once, in the open
+  that records the marker, and refused after. `txn_durable_undo.Log.open`
+  under a key now needs the directory's identity. **BREAKING (operator):**
+  a TDE data directory whose identity file is lost can no longer be
+  opened; restore it from a backup with `data_dir.identity` and
+  `data_dir.seal`. Residual in docs/TDE_FILE_LEVEL_ENCRYPTION.md.
+  Regression: `zig build test-sonny6689-data-dir-transplant`.
 - **Under TDE a data directory's graph registry is bound to it, and a
   plaintext registry is refused once it has been sealed (SONNY-6635).**
   `graph_registry.dat` and `dropped_graphs.dat` were sealed under
