@@ -426,7 +426,10 @@ fn opensUnder(allocator: Allocator, cipher_in: gs.side_file_crypto.Cipher, kind:
 /// SONNY-6635: true when any graph manifest slot in `data_dir` that
 /// authenticates under `key` is at format_version >= 5 (sealed side files):
 /// the directory was written by a build that seals its registry. A slot
-/// that does not authenticate is an error (it cannot show the opposite).
+/// that does not authenticate, or does not parse, is skipped: a graph
+/// written before the key was set (its manifests carry no HMAC) is not
+/// evidence, and forging one shows nothing either (only an authenticated
+/// V5 slot counts).
 /// Both layouts: `<data_dir>/<graph uuid>/graphs/<shard uuid>/manifest.{a,b}`
 /// and the single-engine `<data_dir>/graphs/<graph uuid>/manifest.{a,b}`.
 fn sealedStoreEvidence(allocator: Allocator, data_dir: []const u8, key: [32]u8) !bool {
@@ -459,7 +462,13 @@ fn sealedStoreEvidence(allocator: Allocator, data_dir: []const u8, key: [32]u8) 
             for ([_][]const u8{ "manifest.a", "manifest.b" }) |slot| {
                 const p = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{ shards_parent, shard.name, slot });
                 defer allocator.free(p);
-                const m = (try gs.manifest.Manifest.readFromFileWithKey(allocator, p, key)) orelse continue;
+                // A slot that does not authenticate under the key, or cannot
+                // be parsed (a graph written without the key, a torn slot),
+                // shows nothing either way: skipped, as recovery skips it.
+                const m = (gs.manifest.Manifest.readFromFileWithKey(allocator, p, key) catch |err| switch (err) {
+                    error.ManifestAuthFailed, error.ChecksumMismatch, error.InvalidMagic, error.InvalidData, error.UnexpectedEndOfFile => continue,
+                    else => return err,
+                }) orelse continue;
                 if (m.format_version >= gs.manifest.MANIFEST_VERSION_SEALED_SIDE_FILES) return true;
             }
         }

@@ -260,14 +260,14 @@ test "SONNY-6616: a graph opened under another key is refused with EncryptionKey
     // SONNY-6635: the data-directory identity (sealed under the key) too.
     const other = randomKey();
     {
-        const id = (try gs.registry.DataDirIdentity.load(aa, path, key)).?;
-        try id.save(aa, path, other);
-        var c2 = id.cipher(other).?;
-        defer c2.deinit();
         const reg_path = try std.fmt.allocPrint(aa, "{s}/graph_registry.dat", .{path});
         var reg = gs.registry.GraphRegistry.init(testing.allocator);
         defer reg.deinit();
         try geode.graph_storage_adapter.readRegistryOffline(testing.allocator, &reg, path, key);
+        const id = (try gs.registry.DataDirIdentity.load(aa, path, key)).?;
+        try id.save(aa, path, other);
+        var c2 = id.cipher(other).?;
+        defer c2.deinit();
         try reg.saveToFileWith(reg_path, &c2);
     }
     const adapter = try StorageAdapter.init(testing.allocator, path, tdeConfig(other));
