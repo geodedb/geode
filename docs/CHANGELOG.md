@@ -3073,6 +3073,13 @@
 
 ### Fixed
 
+- **A CDC start that fails records no start (SONNY-6593).**
+  `CDCEngine.start()` recorded its `.start` lifecycle event before creating
+  its worker pool, so a start that then failed left a start event for an
+  engine that never ran. `diagnosticsLifecycle` used `std.mem.copy`, which
+  Zig 0.16 does not have (it did not compile when called). Regression:
+  `zig build test-sonny6593-cdc-start-lifecycle`.
+
 - **MCP errors say what was wrong; mcp v0.1.23 (SONNY-6585).** A
   JSON-RPC error from `geode mcp` carried the Zig error's name as its
   message (`InvalidParams`, `ResourceNotFound`) and no data. With mcp

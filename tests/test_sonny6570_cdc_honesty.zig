@@ -902,10 +902,10 @@ test "SONNY-6570: the server serves the CDC RPCs src/proto/geode.proto declares 
 
 test "SONNY-6570: cdc_enhanced.startCDC frees the engine when start() fails" {
     // std.testing.FailingAllocator fails allocation `fail_index` and every
-    // one after it. 0: the engine itself. 1: start()'s first allocation (its
-    // lifecycle record, ignored) and then the worker pool's, so start()
-    // fails and startCDC must free the engine it made; std.testing.allocator
-    // reports anything left behind.
+    // one after it. 0: the engine itself. 1: start()'s worker pool (SONNY-6593:
+    // the lifecycle record now comes after it), so start() fails and
+    // startCDC must free the engine it made; std.testing.allocator reports
+    // anything left behind.
     //
     // Later indices fail inside the thread_pool dependency's own
     // `Core.allocateStorage` (zig-pkg thread_pool 0.2.11 src/pool.zig, a
