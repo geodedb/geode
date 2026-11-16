@@ -5645,6 +5645,11 @@ pub const GraphStore = struct {
         }
 
         self.clearNodesForGraph(graph_name);
+        // CANARY: REQ=REQ-SONNY-6636-DROP-GRAPH-MERGE-PURGE; FEATURE="MergeIdempotency"; ASPECT=DropPurgesMergeEntries; STATUS=TESTED; TEST=tests/test_sonny6636_drop_graph_merge_purge.zig; OWNER=storage; UPDATED=2026-11-16
+        // SONNY-6636: the MERGE entries of the graph's evicted nodes (the
+        // resident ones went with their nodes) and its lean backfill marks.
+        self.merge_prop_index.removeGraph(graph_name);
+        self.forgetLeanBackfilledForGraph(graph_name);
         {
             // SONNY-3233 (round 15, F12): under `graphs_lock`.
             const gio = std.Io.Threaded.global_single_threaded.io();

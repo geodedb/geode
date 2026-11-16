@@ -3073,6 +3073,15 @@
 
 ### Fixed
 
+- **DROP GRAPH leaves none of the graph's MERGE entries or lean backfill
+  marks (SONNY-6636).** It removed the MERGE entries of the graph's resident
+  nodes only: the entries of nodes evicted from the bounded node cache, and
+  the graph's lean backfill marks, stayed for the life of the process (300
+  entries before a drop, 268 after, with a 32-entry node cache). Lookups
+  resolved them (their holder was gone), so the cost was memory and a mark
+  claiming a re-created graph's key was backfilled. Regression: `zig build
+  test-sonny6636-drop-graph-merge-purge`.
+
 - **A follower restores a Raft snapshot into the durable store, losslessly
   and off `inner_mutex`; a restored graph shows no trace of the old one
   (SONNY-6636).** A follower behind the leader's compacted log refused every
