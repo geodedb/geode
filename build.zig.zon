@@ -702,8 +702,15 @@
             // (geode's); its otel chain's thread_pool v0.2.9 is the
             // pre-existing diamond (SONNY-6630). The tag is on the MR merge
             // commit cacb325, whose tree is the release commit 845b454's.
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.20#cacb325a5449935454b744fad411b544acaf279e",
-            .hash = "graph_storage-0.4.20-9UyJS5QhNADuO1M7ofCx0aAdB-6Xjit9fgNnJI4dsG-v",
+            // v0.4.21 (2026-11-15, SONNY-6632): writes of one frame land in
+            // copy order (a flush waits for the frame's write in flight
+            // before copying it), and flushAll / flushDirty wait for every
+            // write in flight, so a checkpoint no longer truncates the WAL
+            // before a page's new image is on disk. No API change; same
+            // dependencies as v0.4.20. Tagged on the MR merge 160046c, same
+            // tree as the release commit 3ffeba7.
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.21#160046ced08ff09c0da6c4a32949d6c2a49d6763",
+            .hash = "graph_storage-0.4.21-9UyJS1xFNABIc04s56XcQVFmjRKQ1LooloHJbu2v36F7",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting

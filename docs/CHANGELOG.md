@@ -611,8 +611,12 @@
   written before the loss under a wrong label or none; a real server
   answers its other graphs throughout and counts the adopted graph's
   labels as created).
-- **Storage re-pin: graph-storage v0.4.20, timeseries-storage v0.2.22,
-  wal v0.1.25 (SONNY-738, SONNY-6615, SONNY-6616, SONNY-6622).** One wal is
+- **Storage re-pin: graph-storage v0.4.21, timeseries-storage v0.2.22,
+  wal v0.1.25 (SONNY-738, SONNY-6615, SONNY-6616, SONNY-6622,
+  SONNY-6632).** graph-storage v0.4.21 lands a frame's flushes in copy
+  order and makes `flushAll` / `flushDirty` wait for writes in flight, so
+  a checkpoint can no longer truncate the WAL before a page's new image is
+  on disk (no API change). One wal is
   compiled into geode, v0.1.25 (`truncateAfter` fails closed as well as
   recovery and compaction): graph-storage v0.4.20 pins it, and build.zig
   points raft v0.2.2's and timeseries-storage v0.2.22's `wal` import (both
