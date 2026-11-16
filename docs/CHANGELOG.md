@@ -3073,6 +3073,25 @@
 
 ### Fixed
 
+- **A graph's WAL drains after a crash restart once the graph is opened;
+  graph-storage v0.4.22 (SONNY-6595 item 5, SONNY-6599).** After a SIGKILL
+  and a restart, a shard nothing made dirty kept its whole replayed WAL
+  through every checkpoint and the clean shutdown. graph-storage v0.4.22
+  fsyncs the directory and truncates the WAL recovery replayed, and an open
+  drains a WAL whose contents the pages already cover (also: a double delete
+  no longer under-counts; `removeEdgeTxn` removes legacy `adj_in` entries;
+  edge-property slab slots are attributed; an overflow replacement is freed
+  at commit, so it is undoable; iterator wrappers release on OOM).
+  **Contract (geode keeps opening graphs lazily, for startup cost):** at
+  startup geode opens only a graph with an IdMap snapshot, and that open
+  drains its WAL; a graph never checkpointed before the crash is opened by
+  the first statement that touches it, and until then its WAL holds exactly
+  the crash's tail. That tail is harmless (every record in it is below the
+  manifest's `last_checkpoint_lsn`) and bounded (one crash's tail). The
+  first statement on the graph drains it to 0, and a clean shutdown leaves
+  0 WAL bytes whether or not a statement ran. Regression: `zig build
+  test-sonny6595-wal-drain` (with and without TDE; now in the aggregate).
+
 - **A failed auto-commit write whose abort graph-storage cannot undo
   quarantines its graph; a half-done property write inside a statement
   transaction is proven not to commit (SONNY-6601 items 3 and 1).** The

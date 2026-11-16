@@ -751,7 +751,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2979-txn-crash-atomicity", .reason = "intentionally red TDD reproduction (SONNY-2979, KNOWN_TEST_ISSUES): a transaction is not crash-atomic until it is made durable as a unit; compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6595-wal-drain", .reason = "intentionally red TDD reproduction (SONNY-6595 item 5, KNOWN_TEST_ISSUES): a shard not written after a crash restart keeps its replayed WAL tail through every checkpoint and the clean shutdown; needs a graph-storage release; compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -10714,9 +10713,8 @@ pub fn build(b: *std.Build) void {
     const sonny6595_del_step = b.step("test-sonny6595-standalone-delete", "Run SONNY-6595 item 3: a DELETE with no MATCH is refused (its variable is not in scope), and so is a DELETE in a CALL subquery inside MATCH ... CALL (the one statement context that carries bindings); nothing is deleted");
     sonny6595_del_step.dependOn(&run_sonny6595_del_tests.step);
 
-    // SONNY-6595 item 5: shard WALs drain after a crash restart (a real
-    // server; intentionally red until graph-storage truncates the WAL it
-    // replays, see docs/KNOWN_TEST_ISSUES.md).
+    // SONNY-6595 item 5: shard WALs after a crash restart (a real server;
+    // graph-storage v0.4.22 drains the WAL when geode opens the graph).
     const sonny6595_wal_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6595_wal_drain.zig"), .target = target, .optimize = optimize });
     sonny6595_wal_test_mod.link_libc = true;
     sonny6595_wal_test_mod.addImport("geode", root_mod);
@@ -10726,8 +10724,8 @@ pub fn build(b: *std.Build) void {
     const sonny6595_wal_tests = b.addTest(.{ .root_module = sonny6595_wal_test_mod });
     const run_sonny6595_wal_tests = b.addRunArtifact(sonny6595_wal_tests);
     spawnsBuiltGeode(sonny6595_wal_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6595_wal_tests.step);
-    const sonny6595_wal_step = b.step("test-sonny6595-wal-drain", "Run SONNY-6595 item 5 reproduction (intentionally red: after a SIGKILL and a restart, a shard written to before the crash and not after keeps its replayed WAL through every light checkpoint and the clean shutdown; the data survives every restart)");
+    shardDep(test_step, &run_sonny6595_wal_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6595_wal_step = b.step("test-sonny6595-wal-drain", "Run SONNY-6595 item 5 regression (a real server, with and without TDE: after a SIGKILL and a restart the WAL holds exactly the crash's tail while no statement touches the graph (lazy open), the first statement that does opens it and the WAL is 0 right after, a clean shutdown leaves 0; the data survives every restart)");
     sonny6595_wal_step.dependOn(&run_sonny6595_wal_tests.step);
     // SONNY-6547 (4): a replicated write's first hydration of its graph does
     // not run under the Raft node's inner_mutex. In-process 3-node cluster.

@@ -18,19 +18,28 @@
 // drain: a new label, which is written to every shard; a read of the graph
 // plus one write, phase 3 below.)
 //
-// The leftover is harmless for durability: every record in it is at or below
-// the manifest's `last_checkpoint_lsn`, so the next recovery skips it, and the
-// data is in the flushed pages. It is bounded (one crash's tail per shard,
-// truncated by that shard's next checkpoint that runs), not growth. This
-// test pins what a real server does, with and without TDE: the data survives
-// every restart (passes), the tail survives 5 s of light checkpoints (the
-// observed symptom, passes), a read and a write drain every shard at the
-// clean shutdown (passes), and a clean shutdown with nothing done since the
-// restart leaves no WAL bytes (FAILS until graph-storage truncates the WAL at
-// the end of recovery).
+// graph-storage v0.4.22 (SONNY-6599): recovery fsyncs the directory and
+// truncates the WAL it replayed, and an open drains a WAL whose contents the
+// pages already cover. geode opens a graph's engine lazily and keeps that
+// policy (startup cost): at startup only a graph with an IdMap snapshot is
+// opened (to check the snapshot's checkpoint stamp,
+// `loadOneGraphFromAdapter`); one with none (never checkpointed) is opened by
+// the first statement that touches it (`requireExistingGraphLocked`). Until
+// then its WAL still holds the crash's tail. That tail is harmless (every
+// record in it is at or below the manifest's `last_checkpoint_lsn`; the data
+// is in the pages) and bounded (one crash's tail, dropped at the graph's next
+// open).
 //
-// Intentionally red (docs/KNOWN_TEST_ISSUES.md): out of the aggregate
-// `zig build test`, compiled by `test-compile`.
+// The contract this test pins on a real server, with and without TDE, for a
+// graph never checkpointed before the crash:
+//   * after a restart and through 5 s of light checkpoints with no statement,
+//     the WAL holds exactly the crash's tail (no growth, no partial drain);
+//   * the first statement that touches the graph opens its engine, and the
+//     WAL is 0 bytes right after (the open-time drain); a graph that has an
+//     IdMap snapshot is opened, and drained, at startup;
+//   * a clean shutdown (SIGTERM) leaves 0 WAL bytes, whether or not a
+//     statement ran since the restart;
+//   * every node written survives every restart.
 
 const std = @import("std");
 const geode_test_bin = @import("geode_test_bin");
@@ -153,6 +162,9 @@ fn report(allocator: std.mem.Allocator, data_dir: []const u8, tde: bool, when: [
 }
 
 const node_count = 64;
+/// Nodes the second crash leaves in the WAL, in a graph of their own.
+const more_count = 8;
+const G2 = "g6595wal";
 
 const tde_key_hex = "6595" ** 16;
 
@@ -201,9 +213,8 @@ fn runConfig(allocator: std.mem.Allocator, tde: bool) !void {
         after_sigterm = try report(allocator, data_dir, tde, "SIGTERM (clean shutdown, full checkpoint)");
     }
 
-    // 3. Restart: everything written is there (the leftover lies below the
-    //    manifest's frontier and is not replayed). Read :W, which hydrates
-    //    its shards, write one node, then SIGTERM again.
+    // 3. Restart: everything written is there. Read :W, write one node,
+    //    then SIGTERM again.
     var seen_w: usize = 0;
     var after_second_sigterm: u64 = 0;
     {
@@ -218,31 +229,66 @@ fn runConfig(allocator: std.mem.Allocator, tde: bool) !void {
         after_second_sigterm = try report(allocator, data_dir, tde, "read :W, one write, SIGTERM");
     }
 
-    // A last restart: every node is there.
-    var seen_final: usize = 0;
+    // 4. Another crash, in a new graph (never checkpointed, so no IdMap
+    //    snapshot: the restart does not open it; `default`'s snapshot from
+    //    the clean shutdowns makes the restart open that one): writes, no
+    //    checkpoint, SIGKILL.
     {
         var server = try Server.start(allocator, data_dir, tde, no_tick_ms, log_path);
         defer server.kill(allocator);
         var c = try server.client(allocator);
         defer c.deinit();
+        _ = try rows(&c, allocator, "CREATE GRAPH " ++ G2);
+        var i: usize = 0;
+        while (i < more_count) : (i += 1) {
+            var qb: [128]u8 = undefined;
+            _ = try rows(&c, allocator, try std.fmt.bufPrint(&qb, "USE GRAPH " ++ G2 ++ "; CREATE (n:W {{i: {d}}}) RETURN n.i AS i", .{i}));
+        }
+    }
+    const tail2 = try report(allocator, data_dir, tde, "second SIGKILL with no checkpoint");
+
+    // 5. Restart: the tail stays until a statement touches the graph; the
+    //    first one opens the engine, which drains the WAL. Then SIGTERM.
+    var after_restart2: u64 = 0;
+    var after_open: u64 = 0;
+    var after_third_sigterm: u64 = 0;
+    var seen_final: usize = 0;
+    var seen_g2: usize = 0;
+    {
+        var server = try Server.start(allocator, data_dir, tde, no_tick_ms, log_path);
+        defer server.kill(allocator);
+        var c = try server.client(allocator);
+        defer c.deinit();
+        after_restart2 = try report(allocator, data_dir, tde, "restart, no statement on the new graph yet");
         seen_final = try rows(&c, allocator, "MATCH (n:W) RETURN n.i AS i");
+        seen_g2 = try rows(&c, allocator, "USE GRAPH " ++ G2 ++ "; MATCH (n:W) RETURN n.i AS i");
+        after_open = try report(allocator, data_dir, tde, "first statement opened the new graph");
+        try server.stop();
+        after_third_sigterm = try report(allocator, data_dir, tde, "SIGTERM after the open");
     }
 
     // Durability: never in doubt.
     try testing.expect(tail > 0);
     try testing.expectEqual(@as(usize, node_count), seen_w);
     try testing.expectEqual(@as(usize, node_count + 1), seen_final);
-    // The shards not written after the restart kept the replayed tail
-    // through every light checkpoint (the observed symptom).
+    try testing.expectEqual(@as(usize, more_count), seen_g2);
+    // Lazy open: with no statement since the restart the graph is not
+    // opened, and its WAL holds exactly the crash's tail, through every
+    // light checkpoint.
     try testing.expectEqual(tail, after_restart);
     try testing.expectEqual(tail, after_idle);
-    // Hydrated and written shards drain at the clean shutdown.
-    try testing.expectEqual(@as(u64, 0), after_second_sigterm);
-    // The contract that fails: a clean shutdown leaves no WAL bytes.
+    try testing.expect(tail2 > 0);
+    try testing.expectEqual(tail2, after_restart2);
+    // The first statement that touches the graph opens it and drains the WAL.
+    try testing.expectEqual(@as(u64, 0), after_open);
+    // A clean shutdown leaves no WAL bytes, with or without a statement since
+    // the restart.
     try testing.expectEqual(@as(u64, 0), after_sigterm);
+    try testing.expectEqual(@as(u64, 0), after_second_sigterm);
+    try testing.expectEqual(@as(u64, 0), after_third_sigterm);
 }
 
-test "SONNY-6595 item 5: a clean shutdown after a crash restart leaves no WAL bytes in any shard, with and without TDE" {
+test "SONNY-6595 item 5: after a crash restart the WAL holds exactly the tail until a statement opens the graph, which drains it, and a clean shutdown leaves none, with and without TDE" {
     var failed: usize = 0;
     for ([_]bool{ false, true }) |tde| {
         runConfig(testing.allocator, tde) catch |err| {
