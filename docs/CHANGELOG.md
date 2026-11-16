@@ -3073,6 +3073,27 @@
 
 ### Fixed
 
+- **An aborted bulk node insert leaves no exact-index entry; QUIC runs
+  `START TRANSACTION ... ROLLBACK` with mutations in one message, as gRPC
+  does (SONNY-6601 items 2 and 6).** The bulk reserved-id insert (the QUIC
+  bulk CREATE / MERGE fast path) adds each property to the exact
+  (label, key, value) index before its engine transaction commits; a
+  failure after that aborted the transaction and gave the slot back but
+  left the entries, naming a node that does not exist under a slot the
+  next insert reuses. They are taken back now, by the value hash computed
+  when added. QUIC refused a program with START TRANSACTION, a CREATE,
+  MERGE or DELETE and ROLLBACK in one message with 25001 (#830, from when
+  that path ignored inline transaction control); the executor runs and
+  rolls it back, and gRPC already accepted it. **User-visible:** such a
+  program now runs on QUIC. Regressions: `zig build
+  test-sonny6601-bulk-insert-index-abort`, `zig build
+  test-sonny6601-quic-inline-rollback`. **Still open (SONNY-6601):** item 1
+  (a half-failed adapter property write inside a statement transaction is
+  covered by geode's undo; not yet proven with an injected mid-write
+  failure), item 3 (a failed auto-commit engine write whose undo fails
+  poisons the shard without quarantining the graph), item 7 (multi-shard
+  transactions are not crash-atomic; design work).
+
 - **Label counters stay exact for names past 512 bytes; the label and
   relationship-type index readers find such names; `setEdgeProperty` of a
   missing edge fails (SONNY-6302 items 4 and 5).** Adding a node to a

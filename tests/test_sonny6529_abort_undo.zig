@@ -292,10 +292,11 @@ fn run(client: *Client, allocator: std.mem.Allocator, c: Case) !void {
     }
     switch (c.mode) {
         .program => {
-            // geode refuses BEGIN ... ROLLBACK with mutations in one batch
-            // (25001), so the batch ends with a statement that fails on its
-            // last row instead: the executor rolls the transaction back in
-            // the same request, with the session's engine transaction open.
+            // The batch ends with a statement that fails on its last row
+            // (QUIC refused BEGIN ... ROLLBACK with mutations in one batch,
+            // 25001, until SONNY-6601): the executor rolls the transaction
+            // back in the same request, with the session's engine
+            // transaction open.
             var pb: [64]u8 = undefined;
             const p = c.prefix(&pb);
             var prog: std.ArrayList(u8) = .empty;

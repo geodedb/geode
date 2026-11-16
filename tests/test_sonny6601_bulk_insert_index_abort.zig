@@ -12,9 +12,11 @@
 // A real store with a data directory. One allocation of the store (its
 // in-memory copy of the node, made after the index entries) is failed (a
 // one-shot fault), for each allocation the insert makes in turn, until an
-// insert needs none of them. After a failed insert the posting of
-// every property it carried must be empty; after the one that succeeds it
-// holds exactly that node.
+// insert needs none of them. After each, every property's posting must
+// hold exactly the nodes that exist: an insert that failed before its
+// commit leaves none. (One that fails after it, copying the properties into
+// the in-memory node, has committed the node and keeps its entries; that it
+// reports failure for a committed node is a separate defect.)
 //
 // CANARY: REQ=REQ-SONNY-6601-BULK-INSERT-INDEX-ABORT; FEATURE="StorageIntegrity"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6601_bulk_insert_index_abort.zig; OWNER=storage; UPDATED=2026-11-15
 
@@ -114,13 +116,13 @@ test "SONNY-6601 (2): an aborted bulk reserved-id insert leaves no exact-index e
         const result = adapter.bulkInsertNodeWithReservedIdForTenant(G, reserved, &labels, &props, graph_store.DEFAULT_TENANT_ID);
         fault.fail_at = null;
 
-        const want: usize = if (result) |_| 1 else |_| 0;
         if (result) |id| inserted = id else |_| failures += 1;
+        const want: usize = if (store.getNodesByLabel(G, "B6601")) |ids| ids.len else 0;
         for (props) |kv| {
             const n = try adapter.countCandidateNodesByLabelAndProperty(G, "B6601", kv.key, kv.value);
             if (n != want) {
                 wrong += 1;
-                std.debug.print("SONNY-6601 (2): store allocation {d} failing, the insert {s}: posting of {s} holds {d}, want {d}\n", .{ k, if (want == 1) "succeeded" else "failed", kv.key, n, want });
+                std.debug.print("SONNY-6601 (2): store allocation {d} failing, the insert {s}: posting of {s} holds {d}, nodes {d}\n", .{ k, if (result) |_| "succeeded" else |_| "failed", kv.key, n, want });
             }
         }
         if (!fault.induced or inserted != null) break;

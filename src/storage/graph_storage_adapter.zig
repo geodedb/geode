@@ -3084,6 +3084,15 @@ fn addIndexedNodePropertyEx(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u6
     try mg.exact_node_property_index.addEx(label_id, property_key, value_hash, node_id, assume_new);
 }
 
+/// SONNY-6601 (2): `addIndexedNodePropertyEx` with the value's hash computed
+/// by the caller, which keeps it to take the entry back
+/// (`exact_node_property_index.remove`, allocation-free for keys up to its
+/// 1 KiB scratch) if the write fails before it commits.
+fn addIndexedNodePropertyHash(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, value_hash: u64, assume_new: bool) !void {
+    if (!graph_store.shouldIndexProperty(property_key)) return;
+    try mg.exact_node_property_index.addEx(label_id, property_key, value_hash, node_id, assume_new);
+}
+
 fn removeIndexedNodeProperty(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, value: gs.PropertyValue) void {
     const value_hash = hashStorageProperty(mg.engine.allocator, value) catch return;
     mg.exact_node_property_index.remove(label_id, property_key, value_hash, node_id);
@@ -5587,17 +5596,36 @@ pub const StorageAdapter = struct {
         // storage/index writes directly here instead of routing back through
         // GraphStore.setNodePropertiesBatch, which would re-enter the adapter
         // graph lookup mutex and redo shard routing for every bulk CREATE.
+        // CANARY: REQ=REQ-SONNY-6601-BULK-INSERT-INDEX-ABORT; FEATURE="StorageIntegrity"; ASPECT=ExactIndexRollback; STATUS=TESTED; TEST=tests/test_sonny6601_bulk_insert_index_abort.zig; OWNER=storage; UPDATED=2026-11-15
+        // SONNY-6601 (2): the exact-index entries are added before the
+        // commit; an insert that fails before the in-memory store holds the
+        // node takes them back (the abort and the slot release above undo
+        // the rest). They stayed, naming a node the abort removed under a
+        // slot the next insert reuses. Removed by the hash computed when
+        // added, so the removal cannot fail on an allocation.
+        var value_hashes_buf: [16]u64 = undefined;
+        const value_hashes: []u64 = if (props.len <= value_hashes_buf.len)
+            value_hashes_buf[0..props.len]
+        else
+            try self.allocator.alloc(u64, props.len);
+        defer if (props.len > value_hashes_buf.len) self.allocator.free(value_hashes);
+        var props_indexed: usize = 0;
+        errdefer if (!slot_kept) for (props[0..props_indexed], value_hashes[0..props_indexed]) |kv, h| {
+            for (label_ids) |label_id| mg.exact_node_property_index.remove(label_id, kv.key, h, slot_id);
+        };
         if (props.len > 0) {
-            for (props) |kv| {
+            for (props, 0..) |kv, i| {
                 const storage_val = try toStorageProperty(self.allocator, kv.value);
                 defer freeTemporaryStorageProperty(self.allocator, storage_val);
                 const new_prop_head = node_shard.putPropertyTxn(rec.prop_head, kv.key, storage_val, local_txn) catch |err|
                     return mapPropertyEntryError(err, kv.key);
                 rec.prop_head = new_prop_head;
+                value_hashes[i] = try hashStorageProperty(mg.engine.allocator, storage_val);
+                props_indexed = i + 1;
                 for (label_ids) |label_id| {
                     // GAP-0900 throughput: bulk insert reserves a FRESH slot_id
                     // that has never been indexed → skip the O(N) de-dup scan.
-                    try addIndexedNodePropertyEx(mg, label_id, slot_id, kv.key, storage_val, true);
+                    try addIndexedNodePropertyHash(mg, label_id, slot_id, kv.key, value_hashes[i], true);
                 }
             }
             try node_shard.putNodeTxn(slot_id, rec, local_txn);
