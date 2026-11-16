@@ -295,7 +295,9 @@ pub fn prehydrateForApply(cmd: Command) void {
     const store = g_store orelse return;
     switch (cmd) {
         .graph_mutation => |gm| {
-            store.ensureGraphHydratedForReplicatedApply(if (gm.graph.len > 0) gm.graph else "default");
+            // SONNY-6605: a build that fails transiently is tried again by the
+            // apply, which fails if it fails again.
+            store.ensureGraphHydratedForReplicatedApply(if (gm.graph.len > 0) gm.graph else "default") catch {};
             const body = if (cluster_replication.isTenantPayload(gm.data))
                 (cluster_replication.splitTenant(gm.data) catch return).inner
             else
@@ -309,7 +311,7 @@ pub fn prehydrateForApply(cmd: Command) void {
 }
 
 fn hydrateBatchGraph(store: *GraphStore, graph: []const u8) void {
-    store.ensureGraphHydratedForReplicatedApply(if (graph.len > 0) graph else "default");
+    store.ensureGraphHydratedForReplicatedApply(if (graph.len > 0) graph else "default") catch {};
 }
 
 // CANARY: REQ=REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE; FEATURE="Raft Snapshot Persistence"; ASPECT=RestoreIntoStore; STATUS=TESTED; TEST=tests/test_sonny6622_raft_v022_adapt.zig; OWNER=distributed; UPDATED=2026-11-15
@@ -578,7 +580,9 @@ fn applyGraphMutationInner(allocator: Allocator, store_opt: ?*GraphStore, gm: Gr
     // measured). The leader hydrates an entry's graph before it proposes
     // it, without `inner_mutex` (`prehydrateForApply`); a graph hydrated
     // here is persisted by the next full checkpoint.
-    store.ensureGraphHydratedForReplicatedApply(graph_name);
+    // SONNY-6605: a build that failed transiently left the graph's products
+    // partial: the apply fails rather than write on them.
+    try store.ensureGraphHydratedForReplicatedApply(graph_name);
     const apply_adapter = graph_store_mod.getGlobalAdapter();
     const apply_mg = if (apply_adapter) |a| try a.beginReplicatedApply(graph_name) else null;
     defer if (apply_mg) |mg| apply_adapter.?.endReplicatedApply(mg);

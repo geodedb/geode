@@ -3107,6 +3107,64 @@
   (timeouts of 2 s and 4 s honoured, in process and through `geode mcp
   --stdio`), `test-sonny6606-backup-handshake-timeout`.
 
+- **Hydration follow-ups to SONNY-6605 (SONNY-6632).** A graph whose
+  registration failed at server start is marked failed and rebuilt by its
+  first touch; a rebuild that succeeded left the mark, so every read of the
+  graph was refused (`GraphQuarantined`) until a restart. The mark is now
+  cleared when the rebuild succeeds. The per-relationship-type count
+  (`count(r:TYPE)`) returned silently when it could not allocate a type's
+  entry, so the hydration (or a store clone or rebuild) succeeded with the
+  type counted one short for the life of the process; the failure now fails
+  the hydration with `OutOfMemory`, which is retried on the next access. A
+  checkpoint skipped freeing the retired node, edge and adjacency cache
+  entries of every graph not built yet, to protect a running build; a graph
+  whose build failed transiently stays not built until a retry succeeds, so
+  each retry under memory pressure grew memory further. Only a running build
+  holds the reclaims off now (`hasRunningHydrationBuild`). Regression:
+  `zig build test-sonny6632-hydration-followups` (real allocation failures:
+  a reload whose registration of the graph failed, then a first touch that
+  answers exact counts and no quarantine; the count entry of a relationship
+  type failing, then exact per-type counts; two failed builds, then a
+  checkpoint that frees all 240 retired node bodies).
+- **A graph whose first-read hydration runs out of memory (or of
+  descriptors, threads or disk space) is retried on its next access instead
+  of being quarantined until a restart (SONNY-6605).** Any hydration error
+  quarantined the graph (`58000 GraphQuarantined`, every read and write
+  refused until the server restarted), out of memory included: a retry was
+  not safe, because the failed build left partial products and the scan
+  bumps the tenant-introspection counts (`SHOW TABLES`, the LSP schema) and
+  the per-relationship-type counts once per node and edge it visits. Now a
+  transient failure (`OutOfMemory`, `SystemResources`, a descriptor or
+  thread quota, `NoSpaceLeft`, `DiskQuota`, `WouldBlock`, `DeviceBusy`)
+  fails the statement with its own error (`53200` for OutOfMemory), the
+  graph is not quarantined, and its next access clears the counts the failed
+  build bumped and builds again; the relationship-type counts are taken per
+  edge scanned, not per edge newly cached, so the edges the failed build
+  cached are counted once. Damage still quarantines the graph (a checksum or
+  authentication failure, `DataCorruption`, `InvalidData`,
+  `LabelDictionaryDiverged`, the side-file errors, an I/O error). The
+  hydration scan reported an allocation failure while decoding a property
+  value or a label list as `DataCorruption` (quarantine, and in a resident
+  scan the node was dropped from the products); it is reported as
+  `OutOfMemory`. A Raft apply whose graph's hydration failed transiently
+  fails instead of writing on the partial products. Regression:
+  `zig build test-sonny6605-hydration-retry` (real allocation failures at
+  six points of the stream scan, its pipelined and single-threaded merge,
+  and the legacy walk: every count exact after the retry, no Tag node
+  counted twice; a statement fails with 53200 and the next one answers; a
+  store whose node pages are zeroed stays quarantined and is not scanned
+  again).
+- **`geode serve --listen ... --listen-grpc ...` no longer waits for the
+  teardown watchdog to exit (SONNY-6605).** The gRPC listener's accept loop
+  (a `while (true)` around a blocking accept in grpc-zig) runs as the one
+  task of a pool, and nothing stopped it: at shutdown the pool's deinit
+  logged `thread-pool deinit timed out after 2000ms with 1 active tasks`,
+  then joined a worker that never returned, and the teardown watchdog forced
+  the exit 30 s later. The shutdown tail now shuts the listening socket down
+  (Linux), the accept fails, the loop returns and the pool joins. Regression:
+  `zig build test-sonny6605-grpc-shutdown` (a real server answering on both
+  listeners exits 0 within 20 s of SIGTERM, with no pool deinit timeout and
+  no watchdog exit in its log).
 - **A graph's first-read hydration no longer quarantines a healthy graph,
   or hydrates stale data, when a checkpoint runs at the same time
   (SONNY-6597).** The hydration scan (`hydration_scan.scanShard`) reads

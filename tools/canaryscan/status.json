@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T00:24:26.704713124Z",
+  "generated_at": "2026-11-16T01:00:09.91084073Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -79845,6 +79845,72 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6605-GRPC-ACCEPT-STOP",
+      "features": [
+        {
+          "feature": "GrpcServerLifecycle",
+          "aspect": "AcceptLoopStops",
+          "status": "TESTED",
+          "files": [
+            "src/transport/grpc_server.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6605_grpc_shutdown.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "GrpcServerLifecycle",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6605_grpc_shutdown.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6605_grpc_shutdown.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6605-HYDRATION-RETRY",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "TransientFailureRetried",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6605_hydration_retry.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6605_hydration_retry.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6605_hydration_retry.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6606-BACKUP-HANDSHAKE-TIMEOUT",
       "features": [
         {
@@ -81121,6 +81187,82 @@
           ],
           "benches": [],
           "owner": "distributed",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6632-EDGE-TYPE-COUNT-OOM",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "CountFailureNotSilent",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6632_hydration_followups.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6632-HYDRATION-FOLLOWUPS",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6632_hydration_followups.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6632_hydration_followups.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6632-OPEN-FAILED-REBUILT",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "FailedClearedOnRebuild",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6632_hydration_followups.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6632-RECLAIM-NOT-BUILT",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "ReclaimGateRunningBuild",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6632_hydration_followups.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
           "updated": "2026-11-15"
         }
       ]
@@ -86269,7 +86411,7 @@
       "EXEMPT": 209,
       "IMPL": 564,
       "STUB": 18,
-      "TESTED": 4255
+      "TESTED": 4263
     },
     "by_aspect": {
       "2PC": 3,
@@ -86294,6 +86436,7 @@
       "AbortedTxnGate": 1,
       "AbsoluteHistoryPathOnly": 1,
       "AbsoluteHomeOnly": 1,
+      "AcceptLoopStops": 1,
       "AcceptPathWedgeAutoRecovery": 1,
       "AcceptReactorOccupancy": 1,
       "AcceptWithoutPoolAndPeerEndpointChange": 1,
@@ -86922,6 +87065,7 @@
       "CostEstimation": 1,
       "CountAgg": 1,
       "CountDistinct": 1,
+      "CountFailureNotSilent": 1,
       "CountFiltering": 1,
       "CountMatches": 1,
       "CountReadSnapshotBypass": 1,
@@ -87497,6 +87641,7 @@
       "FailSecureOnCatalogError": 1,
       "FailSecureOnKeyError": 1,
       "FailedAddUntrustsIndex": 1,
+      "FailedClearedOnRebuild": 1,
       "FailedCreateGivesSlotBack": 1,
       "FailedLogin": 1,
       "FailedQueryExitsNonZero": 1,
@@ -89086,6 +89231,7 @@
       "RebuildProc": 1,
       "RebuildStateRegistry": 1,
       "RebuildWindowApi": 1,
+      "ReclaimGateRunningBuild": 1,
       "RecomputeEveryRecordHash": 1,
       "RecordFailureIsAnError": 1,
       "RecordFallback": 1,
@@ -89123,7 +89269,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 395,
+      "Regression": 398,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -89822,6 +89968,7 @@
       "TransactionFlagsRefused": 1,
       "TransactionLifecycle": 1,
       "Transactions": 1,
+      "TransientFailureRetried": 1,
       "TransientNodeRead": 1,
       "Transport": 1,
       "TransportAgnosticGlobals": 1,

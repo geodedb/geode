@@ -11056,6 +11056,43 @@ pub fn build(b: *std.Build) void {
     const sonny6597_flush_step = b.step("test-sonny6597-hydration-flush-race", "Run SONNY-6597 regression (a hydration scan while a checkpoint writes the shard's dirty pages finds a node created since the last checkpoint, with no false DataCorruption quarantine, and hydrates a property SET since then with its new value)");
     sonny6597_flush_step.dependOn(&run_sonny6597_flush_tests.step);
 
+    // SONNY-6605 (1): a transient hydration failure (out of memory, a
+    // descriptor quota) is retried on the next access with exact counts; a
+    // damaged store stays quarantined.
+    const sonny6605_hyd_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6605_hydration_retry.zig"), .target = target, .optimize = optimize });
+    sonny6605_hyd_test_mod.link_libc = true;
+    sonny6605_hyd_test_mod.addImport("geode", root_mod);
+    const sonny6605_hyd_tests = b.addTest(.{ .root_module = sonny6605_hyd_test_mod });
+    const run_sonny6605_hyd_tests = b.addRunArtifact(sonny6605_hyd_tests);
+    shardDep(test_step, &run_sonny6605_hyd_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6605_hyd_step = b.step("test-sonny6605-hydration-retry", "Run SONNY-6605 item 1 regression (a hydration that runs out of memory at any point of the stream scan, its pipelined or single-threaded merge, or the legacy walk fails its statement with 53200 and the graph is NOT quarantined; the next access hydrates it with exact label, node, relationship and per-type counts and no tenant-introspection count taken twice; a store whose node pages are zeroed stays quarantined and is not scanned again)");
+    sonny6605_hyd_step.dependOn(&run_sonny6605_hyd_tests.step);
+    // SONNY-6605 (3): SIGTERM stops the gRPC accept loop of a server with
+    // both listeners; its pool joins and the teardown watchdog stays idle.
+    const sonny6605_grpc_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6605_grpc_shutdown.zig"), .target = target, .optimize = optimize });
+    sonny6605_grpc_test_mod.link_libc = true;
+    sonny6605_grpc_test_mod.addImport("geode", root_mod);
+    sonny6605_grpc_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6605_grpc_test_mod.addImport("schema", schema_mod);
+    sonny6605_grpc_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6605_grpc_tests = b.addTest(.{ .root_module = sonny6605_grpc_test_mod });
+    const run_sonny6605_grpc_tests = b.addRunArtifact(sonny6605_grpc_tests);
+    spawnsBuiltGeode(sonny6605_grpc_tests);
+    shardDep(test_step, &run_sonny6605_grpc_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6605_grpc_step = b.step("test-sonny6605-grpc-shutdown", "Run SONNY-6605 item 3 regression (a real geode serve with --listen and --listen-grpc, both answering, exits 0 within 20 s of SIGTERM with no thread-pool deinit timeout and no teardown watchdog exit: the shutdown tail stops the gRPC accept loop)");
+    sonny6605_grpc_step.dependOn(&run_sonny6605_grpc_tests.step);
+    // SONNY-6632: a rebuilt open-failed graph is readable, a relationship-type
+    // count that cannot be allocated fails the hydration, and a checkpoint
+    // reclaims the retired entries of a graph that is not being built.
+    const sonny6632_hyd_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6632_hydration_followups.zig"), .target = target, .optimize = optimize });
+    sonny6632_hyd_test_mod.link_libc = true;
+    sonny6632_hyd_test_mod.addImport("geode", root_mod);
+    const sonny6632_hyd_tests = b.addTest(.{ .root_module = sonny6632_hyd_test_mod });
+    const run_sonny6632_hyd_tests = b.addRunArtifact(sonny6632_hyd_tests);
+    shardDep(test_step, &run_sonny6632_hyd_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6632_hyd_step = b.step("test-sonny6632-hydration-followups", "Run SONNY-6632 regression (a graph whose registration failed at open answers reads once its first touch rebuilt it; a relationship-type count whose key cannot be allocated fails the hydration with OutOfMemory and the retry counts every edge; a checkpoint frees the retired node bodies of a graph whose hydration failed transiently)");
+    sonny6632_hyd_step.dependOn(&run_sonny6632_hyd_tests.step);
+
     // SONNY-6492 (3): a replicated data write never creates a dropped graph
     // again; an unlocked createNode never writes into a graph dropped under it.
     const sonny6492_repl_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6492_replicated_write_dropped_graph.zig"), .target = target, .optimize = optimize });
