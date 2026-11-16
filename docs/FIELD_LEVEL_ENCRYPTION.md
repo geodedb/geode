@@ -457,8 +457,15 @@ In-process callers with no principal and no request context (embedders,
 background work) are decided by the role list alone.
 
 An inline property map on an encrypted field (`MATCH (n:L {ssn: '...'})`,
-`-[:R {p: '...'}]->`) compares the stored envelope and never matches; use
-`WHERE` (SONNY-6335 item 3, open). While any FLE field is configured the QUIC
+`-[:R {p: '...'}]->`) matches exactly as the `WHERE` equality does (SONNY-6335
+item 3): a role that may read the plaintext matches the plaintext, any other
+role compares `"[REDACTED]"` (no match, nothing revealed), and bytes that do
+not decrypt are the statement's error (58030), never a silent non-match. It
+compared the stored envelope and matched for no one. The engine-direct reads
+(the planned read and the streaming node scan, which compare stored bytes)
+decline such a pattern to the executor. A `WHERE` over a value that does not
+decrypt, counted or not (`RETURN count(r)`), fails with 58030 rather than
+counting the row out (item 4). While any FLE field is configured the QUIC
 write fast paths and the aggregate pushdowns decline to the executor.
 
 `MERGE` whose pattern names a property that is FLE-encrypted in any type

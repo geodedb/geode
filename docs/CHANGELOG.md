@@ -4,6 +4,24 @@
 
 ### Security
 
+- **An inline property map on an FLE-encrypted field matches as `WHERE`
+  does (SONNY-6335, items 3 and 4).** `MATCH (n:L {ssn: 'x'})` and
+  `-[:R {p: 'x'}]->` compared the stored envelope, so they matched for no
+  one, while `WHERE n.ssn = 'x'` matched the plaintext for a role that may
+  read it. Every inline-map comparison of the executor (node and edge maps,
+  the multi-node, single-hop and variable-length traversals, the pattern
+  walks of graph_algorithms, the WHERE pushdown) now reads the stored
+  string through the FLE read policy (`fle_integration.readStoredString`):
+  plaintext for a permitted role, `"[REDACTED]"` (no match) for any other,
+  and a value that does not decrypt is the statement's error (58030). The
+  planned read and the streaming node scan, which compare stored bytes,
+  decline a pattern whose map names an encrypted field
+  (`pattern_helpers.patternMapsNameEncryptedField`). **User-visible:** such
+  patterns now return rows for a permitted role, and fail with 58030 where
+  the value does not decrypt (they returned nothing). Item 4 (`WHERE r.p =
+  ... RETURN count(r)` answering 0 over a refused decrypt) already failed
+  with 58030 on this branch; the regression now pins it. Regression: `zig
+  build test-sonny6335-fle-identity-and-indexes`.
 - **A `DROP POLICY` whose chain-root write keeps failing puts the policy
   back (SONNY-6273, follow-up).** When the graph store did not take the
   new chain seal and both reseals failed too, the policy's records stayed

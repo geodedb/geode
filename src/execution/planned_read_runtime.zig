@@ -4036,6 +4036,9 @@ pub fn isStorageNativeReadShape(q: *const ast.Query) bool {
 
 fn isStorageNativeQuery(q: *const ast.Query) bool {
     if (q.next_query != null) return false;
+    // SONNY-6335 (3): an inline map on an FLE-encrypted field compares as
+    // WHERE reads it, in the executor (`propsMatch` compares stored bytes).
+    if (pattern_helpers.patternMapsNameEncryptedField(q.match)) return false;
     // A `WITH … FOR …` shape must NOT be served as a plain WITH projection —
     // the storage-native path would drop the FOR body entirely (write loss for
     // `WITH … FOR … CREATE`, and a collapsed one-row result for a read-bodied

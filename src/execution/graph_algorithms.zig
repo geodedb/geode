@@ -2,6 +2,7 @@ const std = @import("std");
 const value_utilities = @import("value_utilities.zig");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
+const pattern_helpers = @import("pattern_helpers.zig");
 const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
@@ -269,8 +270,11 @@ pub fn propertyToValue(node_prop_val: graph_store.PropertyValue) Value {
     return property_codec.propertyValueToValue(node_prop_val);
 }
 
-/// Check if a node's properties match the required properties
+/// Check if a node's (or an edge's) properties match the required properties.
+/// SONNY-6335 (3): `owner` is the node or edge, whose encrypted strings
+/// compare as WHERE reads them (`pattern_helpers.storedValueForMatch`).
 fn nodeMatchesProperties(
+    owner: pattern_helpers.FleOwner,
     node_properties: anytype,
     props: []const ast.Property,
     env: Env,
@@ -281,7 +285,7 @@ fn nodeMatchesProperties(
         // did not match).
         const expected = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, env);
         if (node_properties.get(prop.key)) |node_prop_val| {
-            const node_val = propertyToValue(node_prop_val);
+            const node_val = try pattern_helpers.storedValueForMatch(allocator, owner, prop.key, node_prop_val);
             if (!valuesEqual(node_val, expected)) return false;
         } else {
             return false;
@@ -423,7 +427,7 @@ fn nodeMatchesPattern(
 
     // Check properties if present
     if (pattern.props) |props| {
-        if (!try nodeMatchesProperties(node.properties, props, env, allocator)) return false;
+        if (!try nodeMatchesProperties(pattern_helpers.nodeOwner(&node), node.properties, props, env, allocator)) return false;
     }
     return true;
 }
@@ -590,7 +594,7 @@ const PatternWalk = struct {
                 // visible, and its type's RLS policies allow it (SONNY-2679).
                 if (!self.scope.edgeWalkable(self.store, edge)) continue;
                 if (hop.rel.props) |props| {
-                    if (!try nodeMatchesProperties(edge.properties, props, env, self.allocator)) continue;
+                    if (!try nodeMatchesProperties(pattern_helpers.edgeOwner(edge), edge.properties, props, env, self.allocator)) continue;
                 }
                 if (bound_rel) |v| if (v.Edge.id != edge.id) continue;
                 const far_id = if (side == 0) edge.to_id else edge.from_id;
@@ -659,7 +663,7 @@ const PatternWalk = struct {
                 };
                 if (!typeAllowed(hop.rel.types, e.label)) edges_ok = false;
                 if (edges_ok) if (hop.rel.props) |props| {
-                    if (!try nodeMatchesProperties(e.properties, props, env, self.allocator)) edges_ok = false;
+                    if (!try nodeMatchesProperties(pattern_helpers.edgeOwner(e), e.properties, props, env, self.allocator)) edges_ok = false;
                 };
                 if (!edges_ok) break;
             }

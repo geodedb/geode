@@ -782,7 +782,7 @@ fn checkNodeProperty(
     param_values: []const Value,
 ) bool {
     const node_prop_val = node.properties.get(property) orelse return false;
-    const node_val = propertyValueToValue(node_prop_val);
+    const node_val = pattern_helpers.storedValueForMatch(allocator, pattern_helpers.nodeOwner(node), property, node_prop_val) catch return true; // SONNY-6335 (3): read as WHERE reads it; a refused read is left to the WHERE, which raises it
     const prop_env = Env{
         .names = &.{},
         .values = &.{},
@@ -4014,7 +4014,7 @@ fn nodeMatchesProps(
     for (props) |prop| {
         if (containsVariableReference(prop.value.*)) continue;
         if (node.properties.get(prop.key)) |node_prop_val| {
-            const node_val = propertyValueToValue(node_prop_val);
+            const node_val = try pattern_helpers.storedValueForMatch(allocator, pattern_helpers.nodeOwner(node), prop.key, node_prop_val);
             const expected_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env);
             if (!valuesEqual(node_val, expected_val)) return false;
         } else {
@@ -4720,7 +4720,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (has_var_ref) continue;
 
                         if (node.properties.get(prop.key)) |node_prop_val| {
-                            const node_val = propertyValueToValue(node_prop_val);
+                            const node_val = try pattern_helpers.storedValueForMatch(allocator, pattern_helpers.nodeOwner(node), prop.key, node_prop_val);
                             const expected_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env);
                             if (!valuesEqual(node_val, expected_val)) {
                                 matches_pattern = false;
@@ -4778,7 +4778,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (has_var_ref) continue;
 
                         if (node.properties.get(prop.key)) |node_prop_val| {
-                            const node_val = propertyValueToValue(node_prop_val);
+                            const node_val = try pattern_helpers.storedValueForMatch(allocator, pattern_helpers.nodeOwner(node), prop.key, node_prop_val);
                             const expected_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env);
                             if (!valuesEqual(node_val, expected_val)) {
                                 matches_pattern = false;
@@ -4887,7 +4887,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                                     // SONNY-6498: a value that fails fails the statement (it was NULL).
                                     const expected_val = try eval.evalExpr(value_utilities.lentAllocator(self.allocator), prop.value.*, env);
                                     if (node.properties.get(prop.key)) |node_prop_val| {
-                                        const node_val = propertyValueToValue(node_prop_val);
+                                        const node_val = try pattern_helpers.storedValueForMatch(self.allocator, pattern_helpers.nodeOwner(node), prop.key, node_prop_val);
                                         if (!valuesEqual(node_val, expected_val)) {
                                             return; // Property doesn't match - skip this combination
                                         }
@@ -5065,7 +5065,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                                                 return err;
                                             };
                                             if (node.properties.get(prop.key)) |node_prop_val| {
-                                                const node_val = propertyValueToValue(node_prop_val);
+                                                const node_val = try pattern_helpers.storedValueForMatch(self.allocator, pattern_helpers.nodeOwner(node), prop.key, node_prop_val);
                                                 if (!valuesEqual(node_val, expected_val)) {
                                                     self.allocator.free(env_names);
                                                     self.allocator.free(env_values);
@@ -7246,7 +7246,7 @@ fn executeVariableLengthPathTraversal(
             var passes_props = true;
             for (props) |prop| {
                 if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
-                    const node_val = propertyValueToValue(node_prop_val);
+                    const node_val = try pattern_helpers.storedValueForMatch(allocator, pattern_helpers.nodeOwner(right_node_ptr), prop.key, node_prop_val);
                     const prop_env = eval.Env{
                         .names = &.{},
                         .values = &.{},
@@ -7791,7 +7791,7 @@ fn executeSingleHopEdgeTraversal(
                 var passes_props = true;
                 for (props) |prop| {
                     if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
-                        const node_val = propertyValueToValue(node_prop_val);
+                        const node_val = try pattern_helpers.storedValueForMatch(allocator, pattern_helpers.nodeOwner(right_node_ptr), prop.key, node_prop_val);
                         const prop_env = eval.Env{
                             .names = &.{},
                             .values = &.{},
@@ -9887,7 +9887,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         for (props) |prop| {
                             if (start_node.properties.get(prop.key)) |node_prop_val| {
                                 // Convert PropertyValue to Value for comparison
-                                const node_val = propertyValueToValue(node_prop_val);
+                                const node_val = try pattern_helpers.storedValueForMatch(allocator, pattern_helpers.nodeOwner(start_node), prop.key, node_prop_val);
                                 // Evaluate the expected property value
                                 const empty_env = eval.Env{
                                     .names = &.{},
@@ -9958,7 +9958,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             for (props) |prop| {
                                 if (target_node_ptr.properties.get(prop.key)) |node_prop_val| {
                                     // Convert PropertyValue to Value for comparison
-                                    const node_val = propertyValueToValue(node_prop_val);
+                                    const node_val = try pattern_helpers.storedValueForMatch(allocator, pattern_helpers.nodeOwner(target_node_ptr), prop.key, node_prop_val);
                                     // Evaluate the expected property value
                                     const empty_env = eval.Env{
                                         .names = &.{},
@@ -10146,7 +10146,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     for (props) |prop| {
                         if (node.properties.get(prop.key)) |node_prop_val| {
                             // Convert PropertyValue to Value for comparison
-                            const node_val = propertyValueToValue(node_prop_val);
+                            const node_val = try pattern_helpers.storedValueForMatch(allocator, pattern_helpers.nodeOwner(node), prop.key, node_prop_val);
                             // Evaluate the expected property value
                             const empty_env = eval.Env{
                                 .names = &.{},
@@ -10395,7 +10395,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     for (props) |prop| {
                         if (left_node.properties.get(prop.key)) |node_prop_val| {
                             // Convert PropertyValue to Value for comparison
-                            const node_val = propertyValueToValue(node_prop_val);
+                            const node_val = try pattern_helpers.storedValueForMatch(allocator, pattern_helpers.nodeOwner(left_node), prop.key, node_prop_val);
                             // Evaluate the expected property value
                             const prop_env = eval.Env{
                                 .names = &.{},
@@ -10598,7 +10598,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     for (props) |prop| {
                         if (node.properties.get(prop.key)) |node_prop_val| {
                             // Convert PropertyValue to Value for comparison
-                            const node_val = propertyValueToValue(node_prop_val);
+                            const node_val = try pattern_helpers.storedValueForMatch(allocator, pattern_helpers.nodeOwner(node), prop.key, node_prop_val);
                             // Evaluate expected value from pattern (with access to parameters)
                             const expected_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env);
                             if (!valuesEqual(node_val, expected_val)) {
