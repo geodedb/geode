@@ -140,6 +140,32 @@ fn forAfterPart(allocator: std.mem.Allocator, next: ast.Query, prev: ExecutionRe
     return result;
 }
 
+// CANARY: REQ=REQ-SONNY-6613-MATCH-WITH-FOR-WRITE; FEATURE="ForStatement"; ASPECT=WriteBodyAfterMatchWith; STATUS=TESTED; TEST=tests/test_sonny6613_match_with_for_write.zig; OWNER=engine; UPDATED=2026-11-15
+/// SONNY-6613 item 3b: `MATCH ... WITH ... FOR x IN <list> <body>` whose body
+/// writes (`write_shape.matchWithFor`). ISO/IEC 39075:2024 14.8: the FOR
+/// extends the WITH's working table. That table is read as a write step reads
+/// the rows a WITH after the MATCH keeps (`match_operations.readPatternRows`:
+/// the session's tenant scope and policies, the WHERE before the WITH over
+/// the pattern's rows, the WITH's grouping, DISTINCT, ORDER BY, window and
+/// WHERE), then the body runs for every row of it and every element of that
+/// row's list (`executeForWithBindings`). It was refused with 0A000.
+fn executeMatchWithFor(allocator: std.mem.Allocator, q: ast.Query, fr: ast.ForStatement, context: ExecutionContext, param_names: []const []const u8, param_values: []const Value) anyerror!ExecutionResult {
+    var first = q;
+    first.next_query = null;
+    const current_graph = if (context.session_state) |session| session.graph else null;
+    var table = try match_operations.readPatternRows(allocator, first, param_names, param_values, q.inline_let_bindings, current_graph);
+    defer table.deinit(allocator);
+    var result = try executeForWithBindings(allocator, fr, table.rows, context);
+    // The rows may hold the table's nodes: the result keeps its entities, as
+    // `forAfterPart` does.
+    adoptEntities(&result.owned_graph_entities, table.rows.owned_graph_entities) catch |err| {
+        result.deinit(allocator);
+        return err;
+    };
+    table.rows.owned_graph_entities = null;
+    return result;
+}
+
 // CANARY: REQ=REQ-SONNY-6555-FOR-CHAIN-STAGE; FEATURE="ForStatement"; ASPECT=ReadBodyOverWholeTable; STATUS=TESTED; TEST=tests/test_sonny6555_for_chain_stage.zig; OWNER=engine; UPDATED=2026-11-14
 /// SONNY-6555 item 7: a FOR whose body reads, over the rows reaching it
 /// (`in_columns` / `in_rows`). ISO/IEC 39075:2024 14.8: the FOR extends the
@@ -171,23 +197,11 @@ pub fn runReadForBody(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, 
 /// (left unfreed rather than freed the wrong way; every executor tracker frees
 /// the struct only).
 fn adoptEntities(dst: *?*execution.OwnedGraphEntities, src: ?*execution.OwnedGraphEntities) !void {
-    const s = src orelse return;
-    const d = dst.* orelse {
-        dst.* = s;
-        return;
-    };
-    if (d == s) return;
-    if (d.destroy_node != s.destroy_node or d.destroy_edge != s.destroy_edge or
-        d.allocator.ptr != s.allocator.ptr or d.allocator.vtable != s.allocator.vtable) return;
-    // SONNY-6498: both lists grow first; a failure leaves `src` whole (it
-    // was half copied, then freed by both trackers).
-    try d.nodes.ensureUnusedCapacity(d.allocator, s.nodes.items.len);
-    try d.edges.ensureUnusedCapacity(d.allocator, s.edges.items.len);
-    d.nodes.appendSliceAssumeCapacity(s.nodes.items);
-    d.edges.appendSliceAssumeCapacity(s.edges.items);
-    s.nodes.deinit(s.allocator);
-    s.edges.deinit(s.allocator);
-    s.allocator.destroy(s);
+    // SONNY-6498: every list grows first; a failure leaves `src` whole (it
+    // was half copied, then freed by both trackers). SONNY-6613: the path
+    // arrays `src` keeps move too, and a tracker that frees differently is
+    // linked (it was dropped).
+    return execution.OwnedGraphEntities.adopt(dst, src);
 }
 
 // CANARY: REQ=REQ-SONNY-6498-ERROR-PATH-OWNERSHIP; FEATURE="ExecutionResultOwnership"; ASPECT=ChainParts; STATUS=TESTED; TEST=tests/test_sonny6297_allocation_failure_sweep.zig; OWNER=execution; UPDATED=2026-11-13
@@ -1724,7 +1738,7 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q_in: ast.Query, co
 /// caught). Audited capture sites: ExecutionResult.owned_graph_entities and
 /// ExecutionResult.variable_bindings; every other field is unmanaged.
 fn repointResultAllocators(result: *ExecutionResult, allocator: std.mem.Allocator) void {
-    if (result.owned_graph_entities) |entities| entities.allocator = allocator;
+    if (result.owned_graph_entities) |entities| entities.setAllocator(allocator);
     if (result.variable_bindings) |bindings| bindings.allocator = allocator;
     // A `Value.Map` in a result row is a managed std.StringHashMap that stored
     // the (stack-local, pass-through) metered allocator; its deinit would call
@@ -1747,6 +1761,8 @@ pub fn executeLegacyQueryWithResolvedParams(
     const param_values = struct { items: []const Value }{ .items = resolved_param_values };
 
     if (q.next_query) |next_query_ptr| {
+        // SONNY-6613 item 3b: MATCH ... WITH ... FOR x IN <list> <write>.
+        if (write_shape.matchWithFor(q)) |fr| return executeMatchWithFor(allocator, q, fr.*, context, resolved_param_names, resolved_param_values);
         // CANARY: REQ=REQ-SONNY-3040-CHAINED-WRITES; FEATURE="WriteStep"; ASPECT=ChainDispatch; STATUS=TESTED; TEST=tests/test_sonny3040_chained_writes.zig; OWNER=engine; UPDATED=2026-09-27
         // SONNY-3040: MATCH ... WITH ... CREATE or MERGE is MATCH ... CREATE
         // or MERGE over the WITH's rows; it runs as that. Any other chain

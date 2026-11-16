@@ -351,9 +351,11 @@ Phase 8: Generate Groups (10M)
    RETURN p, a, collect(m) AS media, collect(t) AS topics
    ```
 
-4. **Search** (10%)
+4. **Search** (10%). Not supported as written: Geode has no `vector.search`
+   procedure (nearest neighbours come from `knn(...)`, see
+   docs/API_REFERENCE.md).
 
-   ```gql
+   ```text
    CALL vector.search('post_embeddings', $query_vector, 50)
    YIELD node, score
    MATCH (a:User)-[:AUTHORED]->(node)

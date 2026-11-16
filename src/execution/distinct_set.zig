@@ -104,6 +104,16 @@ pub fn writeGroupKeyPart(w: *std.Io.Writer, scratch: std.mem.Allocator, value: V
 
 pub const WriteKeyError = std.Io.Writer.Error || error{OutOfMemory};
 
+// CANARY: REQ=REQ-SONNY-6613-GROUP-KEY-OOM; FEATURE="Grouping"; ASPECT=KeyAllocationFailureIsOutOfMemory; STATUS=TESTED; TEST=tests/test_sonny6613_group_key_oom.zig; OWNER=engine; UPDATED=2026-11-15
+/// SONNY-6613: `writeGroupKeyPart` into an allocating writer. Its writer
+/// fails only when its allocator does, and says so as `error.WriteFailed`:
+/// that is an allocation failure, OutOfMemory (53200), not a failed write.
+pub fn appendGroupKeyPart(aw: *std.Io.Writer.Allocating, scratch: std.mem.Allocator, value: Value) error{OutOfMemory}!void {
+    writeGroupKeyPart(&aw.writer, scratch, value) catch |err| switch (err) {
+        error.WriteFailed, error.OutOfMemory => return error.OutOfMemory,
+    };
+}
+
 // The type byte of each key. NULL has one only inside a group key or a list.
 const tag_null = '0';
 

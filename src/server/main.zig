@@ -3983,6 +3983,10 @@ pub fn main() !void {
         // instant (mirrors transport.requestShutdown for QUIC). The in-flight
         // drain happens below, after the QUIC connection drain.
         grpc_transport.requestGrpcShutdown();
+        // SONNY-6605 (3): and stop its accept loop, so the pool running it
+        // (`grpc_pool_owner`) joins at teardown instead of timing out and
+        // leaving the teardown watchdog to force the exit.
+        if (grpc_server_owner) |grpc_srv| grpc_srv.stopAccepting();
         if (detached_connection_admission and !g_connection_admission_gate.waitForZero(10 * std.time.ns_per_s)) {
             log.warn("Connection admission threads still active during shutdown", &.{
                 Attr.int("active_admission", @intCast(g_connection_admission_gate.active.load(.acquire))),

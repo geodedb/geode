@@ -953,6 +953,14 @@ fn consumeLegacyPage(
 /// node never entered the IdMap, so loop2 skipped it without reading
 /// further). Any other structural failure fails hydration, exactly like the
 /// legacy `try getAllNodeProperties` in loop2.
+/// SONNY-6605: a decode that could not allocate is out of memory, not a
+/// damaged record: reported as DataCorruption it quarantined the graph until
+/// restart (and in resident mode `nodeBlobCorrupt` dropped the node from the
+/// hydration's products). Every other decode error is damage.
+fn decodeError(err: anyerror) error{ OutOfMemory, DataCorruption } {
+    return if (err == error.OutOfMemory) error.OutOfMemory else error.DataCorruption;
+}
+
 fn nodeBlobCorrupt(row: *NodeRow, opts: ScanOptions, saw_internal_id: bool, err: anyerror) anyerror!void {
     if (opts.resident_mode and !saw_internal_id) {
         row.corrupt_skip = true;
@@ -1013,9 +1021,9 @@ fn parseEntriesRegion(
             // Decoded into the durable arena below; give the (possibly
             // large) scratch copy back (the arena reclaims its last block).
             defer overflow.scratch.free(real);
-            break :blk gs.property.decode(durable, real) catch return error.DataCorruption;
+            break :blk gs.property.decode(durable, real) catch |err| return decodeError(err);
         } else blk: {
-            const inline_value = gs.property.decode(durable, region[off..]) catch return error.DataCorruption;
+            const inline_value = gs.property.decode(durable, region[off..]) catch |err| return decodeError(err);
             off += inline_value.bytes_read;
             break :blk inline_value;
         };
@@ -1143,7 +1151,7 @@ fn scanLabels(
         // GAP-0062: a slab-headed label ref is a SINGLE run (never a chain).
         if (gs.var_store.isSlabHead(row.label_head)) {
             const blob = var_slab_runs.get(row.label_head) orelse return error.DataCorruption;
-            row.label_ids = decodeLabelIds(allocs.node, blob) catch return error.DataCorruption;
+            row.label_ids = decodeLabelIds(allocs.node, blob) catch |err| return decodeError(err);
             continue;
         }
 
@@ -1156,7 +1164,7 @@ fn scanLabels(
             try blob.appendSlice(allocs.scratch, chunk.data);
             current = chunk.next;
         }
-        row.label_ids = decodeLabelIds(allocs.node, blob.items) catch return error.DataCorruption;
+        row.label_ids = decodeLabelIds(allocs.node, blob.items) catch |err| return decodeError(err);
     }
 }
 

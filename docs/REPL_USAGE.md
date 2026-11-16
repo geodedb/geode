@@ -34,7 +34,7 @@ For multi-line queries, end with a semicolon (`;`).
 
 ### Examples
 
-```gql
+```text
 geode> RETURN 1 AS x;
 {"columns":["a"],"data":[[1]]}
 

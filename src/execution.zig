@@ -860,6 +860,13 @@ pub const OwnedGraphEntities = struct {
     destroy_node: ?*const fn (std.mem.Allocator, *graph_store.Node) void = null,
     /// As `destroy_node`, for each tracked relationship.
     destroy_edge: ?*const fn (std.mem.Allocator, *graph_store.Edge) void = null,
+    /// SONNY-6613: the node and relationship arrays of the path values the
+    /// result's rows keep (`adoptPath`), allocated on `allocator`. The nodes
+    /// and relationships they point at are not the arrays' to free.
+    path_nodes: std.ArrayList([]const *const graph_store.Node) = .empty,
+    path_edges: std.ArrayList([]const *const graph_store.Edge) = .empty,
+    /// SONNY-6613: the trackers `link` keeps alive with this one.
+    next: ?*OwnedGraphEntities = null,
 
     pub fn init(allocator: std.mem.Allocator) !*OwnedGraphEntities {
         const self = try allocator.create(OwnedGraphEntities);
@@ -869,6 +876,93 @@ pub const OwnedGraphEntities = struct {
             .allocator = allocator,
         };
         return self;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6613-PATH-OWNERSHIP; FEATURE="PathValues"; ASPECT=ResultOwnsPathArrays; STATUS=TESTED; TEST=tests/test_sonny6613_path_ownership.zig; OWNER=engine; UPDATED=2026-11-15
+    /// SONNY-6613: track a path's node and relationship arrays, allocated on
+    /// `allocator` for a row of the result, freeing them when they cannot
+    /// be tracked. Nothing freed them: a row that kept a path (`RETURN p`, a
+    /// WITH row, `collect(p)`) leaked both arrays.
+    pub fn adoptPath(self: *OwnedGraphEntities, nodes: []const *const graph_store.Node, edges: []const *const graph_store.Edge) !void {
+        errdefer {
+            self.allocator.free(nodes);
+            self.allocator.free(edges);
+        }
+        try self.path_nodes.ensureUnusedCapacity(self.allocator, 1);
+        try self.path_edges.ensureUnusedCapacity(self.allocator, 1);
+        self.path_nodes.appendAssumeCapacity(nodes);
+        self.path_edges.appendAssumeCapacity(edges);
+    }
+
+    /// SONNY-6613: whether `absorb` can take over what `other` tracks: both
+    /// release their entities the same way, on the same allocator.
+    pub fn canAbsorb(self: *const OwnedGraphEntities, other: *const OwnedGraphEntities) bool {
+        return self.destroy_node == other.destroy_node and self.destroy_edge == other.destroy_edge and
+            self.allocator.ptr == other.allocator.ptr and self.allocator.vtable == other.allocator.vtable;
+    }
+
+    /// SONNY-6613: take over what `other` tracks (its nodes, relationships,
+    /// path arrays and linked trackers), destroying `other`'s tracker. Both
+    /// must release their entities the same way, and `other`'s allocations
+    /// must be `self.allocator`'s to free (`canAbsorb` checks the allocator
+    /// is the same one). On an error `other` is left whole. The callers that
+    /// merged trackers by hand moved the nodes and relationships only.
+    pub fn absorb(self: *OwnedGraphEntities, other: *OwnedGraphEntities) !void {
+        std.debug.assert(self != other and self.destroy_node == other.destroy_node and self.destroy_edge == other.destroy_edge);
+        try self.nodes.ensureUnusedCapacity(self.allocator, other.nodes.items.len);
+        try self.edges.ensureUnusedCapacity(self.allocator, other.edges.items.len);
+        try self.path_nodes.ensureUnusedCapacity(self.allocator, other.path_nodes.items.len);
+        try self.path_edges.ensureUnusedCapacity(self.allocator, other.path_edges.items.len);
+        self.nodes.appendSliceAssumeCapacity(other.nodes.items);
+        self.edges.appendSliceAssumeCapacity(other.edges.items);
+        self.path_nodes.appendSliceAssumeCapacity(other.path_nodes.items);
+        self.path_edges.appendSliceAssumeCapacity(other.path_edges.items);
+        other.nodes.clearRetainingCapacity();
+        other.edges.clearRetainingCapacity();
+        other.path_nodes.clearRetainingCapacity();
+        other.path_edges.clearRetainingCapacity();
+        if (other.next) |rest| {
+            other.next = null;
+            self.link(rest);
+        }
+        other.deinit();
+    }
+
+    /// SONNY-6613: keep `other` (and the trackers linked to it) alive until
+    /// this tracker is freed, each releasing its own entities its own way, on
+    /// its own allocator. Nothing is allocated, so nothing fails: for rows
+    /// copied by reference from a result that is then freed (a UNION's arm,
+    /// a WITH's input), whose tracker must outlive it.
+    // CANARY: REQ=REQ-SONNY-6613-ENTITY-ADOPT; FEATURE="ExecutionResultOwnership"; ASPECT=MismatchedTrackerLinked; STATUS=TESTED; TEST=tests/test_sonny6613_entity_adopt.zig; OWNER=execution; UPDATED=2026-11-15
+    /// SONNY-3046 / SONNY-6613: `dst` (a result's tracker, or none) takes over
+    /// `src` (a part's), which is consumed: absorbed when the two free their
+    /// entities the same way (`canAbsorb`), else linked, so each is freed its
+    /// own way with `dst`. It was dropped, leaking it and every node it held.
+    /// On an error `src` is left whole.
+    pub fn adopt(dst: *?*OwnedGraphEntities, src: ?*OwnedGraphEntities) !void {
+        const s = src orelse return;
+        const d = dst.* orelse {
+            dst.* = s;
+            return;
+        };
+        var cur: ?*OwnedGraphEntities = d;
+        while (cur) |t| : (cur = t.next) if (t == s) return;
+        if (d.canAbsorb(s)) return d.absorb(s);
+        d.link(s);
+    }
+
+    pub fn link(self: *OwnedGraphEntities, other: *OwnedGraphEntities) void {
+        var tail = other;
+        while (tail.next) |n| tail = n;
+        tail.next = self.next;
+        self.next = other;
+    }
+
+    /// SONNY-6613: make this tracker and every one linked to it free through
+    /// `allocator` (a pass-through wrapper's inner allocator).
+    pub fn setAllocator(self: *OwnedGraphEntities, allocator: std.mem.Allocator) void {
+        var cur: ?*OwnedGraphEntities = self;
+        while (cur) |t| : (cur = t.next) t.allocator = allocator;
     }
 
     pub fn trackNode(self: *OwnedGraphEntities, node: *graph_store.Node) !void {
@@ -905,6 +999,14 @@ pub const OwnedGraphEntities = struct {
     /// read's error path, empty-result path and missing-graph path -- leaked it
     /// once per query on the caller's allocator (gpa in production).
     pub fn deinit(self: *OwnedGraphEntities) void {
+        var cur: ?*OwnedGraphEntities = self;
+        while (cur) |t| {
+            cur = t.next;
+            t.deinitOne();
+        }
+    }
+
+    fn deinitOne(self: *OwnedGraphEntities) void {
         const allocator = self.allocator;
         for (self.nodes.items) |node| {
             if (self.destroy_node) |destroy| destroy(allocator, node) else allocator.destroy(node);
@@ -914,6 +1016,10 @@ pub const OwnedGraphEntities = struct {
             if (self.destroy_edge) |destroy| destroy(allocator, edge) else allocator.destroy(edge);
         }
         self.edges.deinit(allocator);
+        for (self.path_nodes.items) |nodes| allocator.free(nodes);
+        self.path_nodes.deinit(allocator);
+        for (self.path_edges.items) |edges| allocator.free(edges);
+        self.path_edges.deinit(allocator);
         allocator.destroy(self);
     }
 };
@@ -940,6 +1046,18 @@ pub const ExecutionResult = struct {
     column_buffer: ?[]u8 = null, // Single buffer for all column strings (reduces N allocations to 1)
     // Tracks ownership of materialized graph entities (nodes/edges) for lifetime management
     owned_graph_entities: ?*OwnedGraphEntities = null,
+
+    /// SONNY-6613: keep what `from`'s tracker owns (the path arrays,
+    /// nodes and relationships its rows hold) alive with this result, for
+    /// rows this result copied from `from` by reference before `from` is
+    /// freed. `from` is left with no tracker.
+    pub fn takeOwnedGraphEntities(self: *ExecutionResult, from: *ExecutionResult) void {
+        const src = from.owned_graph_entities orelse return;
+        from.owned_graph_entities = null;
+        if (self.owned_graph_entities) |dst| {
+            if (dst != src) dst.link(src);
+        } else self.owned_graph_entities = src;
+    }
 
     pub fn deinit(self: *ExecutionResult, allocator: std.mem.Allocator) void {
         // Free column buffer if present (Phase 5 optimization)
@@ -1326,6 +1444,10 @@ fn windowValue(v: Value) !usize {
     };
 }
 
+/// SONNY-6613: the kept rows' list is made before any row is freed: a
+/// failure to make it left `result` holding the rows it had freed, which its
+/// `deinit` then freed again (any windowed statement, on an allocation
+/// failure).
 pub fn applyRowWindow(allocator: std.mem.Allocator, result: *ExecutionResult, start: usize, end: usize) !void {
     const total = result.rows.len;
     if (total == 0) return;
@@ -1336,14 +1458,17 @@ pub fn applyRowWindow(allocator: std.mem.Allocator, result: *ExecutionResult, st
     if (start_idx == 0 and end_idx == total) return;
 
     if (start_idx >= end_idx) {
+        const none = try allocator.alloc([]Value, 0);
         for (result.rows) |row| {
             freeRowValues(allocator, result, row);
         }
         allocator.free(result.rows);
-        result.rows = try allocator.alloc([]Value, 0);
+        result.rows = none;
         return;
     }
 
+    const new_len = end_idx - start_idx;
+    const new_rows = try allocator.alloc([]Value, new_len);
     for (result.rows[0..start_idx]) |row| {
         freeRowValues(allocator, result, row);
     }
@@ -1351,8 +1476,6 @@ pub fn applyRowWindow(allocator: std.mem.Allocator, result: *ExecutionResult, st
         freeRowValues(allocator, result, row);
     }
 
-    const new_len = end_idx - start_idx;
-    const new_rows = try allocator.alloc([]Value, new_len);
     for (result.rows[start_idx..end_idx], 0..) |row, i| {
         new_rows[i] = row;
     }
@@ -5057,14 +5180,13 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
             // GAP-0220 FIX: Use try for proper error propagation
             var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
             errdefer key_aw.deinit();
-            const key_writer = &key_aw.writer;
             // GAP-ENT-0055: each key follows a projection alias (`GROUP BY
             // s`) to its underlying expression before evaluating against the
             // input row (`keys`, above).
             for (keys) |key_expr| {
                 const key_val = try evalGroupedExpr(key_arena.allocator(), key_expr, env);
                 // SONNY-2675: the key's typed canonical encoding.
-                try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
+                try distinct_set.appendGroupKeyPart(&key_aw, allocator, key_val);
             }
             // SONNY-6498: the writer keeps the bytes until they are a slice (a
             // failed copy left them in a list nothing freed).
@@ -5137,12 +5259,11 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     // GAP-0220 FIX: Use try for proper error propagation
                     var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
                     errdefer key_aw.deinit();
-                    const key_writer = &key_aw.writer;
                     for (with_items) |item| {
                         if (!return_and_sorting.isAggregationExpr(item.expr) and return_and_sorting.isNonConstantExpr(item.expr)) {
                             const key_val = try evalGroupedExpr(key_arena.allocator(), item.expr, env);
                             // SONNY-2675: the key's typed canonical encoding.
-                            try distinct_set.writeGroupKeyPart(key_writer, allocator, key_val);
+                            try distinct_set.appendGroupKeyPart(&key_aw, allocator, key_val);
                         }
                     }
                     // SONNY-6498: the writer keeps the bytes until they are a slice (a

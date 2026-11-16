@@ -154,6 +154,18 @@ fn renderCell(aa: std.mem.Allocator, cell: Value) anyerror![]const u8 {
             for (items, parts) |item, *p| p.* = try renderCell(aa, item);
             break :blk try std.fmt.allocPrint(aa, "[{s}]", .{try std.mem.join(aa, ", ", parts)});
         },
+        // SONNY-6613: a path is read through its arrays (each node's `k`,
+        // each relationship's type), so a path whose arrays were freed
+        // under the result is caught here.
+        .Path => |path| blk: {
+            const parts = try aa.alloc([]const u8, path.nodes.len + path.edges.len);
+            for (path.nodes, parts[0..path.nodes.len]) |node, *p| p.* = if (node.properties.get("k")) |k| switch (k) {
+                .Int => |n| try std.fmt.allocPrint(aa, "{d}", .{n}),
+                else => "?",
+            } else "?";
+            for (path.edges, parts[path.nodes.len..]) |edge, *p| p.* = try aa.dupe(u8, edge.label);
+            break :blk try std.fmt.allocPrint(aa, "<Path {s}>", .{try std.mem.join(aa, " ", parts)});
+        },
         else => try std.fmt.allocPrint(aa, "<{s}>", .{@tagName(cell)}),
     };
 }

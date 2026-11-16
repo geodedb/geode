@@ -73,7 +73,7 @@ You may index multiple properties on a single index: `ON (d.title, d.body)`.
 
 ### `CREATE INDEX â€¦ USING fulltext`
 
-```gql
+```text
 CREATE INDEX <name> FOR (n:Label) ON (n.prop[, n.prop2]) USING fulltext;
 ```
 
@@ -82,7 +82,7 @@ Creates a fulltext index over the named string properties of `:Label` nodes and
 
 ### `CALL geode.fts.search`
 
-```gql
+```text
 CALL geode.fts.search('<index>', '<query>'[, <max>]);
 ```
 
@@ -97,7 +97,7 @@ over the QUIC wire because results ride the generic GQL Execute+rows protocol â€
 
 ### `CALL geode.fts.phrase` (GAP-0869)
 
-```gql
+```text
 CALL geode.fts.phrase('<index>', '<phrase>'[, <max>]);
 ```
 
@@ -113,7 +113,7 @@ of the constituent terms' BM25 scores.
 
 ### `CALL geode.fts.proximity` (GAP-0869)
 
-```gql
+```text
 CALL geode.fts.proximity('<index>', '<terms>', <distance>[, <max>]);
 ```
 
@@ -148,7 +148,7 @@ is not guaranteed for all letters. This applies equally to `search`, `phrase`,
 
 ### `DROP INDEX`
 
-```gql
+```text
 DROP INDEX <name>;
 ```
 

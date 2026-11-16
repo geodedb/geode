@@ -56,20 +56,20 @@ When operating on decimals with different scales:
 
 ```gql
 -- Integer arithmetic
-RETURN 5 + 3        -- Result: Int(8)
-RETURN 10 / 3       -- Result: Int(3) - truncated
+RETURN 5 + 3;       -- Result: Int(8)
+RETURN 10 / 3;      -- Result: Int(3) - truncated
 
 -- Mixed arithmetic (promotion)
-RETURN 5 + 3.14     -- Result: Decimal(coeff=814, scale=2)
-RETURN 10.5 * 2     -- Result: Decimal(coeff=210, scale=1)
+RETURN 5 + 3.14;    -- Result: Decimal(coeff=814, scale=2)
+RETURN 10.5 * 2;    -- Result: Decimal(coeff=210, scale=1)
 
 -- Comparisons
-RETURN 5 = 5.0      -- Result: Bool(true) - after promotion
-RETURN 3.14 > 3     -- Result: Bool(true) - after promotion
+RETURN 5 = 5.0;     -- Result: Bool(true) - after promotion
+RETURN 3.14 > 3;    -- Result: Bool(true) - after promotion
 
 -- Error cases
-RETURN 1/0          -- Error: TypeMismatch.DivZero
-RETURN 1 < "abc"    -- Error: TypeMismatch
+RETURN 1/0;         -- Error: TypeMismatch.DivZero
+RETURN 1 < "abc";   -- Error: TypeMismatch
 ```
 
 ### Test Coverage

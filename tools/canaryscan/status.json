@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-15T23:56:52.419417117Z",
+  "generated_at": "2026-11-16T01:23:05.985899545Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -23371,17 +23371,14 @@
         {
           "feature": "Binary Protocol Frames",
           "aspect": "Wire",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_001_WireMalformedFrame",
-            "TestCANARY_REQ_GQL_005_HelloRoundTrip"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "wire",
-          "updated": "2025-09-20"
+          "updated": "2026-11-15"
         },
         {
           "feature": "KeywordsAsIdentifiers",
@@ -23415,17 +23412,14 @@
         {
           "feature": "HELLO Capabilities",
           "aspect": "Wire",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_002_WireUnsupportedCapability",
-            "TestCANARY_REQ_GQL_005_HelloRoundTrip"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "wire",
-          "updated": "2025-09-20"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -23435,16 +23429,14 @@
         {
           "feature": "Pagination Legality (US001)",
           "aspect": "Planner",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_004_UnorderedLimitReject"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "planner",
-          "updated": "2025-09-26"
+          "updated": "2026-11-15"
         },
         {
           "feature": "Pagination Policy Override",
@@ -23580,16 +23572,14 @@
         {
           "feature": "Set Operations",
           "aspect": "Engine",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_005_SetOpsDistinct"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2025-09-20"
+          "updated": "2026-11-15"
         },
         {
           "feature": "SetOps",
@@ -24418,19 +24408,14 @@
         {
           "feature": "Property Access",
           "aspect": "Engine",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_017_PropertyAccess",
-            "TestCANARY_REQ_GQL_017_PropertyAccessDecimalFormat",
-            "TestCANARY_REQ_GQL_017_PropertyAccessMissing",
-            "TestCANARY_REQ_GQL_017_PropertyAccessNull"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2025-09-20"
+          "updated": "2026-11-15"
         },
         {
           "feature": "Property Access Hot Path",
@@ -25458,15 +25443,13 @@
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_028_RecoveryAfterCompaction"
-          ],
+          "tests": [],
           "benches": [
             "BenchmarkCANARY_REQ_GQL_028_GraphStoreCompact",
             "BenchmarkCANARY_REQ_GQL_028_SnapshotFragmentation"
           ],
           "owner": "storage",
-          "updated": "2026-02-04"
+          "updated": "2026-11-15"
         },
         {
           "feature": "Snapshot Adaptive Policy",
@@ -25485,16 +25468,14 @@
         {
           "feature": "Recovery After Compaction",
           "aspect": "Storage",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_028_RecoveryAfterCompaction"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "storage",
-          "updated": "2025-09-20"
+          "updated": "2026-11-15"
         },
         {
           "feature": "SnapshotCompaction",
@@ -27985,16 +27966,14 @@
         {
           "feature": "Materialized Views",
           "aspect": "RefreshScheduler",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_076_RefreshScheduler"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2025-09-22"
+          "updated": "2026-11-15"
         },
         {
           "feature": "Materialized Views",
@@ -28032,16 +28011,14 @@
         {
           "feature": "Full-Text Search",
           "aspect": "InvertedIndexCore",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_077_InvertedIndexCore"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "engine",
-          "updated": "2025-09-22"
+          "updated": "2026-11-15"
         },
         {
           "feature": "Full-Text Search",
@@ -28084,16 +28061,14 @@
         {
           "feature": "Additional Data Types",
           "aspect": "ValueTags",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_080_ValueTags"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         },
         {
           "feature": "VariableLengthPaths",
@@ -28222,16 +28197,14 @@
         {
           "feature": "Numeric Types",
           "aspect": "IntWidths",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_081_IntWidths"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         },
         {
           "feature": "SessionManagement",
@@ -28317,16 +28290,14 @@
         {
           "feature": "Float Types",
           "aspect": "NaNForbidden",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_082_NaNForbidden"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         },
         {
           "feature": "ExtendedBuiltins",
@@ -28550,16 +28521,14 @@
         {
           "feature": "Decimal128",
           "aspect": "ArithmeticRounding",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_083_DecimalRounding"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         },
         {
           "feature": "CreateWithClause",
@@ -28621,16 +28590,14 @@
         {
           "feature": "String Types",
           "aspect": "CharPadComparison",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_084_CharPadComparison"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         },
         {
           "feature": "CreateIndexKeywordProperties",
@@ -28652,16 +28619,14 @@
         {
           "feature": "String Types",
           "aspect": "VarcharBounds",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_085_VarcharBounds"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         },
         {
           "feature": "ParenthesizedSetOperations",
@@ -28683,16 +28648,14 @@
         {
           "feature": "Temporal Types",
           "aspect": "DateParsing",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_086_DateParsing"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         },
         {
           "feature": "TypeConversionFunctions",
@@ -28714,16 +28677,14 @@
         {
           "feature": "Temporal Types",
           "aspect": "TimestampTZNormalization",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_087_TimestampTZNorm"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         },
         {
           "feature": "NamespacedFunctions",
@@ -28829,16 +28790,14 @@
         {
           "feature": "Temporal Types",
           "aspect": "IntervalArithmetic",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_088_IntervalArithmetic"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         },
         {
           "feature": "GraphSimilarityFunctions",
@@ -28860,16 +28819,14 @@
         {
           "feature": "Binary Types",
           "aspect": "ByteaHex",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_089_ByteaHex"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         },
         {
           "feature": "ListComprehension",
@@ -28963,16 +28920,14 @@
         {
           "feature": "JSON Types",
           "aspect": "JsonbCanonical",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_090_JsonbCanonical"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         },
         {
           "feature": "ChainedComparisons",
@@ -29008,16 +28963,14 @@
         {
           "feature": "XML Types",
           "aspect": "WellFormed",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_091_XmlWellFormed"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         },
         {
           "feature": "PathAssignmentAfterWITH",
@@ -29055,16 +29008,14 @@
         {
           "feature": "URL Types",
           "aspect": "Normalization",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_092_UrlNormalization"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -29074,16 +29025,14 @@
         {
           "feature": "Domain Types",
           "aspect": "PunycodeHandling",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_093_DomainPunycode"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -29093,16 +29042,14 @@
         {
           "feature": "UUID Types",
           "aspect": "ParsingGeneration",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_094_UuidParsing"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -29112,16 +29059,14 @@
         {
           "feature": "Enum Types",
           "aspect": "OrdinalComparison",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_095_EnumComparison"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -29131,16 +29076,14 @@
         {
           "feature": "Array Types",
           "aspect": "HomogeneousOperations",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_096_ArrayOperations"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -29150,16 +29093,14 @@
         {
           "feature": "Bit Types",
           "aspect": "BitwiseOperations",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_097_BitOperations"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -29169,16 +29110,14 @@
         {
           "feature": "Range Types",
           "aspect": "ContainmentOverlap",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_098_RangeOperations"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "types",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -29188,16 +29127,14 @@
         {
           "feature": "Specialized Indexes",
           "aspect": "IntervalTreePersistence",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_099_IntervalIndexPersist"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "index",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -29207,16 +29144,14 @@
         {
           "feature": "Specialized Indexes",
           "aspect": "JsonbInvertedPersistence",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_100_JsonbIndexPersist"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "index",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         },
         {
           "feature": "UNION Query Operations",
@@ -29240,16 +29175,14 @@
         {
           "feature": "Specialized Indexes",
           "aspect": "DomainTriePersistence",
-          "status": "TESTED",
+          "status": "IMPL",
           "files": [
             "src/canary.zig"
           ],
-          "tests": [
-            "TestCANARY_REQ_GQL_101_DomainTriePersist"
-          ],
+          "tests": [],
           "benches": [],
           "owner": "index",
-          "updated": "2025-09-27"
+          "updated": "2026-11-15"
         }
       ]
     },
@@ -79983,6 +79916,72 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6605-GRPC-ACCEPT-STOP",
+      "features": [
+        {
+          "feature": "GrpcServerLifecycle",
+          "aspect": "AcceptLoopStops",
+          "status": "TESTED",
+          "files": [
+            "src/transport/grpc_server.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6605_grpc_shutdown.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "GrpcServerLifecycle",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6605_grpc_shutdown.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6605_grpc_shutdown.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6605-HYDRATION-RETRY",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "TransientFailureRetried",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6605_hydration_retry.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6605_hydration_retry.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6605_hydration_retry.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6606-BACKUP-HANDSHAKE-TIMEOUT",
       "features": [
         {
@@ -80591,6 +80590,232 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6613-ENTITY-ADOPT",
+      "features": [
+        {
+          "feature": "ExecutionResultOwnership",
+          "aspect": "MismatchedTrackerLinked",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig",
+            "tests/test_sonny6613_entity_adopt.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6613_entity_adopt.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6613-FOR-WRITE-RESULT",
+      "features": [
+        {
+          "feature": "ForStatement",
+          "aspect": "NoRowsWithoutReturn",
+          "status": "TESTED",
+          "files": [
+            "src/execution/statement_handlers.zig",
+            "tests/test_sonny6613_for_write_result.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6613_for_write_result.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6613-FUNCTION-CATALOGUE",
+      "features": [
+        {
+          "feature": "FunctionCatalogue",
+          "aspect": "EvaluatedFunctionsListed",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6613_function_catalogue.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6613_function_catalogue.zig"
+          ],
+          "benches": [],
+          "owner": "gql",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6613-GROUP-KEY-OOM",
+      "features": [
+        {
+          "feature": "Grouping",
+          "aspect": "KeyAllocationFailureIsOutOfMemory",
+          "status": "TESTED",
+          "files": [
+            "src/execution/distinct_set.zig",
+            "tests/test_sonny6613_group_key_oom.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6613_group_key_oom.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6613-LEADING-LET",
+      "features": [
+        {
+          "feature": "LetStatement",
+          "aspect": "StatementLeading",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig",
+            "tests/test_sonny6613_leading_let_unwind.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6613_leading_let_unwind.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6613-LEADING-UNWIND",
+      "features": [
+        {
+          "feature": "Unwind",
+          "aspect": "StatementLeading",
+          "status": "TESTED",
+          "files": [
+            "src/gql/parser.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6613_leading_let_unwind.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "Unwind",
+          "aspect": "StatementLeadingWrite",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6613_leading_unwind_write.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6613_leading_unwind_write.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6613-MATCH-WITH-FOR-WRITE",
+      "features": [
+        {
+          "feature": "ForStatement",
+          "aspect": "WriteBodyAfterMatchWith",
+          "status": "TESTED",
+          "files": [
+            "src/execution/query_execution.zig",
+            "src/execution/write_shape.zig",
+            "tests/test_sonny6613_match_with_for_write.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6613_match_with_for_write.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6613-PATH-OWNERSHIP",
+      "features": [
+        {
+          "feature": "PathValues",
+          "aspect": "ResultOwnsPathArrays",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig",
+            "src/execution/match_operations.zig",
+            "tests/test_sonny6613_path_ownership.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6613_path_ownership.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "PathValues",
+          "aspect": "OwnedPathCopies",
+          "status": "TESTED",
+          "files": [
+            "src/execution/value_utilities.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6613_path_ownership.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6613-PROFILE-CPU-TIME",
+      "features": [
+        {
+          "feature": "PROFILE",
+          "aspect": "NoCopiedCpuTime",
+          "status": "TESTED",
+          "files": [
+            "src/server/profile_payload.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6613_profile_cpu_time.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6613-SINGLE-QUOTED-ALIAS",
+      "features": [
+        {
+          "feature": "GQLParser",
+          "aspect": "AliasIsIdentifier",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6613_quoted_alias.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6613_quoted_alias.zig"
+          ],
+          "benches": [],
+          "owner": "parser",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6614-GRACEFUL-STOP",
       "features": [
         {
@@ -81091,6 +81316,82 @@
           ],
           "benches": [],
           "owner": "distributed",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6632-EDGE-TYPE-COUNT-OOM",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "CountFailureNotSilent",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6632_hydration_followups.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6632-HYDRATION-FOLLOWUPS",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6632_hydration_followups.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6632_hydration_followups.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6632-OPEN-FAILED-REBUILT",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "FailedClearedOnRebuild",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6632_hydration_followups.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6632-RECLAIM-NOT-BUILT",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "ReclaimGateRunningBuild",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6632_hydration_followups.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
           "updated": "2026-11-15"
         }
       ]
@@ -86237,9 +86538,9 @@
       "BENCHED": 126,
       "COMPLETE": 2,
       "EXEMPT": 209,
-      "IMPL": 534,
+      "IMPL": 564,
       "STUB": 18,
-      "TESTED": 4280
+      "TESTED": 4270
     },
     "by_aspect": {
       "2PC": 3,
@@ -86264,6 +86565,7 @@
       "AbortedTxnGate": 1,
       "AbsoluteHistoryPathOnly": 1,
       "AbsoluteHomeOnly": 1,
+      "AcceptLoopStops": 1,
       "AcceptPathWedgeAutoRecovery": 1,
       "AcceptReactorOccupancy": 1,
       "AcceptWithoutPoolAndPeerEndpointChange": 1,
@@ -86327,6 +86629,7 @@
       "AlgoScope": 1,
       "AlgorithmIntegration": 1,
       "AlgorithmVerification": 1,
+      "AliasIsIdentifier": 1,
       "AllErrorsDeny": 1,
       "AllOrNothingSet": 1,
       "AllShortestPathsFilter": 1,
@@ -86891,6 +87194,7 @@
       "CostEstimation": 1,
       "CountAgg": 1,
       "CountDistinct": 1,
+      "CountFailureNotSilent": 1,
       "CountFiltering": 1,
       "CountMatches": 1,
       "CountReadSnapshotBypass": 1,
@@ -87327,6 +87631,7 @@
       "EvalReadSites": 1,
       "EvalSupport": 3,
       "Evaluate": 1,
+      "EvaluatedFunctionsListed": 1,
       "EvaluatedValueLeak": 1,
       "EvaluatedValueOwnership": 1,
       "Evaluation": 9,
@@ -87465,6 +87770,7 @@
       "FailSecureOnCatalogError": 1,
       "FailSecureOnKeyError": 1,
       "FailedAddUntrustsIndex": 1,
+      "FailedClearedOnRebuild": 1,
       "FailedCreateGivesSlotBack": 1,
       "FailedLogin": 1,
       "FailedQueryExitsNonZero": 1,
@@ -87948,6 +88254,7 @@
       "Katz": 1,
       "KeepISIG": 1,
       "KernelSources": 1,
+      "KeyAllocationFailureIsOutOfMemory": 1,
       "KeyCheckValue": 1,
       "KeyDerivation": 2,
       "KeyEpochs": 1,
@@ -88238,6 +88545,7 @@
       "MinRefactor": 1,
       "MinimalEntryPoint": 1,
       "MiscBatch2": 1,
+      "MismatchedTrackerLinked": 1,
       "MissCounter": 1,
       "MixedVersionFailLoud": 1,
       "MixedWorkload": 1,
@@ -88313,6 +88621,7 @@
       "NoAutoCreate": 1,
       "NoBorrowedReads": 1,
       "NoCatalog": 1,
+      "NoCopiedCpuTime": 1,
       "NoCredentialInHost": 1,
       "NoCredentialsInHistory": 1,
       "NoCredentialsNoUnsafePath": 1,
@@ -88362,6 +88671,7 @@
       "NoRoleBypasses": 1,
       "NoRoleIsNone": 1,
       "NoRolesUnauthorized": 1,
+      "NoRowsWithoutReturn": 1,
       "NoSaveOperations": 2,
       "NoSilentResubmission": 1,
       "NoSyntheticOperators": 1,
@@ -88524,6 +88834,7 @@
       "OversizedValueErrorMapping": 1,
       "OwnedGraphEntities": 1,
       "OwnedKeys": 1,
+      "OwnedPathCopies": 1,
       "Ownership": 1,
       "PARAM_REUSE": 1,
       "PARSER": 1,
@@ -89050,6 +89361,7 @@
       "RebuildProc": 1,
       "RebuildStateRegistry": 1,
       "RebuildWindowApi": 1,
+      "ReclaimGateRunningBuild": 1,
       "RecomputeEveryRecordHash": 1,
       "RecordFailureIsAnError": 1,
       "RecordFallback": 1,
@@ -89087,7 +89399,7 @@
       "RegistryHeaderSkipsLostEntry": 1,
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
-      "Regression": 397,
+      "Regression": 400,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -89181,6 +89493,7 @@
       "RestoresAdjacencyEntriesFromMirror": 1,
       "ResultBuilder": 1,
       "ResultGuard": 1,
+      "ResultOwnsPathArrays": 1,
       "ResultOwnsValues": 1,
       "ResultSerialization": 1,
       "ResultStreaming": 1,
@@ -89589,6 +89902,8 @@
       "StatementEndRebuild": 1,
       "StatementFallback": 1,
       "StatementHandler": 4,
+      "StatementLeading": 2,
+      "StatementLeadingWrite": 1,
       "StatementLimitRelay": 1,
       "StatementList": 1,
       "StatementOnStream": 1,
@@ -89785,6 +90100,7 @@
       "TransactionFlagsRefused": 1,
       "TransactionLifecycle": 1,
       "Transactions": 1,
+      "TransientFailureRetried": 1,
       "TransientNodeRead": 1,
       "Transport": 1,
       "TransportAgnosticGlobals": 1,
@@ -90033,6 +90349,7 @@
       "WorkerRoundTrip": 1,
       "Wrapper": 1,
       "WriteBlocked": 1,
+      "WriteBodyAfterMatchWith": 1,
       "WriteBodyAfterWith": 1,
       "WriteBodyComposition": 1,
       "WriteChokepoint": 2,

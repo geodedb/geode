@@ -496,6 +496,15 @@ const ForBodyAccumulator = struct {
             self.owns_value_memory = false;
         }
 
+        // CANARY: REQ=REQ-SONNY-6613-FOR-WRITE-RESULT; FEATURE="ForStatement"; ASPECT=NoRowsWithoutReturn; STATUS=TESTED; TEST=tests/test_sonny6613_for_write_result.zig; OWNER=engine; UPDATED=2026-11-15
+        // SONNY-6613 item 3: a body with no RETURN has no result rows (ISO/IEC
+        // 39075:2024 14.1); its run's row of no columns was kept, one per
+        // element. A row of no columns owns no values.
+        if (result.columns.len == 0) {
+            for (result.rows) |row| allocator.free(row);
+            allocator.free(result.rows);
+            result.rows = &.{};
+        }
         // Reserve first: every transfer below must be infallible so a failure
         // can never leave a row owned by BOTH the accumulator and `result`.
         try self.rows.ensureUnusedCapacity(allocator, result.rows.len);
@@ -533,15 +542,10 @@ const ForBodyAccumulator = struct {
                 // accumulator's `destroy_node`, so both trackers must free
                 // their nodes the same way. Every executor tracker has the
                 // default (struct only); only a node-scan page frees in full.
-                std.debug.assert(acc_entities.destroy_node == entities.destroy_node);
-                try acc_entities.nodes.ensureUnusedCapacity(acc_entities.allocator, entities.nodes.items.len);
-                try acc_entities.edges.ensureUnusedCapacity(acc_entities.allocator, entities.edges.items.len);
-                acc_entities.nodes.appendSliceAssumeCapacity(entities.nodes.items);
-                acc_entities.edges.appendSliceAssumeCapacity(entities.edges.items);
-                // Ownership of the pointers moved to the accumulator.
-                entities.nodes.clearRetainingCapacity();
-                entities.edges.clearRetainingCapacity();
-                entities.deinit(); // also frees the tracker (SONNY-2394)
+                // SONNY-6613: `absorb` moves the path arrays it keeps too
+                // (they were freed here, under the rows that hold them), and
+                // frees the tracker (SONNY-2394).
+                try acc_entities.absorb(entities);
             } else {
                 self.entities = entities;
             }
@@ -723,7 +727,8 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
     // CANARY: REQ=REQ-SONNY-6587-FOR-WRITE-EVERY-ROW; FEATURE="ForStatement"; ASPECT=WriteBodyAfterWith; STATUS=TESTED; TEST=tests/test_sonny6587_for_write_after_with.zig; OWNER=engine; UPDATED=2026-11-15
     // SONNY-6587 item 5: every row of the WITH, each with its own list (ISO/IEC
     // 39075:2024 14.8); the first row only was used. The write allowlist
-    // admits a one-row WITH here today (write_shape.allowWithFor). The list
+    // admits a WITH of values (write_shape.allowWithFor) and, SONNY-6613,
+    // MATCH ... WITH (write_shape.allowMatchWithFor) here. The list
     // is the statement's (`lentAllocator`), as a header's in
     // `expandForTable` (SONNY-6449): it leaked on every run.
     var acc = ForBodyAccumulator{};

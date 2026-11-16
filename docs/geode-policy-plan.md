@@ -277,9 +277,11 @@ The unification work should be organized module-by-module rather than by abstrac
 
 The parser already uses soft-keyword extensions for auth DDL, so GPS should extend the same style rather than adding a disconnected administration channel. New AST variants should include `CreatePolicyStatement`, `AlterPolicyStatement`, `DropPolicyStatement`, `ShowPoliciesStatement`, `ShowGrantsStatement`, `ExplainPolicyStatement`, tenant membership statements, role membership statements, and policy simulation statements. That is the natural continuation of the existing parser/admin_ddl pattern. citeturn16view0turn16view1turn15view3
 
-A minimal but extensible grammar should look like this:
+A minimal but extensible grammar should look like this (a plan: this is not the
+grammar Geode accepts today; see docs/GQL_AUTH_DDL.md for the policy DDL that
+is implemented):
 
-```gql
+```text
 CREATE POLICY tenant_isolation
 ON GRAPH *
 FOR READ, UPDATE, DELETE

@@ -440,6 +440,9 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                 else
                     try executeQueryNoLimitWithContext(allocator, part.query, context);
                 defer part_result.deinit(allocator);
+                // SONNY-6613: the rows copied from the arm by reference hold the
+                // paths (and nodes and relationships) its tracker owns.
+                result.takeOwnedGraphEntities(&part_result);
 
                 // Validate column count match
                 if (part_result.columns.len != result.columns.len) {
@@ -497,6 +500,9 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                 else
                     try executeQueryNoLimitWithContext(allocator, part.query, context);
                 defer part_result.deinit(allocator);
+                // SONNY-6613: the rows copied from the arm by reference hold the
+                // paths (and nodes and relationships) its tracker owns.
+                result.takeOwnedGraphEntities(&part_result);
 
                 // Validate column count match
                 if (part_result.columns.len != result.columns.len) {
@@ -1177,7 +1183,7 @@ pub var test_force_limit_in_spawned_arms: std.atomic.Value(bool) = .init(false);
 /// SONNY-3315: make `res`, built by a parallel UNION arm through the
 /// frame-local `LockedAllocator`, free through `parent` from now on.
 fn reownArmResult(res: *ExecutionResult, parent: std.mem.Allocator) void {
-    if (res.owned_graph_entities) |tracker| tracker.allocator = parent;
+    if (res.owned_graph_entities) |tracker| tracker.setAllocator(parent);
     if (res.variable_bindings) |bindings| bindings.allocator = parent;
 }
 
@@ -1327,6 +1333,9 @@ fn tryParallelUnion(
         var part_result = jobs[job_idx].result.?;
         jobs[job_idx].result = null;
         defer part_result.deinit(allocator);
+        // SONNY-6613: the rows copied from the arm by reference hold the
+        // paths (and nodes and relationships) its tracker owns.
+        result.takeOwnedGraphEntities(&part_result);
 
         if (part_result.columns.len != result.columns.len) {
             return error.UnionColumnCountMismatch;

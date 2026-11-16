@@ -563,7 +563,7 @@ pub const TxnCoordinator = struct {
             error.GraphAlreadyExists => {},
             else => return err,
         };
-        self.store.ensureGraphHydratedForReplicatedApply(graph_name);
+        try self.store.ensureGraphHydratedForReplicatedApply(graph_name);
         const adapter = graph_store.getGlobalAdapter();
         const apply_mg = if (adapter) |a| try a.beginReplicatedApply(graph_name) else null;
         defer if (apply_mg) |mg| adapter.?.endReplicatedApply(mg);
@@ -602,7 +602,7 @@ pub const TxnCoordinator = struct {
                         // SILENTLY DROP this replicated property update. Hydrate
                         // the target graph first (no-op once hydrated / for a
                         // non-deferred graph) so the by-id gate sees the node.
-                        self.store.ensureGraphHydratedForReplicatedApply(graph_name);
+                        try self.store.ensureGraphHydratedForReplicatedApply(graph_name);
                         if (self.store.getNodePtr(node_op.node_id) != null) {
                             for (node_op.props) |p| {
                                 try self.store.setNodeProperty(node_op.node_id, p.key, p.value);
@@ -641,7 +641,7 @@ pub const TxnCoordinator = struct {
                         // first access, so the raw `getEdgePtr` gate would
                         // resolve null and SILENTLY DROP this replicated edge
                         // property update. Hydrate first (no-op once hydrated).
-                        self.store.ensureGraphHydratedForReplicatedApply(graph_name);
+                        try self.store.ensureGraphHydratedForReplicatedApply(graph_name);
                         if (self.store.getEdgePtr(edge_op.edge_id) != null) {
                             for (edge_op.props) |p| {
                                 try self.store.setEdgeProperty(edge_op.edge_id, p.key, p.value);

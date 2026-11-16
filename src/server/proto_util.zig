@@ -800,6 +800,17 @@ pub fn statementErrorInfo(err: anyerror) ?ErrorInfo {
         error.TimeseriesNotEncrypted,
         error.TimeseriesNeedsTdeKey,
         error.EncryptionKeyMismatch,
+        // SONNY-6605: a graph's hydration failed transiently (the graph is
+        // built again on its next access); OutOfMemory is a limit above.
+        error.SystemResources,
+        error.ProcessFdQuotaExceeded,
+        error.SystemFdQuotaExceeded,
+        error.ThreadQuotaExceeded,
+        error.LockedMemoryLimitExceeded,
+        error.NoSpaceLeft,
+        error.DiskQuota,
+        error.WouldBlock,
+        error.DeviceBusy,
         => mapError(err),
         else => null,
     };

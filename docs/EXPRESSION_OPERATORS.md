@@ -111,7 +111,7 @@ RETURN -+42 AS result;  // Returns: -42 (parsed as −(+42))
 
 **Syntax:**
 
-```gql
+```text
 array_expression[index_expression]
 ```
 
