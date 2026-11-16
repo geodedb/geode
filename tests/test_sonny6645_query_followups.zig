@@ -55,6 +55,19 @@ const cases = [_]Case{
     .{ .q = "LET a = 1, b = a RETURN b", .want = &.{"1"} },
     .{ .q = "LET a = 1, b = 2 RETURN a + b AS s", .want = &.{"3"} },
 
+    // A WITH item reads what comes in, not a sibling item's alias (ISO/IEC
+    // 39075:2024 14.10 / 20.12 SR 8: the projection's items are evaluated
+    // over the incoming record).
+    .{ .q = "WITH b AS a, 1 AS b RETURN a", .err = error.VariableNotInScope },
+    .{ .q = "WITH 1 AS a, a + 1 AS b RETURN b", .err = error.VariableNotInScope },
+    .{ .q = "MATCH (n:Ch6645) WITH n.k AS k, k * 2 AS d RETURN d", .err = error.VariableNotInScope },
+    .{ .q = "MATCH (n:Ch6645) WITH n, n.k AS k, n.k + k AS d RETURN d", .err = error.VariableNotInScope },
+    // An alias is read after the projection: its ORDER BY, its WHERE, the
+    // next part.
+    .{ .q = "MATCH (n:Ch6645) WITH n.k AS k ORDER BY k DESC RETURN k", .want = &.{ "2", "1" }, .ordered = true },
+    .{ .q = "MATCH (n:Ch6645) WITH n, n.k AS k WHERE k > 1 RETURN k", .want = &.{"2"} },
+    .{ .q = "MATCH (n:Ch6645) WITH n.k AS k WITH k, k * 2 AS d RETURN d", .want = &.{ "2", "4" } },
+
     // Item 4: a NULL operand is NULL.
     .{ .q = "RETURN bigint(NULL) AS a, smallint(NULL) AS b, real(NULL) AS c, double(NULL) AS d", .want = &.{"null, null, null, null"} },
     .{ .q = "RETURN toReal(NULL) AS a, datetime(NULL) AS b, power(NULL, 2) AS c, power(2, NULL) AS d", .want = &.{"null, null, null, null"} },
