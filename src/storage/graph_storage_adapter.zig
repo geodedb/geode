@@ -2082,6 +2082,12 @@ pub const Quarantine = enum(u8) {
 /// writers hold shard pointers of the graph's engine between lock
 /// acquisitions. A restart reopens every graph from disk.
 ///
+/// `AbortNotUndone` reaches here only for an abort graph-storage could
+/// neither undo nor, from v0.4.24, discard (SONNY-6657: the transaction
+/// overlapped another on its shard, cross-shard records in the WAL tail, or
+/// `abort_undo = .keep_writes`); a discarded abort succeeds and quarantines
+/// nothing (`abortUnmirroredTxn`).
+///
 /// Nothing keeps writing to the shard: graph-storage refuses its writes,
 /// commits and checkpoints after `AbortNotUndone`, and geode refuses every
 /// write to the graph before it reaches the engine. The security graph's
@@ -2104,7 +2110,16 @@ pub fn quarantineAfterTxnFailure(mg: *ManagedGraph, cause: Quarantine, err: anye
 /// in-memory copy (the adapter's write methods return the error, and the
 /// store applies a write to memory only after its engine write returned):
 /// graph-storage undoes the transaction, which is exactly the state the
-/// store holds. `AbortNotUndone` quarantines the graph; it is never ignored.
+/// store holds. SONNY-6657: one its undo journal cannot undo (a page the
+/// caller imaged, a legacy property chain, ...) graph-storage v0.4.24
+/// completes by discarding the transaction's pages and redoing the committed
+/// state, which is the same state: the abort succeeds, the shard keeps
+/// serving and the graph is not quarantined
+/// (`storage_txn_aborts_discarded_total`). Only when it cannot discard
+/// either (another transaction was open on the shard at some point during
+/// this one, cross-shard records in the WAL tail, `abort_undo =
+/// .keep_writes`) is it `AbortNotUndone`, which quarantines the graph; it
+/// is never ignored.
 fn abortUnmirroredTxn(mg: *ManagedGraph, shard: *gs.GraphEngine, txn: gs.TxnId, site: []const u8) void {
     abortCounted(shard, txn) catch |err| noteAbortFailure(mg, err, site);
 }
@@ -2126,13 +2141,23 @@ fn abortUnmirroredShardedTxn(mg: *ManagedGraph, txn: gs.TxnId, site: []const u8)
 /// writer, around its abort, never by the metrics scrape.
 pub var storage_txn_aborts_undone_total: std.atomic.Value(u64) = .init(0);
 pub var storage_txn_aborts_not_undone_total: std.atomic.Value(u64) = .init(0);
+// CANARY: REQ=REQ-SONNY-6657-DISCARD-ABORT; FEATURE="TransactionManagement"; ASPECT=DiscardedAbortCounter; STATUS=TESTED; TEST=tests/test_sonny6529_abort_quarantine.zig; OWNER=storage; UPDATED=2026-11-16
+/// SONNY-6657: graph-storage's `Metrics.txn_aborts_discarded` (from
+/// v0.4.24), summed the same way: aborts its undo journal could not undo
+/// that it completed by discarding the transaction's pages and redoing the
+/// committed state. Such an abort succeeds: the shard keeps serving and
+/// geode does not quarantine the graph. Exported as
+/// `geode.runtime.storage_txn_aborts_discarded_total`.
+pub var storage_txn_aborts_discarded_total: std.atomic.Value(u64) = .init(0);
 
 fn abortCounted(shard: *gs.GraphEngine, txn: gs.TxnId) anyerror!void {
     const undone0 = shard.metrics.txn_aborts_undone;
     const not_undone0 = shard.metrics.txn_aborts_not_undone;
+    const discarded0 = shard.metrics.txn_aborts_discarded;
     defer {
         _ = storage_txn_aborts_undone_total.fetchAdd(shard.metrics.txn_aborts_undone -% undone0, .monotonic);
         _ = storage_txn_aborts_not_undone_total.fetchAdd(shard.metrics.txn_aborts_not_undone -% not_undone0, .monotonic);
+        _ = storage_txn_aborts_discarded_total.fetchAdd(shard.metrics.txn_aborts_discarded -% discarded0, .monotonic);
     }
     return shard.abortTxn(txn);
 }
@@ -12215,6 +12240,7 @@ pub const StorageAdapter = struct {
         reg.register("adapter_checkpoint_failures_total", &self.checkpoint_failures_total) catch {};
         reg.register("storage_txn_aborts_undone_total", &storage_txn_aborts_undone_total) catch {}; // SONNY-6529
         reg.register("storage_txn_aborts_not_undone_total", &storage_txn_aborts_not_undone_total) catch {}; // SONNY-6529
+        reg.register("storage_txn_aborts_discarded_total", &storage_txn_aborts_discarded_total) catch {}; // SONNY-6657
     }
 
     /// Bulk write ops applied since the last checkpoint.

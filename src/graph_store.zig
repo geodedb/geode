@@ -2548,8 +2548,8 @@ pub fn dropGraphMapScans() u64 {
 /// disagree is reported as `LabelDictionaryDiverged` (a restart does not
 /// clear it). SONNY-6529: a graph one of whose engine transactions could not
 /// be ended cleanly while the server runs is refused with `AbortNotUndone`
-/// (graph-storage could not undo an aborted transaction, whose writes are in
-/// its pages) or `CommitFailed` (a commit failed and the engine undid the
+/// (graph-storage could neither undo an aborted transaction, whose writes are
+/// in its pages, nor, from v0.4.24, discard it: SONNY-6657) or `CommitFailed` (a commit failed and the engine undid the
 /// transaction, whose writes the store's in-memory copy still holds); a
 /// restart reopens the graph at its committed state and clears both.
 /// SONNY-6590: a graph graph-storage refused to open under at-rest

@@ -18,6 +18,17 @@
 // transaction's shard: a node record put into a fresh slot (visible to a
 // scan if it ever became durable) and the image of that node's page.
 //
+// SONNY-6657: graph-storage v0.4.24 completes an abort its undo journal
+// cannot undo by discarding the transaction's pages and redoing the
+// committed state, unless another transaction was open on the shard at some
+// point during it (the overlap rule), the WAL tail holds cross-shard
+// records, or `abort_undo = .keep_writes`. The fail-closed case forces the
+// overlap rule: a second engine transaction is begun on the shard while the
+// first is open (and ended at once, writing nothing). A sibling case runs
+// the same transaction without the overlap: the abort is discarded, counted
+// in `storage_txn_aborts_discarded_total`, and the graph is NOT quarantined:
+// it reads, writes and checkpoints at its committed state.
+//
 // An abort graph-storage CAN undo is counted in
 // `storage_txn_aborts_undone_total`: a node create whose label-dictionary
 // write fails (a directory at every shard's `labels.dict.tmp`, as in
@@ -169,6 +180,10 @@ test "SONNY-6529: an abort graph-storage cannot undo quarantines its graph until
         const txn = try adapter.beginTransaction(G);
         const shard = mg.engine.shards[@intCast(txn >> 56)];
         const local: gs.TxnId = txn & ((@as(u64, 1) << 56) - 1);
+        // SONNY-6657: another transaction open on the shard during this one,
+        // so graph-storage may not discard it (the overlap rule).
+        const other = try shard.beginTxn();
+        try shard.abortTxn(other);
         const id = try shard.allocNode();
         var rec = std.mem.zeroes(gs.node.NodeRec);
         rec.txn_stamp = 1;
@@ -176,10 +191,12 @@ test "SONNY-6529: an abort graph-storage cannot undo quarantines its graph until
         try shard.logPagePublic(local, .nodes, shard.nodePageId(id));
 
         const not_undone0 = gsa.storage_txn_aborts_not_undone_total.load(.monotonic);
+        const discarded0 = gsa.storage_txn_aborts_discarded_total.load(.monotonic);
         if (adapter.abortTransaction(G, txn)) |_| {
             return error.AbortWasUndone;
         } else |err| try std.testing.expectEqual(error.AbortNotUndone, err);
         try std.testing.expectEqual(not_undone0 + 1, gsa.storage_txn_aborts_not_undone_total.load(.monotonic));
+        try std.testing.expectEqual(discarded0, gsa.storage_txn_aborts_discarded_total.load(.monotonic));
 
         // Reads and writes of the graph are refused, with the operator
         // message; the other graph serves.
@@ -218,6 +235,78 @@ test "SONNY-6529: an abort graph-storage cannot undo quarantines its graph until
         try expectCount(allocator, &session, "USE GRAPH " ++ G ++ "; CREATE (:A {k: 99}) RETURN 1 AS c", 1);
         try expectCount(allocator, &session, "USE GRAPH " ++ G ++ "; MATCH (n:A) RETURN count(n) AS c", SEED + 1);
         try expectCount(allocator, &session, "USE GRAPH " ++ OTHER ++ "; MATCH (n:A) RETURN count(n) AS c", SEED + 1);
+    }
+}
+
+test "SONNY-6657: an abort graph-storage cannot undo but discards is counted, and leaves the graph writable and not quarantined" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
+    defer allocator.free(data_dir);
+    defer graph_store.setDataDirOverride(allocator, null);
+
+    {
+        const store = try graph_store.initGlobalStore(allocator, data_dir);
+        defer graph_store.deinitGlobalStore();
+        defer execution.cleanupCatalogInstance();
+        var session = execution.SessionState.init(allocator);
+        defer session.deinit();
+        try store.createGraph(G);
+        try seed(allocator, &session, G);
+        try expectCount(allocator, &session, "USE GRAPH " ++ G ++ "; MATCH (n:A) RETURN count(n) AS c", SEED);
+
+        const adapter = graph_store.getGlobalAdapter() orelse return error.NoAdapter;
+        const mg = adapter.engines.get(G) orelse return error.NoGraph;
+
+        // The fail-closed case's transaction, with no other transaction open
+        // on its shard during it.
+        const txn = try adapter.beginTransaction(G);
+        const shard = mg.engine.shards[@intCast(txn >> 56)];
+        const local: gs.TxnId = txn & ((@as(u64, 1) << 56) - 1);
+        const id = try shard.allocNode();
+        var rec = std.mem.zeroes(gs.node.NodeRec);
+        rec.txn_stamp = 1;
+        try shard.putNodeTxn(id, rec, local);
+        try shard.logPagePublic(local, .nodes, shard.nodePageId(id));
+
+        const not_undone0 = gsa.storage_txn_aborts_not_undone_total.load(.monotonic);
+        const discarded0 = gsa.storage_txn_aborts_discarded_total.load(.monotonic);
+        try adapter.abortTransaction(G, txn);
+        try std.testing.expectEqual(discarded0 + 1, gsa.storage_txn_aborts_discarded_total.load(.monotonic));
+        try std.testing.expectEqual(not_undone0, gsa.storage_txn_aborts_not_undone_total.load(.monotonic));
+        try std.testing.expect(shard.abort_not_undone == null);
+        try std.testing.expectEqual(@intFromEnum(gsa.Quarantine.none), mg.quarantine.load(.acquire));
+
+        // The graph serves at its committed state: the aborted record is
+        // gone (live-count check), reads and writes answer, and the shard
+        // takes transactions and checkpoints.
+        const entries = try adapter.scanAllNodes(G, allocator);
+        allocator.free(entries);
+        try std.testing.expectEqual(SEED, entries.len);
+        try expectCount(allocator, &session, "USE GRAPH " ++ G ++ "; MATCH (n) RETURN count(n) AS c", SEED);
+        try expectCount(allocator, &session, "USE GRAPH " ++ G ++ "; CREATE (:A {k: 99}) RETURN 1 AS c", 1);
+        try expectCount(allocator, &session, "USE GRAPH " ++ G ++ "; MATCH (n:A {k: 1}) SET n.x = 1 RETURN count(n) AS c", 1);
+        try expectCount(allocator, &session, "USE GRAPH " ++ G ++ "; MATCH (n:A) RETURN count(n) AS c", SEED + 1);
+        const t = try shard.beginTxn();
+        try shard.abortTxn(t);
+        try adapter.checkpointGraph(G);
+    }
+
+    // Reopened: the committed state, with the later CREATE and SET.
+    {
+        const store = try graph_store.initGlobalStore(allocator, data_dir);
+        defer graph_store.deinitGlobalStore();
+        defer execution.cleanupCatalogInstance();
+        try store.loadFromFile();
+        var session = execution.SessionState.init(allocator);
+        defer session.deinit();
+        const adapter = graph_store.getGlobalAdapter() orelse return error.NoAdapter;
+        const entries = try adapter.scanAllNodes(G, allocator); // live-count check
+        defer allocator.free(entries);
+        try std.testing.expectEqual(SEED + 1, entries.len);
+        try expectCount(allocator, &session, "USE GRAPH " ++ G ++ "; MATCH (n:A) WHERE n.x = 1 RETURN count(n) AS c", 1);
+        try expectCount(allocator, &session, "USE GRAPH " ++ G ++ "; MATCH (n) RETURN count(n) AS c", SEED + 1);
     }
 }
 

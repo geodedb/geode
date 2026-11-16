@@ -304,11 +304,19 @@ How:
 - **The engine's own undo** is used for a transaction the adapter opened
   for one write call that failed before the server's in-memory copy took
   the write: graph-storage 0.4.16 `abortTxn` undoes it (node record, slot,
-  count and id, properties, labels, relationships). An abort it cannot undo
-  exactly (`AbortNotUndone`: a page the caller imaged itself, a property
+  count and id, properties, labels, relationships). An abort its undo
+  journal cannot undo exactly (a page the caller imaged itself, a property
   change on a legacy chain, a chain pointer of an existing node moved, more
-  than 1,048,576 writes) leaves the writes in the shard's pages and makes the
-  shard refuse every write, commit and checkpoint; geode then refuses the
+  than 1,048,576 writes) is, from graph-storage v0.4.24 (SONNY-6657),
+  completed by discarding the transaction's pages and redoing the committed
+  state: the abort succeeds, the shard keeps serving, and geode does not
+  quarantine the graph (counter
+  `geode.runtime.storage_txn_aborts_discarded_total`). Only an abort it can
+  neither undo nor discard fails with `AbortNotUndone`: another transaction
+  was open on the shard at some point during it, the shard's WAL tail holds
+  cross-shard (2PC) records, or the engine runs with `abort_undo =
+  .keep_writes`. That one leaves the writes in the shard's pages and makes
+  the shard refuse every write, commit and checkpoint; geode then refuses the
   graph's reads and writes with 58000 `AbortNotUndone` until the server
   restarts, which reopens the graph at its committed state (nothing
   uncommitted reached disk). The same holds for a write graph-storage
@@ -323,7 +331,8 @@ How:
   graph's nodes, relationships, label counts and indexes in memory beside
   the engine and has no path that rebuilds them for one graph while the
   server runs. Counters: `geode.runtime.storage_txn_aborts_undone_total`,
-  `geode.runtime.storage_txn_aborts_not_undone_total`.
+  `geode.runtime.storage_txn_aborts_not_undone_total`,
+  `geode.runtime.storage_txn_aborts_discarded_total`.
 - **Durable undo log, `<data dir>/txn_undo.wal`** (`src/txn_durable_undo.zig`).
   Inside an explicit transaction every change's undo entry (the
   `txn_undo_log.UndoEntry` ROLLBACK uses: a created node or relationship, a
