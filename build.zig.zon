@@ -734,8 +734,17 @@
             // 8271e65. Same dependencies as v0.4.21 (wal v0.1.25,
             // thread_pool v0.2.11, otel v0.1.28); same wal routing (build.zig
             // points its "wal" import at geode's v0.1.25).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.24#07d3a689ad5880a024958f4997eca149ce80def4",
-            .hash = "graph_storage-0.4.24-9UyJS12SNgChQ1n3evsZfD_A1ureTnC-iNQG78ixRF9v",
+            // v0.4.25 (2026-11-16, SONNY-6659): a page has one open writer: a
+            // second open transaction's write to a page another open one
+            // wrote fails with `error.WriteConflict` (it cannot commit; its
+            // abort undoes it in memory). Each open transaction fills slab
+            // pages of its own, and `allocNodeTxn` (GraphEngine,
+            // ShardedGraphEngine) gives it node ids from a node page of its
+            // own; plain `allocNode` while another transaction is open
+            // shares a node page and conflicts. Same dependencies as v0.4.24.
+            // Tagged on f92e685, same tree as the release commit 9d84132.
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.25#f92e685bca0a493c9879bf83921af0d93db8dc79",
+            .hash = "graph_storage-0.4.25-9UyJS2s7NwDrdZBB4UFjWjLoMhLm9_jcMEAawQypt9c1",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
