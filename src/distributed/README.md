@@ -201,29 +201,31 @@ Design to unblock it:
   table, taken at the leader's applied index: checkpoint every graph, then
   copy (hard-link) its files while the apply path is paused, outside
   `inner_mutex`.
-- **Swap (landed, SONNY-6636):** the adapter keeps each graph under
-  `<data_dir>/<uuid>` and maps names to uuids in `graph_registry.dat`, so
-  a restore never renames a live directory.
-  `StorageAdapter.beginGraphRestore(names)` mints a uuid per graph, writes
-  `<data_dir>/graph_restore.intent` (the staged uuids and the ones they
-  replace; fsynced, renamed, directory fsynced) and creates the staged
-  directories; the caller fills them; `commitGraphRestore` rewrites the
-  registry to name the staged uuids (the commit point; the old engines
-  leave `engines` and are freed by their last unpin, as `dropGraph` frees
-  one); `finishGraphRestore` deletes the replaced directories, then the
-  intent; `abandonGraphRestore` deletes the staged ones. Refused under
-  at-rest encryption: graph-storage seals a graph's files under a key
-  derived from its uuid, so staged files must be re-sealed for the new uuid
-  first (open).
+- **Swap (landed, SONNY-6636):** a restored graph keeps the uuid its
+  files were written under: graph-storage binds a graph's uuid into its
+  manifest, WAL header (`UuidMismatch`), shard uuids and, under at-rest
+  encryption, its keys, and exposes no re-key, so files cannot move to
+  another uuid. `StorageAdapter.beginGraphRestore(sources)` writes
+  `<data_dir>/graph_restore.intent` (each graph's name, old uuid and
+  restored uuid; fsynced, sealed under at-rest encryption like the
+  registry) and creates `<data_dir>/<uuid>.restore`; the caller fills it;
+  `commitGraphRestore` rewrites the intent as committed (the commit
+  point), detaches the old engines (dropped, drained under their
+  whole-graph lock, freed by the last unpin with no checkpoint), renames
+  each staged directory into place (a graph restored again under its own
+  uuid has its live directory renamed aside to `<uuid>.old` first),
+  points the registry at the restored uuids, deletes the old directories
+  and then the intent. A uuid that belongs to another graph here is
+  refused (`GraphRestoreUuidInUse`). Works under at-rest encryption when
+  the nodes share the key.
 - **Crash safety (landed):** `StorageAdapter.init` reads the intent before
-  any graph opens and deletes every directory it lists that the registry
-  does not name, then the intent: a crash before the commit reopens on the
-  old graphs, one after it on the restored ones. A damaged intent refuses
-  the open. `test-sonny6636-graph-restore-swap` stops the swap at each step
-  and reopens. Still open: the snapshot index and term in the intent, and
-  persisting the Raft snapshot (`advancePersist`) only after the intent is
-  removed, so a crash before leaves the node behind and the leader sends
-  the snapshot again.
+  any graph opens: not committed, the staged directories are deleted and
+  the old graphs stay; committed, the swap is finished (the same
+  idempotent steps). A damaged intent refuses the open.
+  `test-sonny6636-graph-restore-swap` stops both shapes at every step,
+  with and without at-rest encryption, and reopens. Still open: the
+  snapshot index and term in the intent, and persisting the Raft snapshot
+  (`advancePersist`) only after the intent is removed.
 - **Resident state (open):** after the swap, `GraphStore` must forget the
   graph's resident state (IdMap, label index, caches) before marking it
   pending hydration: hydration re-inserts idempotently but removes nothing,
