@@ -4077,7 +4077,7 @@ REQ-SONNY-3035-OFFLINE-CHAIN-ROOT,OfflineAuthStoreSafety,NoKeyBeforeVerify,TESTE
 REQ-SONNY-3035-OFFLINE-CHAIN-ROOT,OfflineAuthStoreSafety,Regression,TESTED,tests/test_sonny3035_offline_chain_root.zig,tests/test_sonny3035_offline_chain_root.zig,,security,2026-09-27
 REQ-SONNY-3036-RLS-POLICY-KEYS,RLSExpressionCompilation,OwnedKeys,TESTED,src/security/rls_core.zig,tests/test_sonny3036_rls_policy_keys.zig,,security,2026-09-27
 REQ-SONNY-3036-RLS-POLICY-KEYS,RLSExpressionCompilation,Regression,TESTED,tests/test_sonny3036_rls_policy_keys.zig,tests/test_sonny3036_rls_policy_keys.zig,,security,2026-09-27
-REQ-SONNY-3037-REVOKE-PRINCIPAL,OfflineAuthStoreSafety,RevokeMatchesPrincipal,TESTED,src/cli/auth_cli.zig,tests/test_sonny3037_revoke_principal.zig,,security,2026-09-27
+REQ-SONNY-3037-REVOKE-PRINCIPAL,OfflineAuthStoreSafety,RevokeMatchesPrincipal,TESTED,src/cli/auth_cli.zig,tests/test_sonny6586_offline_grant_rule.zig,,security,2026-11-15
 REQ-SONNY-3037-REVOKE-PRINCIPAL,OfflineAuthStoreSafety,PermissionIdSequence,TESTED,src/storage/user_storage.zig,tests/test_sonny3037_revoke_principal.zig,,security,2026-09-27
 REQ-SONNY-3037-REVOKE-PRINCIPAL,OfflineAuthStoreSafety,Regression,TESTED,tests/test_sonny3037_revoke_principal.zig,tests/test_sonny3037_revoke_principal.zig,,security,2026-09-27
 REQ-SONNY-3038-ALGO-EVICTED-NODE,RLS Algorithm Filtering,EvictedNode,TESTED,src/server/rls_filter.zig,tests/test_sonny3038_auth_rls_low_findings.zig,,security,2026-11-11
@@ -4996,8 +4996,13 @@ REQ-SONNY-6585-MCP-ERROR-DETAIL,MCPResultShapes,ErrorMessageAndData,TESTED,src/m
 REQ-SONNY-6585-MCP-ERROR-DETAIL,MCPResultShapes,ErrorMessageAndData,TESTED,tests/test_sonny6585_mcp_error_detail.zig,,,mcp,2026-11-15
 REQ-SONNY-6586-CLI-MISSING-DATA-DIR,OfflineAuthStoreSafety,MissingDataDirNamed,TESTED,src/cli/cli_auth_helpers.zig,tests/test_sonny6586_cli_truth.zig,,cli,2026-11-15
 REQ-SONNY-6586-CLI-TRUTH,CliOptions,NoFalseClaims,TESTED,tests/test_sonny6586_cli_truth.zig,tests/test_sonny6586_cli_truth.zig,,cli,2026-11-15
+REQ-SONNY-6586-GRANT-RULES-SHARED,GQL Auth DDL,OneGrantRule,TESTED,src/security/graph_grant_rules.zig,tests/test_sonny6586_offline_grant_rule.zig,,security,2026-11-15
 REQ-SONNY-6586-MCP-LIST-MAP-PARAMS,MCPBackendTools,ListAndMapParameters,TESTED,src/mcp/client.zig,tests/test_sonny6586_cli_truth.zig,,mcp,2026-11-15
 REQ-SONNY-6586-MCP-OFFLINE-RESOURCES,MCPBackendTools,NoOfflineData,TESTED,src/mcp/resources.zig,tests/test_sonny6586_cli_truth.zig,,mcp,2026-11-15
+REQ-SONNY-6586-OFFLINE-GRANT-RULE,OfflineAuthStoreSafety,GrantMatchesOnlineGrant,TESTED,src/cli/auth_cli.zig,tests/test_sonny6586_offline_grant_rule.zig,,security,2026-11-15
+REQ-SONNY-6586-OFFLINE-GRANT-RULE,OfflineAuthStoreSafety,GrantMatchesOnlineGrant,TESTED,tests/test_sonny6586_offline_grant_rule.zig,,,security,2026-11-15
+REQ-SONNY-6586-PARAM-JSON-NO-LEAK,CliOptions,ParamConversionFreesOnFailure,TESTED,src/cli/param_json.zig,tests/test_sonny6586_param_json_alloc.zig,,cli,2026-11-15
+REQ-SONNY-6586-PARAM-JSON-NO-LEAK,CliOptions,ParamConversionFreesOnFailure,TESTED,tests/test_sonny6586_param_json_alloc.zig,,,cli,2026-11-15
 REQ-SONNY-6586-QUERY-LOG-LEVEL,CliOptions,LogLevelRefused,TESTED,src/cli/main.zig,tests/test_sonny6586_cli_truth.zig,,cli,2026-11-15
 REQ-SONNY-6587-CANARY-TRUTH,Governance,CanaryTestExists,TESTED,tests/test_sonny6587_canary_markers.zig,tests/test_sonny6587_canary_markers.zig,,governance,2026-11-15
 REQ-SONNY-6587-FOR-WRITE-EVERY-ROW,ForStatement,WriteBodyAfterWith,TESTED,src/execution/statement_handlers.zig,tests/test_sonny6587_for_write_after_with.zig,,engine,2026-11-15
@@ -5021,6 +5026,8 @@ REQ-SONNY-6590-TS-TDE-DEFAULT,TimeSeriesTDE,OnWithTdeKey,TESTED,src/timeseries/t
 REQ-SONNY-6591-FTS-FAST-CREATE,FullText,FastPathCreateMaintenance,TESTED,src/server/quic_connection_handler.zig,tests/test_sonny6591_fts_write_paths.zig,,fts,2026-11-15
 REQ-SONNY-6591-FTS-REGISTRY-AFTER-RESTART,FullText,RegistryArmedFromCatalog,TESTED,src/execution/fts_index_ops.zig,tests/test_sonny6591_fts_write_paths.zig,,fts,2026-11-15
 REQ-SONNY-6591-FTS-WRITE-PATHS,FullText,WirePathMatrix,TESTED,tests/test_sonny6591_fts_write_paths.zig,tests/test_sonny6591_fts_write_paths.zig,,fts,2026-11-15
+REQ-SONNY-6593-CDC-START-LIFECYCLE,CDCControl,StartRecordedOnSuccessOnly,TESTED,src/streaming/cdc_enhanced.zig,tests/test_sonny6593_cdc_start_lifecycle.zig,,cdc,2026-11-15
+REQ-SONNY-6593-CDC-START-LIFECYCLE,CDCControl,StartRecordedOnSuccessOnly,TESTED,tests/test_sonny6593_cdc_start_lifecycle.zig,,,cdc,2026-11-15
 REQ-SONNY-6593-GRPC-SERVICE-CONTRACT,GrpcTransport,ServedEqualsDeclared,TESTED,src/transport/grpc_service_methods.zig,tests/test_sonny6593_grpc_service_contract.zig,,transport,2026-11-15
 REQ-SONNY-6593-GRPC-SERVICE-CONTRACT,GrpcTransport,ServedEqualsDeclared,TESTED,tests/test_sonny6593_grpc_service_contract.zig,,,transport,2026-11-15
 REQ-SONNY-6594-AUTH-READ-FAILURE,StorageIntegrity,Regression,TESTED,tests/test_sonny6594_auth_read_failure.zig,tests/test_sonny6594_auth_read_failure.zig,,security,2026-11-15

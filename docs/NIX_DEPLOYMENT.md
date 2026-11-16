@@ -600,8 +600,8 @@ spec:
         - containerPort: 9090
           name: metrics
           protocol: TCP
-        # The server's config file is `serve --config <path>`: GEODE_CONFIG
-        # is read only by `geode shell` (SONNY-6435).
+        # The server's config file is `serve --config <path>`; no
+        # environment variable names it (SONNY-6593).
         env:
         - name: POD_NAME
           valueFrom:

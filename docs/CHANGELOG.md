@@ -3073,6 +3073,46 @@
 
 ### Fixed
 
+- **Offline `geode grant` / `geode revoke` are the online `GRANT ... ON
+  GRAPH` (SONNY-6586).** They stored a free-form permission record (any
+  name, the user in its conditions) that no authorization path reads, and
+  printed "Granted"; their only rule refused `admin` unless the grantee was
+  named `admin`. They now apply the online rule, shared in
+  `src/security/graph_grant_rules.zig` (used by `geode.auth.grant` too):
+  `READ`, `WRITE`, `SCHEMA` or `ALL` on one `--graph` (none and `*` are
+  refused) to a user that exists, stored as the `GraphGrant` records
+  `GRANT` stores and the server loads at startup. **User-visible:**
+  `geode grant <name> --to <user>` without `--graph`, any other privilege
+  name (`admin` included: it is a role, `geode user assign-role`) and an
+  unknown user are refused; `--graph` is new (`--resource` still works).
+  Records the old command stored stay inert. Also: an allocation failure
+  while reading the arguments is reported (it was dropped). Regression:
+  `zig build test-sonny6586-offline-grant-rule`.
+
+- **`geode query --param` frees a list or map that fails part-way
+  (SONNY-6586).** The conversion (`src/cli/param_json.zig`, moved out of
+  `src/cli/main.zig`) leaked the elements, keys and arrays built before an
+  allocation failure or a value nested past the depth limit. Regression:
+  `zig build test-sonny6586-param-json-alloc`.
+
+- **A CDC start that fails records no start (SONNY-6593).**
+  `CDCEngine.start()` recorded its `.start` lifecycle event before creating
+  its worker pool, so a start that then failed left a start event for an
+  engine that never ran. `diagnosticsLifecycle` used `std.mem.copy`, which
+  Zig 0.16 does not have (it did not compile when called). Regression:
+  `zig build test-sonny6593-cdc-start-lifecycle`.
+
+- **`docs/USAGE.md` and `docs/REAL_TIME_ANALYTICS.md` describe what geode
+  does (SONNY-6593).** USAGE.md documented `system.federation.status()`
+  and `system.resources()` (no such procedures), "always on" shard
+  federation and a nested config file (`server:`, `tls:`, `storage:`,
+  `federation:`, `optimizer:`) that `geode serve` never reads,
+  `EXPLAIN (VERBOSE)` / `EXPLAIN (ANALYZE)` (EXPLAIN takes no options),
+  metrics on fixed ports with a `/ready` path and metric names that do not
+  exist, and log files geode does not write. REAL_TIME_ANALYTICS.md
+  presented CDC as an input to an engine `geode serve` does not start, and
+  a CDC conversion that ignores the event it is given.
+
 - **MCP errors say what was wrong; mcp v0.1.23 (SONNY-6585).** A
   JSON-RPC error from `geode mcp` carried the Zig error's name as its
   message (`InvalidParams`, `ResourceNotFound`) and no data. With mcp

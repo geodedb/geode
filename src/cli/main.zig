@@ -100,6 +100,8 @@ const server_cli_args = @import("../server/cli_args.zig");
 const protobuf = @import("protobuf");
 const json_lib = @import("json");
 const schema = @import("schema");
+// `geode query --param` values (JSON) as wire values.
+const param_json = @import("param_json.zig");
 const query_runner = geode.query_runner;
 const query_scope = geode.query_scope;
 const grpc_query_transport = geode.grpc_query_transport;
@@ -1007,7 +1009,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             }
             const param_name = argv[i + 1];
             const param_value = argv[i + 2];
-            const parsed_value = parseParamValue(allocator, param_value) catch |err| {
+            const parsed_value = param_json.parseParamValue(allocator, param_value) catch |err| {
                 const stderr_fd = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
                 try stderr_fd.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Parameter parse error\n");
                 log.err("parameter parse failed", &.{Attr.string("error", @errorName(err))});
@@ -1609,45 +1611,6 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         };
     }
     if (query_failed) std.process.exit(@intFromEnum(ExitCode.general_error));
-}
-
-const PARAM_MAX_SIZE: usize = 1 * 1024 * 1024; // 1 MB max param payload
-const PARAM_MAX_DEPTH: usize = 64;
-
-fn parseParamValue(allocator: std.mem.Allocator, input: []const u8) !schema.Value {
-    if (input.len > PARAM_MAX_SIZE) return error.ParamsTooLarge;
-    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, input, .{});
-    defer parsed.deinit();
-    return jsonToProtoValue(allocator, parsed.value, 0);
-}
-
-fn jsonToProtoValue(allocator: std.mem.Allocator, value: std.json.Value, depth: usize) !schema.Value {
-    if (depth > PARAM_MAX_DEPTH) return error.ParamsTooDeep;
-    return switch (value) {
-        .null => .{ .kind = .{ .null_val = .{} } },
-        .bool => |b| .{ .kind = .{ .bool_val = b } },
-        .integer => |i| .{ .kind = .{ .int_val = .{ .value = i, .kind = .INT } } },
-        .float => |f| .{ .kind = .{ .double_val = .{ .value = f, .kind = .DOUBLE } } },
-        .number_string => |s| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, s), .kind = .STRING } } },
-        .string => |s| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, s), .kind = .STRING } } },
-        .array => |arr| blk: {
-            var values = std.ArrayList(schema.Value).initCapacity(allocator, arr.items.len) catch return error.OutOfMemory;
-            for (arr.items) |item| {
-                try values.append(allocator, try jsonToProtoValue(allocator, item, depth + 1));
-            }
-            break :blk .{ .kind = .{ .list_val = .{ .values = values } } };
-        },
-        .object => |obj| blk: {
-            var entries = std.ArrayList(schema.MapEntry).initCapacity(allocator, obj.count()) catch return error.OutOfMemory;
-            var it = obj.iterator();
-            while (it.next()) |entry| {
-                const key = try allocator.dupe(u8, entry.key_ptr.*);
-                const val = try jsonToProtoValue(allocator, entry.value_ptr.*, depth + 1);
-                try entries.append(allocator, .{ .key = key, .value = val });
-            }
-            break :blk .{ .kind = .{ .map_val = .{ .entries = entries } } };
-        },
-    };
 }
 
 // GAP-0113 SECURITY FIX: Add TLS certificate verification support

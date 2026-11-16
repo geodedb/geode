@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T04:30:44.65962492Z",
+  "generated_at": "2026-11-16T04:30:50.397243043Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -63928,11 +63928,11 @@
             "src/cli/auth_cli.zig"
           ],
           "tests": [
-            "tests/test_sonny3037_revoke_principal.zig"
+            "tests/test_sonny6586_offline_grant_rule.zig"
           ],
           "benches": [],
           "owner": "security",
-          "updated": "2026-09-27"
+          "updated": "2026-11-15"
         },
         {
           "feature": "OfflineAuthStoreSafety",
@@ -78841,6 +78841,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6586-GRANT-RULES-SHARED",
+      "features": [
+        {
+          "feature": "GQL Auth DDL",
+          "aspect": "OneGrantRule",
+          "status": "TESTED",
+          "files": [
+            "src/security/graph_grant_rules.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6586_offline_grant_rule.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6586-MCP-LIST-MAP-PARAMS",
       "features": [
         {
@@ -78874,6 +78893,46 @@
           ],
           "benches": [],
           "owner": "mcp",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6586-OFFLINE-GRANT-RULE",
+      "features": [
+        {
+          "feature": "OfflineAuthStoreSafety",
+          "aspect": "GrantMatchesOnlineGrant",
+          "status": "TESTED",
+          "files": [
+            "src/cli/auth_cli.zig",
+            "tests/test_sonny6586_offline_grant_rule.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6586_offline_grant_rule.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6586-PARAM-JSON-NO-LEAK",
+      "features": [
+        {
+          "feature": "CliOptions",
+          "aspect": "ParamConversionFreesOnFailure",
+          "status": "TESTED",
+          "files": [
+            "src/cli/param_json.zig",
+            "tests/test_sonny6586_param_json_alloc.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6586_param_json_alloc.zig"
+          ],
+          "benches": [],
+          "owner": "cli",
           "updated": "2026-11-15"
         }
       ]
@@ -79245,6 +79304,26 @@
           ],
           "benches": [],
           "owner": "fts",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6593-CDC-START-LIFECYCLE",
+      "features": [
+        {
+          "feature": "CDCControl",
+          "aspect": "StartRecordedOnSuccessOnly",
+          "status": "TESTED",
+          "files": [
+            "src/streaming/cdc_enhanced.zig",
+            "tests/test_sonny6593_cdc_start_lifecycle.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6593_cdc_start_lifecycle.zig"
+          ],
+          "benches": [],
+          "owner": "cdc",
           "updated": "2026-11-15"
         }
       ]
@@ -87154,7 +87233,7 @@
       "EXEMPT": 209,
       "IMPL": 564,
       "STUB": 18,
-      "TESTED": 4305
+      "TESTED": 4309
     },
     "by_aspect": {
       "2PC": 3,
@@ -88572,6 +88651,7 @@
       "GrantListProcedure": 1,
       "GrantListReadOnly": 1,
       "GrantListingsLocked": 1,
+      "GrantMatchesOnlineGrant": 1,
       "GrantMissingUserIsError": 1,
       "GrantOnStarRefused": 1,
       "GrantOnlyGraphAccess": 1,
@@ -89397,6 +89477,7 @@
       "OneCheckpointPerTickAndShutdown": 1,
       "OneEncryptionIdentity": 1,
       "OneEngine": 1,
+      "OneGrantRule": 1,
       "OneGraphLockAtATime": 1,
       "OneImplementation": 1,
       "OneLimiterForEveryCodeCheck": 1,
@@ -89478,6 +89559,7 @@
       "ParallelReadWriteE2EBuild": 1,
       "ParallelRegression": 1,
       "ParallelThroughput": 1,
+      "ParamConversionFreesOnFailure": 1,
       "ParameterBinding": 1,
       "ParameterBindingParity": 1,
       "ParameterHandling": 1,
@@ -90500,6 +90582,7 @@
       "StandardCastMatrix": 1,
       "Start": 1,
       "StartFailureFreesEngine": 1,
+      "StartRecordedOnSuccessOnly": 1,
       "StartTransaction": 1,
       "StartsEndsContains": 1,
       "Startup": 6,

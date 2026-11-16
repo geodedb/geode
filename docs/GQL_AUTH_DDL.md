@@ -404,6 +404,33 @@ not loaded hides nothing). A stored FLE role grant whose user was deleted is
 not loaded (it names no one). Hydration still tolerates the records it always
 tolerated by design: a duplicate or uncompilable stored policy (GAP-0923).
 
+### Offline `geode grant` / `geode revoke` (SONNY-6586)
+
+With no server holding the data directory, `geode grant` and `geode revoke`
+do what `GRANT ... ON GRAPH` and `REVOKE ... ON GRAPH` do, under the same
+rule (`src/security/graph_grant_rules.zig`, used by both):
+
+```bash
+geode grant  <READ|WRITE|SCHEMA|ALL> --graph <graph> --to   <user> [--data-dir <dir>]
+geode revoke <READ|WRITE|SCHEMA|ALL> --graph <graph> --from <user> [--data-dir <dir>]
+```
+
+- The privilege is `READ`, `WRITE`, `SCHEMA` or `ALL`; anything else is
+  refused (exit 2). `admin` is a role, not a privilege: use
+  `geode user assign-role <user> admin` (`GRANT ROLE admin TO <user>`).
+- One named graph is required (exit 2 without `--graph`); a grant on `*`
+  is refused.
+- The user must exist (exit 1).
+- The grant is stored as the `GraphGrant` records `GRANT` stores (all of
+  `ALL`'s three, or none) and is in force when the server next starts.
+  `geode revoke` of a privilege the user does not hold on the graph is
+  refused (exit 1) and changes nothing.
+
+Before SONNY-6586 they stored a free-form permission record (any name, the
+user in its conditions) that no authorization path reads, and printed
+"Granted"; their only rule refused `admin` unless the grantee was named
+`admin`.
+
 ### Per-graph grant semantics
 
 **Security fix (2026-10, REQ-SEC-PER-GRAPH-GRANTS).** For every role:
