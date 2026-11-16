@@ -11493,6 +11493,25 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6659_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6659-geode-single-writer", "Run SONNY-6659 regression (a cross-shard relationship and a node batch written while a statement engine transaction is open on their shard join it, beginning no second transaction there; graph-storage WriteConflict answers 40001; over a real server killed with SIGKILL, both inside an explicit transaction commit, roll back and vanish at the kill with it)").dependOn(&run_sonny6659_tests.step);
 
+    // SONNY-6659 (graph-storage v0.4.25, one open writer per page): several
+    // engine transactions open on one shard that create nodes there get node
+    // ids from pages of their own (`allocNodeTxn`), so none is refused with
+    // WriteConflict; over a real server, concurrent explicit transactions and
+    // updates of one node answer no 40001, and a ROLLBACK with the session's
+    // engine transaction open conflicts with nothing, also across a SIGKILL.
+    const sonny6659ow_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6659_open_writers.zig"), .target = target, .optimize = optimize });
+    sonny6659ow_test_mod.link_libc = true;
+    sonny6659ow_test_mod.addImport("geode", root_mod);
+    sonny6659ow_test_mod.addImport("graph_storage", graph_storage_mod);
+    sonny6659ow_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6659ow_test_mod.addImport("schema", schema_mod);
+    sonny6659ow_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6659ow_tests = b.addTest(.{ .root_module = sonny6659ow_test_mod });
+    const run_sonny6659ow_tests = b.addRunArtifact(sonny6659ow_tests);
+    spawnsBuiltGeode(sonny6659ow_tests);
+    shardDep(test_step, &run_sonny6659ow_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6659-open-writers", "Run SONNY-6659 regression (graph-storage v0.4.25: four statement transactions open on one shard creating nodes there through createNode, createNodesBatch and the bulk insert are never refused with WriteConflict; over a real server, explicit transactions of several sessions at once and two sessions incrementing one node answer no 40001 and lose no update, a ROLLBACK with the session's engine transaction open undoes every kind of change, and a SIGKILL keeps only what committed)").dependOn(&run_sonny6659ow_tests.step);
+
     // SONNY-2979: txn_undo.wal's record codec (plain and sealed), torn-tail
     // handling, loser selection per boot, and the file's lifecycle.
     const sonny2979w_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2979_undo_wal_format.zig"), .target = target, .optimize = optimize });
