@@ -6,7 +6,7 @@
 > function, and not Cypher's `UNWIND … YIELD`).
 
 **Status:** Implemented — backed by the external **`fts-storage`** LSM library (PRIMARY backing store)
-**Dependency:** `.fts_storage` v0.1.1 in `build.zig.zon` (commit `908c1f54`)
+**Dependency:** `.fts_storage` v0.1.6 in `build.zig.zon` (commit `e4724290`)
 **Modules:**
 
 - `src/storage/fts_storage_adapter.zig` — per-graph registry of `fts_storage.Engine`s
@@ -180,7 +180,7 @@ graph dir
 | `FtsStorageAdapter` | `src/storage/fts_storage_adapter.zig` | Per-graph registry of `fts_storage.Engine`s; create / search / drop / live-maintenance |
 | `FullTextIndex` | `src/index/fulltext.zig` | Facade — delegates to the adapter |
 | `Tokenizer` | `src/index/fts_tokenizer.zig` | Text → terms |
-| `fts-storage` (external) | `build.zig.zon` `.fts_storage` v0.1.1 | LSM engine: BM25 ranking, WAL, segments, manifest, durability |
+| `fts-storage` (external) | `build.zig.zon` `.fts_storage` v0.1.6 | LSM engine: BM25 ranking, WAL, segments, manifest, durability |
 
 ---
 

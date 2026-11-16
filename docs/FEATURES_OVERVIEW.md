@@ -11,7 +11,7 @@ All 7 development phases from the TODO list have been successfully implemented:
 - ✅ **Phase 2**: Parser Extensions (Map literals, deep nesting)
 - ✅ **Phase 3**: Set Operations (UNION/INTERSECT/EXCEPT)
 - ❌ **Phase 4**: Transaction Isolation — not implemented in the server (no isolation levels, SSI or phantom-read prevention; the code was never compiled and was removed 2026-11-11, SONNY-6298). See [ENHANCED_TRANSACTION_ISOLATION.md](ENHANCED_TRANSACTION_ISOLATION.md)
-- ✅ **Phase 5**: Distributed Coordination — Raft consensus and cluster management, replicating the documented write slice; no two-phase commit and no replicated DDL (nothing proposes a `txn_prepare`/`txn_decide` or `schema_change` entry; DDL is refused in cluster mode, SONNY-6547) (`src/distributed/`: 22,458 lines in 26 files). Federated / scatter-gather query coordination is not implemented (that code was never compiled and was removed 2026-11-11, SONNY-6279)
+- ✅ **Phase 5**: Distributed Coordination — Raft consensus and cluster management, replicating the documented write slice; no two-phase commit and no replicated DDL (nothing proposes a `txn_prepare`/`txn_decide` or `schema_change` entry; DDL is refused in cluster mode, SONNY-6547) (`src/distributed/`: 14,052 lines in 13 `.zig` files after SONNY-6563 deleted the modules the server never reached). Federated / scatter-gather query coordination is not implemented (that code was never compiled and was removed 2026-11-11, SONNY-6279)
 - ✅ **Phase 6**: Materialized Views (3 refresh strategies; query rewrite is exact-match only, API level — GAP-0876)
 - ✅ **Phase 7**: Graph Algorithms — the `CALL algo.*` procedures (`src/execution/centrality_algorithms.zig`). The "20-90% performance gains" came from `src/graph/centrality_optimized.zig` and its sibling `src/graph/` modules, which no build compiled or ran; they were removed 2026-11-13 (SONNY-6511) and no gain was ever measured on the server path
 
@@ -74,7 +74,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 ### **Data Protection**
 
-- **TDE**: Transparent data encryption (AES-256-GCM pages and WAL); measured overhead +0.7% with the default per-commit fsync, about +20% on the commit path without fsync ([TDE_FILE_LEVEL_ENCRYPTION.md](TDE_FILE_LEVEL_ENCRYPTION.md#measured-overhead))
+- **TDE**: Transparent data encryption (AES-256-GCM pages and WAL); measured overhead +1.0% with the default per-commit fsync, about +29% on the commit path without fsync, +57% to +62% on reads that miss the buffer pool ([TDE_FILE_LEVEL_ENCRYPTION.md](TDE_FILE_LEVEL_ENCRYPTION.md#measured-overhead))
 - **KMS Integration**: KMS provider clients, including HashiCorp Vault; the TDE master key is not KMS-backed (see [KMS_PROVIDER_SYSTEM.md](KMS_PROVIDER_SYSTEM.md))
 - **Audit Logging**: Comprehensive compliance tracking
 - **Data Classification**: 5-level security classification

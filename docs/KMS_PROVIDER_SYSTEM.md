@@ -75,12 +75,12 @@ What the server does:
   `hashicorp`, `local`) is not an endpoint and no client for it is built in:
   startup refuses it (SONNY-6348; it used to run a local AES-256-GCM round
   trip with an ephemeral key and log "KMS configured").
-- The providers in `src/security/kms.zig` are reached from the
-  `tde.configure_kms`, `tde.configure_mock_kms` and `tde.test_kms_wrap_unwrap`
-  procedures
-  (`src/execution/storage_dispatch.zig`), which build a provider and run a
-  wrap/unwrap round trip; they do not install a key into page or WAL
-  encryption.
+- Nothing in the server imports `src/security/kms.zig`. The
+  `tde.configure_kms` and `tde.configure_mock_kms` procedures are refused
+  with 0A000 (SONNY-6342, `src/execution/storage_dispatch.zig`), and
+  `tde.test_kms_wrap_unwrap` / `tde.test_kms_attestation` run self-tests in
+  `src/security/tde.zig`, not the providers in `kms.zig`; none of them
+  installs a key into page or WAL encryption.
 
 ## Vault Integration Features
 

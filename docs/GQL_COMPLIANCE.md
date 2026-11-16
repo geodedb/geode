@@ -729,4 +729,4 @@ All core GQL features are now fully implemented. Future work focuses on:
 3. **Extended Compliance**: Support for future GQL standard extensions
 4. **GPU Acceleration**: Hardware-accelerated graph traversal operations
 
-Geode's 109/109 ISO conformance-suite pass rate (parse-only scope) and broad GQL feature coverage make it a strong choice for graph applications that need standards-aligned query language support. Single-tenant deployments are development-ready; review the [Known Limitations](../CLAUDE.md#known-limitations) (multi-tenant, distributed cluster, backup) before production deployment.
+Geode's 120/120 ISO conformance-suite pass rate (parse-only scope) and broad GQL feature coverage make it a strong choice for graph applications that need standards-aligned query language support. Single-tenant deployments are development-ready; review the [Known Limitations](../CLAUDE.md#known-limitations) (multi-tenant, distributed cluster, backup) before production deployment.

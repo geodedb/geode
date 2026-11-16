@@ -13,6 +13,19 @@ below — under GAP-0860.
 
 ## Canonical Local Baseline (2026-06-10)
 
+> **Status 2026-11-15:** the counts in this section are historical. The last
+> full per-step sweep is the 2026-06-11 one below (236 PASS, 0 FAIL,
+> 1 TIMEOUT, 3 SKIP of 240 steps). `build.zig` now registers about 1,000
+> named `test-*` steps and no full sweep of them has been recorded, so there
+> is no current pass count; the "expected baseline 175/179" figures below
+> describe the 179-step set of 2026-06-10 only. Every named step runs in the
+> sharded aggregate `zig build test` or is listed in `build.zig`'s
+> `not_in_aggregate_steps` (see "Which named steps the aggregate runs"); the
+> intentionally red reproductions on that list on 2026-11-15 are
+> `test-sonny2848-tenant-subquery-aggregation`,
+> `test-sonny2979-txn-crash-atomicity`, `test-sonny6571-schema-names` and
+> `test-sonny6595-wal-drain` (rows below).
+
 | Field | Value |
 |---|---|
 | Date | 2026-06-10 (UTC) |
@@ -329,4 +342,4 @@ acting:
 3. For integration coverage, run the harness in `../geode-test-harness` and
    record the dated numbers in the historical section.
 
-*Last rebaselined: 2026-06-10 (GAP-0860) from commit `faac1f3e`. Refreshed 2026-06-10 (GAP-0863d) from per-step re-runs at commit `0eefbb9a`; `test-gpu` moved FAIL→PASS 2026-06-11 (GAP-0878) — expected baseline 175/179 (1 FAIL / 3 TIMEOUT); full re-sweep owed at next rebaseline.*
+*Last rebaselined: 2026-06-10 (GAP-0860) from commit `faac1f3e`. Refreshed 2026-06-10 (GAP-0863d) from per-step re-runs at commit `0eefbb9a`; `test-gpu` moved FAIL→PASS 2026-06-11 (GAP-0878) — expected baseline 175/179 (1 FAIL / 3 TIMEOUT); full re-sweep owed at next rebaseline. 2026-11-15: no full sweep of the ~1,000 steps now registered has been recorded; see the status note under "Canonical Local Baseline".*

@@ -1100,7 +1100,7 @@ engine's pages unencrypted, are no longer written for `__geode_security`
 
 Why the HMAC key: it is the one key every server has (it already seals the
 chain), backups do not carry it (SONNY-6299), and it may live outside the
-data directory (environment, KMS-backed `GEODE_TDE_KEY`). What that buys:
+data directory (environment, e.g. `GEODE_AUTH_HMAC_KEY` or `GEODE_TDE_KEY` supplied by the deployment; geode fetches no key from a KMS). What that buys:
 someone who reads the data directory, a backup, a snapshot side-car or a
 WAL **without** the key cannot recover the secret; a sealed value copied to
 another user's record does not open; a changed one does not open.
