@@ -3073,6 +3073,17 @@
 
 ### Fixed
 
+- **`geode query` frees its connect and login error messages
+  (SONNY-6662).** The HELLO handshake formatted "Error: <server message>"
+  (a refused login), "Failed to send HELLO" and "Failed to receive HELLO
+  response", and `--batch` formatted "Failed to initialize client" and
+  "Failed to connect", with the process allocator and never freed them.
+  `--batch` returns those failures through `main`, so a Debug build
+  printed a DebugAllocator leak report after every refused login or
+  connection. The messages are freed after they are written; output and
+  exit codes are unchanged. Regression: `zig build
+  test-sonny6662-cli-auth-leak`.
+
 - **`geode mcp --port` serves; MCP HTTP clients get sessions; mcp
   v0.1.26 (SONNY-6644).** The HTTP transport (the transport unless
   `--stdio` is given) printed "MCP server listening on port N" and exited

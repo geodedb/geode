@@ -1935,8 +1935,7 @@ fn executeQueryOnGrpc(
         },
         .{ .on_progress = touchActiveQueryDeadlineWatchdog },
     ) catch |err| {
-        const msg = std.fmt.allocPrint(allocator, "Error: gRPC handshake failed: {}\n", .{err}) catch "Error: gRPC handshake failed\n";
-        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
+        writeErrorFmt(allocator, stderr_handle, "Error: gRPC handshake failed: {}\n", .{err}, "Error: gRPC handshake failed\n");
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer {
@@ -1945,8 +1944,7 @@ fn executeQueryOnGrpc(
     }
 
     if (!hello_resp.success) {
-        const err_msg = std.fmt.allocPrint(allocator, "Error: {s}\n\n", .{hello_resp.error_message}) catch "Error: Authentication failed\n\n";
-        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+        writeErrorFmt(allocator, stderr_handle, "Error: {s}\n\n", .{hello_resp.error_message}, "Error: Authentication failed\n\n");
         std.process.exit(@intFromEnum(ExitCode.auth_error));
     }
 
@@ -2094,16 +2092,14 @@ fn executeBatchQueries(
             null,
             .{ .timeout_ms = zig_quic_bridge.timeoutMsFromSeconds(timeout_secs) },
         ) catch |err| {
-            const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to initialize client: {}\n", .{err}) catch "Error: Failed to initialize client\n";
-            stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+            writeErrorFmt(allocator, stderr, "Error: Failed to initialize client: {}\n", .{err}, "Error: Failed to initialize client\n");
             return error.ConnectionFailed;
         };
         c.connect() catch |err| {
             c.deinit();
             const name = @errorName(err);
             if (connect_attempt + 1 >= max_connect_attempts or std.mem.indexOf(u8, name, "ConnectionRefused") != null) {
-                const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to connect: {s}\n", .{name}) catch "Error: Failed to connect\n";
-                stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+                writeErrorFmt(allocator, stderr, "Error: Failed to connect: {s}\n", .{name}, "Error: Failed to connect\n");
                 return error.ConnectionFailed;
             }
             compat_sleepNs(50 * std.time.ns_per_ms);
@@ -2966,6 +2962,21 @@ fn resolveQueryGraphBinding(
     };
 }
 
+// CANARY: REQ=REQ-SONNY-6662-CLI-ERROR-MSG-FREED; FEATURE="QueryCli"; ASPECT=ConnectErrorsFreed; STATUS=TESTED; TEST=tests/test_sonny6662_cli_auth_leak.zig; OWNER=cli; UPDATED=2026-11-16
+/// SONNY-6662: write a formatted error message to `file` and free it, or
+/// write `fallback` when it cannot be formatted. The connect and HELLO
+/// failure paths allocPrinted their message and never freed it, which the
+/// Debug build reported as a leak on every refused login under --batch.
+fn writeErrorFmt(allocator: std.mem.Allocator, file: std.Io.File, comptime fmt: []const u8, args: anytype, fallback: []const u8) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const msg = std.fmt.allocPrint(allocator, fmt, args) catch {
+        file.writeStreamingAll(io, fallback) catch {};
+        return;
+    };
+    defer allocator.free(msg);
+    file.writeStreamingAll(io, msg) catch {};
+}
+
 // CANARY: REQ=REQ-CLI-BATCH-MODE-005; FEATURE="QueryBatchMode"; ASPECT=HelloOnce; STATUS=TESTED; TEST=tests/test_cli_batch_mode.zig; OWNER=cli; UPDATED=2026-08-29
 /// ENG-3914: perform the HELLO handshake on the CURRENT stream of `raw_client`.
 /// Extracted from `executeQueryOnConnection` so `--batch` can HELLO exactly
@@ -2998,8 +3009,7 @@ fn helloOnConnection(
 
     log.debug("Client sending HELLO (Protobuf)", &.{});
     writeProtoMessageViaZigClient(allocator, raw_client, .{ .hello = hello_req }) catch |err| {
-        const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to send HELLO: {}\n", .{err}) catch "Error: Failed to send HELLO\n";
-        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+        writeErrorFmt(allocator, stderr_handle, "Error: Failed to send HELLO: {}\n", .{err}, "Error: Failed to send HELLO\n");
         return error.ConnectionFailed;
     };
 
@@ -3008,8 +3018,7 @@ fn helloOnConnection(
     defer hello_arena.deinit();
 
     const hello_resp_msg = readProtoMessageViaZigClient(hello_arena.allocator(), raw_client, timeout_secs) catch |err| {
-        const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to receive HELLO response: {}\n", .{err}) catch "Error: Failed to receive HELLO response\n";
-        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+        writeErrorFmt(allocator, stderr_handle, "Error: Failed to receive HELLO response: {}\n", .{err}, "Error: Failed to receive HELLO response\n");
         return error.ConnectionFailed;
     };
 
@@ -3017,8 +3026,7 @@ fn helloOnConnection(
         .hello => |h| {
             log.debug("Client received HELLO response", &.{Attr.boolean("success", h.success)});
             if (!h.success) {
-                const err_msg = std.fmt.allocPrint(allocator, "Error: {s}\n\n", .{h.error_message}) catch "Error: Authentication failed\n\n";
-                stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+                writeErrorFmt(allocator, stderr_handle, "Error: {s}\n\n", .{h.error_message}, "Error: Authentication failed\n\n");
                 return error.AuthenticationFailed;
             }
             return allocator.dupe(u8, h.session_id);
