@@ -870,9 +870,9 @@ REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimWriteCheck,TESTED,,,index,
 REQ-ENG-3922-VECTOR-DIM-GUARD,VectorIndex,UnindexedDimWriteCheck,TESTED,,,index,2026-08-29,src/index/index_manager.zig,1580
 REQ-ENG-3954-FTS-MAINTAIN-UAF,FTS live-maintenance property read,ShardLockedCopy,TESTED,,,index,2026-08-28,src/execution/fts_index_ops.zig,873
 REQ-ENG-3960-CALL-MUTATION-CLASSIFICATION,MATCH...CALL / CALL{} / chained-WITH mutation classification,ReadOnlyFloor,TESTED,,,engine,2026-08-28,src/query/query_traits.zig,1175
-REQ-ENG-CREATE-INDEX-BACKFILL-OUTSIDE-WRITE-LOCK,AdvancedIndex,DeferredBackfill,TESTED,,,index,2026-08-25,src/execution/statement_dispatcher.zig,291
+REQ-ENG-CREATE-INDEX-BACKFILL-OUTSIDE-WRITE-LOCK,AdvancedIndex,DeferredBackfill,TESTED,,,index,2026-08-25,src/execution/statement_dispatcher.zig,323
 REQ-ENG-CREATE-INDEX-BACKFILL-OUTSIDE-WRITE-LOCK,AdvancedIndex,Regression,TESTED,,,index,2026-08-25,tests/test_create_index_backfill_deferral.zig,1
-REQ-ENG-USING-VECTOR-BUILDS-INDEX,VectorIndex,MetricThreading,TESTED,,,index,2026-08-25,src/execution/statement_dispatcher.zig,234
+REQ-ENG-USING-VECTOR-BUILDS-INDEX,VectorIndex,MetricThreading,TESTED,,,index,2026-08-25,src/execution/statement_dispatcher.zig,266
 REQ-ENG-USING-VECTOR-BUILDS-INDEX,VectorIndex,Regression,TESTED,,,index,2026-08-25,tests/test_using_vector_index.zig,1
 REQ-ENG-USING-VECTOR-BUILDS-INDEX,VectorIndex,RuntimeTypeMapping,TESTED,,,index,2026-08-25,src/execution/statement_dispatcher.zig,14
 REQ-ENGINE-001,Engine,QueryExecution,IMPL,,,engine,2026-11-14,tests/test_gap_0193_final_batch.zig,355
@@ -1199,7 +1199,7 @@ REQ-GAP-0915-LABEL-INDEX-CRASH-REBUILD,CrashRecovery,LabelScanHydrationGuard,TES
 REQ-GAP-0915-LABEL-INDEX-CRASH-REBUILD,CrashRecovery,Regression,TESTED,,,storage,2026-07-10,tests/test_gap0910_0915_crash_recovery.zig,1
 REQ-GAP-0917-TXN-POST-ERROR-REJECT,TransactionManagement,FailedTransactionSemantics,TESTED,,,engine,2026-07-10,src/execution.zig,1795
 REQ-GAP-0917-TXN-POST-ERROR-REJECT,TransactionManagement,Regression,TESTED,,,engine,2026-07-10,tests/test_gap0917_txn_post_error.zig,1
-REQ-GAP-0918-VECTOR-INDEX-VALIDATION,VectorIndex,DimValidationRegistration,TESTED,,,index,2026-07-10,src/execution/statement_dispatcher.zig,258
+REQ-GAP-0918-VECTOR-INDEX-VALIDATION,VectorIndex,DimValidationRegistration,TESTED,,,index,2026-07-10,src/execution/statement_dispatcher.zig,290
 REQ-GAP-0918-VECTOR-INDEX-VALIDATION,VectorIndex,DimensionWriteCheck,TESTED,,,index,2026-07-10,src/index/index_manager.zig,1497
 REQ-GAP-0918-VECTOR-INDEX-VALIDATION,VectorIndex,MetricValidation,TESTED,,,index,2026-07-10,src/execution.zig,2612
 REQ-GAP-0918-VECTOR-INDEX-VALIDATION,VectorIndex,Regression,TESTED,,,index,2026-07-10,tests/test_gap0918_vector_validation.zig,1
@@ -4236,12 +4236,13 @@ REQ-SONNY-2791-INTERNAL-GRAPHS,GraphRBACEnforcement,RefuseInternal,TESTED,,,secu
 REQ-SONNY-2791-INTERNAL-GRAPHS,GraphRBACEnforcement,Regression,TESTED,,,security,2026-09-26,tests/test_sonny2791_internal_graphs_reseal.zig,19
 REQ-SONNY-2791-RESEAL-LEGACY,AuthDDLPersistence,ResealRefusesUnsignedLegacy,TESTED,,,security,2026-09-26,src/security/auth_graph_manager.zig,764
 REQ-SONNY-2791-RESEAL-LEGACY,AuthDDLPersistence,SealRefusesUnsignedLegacy,TESTED,,,security,2026-09-26,src/security/auth_graph_manager.zig,736
+REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,BuildAfterDropRecheck,TESTED,,,catalog,2026-11-15,src/execution/statement_dispatcher.zig,238
 REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,DbIndexesLocked,TESTED,,,catalog,2026-11-11,src/execution/meta_dispatch.zig,461
 REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,DropIndexLockedAndSaved,TESTED,,,catalog,2026-11-11,src/execution.zig,2912
 REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,DropIndexPersisted,TESTED,,,catalog,2026-11-11,src/schema/catalog.zig,1156
 REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,InMemoryCatalog,TESTED,,,catalog,2026-11-11,src/execution.zig,401
 REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,InMemoryCatalog,TESTED,,,catalog,2026-11-11,src/schema/catalog.zig,320
-REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,ProcessLifetimeIndexManager,TESTED,,,catalog,2026-11-11,src/execution/statement_dispatcher.zig,263
+REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,ProcessLifetimeIndexManager,TESTED,,,catalog,2026-11-11,src/execution/statement_dispatcher.zig,295
 REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,Regression,TESTED,,,catalog,2026-11-11,tests/test_sonny2795_drop_index_catalog.zig,25
 REQ-SONNY-2795-DROP-INDEX-CATALOG,SchemaCatalog,VectorReadersLocked,TESTED,,,catalog,2026-11-11,src/execution/statement_dispatcher.zig,84
 REQ-SONNY-2796-TEMPORAL-FIELDS,DateTimeFunctions,FieldsBefore1970,TESTED,,,datetime,2026-11-13,src/eval.zig,2366

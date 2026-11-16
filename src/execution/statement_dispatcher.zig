@@ -159,9 +159,12 @@ pub fn armVectorDimGuard(
 /// lock is held only for the copy and nothing is called under it, so the
 /// self-deadlock the CREATE INDEX note in src/execution.zig describes (a
 /// GRAPH lock re-taken on the same thread) cannot arise here: no statement
-/// holds the catalog lock while evaluating expressions. A DROP INDEX that
-/// lands between the copy and the build below leaves a runtime index with no
-/// row until the next DROP or restart, as before.
+/// holds the catalog lock while evaluating expressions. SONNY-2795: a DROP
+/// INDEX that lands between the copy and the build found no runtime index to
+/// tear down, and the build then left one (and its dimension pin) with no
+/// catalog row until the next DROP or restart. After the build the row is
+/// read again under the shared lock, and what the build made is torn down
+/// when the row is gone (`dropRuntimeIndexWithoutRow`).
 pub fn ensureAdvancedVectorIndexForProperty(allocator: std.mem.Allocator, property: []const u8) !void {
     // Already registered in this process — the overwhelmingly common case, and
     // what keeps a per-query call cheap.
@@ -229,6 +232,35 @@ pub fn ensureAdvancedVectorIndexForProperty(allocator: std.mem.Allocator, proper
     // write lock, and this path runs under a read query, which holds no
     // exclusive lock and needs the index for the query in hand.
     try manager.rebuildAdvancedIndex(graph_store.getGlobalStore(allocator), info.name);
+    dropRuntimeIndexWithoutRow(catalog, manager, info.name, info.label, property);
+}
+
+// CANARY: REQ=REQ-SONNY-2795-DROP-INDEX-CATALOG; FEATURE="SchemaCatalog"; ASPECT=BuildAfterDropRecheck; STATUS=TESTED; TEST=tests/test_sonny2795_drop_index_catalog.zig; OWNER=catalog; UPDATED=2026-11-15
+/// SONNY-2795: after `ensureAdvancedVectorIndexForProperty` built the runtime
+/// index `name` from its copy of the catalog row, read the row again under
+/// the shared catalog lock; when a DROP INDEX removed it meanwhile, tear down
+/// the runtime index and its dimension pin, as DROP INDEX does. The lock is
+/// released before the teardown: it takes `rebuild_mutex` (tier 1.5), below
+/// the catalog lock (tier 2), and no graph lock is taken here. A CREATE INDEX
+/// of the same name between the read and the teardown loses only its runtime
+/// copy, which the next query rebuilds from its row.
+fn dropRuntimeIndexWithoutRow(catalog: anytype, manager: *index_manager.IndexManager, name: []const u8, label: []const u8, property: []const u8) void {
+    const row_present = blk: {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        catalog.rwlock.lockSharedUncancelable(io);
+        defer catalog.rwlock.unlockShared(io);
+        var iter = catalog.indexes.iterator();
+        while (iter.next()) |entry| {
+            const c = entry.value_ptr.*;
+            if (!std.mem.eql(u8, c.name, name) or !std.mem.eql(u8, c.table_name, label)) continue;
+            if (c.columns.len != 1 or !std.mem.eql(u8, c.columns[0], property)) continue;
+            break :blk true;
+        }
+        break :blk false;
+    };
+    if (row_present) return;
+    _ = manager.dropAdvancedIndex(name, .vector_f32) catch false;
+    manager.unregisterVectorDimValidation(name);
 }
 
 // CANARY: REQ=REQ-ENG-USING-VECTOR-BUILDS-INDEX; FEATURE="VectorIndex"; ASPECT=MetricThreading; STATUS=TESTED; TEST=tests/test_using_vector_index.zig; OWNER=index; UPDATED=2026-08-25

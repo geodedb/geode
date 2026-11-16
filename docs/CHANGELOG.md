@@ -3073,6 +3073,17 @@
 
 ### Fixed
 
+- **A vector index dropped while the knn path builds it leaves no runtime
+  index behind (SONNY-2795).** The knn path's lazy build
+  (`ensureAdvancedVectorIndexForProperty`) copied the catalog row under the
+  shared catalog lock and built after releasing it, so a DROP INDEX in
+  between found nothing to tear down and the build left a runtime index and
+  its dimension pin with no catalog row until the next DROP or restart. The
+  build reads the row again under the shared lock and tears down what it
+  built when the row is gone (the lock is released first: the teardown
+  takes `rebuild_mutex`, a lower tier). Regression: `zig build
+  test-sonny2795-drop-index-catalog`.
+
 - **Invalid references answer 42002 and a UNION column-count mismatch 42000,
   as ISO/IEC 39075 Table 8 and 4.7.3 define them (SONNY-6543).**
   **BREAKING:** a GROUP BY key, a HAVING (or WHERE after RETURN) name and a
