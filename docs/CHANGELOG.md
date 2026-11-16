@@ -4,6 +4,49 @@
 
 ### Security
 
+- **Existing plaintext of a newly encrypted field can be migrated:
+  `CALL geode.fle.migrateEncrypt` and `geode fle migrate-encrypt`
+  (SONNY-6688).** `geode.fle.configureField` encrypted values written
+  after it; values already stored stayed plaintext on disk, and
+  `migrate-encrypt` refused as unsupported (SONNY-6321). The new procedure
+  (Admin only, audited, refused in cluster mode and in an explicit
+  transaction) rewrites every plaintext value of the field in one graph,
+  nodes whose first label is the type and relationships of the type,
+  sealed under the FLE record identity: the permitted role reads it as
+  before, others read `"[REDACTED]"`. Only the session's tenant's records;
+  nodes hidden by row policies are skipped and counted. Each value is
+  removed before its envelope is written, so graph-storage's dead slot does
+  not keep the plaintext (the store files drop it at the next checkpoint).
+  Batches are journaled ahead (`fle_migration.journal`, envelopes only) and
+  a crash between a removal and its rewrite is finished at the next server
+  start; values already sealed are skipped, so a rerun resumes. `geode fle
+  migrate-encrypt <tenant> <schema> <field> [batch_size]` sends the CALL
+  with `geode query`'s connection options. **BREAKING (operator):** it now
+  needs a server (`--server`); the in-process `fle_commands.migrateEncrypt`
+  refuses and points there. The never-set storage-callback migration in
+  `fle_commands` (`setStorageCallback`, `executeMigrationWithStorage`) is
+  removed. REQ-FLE-MIGRATE-001, REQ-FLE-BATCH-001, REQ-FLE-STORAGE-001
+  (fle_commands) and REQ-FLE-MIGRATE-CLI-001 are TESTED. Regression: `zig
+  build test-sonny6688-fle-migrate-encrypt`.
+- **A TDE data directory refuses a deleted or donor identity after the
+  upgrade, and a restore intent or undo log moved from another directory
+  (SONNY-6689).** With `data_dir.identity` deleted, a registry sealed under
+  graph-storage's shared `SEAL_UUID` was adopted as a SONNY-6616 build's,
+  so a registry from any directory under the key could be substituted; and
+  the graph-restore intent and `txn_undo.wal` were sealed under
+  `SEAL_UUID`, so either could be moved between directories sharing a
+  key. The first open now records the upgrade in a sealed marker
+  (`data_dir.seal`); afterwards a missing identity
+  (`DataDirIdentityMissing`) or one the marker does not name
+  (`DataDirIdentityMismatch`) refuses the directory. The restore intent and
+  undo log are sealed under the identity; a `SEAL_UUID`-sealed one an
+  earlier build left is read (the undo log resealed) once, in the open
+  that records the marker, and refused after. `txn_durable_undo.Log.open`
+  under a key now needs the directory's identity. **BREAKING (operator):**
+  a TDE data directory whose identity file is lost can no longer be
+  opened; restore it from a backup with `data_dir.identity` and
+  `data_dir.seal`. Residual in docs/TDE_FILE_LEVEL_ENCRYPTION.md.
+  Regression: `zig build test-sonny6689-data-dir-transplant`.
 - **Under TDE a data directory's graph registry is bound to it, and a
   plaintext registry is refused once it has been sealed (SONNY-6635).**
   `graph_registry.dat` and `dropped_graphs.dat` were sealed under

@@ -893,7 +893,6 @@ REQ-FIPS-CHACHA-FAILCLOSE-001,FIPSFailClose,FLEEncryptAesGcmAllowed,TESTED,src/f
 REQ-FIPS-CHACHA-FAILCLOSE-001,FIPSFailClose,FLEEncryptChaChaAllowedNonFips,TESTED,src/fle_integration.zig,,,security,2026-06-24
 REQ-FIPS-CHACHA-FAILCLOSE-002,FIPSFailClose,FLEDecrypt,IMPL,src/fle_integration.zig,,,security,2026-06-24
 REQ-FIPS-CHACHA-FAILCLOSE-003,FIPSFailClose,QUICHeaderProtect,IMPL,src/transport/quic_parallel_serial.zig,,,security,2026-06-24
-REQ-FIPS-CHACHA-FAILCLOSE-004,FIPSFailClose,FLEMigrate,IMPL,src/admin/fle_commands.zig,,,security,2026-06-24
 REQ-FIPS-PWHASH-001,FIPSPasswordHashFailClose,Security,TESTED,src/security/test_auth_enforcement.zig,,,security,2026-06-23
 REQ-FLE-001,FieldLevelEncryption,EncryptProperty,IMPL,tests/test_gap_0193_priority_categories.zig,,,security,2026-11-14
 REQ-FLE-002,FieldLevelEncryption,DecryptProperty,IMPL,tests/test_gap_0193_priority_categories.zig,,,security,2026-11-14
@@ -901,7 +900,7 @@ REQ-FLE-003,FieldLevelEncryption,KeyRotation,IMPL,tests/test_gap_0193_priority_c
 REQ-FLE-ADMIN-001,FieldLevelEncryption,ADMIN,TESTED,src/admin/fle_commands.zig,tests/test_sonny6321_fle_admin_cli.zig,,security,2026-11-16
 REQ-FLE-AST-001,FieldLevelEncryption,AST,TESTED,src/gql/ast.zig,tests/test_sonny6321_tde_fle_cases.zig,,security,2026-11-12
 REQ-FLE-AUTHCHAIN-001,FLE AuthChain Integrity,ConfigureFieldRestart,TESTED,tests/test_gap0854_fle_chain.zig,,,security,2026-06-09
-REQ-FLE-BATCH-001,FLE Batch Re-encryption,ProgressTracking,IMPL,src/admin/fle_commands.zig,,,security,2026-11-16
+REQ-FLE-BATCH-001,FLE Batch Re-encryption,ProgressTracking,TESTED,src/admin/fle_commands.zig,tests/test_sonny6688_fle_migrate_encrypt.zig,,security,2026-11-16
 REQ-FLE-BI-001,FieldLevelEncryption,SECURITY,TESTED,src/crypto/hmac.zig,src/crypto/hmac.zig,,security,2026-01-15
 REQ-FLE-BI-002,FieldLevelEncryption,SECURITY,TESTED,src/index/blind_index.zig,tests/test_sonny6321_fle_schema_blind_index.zig,,security,2026-11-12
 REQ-FLE-BUILD-001,FieldLevelEncryption,BUILD,TESTED,build.zig,geodetestlab/specs/fle_comprehensive_security.yml,,security,2025-10-15
@@ -954,8 +953,8 @@ REQ-FLE-FAILSECURE-007,FLEFailSecure,AuditTrail,TESTED,src/security/test_fle_enf
 REQ-FLE-HKDF-001,FieldLevelEncryption,SECURITY,TESTED,src/crypto/hkdf.zig,src/crypto/hkdf.zig,,security,2026-01-15
 REQ-FLE-INTEGRATION-001,FieldLevelEncryption,INTEGRATION,TESTED,src/fle_integration.zig,test-gap0852,,security,2026-11-12
 REQ-FLE-KEY-001,FieldLevelEncryption,SECURITY,TESTED,src/keys/types.zig,test-fle-lifecycle,,security,2026-11-12
-REQ-FLE-MIGRATE-001,FieldLevelEncryption,Migration,IMPL,src/admin/fle_commands.zig,,,security,2026-11-16
-REQ-FLE-MIGRATE-CLI-001,FLEMigrateCLI,CLI,IMPL,src/cli/fle_cli.zig,,,security,2026-11-16
+REQ-FLE-MIGRATE-001,FieldLevelEncryption,Migration,TESTED,src/admin/fle_commands.zig,tests/test_sonny6688_fle_migrate_encrypt.zig,,security,2026-11-16
+REQ-FLE-MIGRATE-CLI-001,FLEMigrateCLI,CLI,TESTED,src/cli/fle_cli.zig,tests/test_sonny6688_fle_migrate_encrypt.zig,,security,2026-11-16
 REQ-FLE-ONLINE-GRANT-001,FLEOnlineGrant,GrantPlaintextDispatch,TESTED,tests/test_fle_online_grant.zig,,,security,2026-06-18
 REQ-FLE-PARSER-001,FieldLevelEncryption,PARSER,TESTED,src/gql/parser.zig,tests/test_sonny6321_tde_fle_cases.zig,,security,2026-11-12
 REQ-FLE-PREDICATE-HELPERS-001,FLE Predicate Rewriting,Helpers,TESTED,src/fle_integration.zig,geodetestlab/specs/fle_comprehensive_security.yml,,security,2026-01-09
@@ -971,7 +970,7 @@ REQ-FLE-ROLE-ISOLATION-004,FLERoleIsolation,GrpcCleanup,IMPL,src/transport/grpc_
 REQ-FLE-ROTATION-001,FLEKeyRotation,Encryption,TESTED,src/fle_integration.zig,geodetestlab/specs/fle_rotation.yml,,security,2026-01-10
 REQ-FLE-ROTATION-002,FLEKeyRotation,KeyManagement,TESTED,src/fle_integration.zig,geodetestlab/specs/fle_rotation.yml,,security,2026-01-10
 REQ-FLE-SCHEMA-001,FieldLevelEncryption,SCHEMA,TESTED,src/schema/annotations.zig,tests/test_sonny6321_fle_schema_blind_index.zig,,security,2026-11-12
-REQ-FLE-STORAGE-001,FLE Storage Callback,StorageIntegration,IMPL,src/admin/fle_commands.zig,,,security,2026-11-16
+REQ-FLE-STORAGE-001,FLE Storage Callback,StorageIntegration,TESTED,src/admin/fle_commands.zig,tests/test_sonny6688_fle_migrate_encrypt.zig,,security,2026-11-16
 REQ-FLE-STORAGE-001,FieldLevelEncryption,STORAGE,TESTED,src/graph_store.zig,tests/test_sonny6321_tde_fle_cases.zig,,security,2026-11-12
 REQ-FLE-TEST-001,FLE,BasicEncryption,IMPL,tests/test_gap_0193_batch2_testing.zig,,,security,2026-11-12
 REQ-FLE-TEST-002,FLE,BlindIndex,IMPL,tests/test_gap_0193_batch2_testing.zig,,,security,2026-11-12
@@ -4431,7 +4430,6 @@ REQ-SONNY-6313-EXPLAIN-POLICY-GATES,GPS EXPLAIN POLICY,Regression,TESTED,tests/t
 REQ-SONNY-6313-TENANT-LIST-READ-ONLY,PerTenantIsolation,ReadOnlyClassification,TESTED,src/execution/procedure_access.zig,tests/test_sonny6313_explain_policy_gates.zig,,security,2026-11-12
 REQ-SONNY-6320-PASSWORD-HASHING,Argon2id Password Hashing,DeterministicHashAndConstantTimeVerify,TESTED,tests/test_sonny6320_password_hashing.zig,tests/test_sonny6320_password_hashing.zig,,security,2026-11-12
 REQ-SONNY-6321-FLE-ADMIN-CLI,FieldLevelEncryption,AdminCommandsAndMigrateRefusal,TESTED,tests/test_sonny6321_fle_admin_cli.zig,tests/test_sonny6321_fle_admin_cli.zig,,security,2026-11-16
-REQ-SONNY-6321-FLE-MIGRATE-UNSUPPORTED,FieldLevelEncryption,MigrateRefusedWithoutStorage,TESTED,src/admin/fle_commands.zig,tests/test_sonny6321_fle_admin_cli.zig,,security,2026-11-16
 REQ-SONNY-6321-FLE-SCHEMA-BI,FieldLevelEncryption,AnnotationsBlindIndexEvidence,TESTED,tests/test_sonny6321_fle_schema_blind_index.zig,tests/test_sonny6321_fle_schema_blind_index.zig,,security,2026-11-12
 REQ-SONNY-6321-TDE-FLE-CANARY-EVIDENCE,TDEProcedures,SelfTestProceduresAndHonestMarkers,TESTED,tests/test_sonny6321_tde_procedures.zig,tests/test_sonny6321_tde_procedures.zig,,tde,2026-11-12
 REQ-SONNY-6321-TDE-FLE-CASES,TDEProcedures,OltpAuthClusterFleEvidence,TESTED,tests/test_sonny6321_tde_fle_cases.zig,tests/test_sonny6321_tde_fle_cases.zig,,tde,2026-11-12
@@ -5284,6 +5282,12 @@ REQ-SONNY-6671-WORKER-SHARD,High-Concurrency Mutations,EngineShardOfPublicId,TES
 REQ-SONNY-6671-WORKER-SHARD,High-Concurrency Mutations,Regression,TESTED,tests/test_sonny6671_group_commit_routing.zig,tests/test_sonny6671_group_commit_routing.zig,,storage,2026-11-16
 REQ-SONNY-6672-MERGE-ONMATCH-SHARD,High-Concurrency Mutations,MatchedNodeShard,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6672_bulk_merge_onmatch_shard.zig,,storage,2026-11-16
 REQ-SONNY-6672-MERGE-ONMATCH-SHARD,High-Concurrency Mutations,Regression,TESTED,tests/test_sonny6672_bulk_merge_onmatch_shard.zig,tests/test_sonny6672_bulk_merge_onmatch_shard.zig,,storage,2026-11-16
+REQ-SONNY-6688-FLE-MIGRATE-ENCRYPT,FieldLevelEncryption,MigrateExistingPlaintext,TESTED,src/execution/fle_migration.zig,tests/test_sonny6688_fle_migrate_encrypt.zig,,security,2026-11-16
+REQ-SONNY-6688-FLE-MIGRATE-ENCRYPT,FieldLevelEncryption,Regression,TESTED,tests/test_sonny6688_fle_migrate_encrypt.zig,tests/test_sonny6688_fle_migrate_encrypt.zig,,security,2026-11-16
+REQ-SONNY-6688-FLE-MIGRATE-PROCEDURE,FieldLevelEncryption,MigrateEncryptProcedure,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6688_fle_migrate_encrypt.zig,,security,2026-11-16
+REQ-SONNY-6689-DATA-DIR-SEAL-MARKER,TDEFileLevelEncryption,UpgradeMarkerRefusesTransplant,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6689_data_dir_transplant.zig,,security,2026-11-16
+REQ-SONNY-6689-DATA-DIR-TRANSPLANT,TDEFileLevelEncryption,Regression,TESTED,tests/test_sonny6689_data_dir_transplant.zig,tests/test_sonny6689_data_dir_transplant.zig,,security,2026-11-16
+REQ-SONNY-6689-UNDO-LOG-IDENTITY,TDEFileLevelEncryption,UndoLogBoundToDataDir,TESTED,src/txn_durable_undo.zig,tests/test_sonny6689_data_dir_transplant.zig,,security,2026-11-16
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13

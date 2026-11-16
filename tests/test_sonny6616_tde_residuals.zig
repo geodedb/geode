@@ -195,6 +195,8 @@ test "SONNY-6616: a plaintext registry and dropped-graph list from an earlier bu
         const plain = try c.open(aa, geode.graph_storage_adapter.side_kind_dropped_graphs, "dropped_graphs.dat", sealed);
         try std.Io.Dir.cwd().writeFile(io(), .{ .sub_path = drop_path, .data = plain });
         try std.Io.Dir.cwd().deleteFile(io(), id_path);
+        // SONNY-6689: nor the upgrade marker.
+        try std.Io.Dir.cwd().deleteFile(io(), try std.fmt.allocPrint(aa, "{s}/data_dir.seal", .{path}));
         try testing.expect(try manifestsToV4(aa, path, key) > 0);
     }
     try testing.expectEqual(@as(usize, 2), try holders(aa, path, kept_graph) + try holders(aa, path, dropped_graph));
@@ -266,6 +268,9 @@ test "SONNY-6616: a graph opened under another key is refused with EncryptionKey
         try geode.graph_storage_adapter.readRegistryOffline(testing.allocator, &reg, path, key);
         const id = (try gs.registry.DataDirIdentity.load(aa, path, key)).?;
         try id.save(aa, path, other);
+        // SONNY-6689: and the upgrade marker.
+        const marker = (try geode.graph_storage_adapter.DataDirSealMarker.load(aa, path, key)).?;
+        try marker.save(aa, path, other);
         var c2 = id.cipher(other).?;
         defer c2.deinit();
         try reg.saveToFileWith(reg_path, &c2);

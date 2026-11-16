@@ -269,6 +269,12 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-6362: MERGE cannot match a randomized FLE ciphertext.
         // SONNY-6433: a MERGE key property that is null can match nothing.
         error.NullMergeKey => .{ .code = "22004", .message = "null value not allowed: a MERGE pattern's property value is null. A null property is absent, and `k = null` is never true, so the pattern can match nothing and MERGE does not create an element without the key. Give the key a value, or use CREATE" },
+        // SONNY-6688: geode.fle.migrateEncrypt.
+        error.FieldNotEncrypted => .{ .code = "22023", .message = "The field is not configured for field-level encryption: configure it (CALL geode.fle.configureField) before migrating its values" },
+        error.MigrationInTransaction => .{ .code = "25000", .message = "geode.fle.migrateEncrypt commits batch by batch and cannot run inside an explicit transaction" },
+        error.CorruptFleMigrationJournal => .{ .code = "XX001", .message = "fle_migration.journal is damaged: the FLE migration batch it records cannot be finished" },
+        error.MigrationNeedsDurableCommits => .{ .code = "55000", .message = "geode.fle.migrateEncrypt needs durable commits; the store runs with GEODE_WAL_SYNC=deferred" },
+        error.MigrationInterrupted => .{ .code = "58030", .message = "The FLE migration stopped part way; the batches done are kept. Run it again to finish" },
         error.MergeOnEncryptedField => .{ .code = "0A000", .message = "MERGE on an FLE-encrypted property is not supported: the stored value is randomized ciphertext, so a pattern value never matches it and MERGE would create a duplicate. MERGE on an unencrypted key and set the encrypted property with ON CREATE SET / SET" },
         error.IndexOnEncryptedField => .{ .code = "0A000", .message = "The field is FLE-encrypted: an index or UNIQUE / NODE KEY constraint over it would hold ciphertext (or plaintext); none can be created. Equality search over an encrypted field is not available; index or constrain an unencrypted property instead" },
         error.EncryptedFieldIndexed => .{ .code = "0A000", .message = "The field has an index or a UNIQUE / NODE KEY constraint over it; drop it before encrypting the field" },

@@ -529,6 +529,15 @@ pub const HopScope = struct {
 // expression-based property policies for the current session.
 // Returns true (allow) when no RLS engine is active, no user is authenticated,
 // or the node passes both label-deny and expression checks.
+/// SONNY-6688: may the active session see `node` under its row policies
+/// (`passesRLSFilter`, as a MATCH decides)? True when no policy can deny it.
+pub fn nodeVisibleUnderSessionRls(allocator: std.mem.Allocator, node: graph_store.Node) bool {
+    if (!rlsMayDenyForSession()) return true;
+    var row = std.StringHashMap(rls.Value).init(allocator);
+    defer row.deinit();
+    return passesRLSFilter(&row, node);
+}
+
 // CANARY: REQ=REQ-SEC-RLS-WIRE-014; FEATURE="RLS Expression Wiring"; ASPECT=MatchLabelDeny; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
 fn passesRLSFilter(
     reusable_row: *std.StringHashMap(rls.Value),
