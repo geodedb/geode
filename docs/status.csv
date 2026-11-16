@@ -5587,6 +5587,7 @@ REQ-SONNY-6665-SNAPSHOT-STREAM,Raft Snapshot Persistence,StreamedOffInnerMutex,T
 REQ-SONNY-6665-STAGED-INSTALL-OFF-MUTEX,Raft Snapshot Persistence,Regression,TESTED,,,distributed,2026-11-16,tests/test_sonny6665_install_lock_hold.zig,19
 REQ-SONNY-6665-STAGED-INSTALL-OFF-MUTEX,Raft Snapshot Persistence,SyncStagedSnapshotUnlocked,TESTED,,,distributed,2026-11-16,src/distributed/raft_consensus.zig,3948
 REQ-SONNY-6665-WIRE-FIELDS,Raft Snapshot Persistence,FrameRoundTrip,TESTED,,,distributed,2026-11-16,tests/test_sonny6665_wire_fields.zig,12
+REQ-SONNY-6667-DEDUP-RESTORE-RACE,DistributedCluster,Regression,TESTED,,,distributed,2026-11-16,tests/test_sonny6667_dedup_restore_race.zig,27
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,,,storage,2026-11-13,src/execution/crud_operations.zig,1521
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,,,storage,2026-11-13,tests/test_sonny738_create_query_one_commit.zig,20
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,EverySite,TESTED,,,eval,2026-11-13,tests/test_sonny738_equality_consistency.zig,38
