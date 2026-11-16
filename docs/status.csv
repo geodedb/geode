@@ -5314,6 +5314,7 @@ REQ-SONNY-6586-CLI-TRUTH,CliOptions,NoFalseClaims,TESTED,,,cli,2026-11-15,tests/
 REQ-SONNY-6586-MCP-LIST-MAP-PARAMS,MCPBackendTools,ListAndMapParameters,TESTED,,,mcp,2026-11-15,src/mcp/client.zig,186
 REQ-SONNY-6586-MCP-OFFLINE-RESOURCES,MCPBackendTools,NoOfflineData,TESTED,,,mcp,2026-11-15,src/mcp/resources.zig,152
 REQ-SONNY-6586-OFFLINE-GRANT-RULE,OfflineAuthStoreSafety,GrantMatchesOnlineGrant,TESTED,,,security,2026-11-15,tests/test_sonny6586_offline_grant_rule.zig,1
+REQ-SONNY-6586-PARAM-JSON-NO-LEAK,CliOptions,ParamConversionFreesOnFailure,TESTED,,,cli,2026-11-15,src/cli/param_json.zig,26
 REQ-SONNY-6586-PARAM-JSON-NO-LEAK,CliOptions,ParamConversionFreesOnFailure,TESTED,,,cli,2026-11-15,tests/test_sonny6586_param_json_alloc.zig,1
 REQ-SONNY-6586-QUERY-LOG-LEVEL,CliOptions,LogLevelRefused,TESTED,,,cli,2026-11-15,src/cli/main.zig,1059
 REQ-SONNY-6587-CANARY-TRUTH,Governance,CanaryTestExists,TESTED,,,governance,2026-11-15,tests/test_sonny6587_canary_markers.zig,12

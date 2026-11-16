@@ -23,22 +23,28 @@ pub fn jsonToProtoValue(allocator: std.mem.Allocator, value: std.json.Value, dep
         .float => |f| .{ .kind = .{ .double_val = .{ .value = f, .kind = .DOUBLE } } },
         .number_string => |s| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, s), .kind = .STRING } } },
         .string => |s| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, s), .kind = .STRING } } },
+        // CANARY: REQ=REQ-SONNY-6586-PARAM-JSON-NO-LEAK; FEATURE="CliOptions"; ASPECT=ParamConversionFreesOnFailure; STATUS=TESTED; TEST=tests/test_sonny6586_param_json_alloc.zig; OWNER=cli; UPDATED=2026-11-15
+        // SONNY-6586: a list or map that fails part-way (an allocation, or
+        // an element nested past PARAM_MAX_DEPTH) frees what it built.
         .array => |arr| blk: {
-            var values = std.ArrayList(schema.Value).initCapacity(allocator, arr.items.len) catch return error.OutOfMemory;
-            for (arr.items) |item| {
-                try values.append(allocator, try jsonToProtoValue(allocator, item, depth + 1));
-            }
-            break :blk .{ .kind = .{ .list_val = .{ .values = values } } };
+            var list: schema.ListValue = .{ .values = .empty };
+            errdefer list.deinit(allocator);
+            try list.values.ensureTotalCapacityPrecise(allocator, arr.items.len);
+            for (arr.items) |item| list.values.appendAssumeCapacity(try jsonToProtoValue(allocator, item, depth + 1));
+            break :blk .{ .kind = .{ .list_val = list } };
         },
         .object => |obj| blk: {
-            var entries = std.ArrayList(schema.MapEntry).initCapacity(allocator, obj.count()) catch return error.OutOfMemory;
+            var map: schema.MapValue = .{ .entries = .empty };
+            errdefer map.deinit(allocator);
+            try map.entries.ensureTotalCapacityPrecise(allocator, obj.count());
             var it = obj.iterator();
             while (it.next()) |entry| {
                 const key = try allocator.dupe(u8, entry.key_ptr.*);
+                errdefer allocator.free(key);
                 const val = try jsonToProtoValue(allocator, entry.value_ptr.*, depth + 1);
-                try entries.append(allocator, .{ .key = key, .value = val });
+                map.entries.appendAssumeCapacity(.{ .key = key, .value = val });
             }
-            break :blk .{ .kind = .{ .map_val = .{ .entries = entries } } };
+            break :blk .{ .kind = .{ .map_val = map } };
         },
     };
 }

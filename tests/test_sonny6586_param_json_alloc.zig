@@ -6,10 +6,11 @@
 // the elements, keys and backing arrays built before the failure: there
 // was no errdefer.
 //
-// Strategy: fail allocation n = 0, 1, 2, ... (std.testing.FailingAllocator
-// fails allocation n only) of a nested list/map conversion until one runs
-// with no failure induced, each over its own DebugAllocator so a leak names
-// the index; and a value too deep, after siblings were built.
+// Strategy: fail from allocation n = 0, 1, 2, ... of a nested list/map
+// conversion (std.testing.FailingAllocator fails allocation n and every one
+// after it) until one runs with no failure induced, each over its own
+// DebugAllocator so a leak names the index; and a value too deep, after
+// siblings were built.
 const std = @import("std");
 const testing = std.testing;
 const param_json = @import("param_json");

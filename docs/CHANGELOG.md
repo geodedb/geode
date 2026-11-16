@@ -3073,6 +3073,12 @@
 
 ### Fixed
 
+- **`geode query --param` frees a list or map that fails part-way
+  (SONNY-6586).** The conversion (`src/cli/param_json.zig`, moved out of
+  `src/cli/main.zig`) leaked the elements, keys and arrays built before an
+  allocation failure or a value nested past the depth limit. Regression:
+  `zig build test-sonny6586-param-json-alloc`.
+
 - **A CDC start that fails records no start (SONNY-6593).**
   `CDCEngine.start()` recorded its `.start` lifecycle event before creating
   its worker pool, so a start that then failed left a start event for an
