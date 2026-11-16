@@ -8306,6 +8306,17 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6531-mcp-ownership", "Run SONNY-6531 item 1 regression (every MCP method geode implements - initialize, ping, tools/list, tools/call for each tool incl. error results, resources/list, resources/read for each resource incl. unknown URIs and an unreachable server, resources/templates/list, prompts/list, prompts/get for each prompt incl. unknown, completion/complete, logging/setLevel, subscribe/unsubscribe, notifications and a batch - frees each handler result exactly once under std.testing.allocator, with no backend, an undialable DSN, a dead endpoint and a real geode serve; a real geode mcp --stdio Debug session answers every request and exits with no leak report)").dependOn(&run_tests.step);
     }
+    // SONNY-6644: geode mcp --port serves Streamable HTTP sessions (mcp
+    // v0.1.26) until SIGTERM (real binary).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6644_mcp_http_session.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6644-mcp-http-session", "Run SONNY-6644 regression (geode mcp --no-auth --port 0 keeps serving after it prints its port; initialize without a session answers an Mcp-Session-Id, a request without one is 400 and an unknown one 404, the session's notification is 202 and its tools/list 200 with the same id, a second client's initialize gets another session; SIGTERM ends it with exit 0)").dependOn(&run_tests.step);
+    }
     // SONNY-6585: a JSON-RPC error from geode's MCP server carries a message
     // and data naming what was wrong (mcp v0.1.23 setErrorDetail).
     {
