@@ -16846,6 +16846,34 @@ pub fn build(b: *std.Build) void {
     const sonny3037_step = b.step("test-sonny3037-revoke-principal", "Run SONNY-3037 regression (geode revoke --from revokes the named principal's grant and no other principal's; a principal with no such grant is refused and nothing changes)");
     sonny3037_step.dependOn(&run_sonny3037_tests.step);
 
+    // SONNY-6586: offline grant / revoke follow the online GRANT ... ON
+    // GRAPH rule (READ/WRITE/SCHEMA/ALL on one graph to an existing user)
+    // and store its GraphGrant records. Through the installed CLI.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6586_offline_grant_rule.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+        mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6586-offline-grant-rule", "Run SONNY-6586 follow-up regression (offline geode grant / revoke follow the online GRANT <privilege> ON GRAPH rule: READ, WRITE, SCHEMA or ALL only - admin is a role, refused to anyone - on one --graph, never '*' or none, to a user that exists; a grant stores the GraphGrant records GRANT stores (ALL is three) and no free-form Permission record, revoke removes them and refuses a privilege not held, and the chain verifies)").dependOn(&run_tests.step);
+    }
+    // SONNY-6586: geode query --param's JSON conversion frees a list or map
+    // that fails part-way (allocation-failure sweep, depth limit).
+    {
+        const param_json_mod = b.createModule(.{ .root_source_file = b.path("src/cli/param_json.zig"), .target = target, .optimize = optimize });
+        param_json_mod.addImport("schema", schema_mod);
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6586_param_json_alloc.zig"), .target = target, .optimize = optimize });
+        mod.addImport("param_json", param_json_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6586-param-json-alloc", "Run SONNY-6586 follow-up regression (geode query --param's JSON-to-wire conversion, src/cli/param_json.zig: an allocation failure at any point of a nested list/map conversion, and a value nested past the depth limit after siblings were built, leave nothing allocated)").dependOn(&run_tests.step);
+    }
+
     // SONNY-2778: the generated admin password file (O_CREAT|O_EXCL|
     // O_NOFOLLOW, 0600, never in the cwd, never over a planted file or link),
     // and UserManager's policy strings (spawns the installed CLI and server).
@@ -19871,6 +19899,7 @@ pub fn build(b: *std.Build) void {
         .{ .file = "tests/test_sonny6548_gql_identifier_words.zig", .step = "test-sonny6548-gql-identifier-words", .desc = "Run SONNY-6548 regression (SET and REMOVE take a variable named with an ISO/IEC 39075 non-reserved word such as type or property; a reserved word such as MATCH is refused as a variable; fixed by SONNY-6564)", .weight = 1 },
         .{ .file = "tests/test_sonny6564_identifier_words.zig", .step = "test-sonny6564-identifier-words", .desc = "Run SONNY-6564 regression (ISO/IEC 39075 21.3: every non-reserved word names a variable in every binding position - SET, REMOVE, DELETE, FOR, UNWIND, aliases, parameters included; every reserved and pre-reserved word is refused there with a 42000 naming the delimited form, which works; labels, types and property names take any word; 16.11 quantifiers {m,n} {n} {m,} {,n} + * read into the *m..n bounds; over QUIC and gRPC against a real geode serve)", .weight = 1 },
         .{ .file = "tests/test_sonny6561_cdc_transport_parity.zig", .step = "test-sonny6561-cdc-transport-parity", .desc = "Run SONNY-6561 regression (CDC_DIAGNOSTICS, CDC_CONTROL and CALL cdc.* answer the same over QUIC and gRPC for the admin, readwrite, readonly and unauthenticated callers, with CDC off, on and disabled again)", .weight = 2 },
+        .{ .file = "tests/test_sonny6593_cdc_start_lifecycle.zig", .step = "test-sonny6593-cdc-start-lifecycle", .desc = "Run SONNY-6593 item 3 regression (a CDCEngine.start() that fails at any allocation leaves the engine stopped with no start lifecycle event; the start that succeeds records exactly one)", .weight = 1 },
         .{ .file = "tests/test_sonny6570_cdc_honesty.zig", .step = "test-sonny6570-cdc-honesty", .desc = "Run SONNY-6570 regression (every CALL cdc.* answers from the CDC engine or is refused 0A000; every CDC procedure and frame is Admin only on QUIC and gRPC; CDC changes are audited and the chain verifies; gRPC serves the .proto's GetCdcDiagnostics / ControlCdc; startCDC frees the engine when start() fails)", .weight = 2 },
         .{ .file = "tests/test_sonny6596_approximate_literal.zig", .step = "test-sonny6596-approximate-literal", .desc = "Run SONNY-6596 item 1 regression (ISO/IEC 39075 21.2: a numeric literal with an exponent - 1.5E0, 1E3, 1.0e308 - is an approximate numeric literal evaluated as a DOUBLE and declared DOUBLE on the wire; beyond the DOUBLE range it is refused; 1.25 stays an exact DECIMAL)", .weight = 1 },
         .{ .file = "tests/test_sonny6596_profile_v1_measured.zig", .step = "test-sonny6596-profile-v1-measured", .desc = "Run SONNY-6596 item 2 regression (over QUIC and gRPC against a real geode serve: a version-1 PROFILE - a CREATE, a UNION - is one LegacyExecute operator with the measured wall-clock time and the rows returned; no NodeScan / Expand / Union phase operators, no invented times, bytes, estimates or UNION input rows)", .weight = 1 },
