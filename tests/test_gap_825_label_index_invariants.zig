@@ -298,7 +298,7 @@ test "GAP-825b: loadOneGraphFromAdapter rebuilds nodes_by_graph and node_labels_
 
     // Drop the in-memory caches and rebuild from the adapter.  This
     // exercises the same code path as a process restart.
-    store.clearNodes();
+    try store.clearNodes();
     try testing.expectEqual(@as(usize, 0), store.nodesInGraphCount("g"));
 
     try store.loadFromFile();

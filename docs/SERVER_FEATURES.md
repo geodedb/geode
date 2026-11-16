@@ -170,6 +170,14 @@ fail before a crash. A graph in which a shard names a label shard 0 lacks,
 or orders two labels differently, is refused even then and needs a manual
 repair.
 
+**Graph write-ahead log damaged mid-log** (SONNY-6642): a graph whose
+shard WAL holds a damaged record with valid records after it (not a torn
+tail, which is truncated) is not opened: graph-storage leaves the log as it
+is, and the graph's reads and writes fail with 58000 `WalCorrupted` (it was
+the generic `GraphQuarantined`). The server and its other graphs keep
+serving; the server log names the graph and the byte offset of the damaged
+record. Restore the graph's directory from a backup, or drop the graph.
+
 ### 1.4 Backup (local files only)
 
 **Status (2026-11-12, SONNY-6422):** there is no S3 / DigitalOcean Spaces

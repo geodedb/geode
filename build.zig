@@ -7004,17 +7004,10 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/phase1_kernels.zig"), .target = target, .optimize = optimize }),
     });
 
-    // Massive Scale Storage Stress Test
-    const stress_storage_massive = b.addTest(.{
-        .name = "stress_storage_massive", // Set name to allow filtering
-        .root_module = b.createModule(.{ .root_source_file = b.path("tests/stress_storage_massive.zig"), .target = target, .optimize = optimize }),
-    });
-    // GraphStore stress test - no legacy storage imports required.
-
-    const run_stress_storage = b.addRunArtifact(stress_storage_massive);
-    // Only run if explicitly requested via filter or a separate step (optional: create "stress" step)
-    const stress_step = b.step("stress", "Run massive storage stress tests");
-    stress_step.dependOn(&run_stress_storage.step);
+    // SONNY-6640: the `stress` step (tests/stress_storage_massive.zig) was
+    // removed: it did not compile (no `geode` module, std.rand, Timer), and
+    // what it checked (a second GraphStore reloading the first's legacy
+    // per-store file) no longer exists: loadFromFile reads the global adapter.
 
     gpu_phase1_test.root_module.addImport("vulkan_compute", vulkan_compute_mod);
     gpu_phase1_test.root_module.addImport("vulkan_loader", vulkan_loader_mod);
@@ -11205,6 +11198,70 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6597_flush_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6597_flush_step = b.step("test-sonny6597-hydration-flush-race", "Run SONNY-6597 regression (a hydration scan while a checkpoint writes the shard's dirty pages finds a node created since the last checkpoint, with no false DataCorruption quarantine, and hydrates a property SET since then with its new value)");
     sonny6597_flush_step.dependOn(&run_sonny6597_flush_tests.step);
+
+    // SONNY-6639: a reload that runs out of memory resetting the store fails
+    // with OutOfMemory (it panicked) and clears every hydration latch.
+    const sonny6639_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6639_reload_oom.zig"), .target = target, .optimize = optimize });
+    sonny6639_test_mod.link_libc = true;
+    sonny6639_test_mod.addImport("geode", root_mod);
+    const sonny6639_tests = b.addTest(.{ .root_module = sonny6639_test_mod });
+    const run_sonny6639_tests = b.addRunArtifact(sonny6639_tests);
+    shardDep(test_step, &run_sonny6639_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6639_step = b.step("test-sonny6639-reload-oom", "Run SONNY-6639 regression (GraphStore.loadFromFile fails with OutOfMemory when an allocation of its store reset fails, and leaves the store whole; it clears needs_reset with done and failed)");
+    sonny6639_step.dependOn(&run_sonny6639_tests.step);
+
+    // SONNY-6640: the adapter's engine-direct property reads (the bulk
+    // relationship-MERGE endpoint resolvers, the ordered-index column probe)
+    // report a read error; they took it for an absent property.
+    const sonny6640_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6640_adapter_property_read_errors.zig"), .target = target, .optimize = optimize });
+    sonny6640_test_mod.link_libc = true;
+    sonny6640_test_mod.addImport("geode", root_mod);
+    const sonny6640_tests = b.addTest(.{ .root_module = sonny6640_test_mod });
+    const run_sonny6640_tests = b.addRunArtifact(sonny6640_tests);
+    shardDep(test_step, &run_sonny6640_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6640_step = b.step("test-sonny6640-adapter-property-read-errors", "Run SONNY-6640 regression (a durable store, the adapter allocator failing from the k-th allocation: lookupNodeIdByLabelAndAllProps, lookupPublicNodeIdByLabelAndAllProps and probeOrderedColumnClass answer the healthy answer or an error, never a missing node or a declined column)");
+    sonny6640_step.dependOn(&run_sonny6640_tests.step);
+
+    // SONNY-6642: a graph WAL damaged mid-log (graph-storage WalCorrupted)
+    // is refused as WalCorrupted with an operator message after a crash.
+    const sonny6642_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6642_wal_corrupted_quarantine.zig"), .target = target, .optimize = optimize });
+    sonny6642_test_mod.link_libc = true;
+    sonny6642_test_mod.addImport("geode", root_mod);
+    sonny6642_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6642_test_mod.addImport("schema", schema_mod);
+    sonny6642_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6642_tests = b.addTest(.{ .root_module = sonny6642_test_mod });
+    const run_sonny6642_tests = b.addRunArtifact(sonny6642_tests);
+    spawnsBuiltGeode(sonny6642_tests);
+    shardDep(test_step, &run_sonny6642_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6642_step = b.step("test-sonny6642-wal-corrupted-quarantine", "Run SONNY-6642 regression (a real server is SIGKILLed with a graph's shard logs un-checkpointed, a middle record of one log is damaged; the restarted server refuses the graph with 58000 WalCorrupted and serves the others)");
+    sonny6642_step.dependOn(&run_sonny6642_tests.step);
+
+    // SONNY-6601 (2): an aborted bulk reserved-id insert leaves no entry in
+    // the exact property index.
+    const sonny6601_bi_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6601_bulk_insert_index_abort.zig"), .target = target, .optimize = optimize });
+    sonny6601_bi_test_mod.link_libc = true;
+    sonny6601_bi_test_mod.addImport("geode", root_mod);
+    const sonny6601_bi_tests = b.addTest(.{ .root_module = sonny6601_bi_test_mod });
+    const run_sonny6601_bi_tests = b.addRunArtifact(sonny6601_bi_tests);
+    shardDep(test_step, &run_sonny6601_bi_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6601_bi_step = b.step("test-sonny6601-bulk-insert-index-abort", "Run SONNY-6601 item 2 regression (a durable store, one store allocation failed in turn during a bulk reserved-id node insert: every property's exact-index posting holds exactly the nodes that exist; an insert that fails before its commit leaves none)");
+    sonny6601_bi_step.dependOn(&run_sonny6601_bi_tests.step);
+
+    // SONNY-6601 (6): QUIC runs START TRANSACTION ... ROLLBACK with
+    // mutations in one message (it refused it with 25001; gRPC ran it).
+    const sonny6601_qr_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6601_quic_inline_rollback.zig"), .target = target, .optimize = optimize });
+    sonny6601_qr_test_mod.link_libc = true;
+    sonny6601_qr_test_mod.addImport("geode", root_mod);
+    sonny6601_qr_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6601_qr_test_mod.addImport("schema", schema_mod);
+    sonny6601_qr_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6601_qr_tests = b.addTest(.{ .root_module = sonny6601_qr_test_mod });
+    const run_sonny6601_qr_tests = b.addRunArtifact(sonny6601_qr_tests);
+    spawnsBuiltGeode(sonny6601_qr_tests);
+    shardDep(test_step, &run_sonny6601_qr_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6601_qr_step = b.step("test-sonny6601-quic-inline-rollback", "Run SONNY-6601 item 6 regression (a real server over QUIC: START TRANSACTION with CREATE, MERGE, DELETE or SET and ROLLBACK in one message succeeds and leaves nothing; with COMMIT it keeps the change)");
+    sonny6601_qr_step.dependOn(&run_sonny6601_qr_tests.step);
 
     // SONNY-6605 (1): a transient hydration failure (out of memory, a
     // descriptor quota) is retried on the next access with exact counts; a
@@ -18123,6 +18180,17 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6302_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6302_step = b.step("test-sonny6302-edge-write-and-delete-errors", "Run SONNY-6302 regression (a failed engine write in setEdgeProperty / removeEdgeProperty is reported and memory stays equal to the engine; a tenant drop whose delete fails is refused before the tenant is removed and a retry completes it; a replicated delete reports a failed delete; deleting nodes and edges with names past 512 bytes cannot fail after the engine delete)");
     sonny6302_step.dependOn(&run_sonny6302_tests.step);
+
+    // SONNY-6302 (4)/(5): label counters stay exact for names past 512 bytes
+    // whichever allocation fails; setEdgeProperty of a missing edge fails.
+    const sonny6302_lc_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6302_label_count_and_missing_edge.zig"), .target = target, .optimize = optimize });
+    sonny6302_lc_test_mod.addImport("geode", root_mod);
+    sonny6302_lc_test_mod.link_libc = true;
+    const sonny6302_lc_tests = b.addTest(.{ .root_module = sonny6302_lc_test_mod });
+    const run_sonny6302_lc_tests = b.addRunArtifact(sonny6302_lc_tests);
+    shardDep(test_step, &run_sonny6302_lc_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6302_lc_step = b.step("test-sonny6302-label-count-and-missing-edge", "Run SONNY-6302 items 4 and 5 regression (addNodeLabel / removeNodeLabel of a 600-byte label on a node of a 600-byte tenant, each allocation failed once in turn: the label posting, its count and the tenant's label listing agree with the node; setEdgeProperty of a missing edge is EdgeNotFound)");
+    sonny6302_lc_step.dependOn(&run_sonny6302_lc_tests.step);
 
     // geode#875: the vector index is fully rebuilt on every single write (RC-1,
     // O(N^2) ingest), a row-invariant knn() in WHERE/WITH is re-evaluated once

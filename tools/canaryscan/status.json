@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T04:30:39.102908166Z",
+  "generated_at": "2026-11-16T04:30:44.65962492Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -69385,6 +69385,20 @@
         },
         {
           "feature": "GraphStoreFailureAtomicity",
+          "aspect": "LongNameKeyLookup",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6302_label_count_and_missing_edge.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "GraphStoreFailureAtomicity",
           "aspect": "LongNameRemoverKeys",
           "status": "TESTED",
           "files": [
@@ -69396,6 +69410,21 @@
           "benches": [],
           "owner": "storage",
           "updated": "2026-11-11"
+        },
+        {
+          "feature": "GraphStoreFailureAtomicity",
+          "aspect": "LongNameLabelCounter",
+          "status": "TESTED",
+          "files": [
+            "src/graph_store.zig",
+            "tests/test_sonny6302_label_count_and_missing_edge.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6302_label_count_and_missing_edge.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
         },
         {
           "feature": "GraphStoreFailureAtomicity",
@@ -79965,6 +79994,72 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6601-BULK-INSERT-INDEX-ABORT",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "ExactIndexRollback",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6601_bulk_insert_index_abort.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6601_bulk_insert_index_abort.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6601_bulk_insert_index_abort.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6601-QUIC-INLINE-ROLLBACK",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "TransportParity",
+          "status": "TESTED",
+          "files": [
+            "src/server/quic_connection_handler.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6601_quic_inline_rollback.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6601_quic_inline_rollback.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6601_quic_inline_rollback.zig"
+          ],
+          "benches": [],
+          "owner": "transport",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6602-MFA-CLI-HONESTY",
       "features": [
         {
@@ -81892,6 +81987,77 @@
           ],
           "benches": [],
           "owner": "parser",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6639-RELOAD-OOM",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6639_reload_oom.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6639_reload_oom.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6640-ADAPTER-PROPERTY-READ-ERRORS",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6640_adapter_property_read_errors.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6640_adapter_property_read_errors.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6642-WAL-CORRUPTED-QUARANTINE",
+      "features": [
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "OperatorMessage",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6642_wal_corrupted_quarantine.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-15"
+        },
+        {
+          "feature": "StorageIntegrity",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6642_wal_corrupted_quarantine.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6642_wal_corrupted_quarantine.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
           "updated": "2026-11-15"
         }
       ]
@@ -86988,7 +87154,7 @@
       "EXEMPT": 209,
       "IMPL": 564,
       "STUB": 18,
-      "TESTED": 4295
+      "TESTED": 4305
     },
     "by_aspect": {
       "2PC": 3,
@@ -88109,6 +88275,7 @@
       "ExactIndexCandidates": 2,
       "ExactIndexConfigStamp": 1,
       "ExactIndexLateKeyCatchUp": 1,
+      "ExactIndexRollback": 1,
       "ExactIntegerSum": 1,
       "ExactMatchRewrite": 1,
       "ExactNumberHash": 1,
@@ -88866,6 +89033,8 @@
       "LoginRefusalAudit": 1,
       "LoginState": 2,
       "LoginVerifyErrors": 1,
+      "LongNameKeyLookup": 1,
+      "LongNameLabelCounter": 1,
       "LongNameRemoverKeys": 1,
       "Lookup": 1,
       "LostAcknowledgement": 1,
@@ -89245,7 +89414,7 @@
       "OpenAndCountRestoredStore": 1,
       "OperationMapping": 1,
       "OperatorConfig": 1,
-      "OperatorMessage": 4,
+      "OperatorMessage": 5,
       "Operators": 1,
       "Optimization": 2,
       "Optimizer": 1,
@@ -89859,7 +90028,7 @@
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
       "RegistrySwap": 1,
-      "Regression": 407,
+      "Regression": 412,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -90571,6 +90740,7 @@
       "TransportExecutionParity": 1,
       "TransportFastPath": 1,
       "TransportHotPath": 1,
+      "TransportParity": 1,
       "TransportParitySmokeWiring": 1,
       "TransportProfile": 1,
       "TransportProgramGate": 1,

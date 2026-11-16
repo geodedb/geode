@@ -3784,7 +3784,7 @@ pub fn orderedScanFastPath(
         // classes, a non-canonical string, a value of no ordered class; the
         // `orderedIndexColumn` decline below) is declined before the build
         // starts; it was built, and persisted, for nothing.
-        if (!adapter.probeOrderedColumnClass(filter_graph, label, ret_key)) return null;
+        if (!try adapter.probeOrderedColumnClass(filter_graph, label, ret_key)) return null;
         adapter.spawnOrderedIndexBuildAsync(filter_graph, label, ret_key);
         return null;
     }

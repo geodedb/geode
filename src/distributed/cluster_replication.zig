@@ -624,8 +624,9 @@ fn applyMultiCreatePayloadAt(
         var pi: usize = 0;
         while (pi < nprops) : (pi += 1) {
             const p = try readProp(&r);
-            // Idempotent: setEdgeProperty no-ops if the edge is absent and
-            // overwrites in place otherwise (repairs a partial first-apply).
+            // Idempotent: overwrites in place (repairs a partial first-apply).
+            // The edge exists (created or already there, above); a missing
+            // one is error.EdgeNotFound (SONNY-6302), not a no-op.
             try store.setEdgeProperty(edge_id, p.key, p.value);
         }
     }

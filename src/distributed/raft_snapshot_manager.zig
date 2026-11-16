@@ -93,7 +93,7 @@ pub fn installSnapshotData(
         defer graph_store.releaseStoreWriteLock();
 
         // 2. Clear existing store data
-        store.clearNodes();
+        try store.clearNodes();
 
         // 3. Parse JSON-lines and recreate nodes/edges
         var line_iter = std.mem.splitScalar(u8, data, '\n');

@@ -3195,6 +3195,84 @@
   seeds with deferred WAL sync (51 minutes on a loaded disk). Regressions:
   `zig build test-sonny6637-query-items`, `zig build
   test-sonny6637-function-arity`.
+- **An aborted bulk node insert leaves no exact-index entry; QUIC runs
+  `START TRANSACTION ... ROLLBACK` with mutations in one message, as gRPC
+  does (SONNY-6601 items 2 and 6).** The bulk reserved-id insert (the QUIC
+  bulk CREATE / MERGE fast path) adds each property to the exact
+  (label, key, value) index before its engine transaction commits; a
+  failure after that aborted the transaction and gave the slot back but
+  left the entries, naming a node that does not exist under a slot the
+  next insert reuses. They are taken back now, by the value hash computed
+  when added. QUIC refused a program with START TRANSACTION, a CREATE,
+  MERGE or DELETE and ROLLBACK in one message with 25001 (#830, from when
+  that path ignored inline transaction control); the executor runs and
+  rolls it back, and gRPC already accepted it. **User-visible:** such a
+  program now runs on QUIC. Regressions: `zig build
+  test-sonny6601-bulk-insert-index-abort`, `zig build
+  test-sonny6601-quic-inline-rollback`. **Still open (SONNY-6601):** item 1
+  (a half-failed adapter property write inside a statement transaction is
+  covered by geode's undo; not yet proven with an injected mid-write
+  failure), item 3 (a failed auto-commit engine write whose undo fails
+  poisons the shard without quarantining the graph), item 7 (multi-shard
+  transactions are not crash-atomic; design work).
+
+- **Label counters stay exact for names past 512 bytes; the label and
+  relationship-type index readers find such names; `setEdgeProperty` of a
+  missing edge fails (SONNY-6302 items 4 and 5).** Adding a node to a
+  label posting bumped the (graph, label) count with a key that, past its
+  512-byte stack buffer, was allocated after the insert and `catch
+  return`ed (the count stayed low); removing a label built the keys of its
+  counter decrements (graph and label, graph and tenant, label and
+  property) after the label was gone, with the same `catch return` (the
+  counts stayed high, and the tenant's label listing kept the label). The
+  key and the counter entry are now made before the insert, and
+  `removeNodeLabel`, `removeNodeLabelNoSave` and the create-path rollback
+  reserve the removers' key room first (`RemoverKeyRoom`, as the deletes
+  do). `getNodesByLabel`, `snapshotNodesByLabel`, `getEdgeIdsByType` and
+  the edge-type scan built their key on the stack only and answered "no
+  such label / type" past 512 bytes (`MATCH (n:L)` found nothing for such
+  a label); they look the key up without building it now.
+  **User-visible:** `setEdgeProperty` of an edge that does not exist is
+  `EdgeNotFound` (it returned success), as `setEdgePropertiesBatch` was.
+  Regression: `zig build test-sonny6302-label-count-and-missing-edge`.
+
+- **The storage adapter's engine-direct property reads report a read error
+  instead of an absent property (SONNY-6640).** The bulk relationship-MERGE
+  endpoint resolvers (`lookupNodeIdByLabelAndAllProps`,
+  `lookupPublicNodeIdByLabelAndAllProps`) verified each candidate with
+  `getNodeProperty(...) catch null`, so a read that failed reported an
+  existing endpoint as missing (the edge was skipped), and the ordered-index
+  column probe (`probeOrderedColumnClass`) declined the column on a read
+  error as if a value broke it. The error is returned now (a candidate the
+  engine no longer holds, `NodeNotFound`, is still no match), and so is a
+  failure to decode the value read. **API:** `probeOrderedColumnClass`
+  returns `!bool`. Regression: `zig build
+  test-sonny6640-adapter-property-read-errors`.
+
+- **A reload that runs out of memory fails instead of crashing the server;
+  a reload clears every hydration latch (SONNY-6639).**
+  `GraphStore.clearNodes` (the first step of `loadFromFile`, and of a Raft
+  snapshot install) registered the default graph again with allocations
+  that ended in `@panic` on OutOfMemory. The new registries are now built
+  before the reset frees anything: `clearNodes` returns
+  `error{OutOfMemory}!void` and changes nothing when it fails, and
+  `loadFromFile` reserves the registries of its failure-path reset up
+  front, so that reset cannot fail. `loadFromFile` also clears
+  `needs_reset` (SONNY-6605) with `done` and `failed`. **API:**
+  `clearNodes` callers handle the error (`try`). Regression: `zig build
+  test-sonny6639-reload-oom`.
+
+- **A graph whose WAL is damaged mid-log answers 58000 `WalCorrupted` with
+  an operator message (SONNY-6642).** graph-storage >= 0.4.20 refuses to
+  open a graph whose shard WAL has a damaged record followed by valid ones
+  (`WalCorrupted`; the log is left as it is). geode did not list the error
+  among the quarantine causes, so the graph answered the generic
+  "GraphQuarantined: the graph's indexes could not be loaded ...". It is
+  its own cause now, with a 58000 message that says the log is damaged and
+  to restore the graph from a backup or drop it (`docs/SERVER_FEATURES.md`).
+  Regression: `zig build test-sonny6642-wal-corrupted-quarantine` (a real
+  server SIGKILLed with its graph logs un-checkpointed, a middle record
+  damaged, the restarted server asked).
 
 - **Cluster Raft snapshots travel on the wire and carry the idempotency
   table; wal v0.1.25 (SONNY-6633, SONNY-6628).** geode's InstallSnapshot frame dropped the chunk data, the
@@ -8770,6 +8848,12 @@
   `zig build test-sonny2672-read-semantics-batch`.
 
 ### Removed
+
+- **`tests/stress_storage_massive.zig` and its `zig build stress` step
+  (SONNY-6640):** it did not compile (no `geode` import, `std.rand`,
+  `std.time.Timer`), and what it checked, a second `GraphStore` reloading
+  the first one's legacy per-store file, no longer exists (`loadFromFile`
+  reads the global storage adapter).
 
 - **`src/client/repl/repl_config.zig` `Config.load` / `save` (SONNY-6554):**
   written against removed Zig APIs and never compiled (no caller), with

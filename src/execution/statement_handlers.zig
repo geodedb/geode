@@ -1867,7 +1867,7 @@ test "executeShow tables reads persisted snapshot state" {
     try adapter.checkpointAll();
 
     // Simulate a stale compatibility cache; SHOW TABLES must re-read persisted storage.
-    store.clearNodes();
+    try store.clearNodes();
 
     var catalog_tmp = testing.tmpDir(.{});
     defer catalog_tmp.cleanup();
