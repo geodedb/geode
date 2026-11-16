@@ -734,8 +734,8 @@
             // 8271e65. Same dependencies as v0.4.21 (wal v0.1.25,
             // thread_pool v0.2.11, otel v0.1.28); same wal routing (build.zig
             // points its "wal" import at geode's v0.1.25).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.22#8271e65a9f91db6b24dd217bb58d58c8fa22e699",
-            .hash = "graph_storage-0.4.22-9UyJS99JNQAXVpnLwCKQgH1mhbdBoF1MsvEFAwzBVPST",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.24#07d3a689ad5880a024958f4997eca149ce80def4",
+            .hash = "graph_storage-0.4.24-9UyJS12SNgChQ1n3evsZfD_A1ureTnC-iNQG78ixRF9v",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting

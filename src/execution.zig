@@ -1751,6 +1751,36 @@ fn refuseQuarantinedProgram(allocator: std.mem.Allocator, program: *const ast.Pr
     if (graph_store.programQuarantineError(allocator, graphs, true)) |err| return err;
 }
 
+// CANARY: REQ=REQ-SONNY-6659-SINGLE-WRITER; FEATURE="TransactionManagement"; ASPECT=AutoCommitConflictRetry; STATUS=IMPL; OWNER=storage; UPDATED=2026-11-16
+/// SONNY-6659: retries of auto-commit statements that graph-storage refused
+/// with `WriteConflict` (`retryAfterWriteConflict`).
+pub var write_conflict_retries_total: std.atomic.Value(u64) = .init(0);
+
+/// SONNY-6659: how many times an auto-commit statement refused with
+/// `WriteConflict` runs again before the error (40001) is returned.
+pub const max_write_conflict_retries: u32 = 3;
+
+/// SONNY-6659: should a statement that failed with `err` run again?
+/// graph-storage (from v0.4.26) refuses a write to a page another open engine
+/// transaction has written (`error.WriteConflict`, matched by name so this
+/// compiles against engines without it); the refused transaction is aborted
+/// and the statement's changes are undone (`endStatementFailed` returns the
+/// error only when they all were). geode itself keeps one engine transaction
+/// open per shard per request, so the other writer is a concurrent one, and
+/// once it ends the statement can succeed. Only an auto-commit statement
+/// (outside an explicit transaction, which the client retries as a whole)
+/// of the outermost program, up to `max_write_conflict_retries` times, after
+/// 1, 2 and 4 ms.
+fn retryAfterWriteConflict(err: anyerror, state: TransactionState, attempt: u32) bool {
+    if (err != error.WriteConflict) return false;
+    if (state != .None or t_entry_depth != 1) return false;
+    if (attempt >= max_write_conflict_retries) return false;
+    _ = write_conflict_retries_total.fetchAdd(1, .monotonic);
+    log.warn("an auto-commit statement was refused by a concurrent writer (WriteConflict) and undone; running it again", &.{Attr.uint("attempt", attempt + 1)});
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromMilliseconds(@as(i64, 1) << @intCast(attempt)), .awake) catch {};
+    return true;
+}
+
 fn executeProgramInScratch(allocator: std.mem.Allocator, program: *const ast.Program, context: ExecutionContext) !ExecutionResult {
     installDecryptDecider(); // SONNY-6334
     // SONNY-3247: at the outermost entry point, the parameters are the
@@ -1842,7 +1872,20 @@ fn executeProgramInScratch(allocator: std.mem.Allocator, program: *const ast.Pro
             subquery_cache.restore(prev_cache);
             sub_cache.deinit();
         }
-        last_result = executeStatementWithContext(allocator, stmt, current_context) catch |err| {
+        // SONNY-6659: an auto-commit statement refused by a concurrent
+        // writer (WriteConflict) was undone; it runs again, a bounded number
+        // of times (`retryAfterWriteConflict`).
+        const stmt_result = retry: {
+            var attempt: u32 = 0;
+            while (true) : (attempt += 1) {
+                const r = executeStatementWithContext(allocator, stmt, current_context);
+                if (r) |_| {} else |err| {
+                    if (retryAfterWriteConflict(err, current_context.transaction_state, attempt)) continue;
+                }
+                break :retry r;
+            }
+        };
+        last_result = stmt_result catch |err| {
             // GAP-0917: a failure inside an active transaction marks it
             // FAILED — subsequent statements are rejected (see above) instead
             // of silently executing and committing.

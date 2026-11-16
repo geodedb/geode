@@ -3073,6 +3073,42 @@
 
 ### Fixed
 
+- **A discarded engine abort is counted and documented; the
+  `AbortNotUndone` quarantine test forces the case that still fails closed
+  (SONNY-6657, SONNY-6529).** Since the graph-storage v0.4.24 pin, an abort
+  its undo journal cannot undo (a caller-imaged page, a legacy property
+  chain) is completed by discarding the transaction's pages and redoing the
+  committed state: the abort succeeds and the graph is not quarantined.
+  `test-sonny6529-abort-quarantine` expected that abort to fail closed and
+  failed (`AbortWasUndone`). Its quarantine case now begins a second
+  transaction on the shard during the aborted one (graph-storage's overlap
+  rule, under which it cannot discard), and a new case checks that the
+  same abort without the overlap leaves the graph writable, checkpointing
+  and not quarantined, also after a reopen. New counter
+  `geode.runtime.storage_txn_aborts_discarded_total`;
+  docs/TRANSACTION_MANAGEMENT.md and the quarantine code comments describe
+  when `AbortNotUndone` still happens (overlap, cross-shard WAL tail
+  records, `abort_undo = .keep_writes`).
+
+- **A write on the shard of an open statement or session engine
+  transaction joins it (SONNY-6659).** graph-storage v0.4.26 refuses a
+  second open transaction's write to a page another open transaction wrote
+  (`WriteConflict`): a full-page WAL image one of them committed carried
+  the other's uncommitted bytes, and recovery replayed them. Two geode
+  writes began such a second transaction: a relationship between nodes on
+  different shards (stored on its source's shard) committed its own there
+  while the statement's or session's transaction was open on that shard,
+  and a node batch (`CREATE (:L), (:L), (:L)`, `createNodesBatch`) opened
+  one per shard, that shard included. Both now write in the open
+  transaction on its shard, so they commit, roll back and vanish at a
+  crash with it, and cost one engine commit fewer. Every other write
+  already joined it (SONNY-6472, SONNY-6529, SONNY-6658). **User-visible:**
+  a `WriteConflict` from the engine (a concurrent writer on the same shard)
+  answers SQLSTATE 40001 (it was 58000), and an auto-commit statement it
+  refused, which is undone, runs again up to 3 times first; see
+  docs/TRANSACTION_MANAGEMENT.md. Regression: `zig build
+  test-sonny6659-geode-single-writer`.
+
 - **`geode query` frees its connect and login error messages
   (SONNY-6662).** The HELLO handshake formatted "Error: <server message>"
   (a refused login), "Failed to send HELLO" and "Failed to receive HELLO

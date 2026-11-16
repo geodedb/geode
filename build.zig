@@ -10907,7 +10907,7 @@ pub fn build(b: *std.Build) void {
     const sonny6529_aq_tests = b.addTest(.{ .root_module = sonny6529_aq_test_mod });
     const run_sonny6529_aq_tests = b.addRunArtifact(sonny6529_aq_tests);
     shardDep(test_step, &run_sonny6529_aq_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny6529_aq_step = b.step("test-sonny6529-abort-quarantine", "Run SONNY-6529 regression in process (an engine abort graph-storage 0.4.16 cannot undo - a caller-imaged page - fails with AbortNotUndone and quarantines its graph: reads and writes refused with the 58000 operator message, other graphs serve, the shard refuses writes, storage_txn_aborts_not_undone_total counts it; a reopen serves the graph at its committed state without the aborted record; an undone abort is counted in storage_txn_aborts_undone_total and leaves the graph serving; LabelIdSpaceExhausted answers 54000)");
+    const sonny6529_aq_step = b.step("test-sonny6529-abort-quarantine", "Run SONNY-6529 regression in process (an engine abort graph-storage can neither undo nor discard - a caller-imaged page, overlapped by another transaction on its shard - fails with AbortNotUndone and quarantines its graph: reads and writes refused with the 58000 operator message, other graphs serve, the shard refuses writes, storage_txn_aborts_not_undone_total counts it; a reopen serves the graph at its committed state without the aborted record; the same abort without the overlap is discarded (SONNY-6657), counted in storage_txn_aborts_discarded_total, and leaves the graph writable, checkpointing and not quarantined, also after a reopen; an undone abort is counted in storage_txn_aborts_undone_total and leaves the graph serving; LabelIdSpaceExhausted answers 54000)");
     sonny6529_aq_step.dependOn(&run_sonny6529_aq_tests.step);
     // SONNY-6594 (1): a ROLLBACK (or a write's undo capture) that cannot read
     // a body fails loudly instead of skipping the change. gRPC in process.
@@ -11441,6 +11441,24 @@ pub fn build(b: *std.Build) void {
     const run_sonny6658l_tests = b.addRunArtifact(sonny6658l_tests);
     shardDep(test_step, &run_sonny6658l_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6658-statement-undo-log", "Run SONNY-6658 regression (in-process, durable undo log installed: a one-shard auto-commit statement, CREATE or MATCH ... SET of one node, commits one engine transaction and writes nothing to txn_undo.wal; a multi-shard one is logged and sealed with COMMITTED, a failed one undone and sealed with ROLLED_BACK, and the log is left empty)").dependOn(&run_sonny6658l_tests.step);
+
+    // SONNY-6659: a write made while a statement or session engine
+    // transaction is open on its shard joins it (graph-storage v0.4.26 refuses
+    // a second open writer of a page with WriteConflict): a cross-shard
+    // relationship and a node batch; WriteConflict answers 40001; and over a
+    // real server killed with SIGKILL, both in an explicit transaction commit,
+    // roll back and vanish with it.
+    const sonny6659_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6659_geode_single_writer.zig"), .target = target, .optimize = optimize });
+    sonny6659_test_mod.link_libc = true;
+    sonny6659_test_mod.addImport("geode", root_mod);
+    sonny6659_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6659_test_mod.addImport("schema", schema_mod);
+    sonny6659_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6659_tests = b.addTest(.{ .root_module = sonny6659_test_mod });
+    const run_sonny6659_tests = b.addRunArtifact(sonny6659_tests);
+    spawnsBuiltGeode(sonny6659_tests);
+    shardDep(test_step, &run_sonny6659_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6659-geode-single-writer", "Run SONNY-6659 regression (a cross-shard relationship and a node batch written while a statement engine transaction is open on their shard join it, beginning no second transaction there; graph-storage WriteConflict answers 40001; over a real server killed with SIGKILL, both inside an explicit transaction commit, roll back and vanish at the kill with it)").dependOn(&run_sonny6659_tests.step);
 
     // SONNY-2979: txn_undo.wal's record codec (plain and sealed), torn-tail
     // handling, loser selection per boot, and the file's lifecycle.

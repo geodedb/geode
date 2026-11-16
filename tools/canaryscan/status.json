@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T10:08:10.730015574Z",
+  "generated_at": "2026-11-16T12:25:52.282688445Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -82850,6 +82850,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6657-DISCARD-ABORT",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "DiscardedAbortCounter",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6529_abort_quarantine.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6658-AUTOCOMMIT-ATOMIC",
       "features": [
         {
@@ -82922,6 +82941,79 @@
           ],
           "tests": [
             "tests/test_sonny6658_autocommit_crash_atomicity.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6659-SINGLE-WRITER",
+      "features": [
+        {
+          "feature": "TransactionManagement",
+          "aspect": "AutoCommitConflictRetry",
+          "status": "IMPL",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "WriteConflictSqlstate",
+          "status": "TESTED",
+          "files": [
+            "src/server/proto_util.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6659_geode_single_writer.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "NodeBatchJoins",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6659_geode_single_writer.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "CrossShardEdgeJoins",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6659_geode_single_writer.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "TransactionManagement",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6659_geode_single_writer.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6659_geode_single_writer.zig"
           ],
           "benches": [],
           "owner": "storage",
@@ -88057,9 +88149,9 @@
       "BENCHED": 126,
       "COMPLETE": 2,
       "EXEMPT": 209,
-      "IMPL": 565,
+      "IMPL": 566,
       "STUB": 18,
-      "TESTED": 4356
+      "TESTED": 4361
     },
     "by_aspect": {
       "2PC": 3,
@@ -88258,6 +88350,7 @@
       "AuthorizeSnapshotRead": 1,
       "AutoCalibrationLogic": 2,
       "AutoCommitAbortNotUndone": 1,
+      "AutoCommitConflictRetry": 1,
       "AutoKeyChecks": 1,
       "Avg": 1,
       "AvgAgg": 1,
@@ -88772,6 +88865,7 @@
       "CrossPathConcurrency": 1,
       "CrossPlatform": 1,
       "CrossProcessExclusion": 1,
+      "CrossShardEdgeJoins": 1,
       "CrossSubsystemReachability": 1,
       "CrossTenantE2E": 1,
       "CrossThreadRecordRegression": 1,
@@ -88934,6 +89028,7 @@
       "DisableSurvivesRestart": 1,
       "DisabledPolicy": 1,
       "DiscardGraphGrant": 1,
+      "DiscardedAbortCounter": 1,
       "DiscoveryRows": 2,
       "DisjointLoopbackAddresses": 1,
       "DiskEncryption": 1,
@@ -90232,6 +90327,7 @@
       "NoUncompiledPersistenceOrSimulatedKmsClaims": 1,
       "NoUnmeasuredTdeOverheadClaim": 1,
       "NoUnreadDeployConfig": 1,
+      "NodeBatchJoins": 1,
       "NodeCache": 1,
       "NodeCompare": 1,
       "NodeCreateAutoTenant": 1,
@@ -90961,7 +91057,7 @@
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
       "RegistrySwap": 1,
-      "Regression": 422,
+      "Regression": 423,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -91935,6 +92031,7 @@
       "WriteChokepoint": 2,
       "WriteChokepointEveryLabel": 1,
       "WriteChokepointLabels": 1,
+      "WriteConflictSqlstate": 1,
       "WriteDoesNotFullRebuild": 1,
       "WriteGate": 1,
       "WriteHarnessStoresOnTmpfs": 1,

@@ -5245,11 +5245,17 @@ REQ-SONNY-6647-USER-PERMISSIONS,OfflineAuthStoreSafety,PermissionsAreGraphGrants
 REQ-SONNY-6647-USER-PERMISSIONS,OfflineAuthStoreSafety,PermissionsAreGraphGrants,TESTED,tests/test_sonny6647_user_permissions.zig,,,security,2026-11-15
 REQ-SONNY-6651-EMPTY-GRAPH-PAYLOAD,DistributedCluster,DecodeEmptyGraphAsDefault,TESTED,src/distributed/cluster_replication.zig,tests/test_sonny6651_empty_graph_payload.zig,,distributed,2026-11-16
 REQ-SONNY-6651-EMPTY-GRAPH-PAYLOAD,DistributedCluster,EmptyGraphIsDefault,TESTED,tests/test_sonny6651_empty_graph_payload.zig,tests/test_sonny6651_empty_graph_payload.zig,,distributed,2026-11-16
+REQ-SONNY-6657-DISCARD-ABORT,TransactionManagement,DiscardedAbortCounter,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6529_abort_quarantine.zig,,storage,2026-11-16
 REQ-SONNY-6658-AUTOCOMMIT-ATOMIC,TransactionManagement,StatementSeal,TESTED,src/execution.zig,tests/test_sonny6658_autocommit_crash_atomicity.zig,,storage,2026-11-16
 REQ-SONNY-6658-AUTOCOMMIT-ATOMIC,TransactionManagement,StatementDurableUndo,TESTED,src/statement_undo.zig,tests/test_sonny6658_autocommit_crash_atomicity.zig,,storage,2026-11-16
 REQ-SONNY-6658-AUTOCOMMIT-ATOMIC,TransactionManagement,StatementEndCommit,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6658_autocommit_crash_atomicity.zig,,storage,2026-11-16
 REQ-SONNY-6658-AUTOCOMMIT-ATOMIC,TransactionManagement,StatementLogCost,TESTED,tests/test_sonny6658_statement_undo_log.zig,tests/test_sonny6658_statement_undo_log.zig,,storage,2026-11-16
 REQ-SONNY-6658-STATEMENT-KILL-HOOK,TransactionManagement,CrashPointHook,TESTED,src/statement_undo.zig,tests/test_sonny6658_autocommit_crash_atomicity.zig,,storage,2026-11-16
+REQ-SONNY-6659-SINGLE-WRITER,TransactionManagement,AutoCommitConflictRetry,IMPL,src/execution.zig,,,storage,2026-11-16
+REQ-SONNY-6659-SINGLE-WRITER,TransactionManagement,WriteConflictSqlstate,TESTED,src/server/proto_util.zig,tests/test_sonny6659_geode_single_writer.zig,,storage,2026-11-16
+REQ-SONNY-6659-SINGLE-WRITER,TransactionManagement,NodeBatchJoins,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6659_geode_single_writer.zig,,storage,2026-11-16
+REQ-SONNY-6659-SINGLE-WRITER,TransactionManagement,CrossShardEdgeJoins,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6659_geode_single_writer.zig,,storage,2026-11-16
+REQ-SONNY-6659-SINGLE-WRITER,TransactionManagement,Regression,TESTED,tests/test_sonny6659_geode_single_writer.zig,tests/test_sonny6659_geode_single_writer.zig,,storage,2026-11-16
 REQ-SONNY-6662-CLI-AUTH-LEAK,QueryCli,ConnectErrorsFreed,TESTED,tests/test_sonny6662_cli_auth_leak.zig,tests/test_sonny6662_cli_auth_leak.zig,,cli,2026-11-16
 REQ-SONNY-6662-CLI-ERROR-MSG-FREED,QueryCli,ConnectErrorsFreed,TESTED,src/cli/main.zig,tests/test_sonny6662_cli_auth_leak.zig,,cli,2026-11-16
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13

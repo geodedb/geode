@@ -2082,6 +2082,12 @@ pub const Quarantine = enum(u8) {
 /// writers hold shard pointers of the graph's engine between lock
 /// acquisitions. A restart reopens every graph from disk.
 ///
+/// `AbortNotUndone` reaches here only for an abort graph-storage could
+/// neither undo nor, from v0.4.24, discard (SONNY-6657: the transaction
+/// overlapped another on its shard, cross-shard records in the WAL tail, or
+/// `abort_undo = .keep_writes`); a discarded abort succeeds and quarantines
+/// nothing (`abortUnmirroredTxn`).
+///
 /// Nothing keeps writing to the shard: graph-storage refuses its writes,
 /// commits and checkpoints after `AbortNotUndone`, and geode refuses every
 /// write to the graph before it reaches the engine. The security graph's
@@ -2104,7 +2110,16 @@ pub fn quarantineAfterTxnFailure(mg: *ManagedGraph, cause: Quarantine, err: anye
 /// in-memory copy (the adapter's write methods return the error, and the
 /// store applies a write to memory only after its engine write returned):
 /// graph-storage undoes the transaction, which is exactly the state the
-/// store holds. `AbortNotUndone` quarantines the graph; it is never ignored.
+/// store holds. SONNY-6657: one its undo journal cannot undo (a page the
+/// caller imaged, a legacy property chain, ...) graph-storage v0.4.24
+/// completes by discarding the transaction's pages and redoing the committed
+/// state, which is the same state: the abort succeeds, the shard keeps
+/// serving and the graph is not quarantined
+/// (`storage_txn_aborts_discarded_total`). Only when it cannot discard
+/// either (another transaction was open on the shard at some point during
+/// this one, cross-shard records in the WAL tail, `abort_undo =
+/// .keep_writes`) is it `AbortNotUndone`, which quarantines the graph; it
+/// is never ignored.
 fn abortUnmirroredTxn(mg: *ManagedGraph, shard: *gs.GraphEngine, txn: gs.TxnId, site: []const u8) void {
     abortCounted(shard, txn) catch |err| noteAbortFailure(mg, err, site);
 }
@@ -2126,13 +2141,23 @@ fn abortUnmirroredShardedTxn(mg: *ManagedGraph, txn: gs.TxnId, site: []const u8)
 /// writer, around its abort, never by the metrics scrape.
 pub var storage_txn_aborts_undone_total: std.atomic.Value(u64) = .init(0);
 pub var storage_txn_aborts_not_undone_total: std.atomic.Value(u64) = .init(0);
+// CANARY: REQ=REQ-SONNY-6657-DISCARD-ABORT; FEATURE="TransactionManagement"; ASPECT=DiscardedAbortCounter; STATUS=TESTED; TEST=tests/test_sonny6529_abort_quarantine.zig; OWNER=storage; UPDATED=2026-11-16
+/// SONNY-6657: graph-storage's `Metrics.txn_aborts_discarded` (from
+/// v0.4.24), summed the same way: aborts its undo journal could not undo
+/// that it completed by discarding the transaction's pages and redoing the
+/// committed state. Such an abort succeeds: the shard keeps serving and
+/// geode does not quarantine the graph. Exported as
+/// `geode.runtime.storage_txn_aborts_discarded_total`.
+pub var storage_txn_aborts_discarded_total: std.atomic.Value(u64) = .init(0);
 
 fn abortCounted(shard: *gs.GraphEngine, txn: gs.TxnId) anyerror!void {
     const undone0 = shard.metrics.txn_aborts_undone;
     const not_undone0 = shard.metrics.txn_aborts_not_undone;
+    const discarded0 = shard.metrics.txn_aborts_discarded;
     defer {
         _ = storage_txn_aborts_undone_total.fetchAdd(shard.metrics.txn_aborts_undone -% undone0, .monotonic);
         _ = storage_txn_aborts_not_undone_total.fetchAdd(shard.metrics.txn_aborts_not_undone -% not_undone0, .monotonic);
+        _ = storage_txn_aborts_discarded_total.fetchAdd(shard.metrics.txn_aborts_discarded -% discarded0, .monotonic);
     }
     return shard.abortTxn(txn);
 }
@@ -7797,9 +7822,21 @@ pub const StorageAdapter = struct {
         // are skipped.
         const shard_count = gs.sharded_engine.SHARD_COUNT;
         var shard_txns: [shard_count]?gs.TxnId = [_]?gs.TxnId{null} ** shard_count;
+        // CANARY: REQ=REQ-SONNY-6659-SINGLE-WRITER; FEATURE="TransactionManagement"; ASPECT=NodeBatchJoins; STATUS=TESTED; TEST=tests/test_sonny6659_geode_single_writer.zig; OWNER=storage; UPDATED=2026-11-16
+        // SONNY-6659: on the shard of the statement's or session's engine
+        // transaction the batch writes in it (it commits or is undone with
+        // it), rather than in a second transaction open there beside it,
+        // which graph-storage 0.4.26 refuses (`WriteConflict`).
+        const joined_shard: ?usize = if (currentStatementTxnForGraph(graph_name)) |s| blk: {
+            const si = shardedTxnShard(s.txn_id);
+            if (si >= shard_count) break :blk null;
+            shard_txns[si] = shardedTxnLocal(s.txn_id);
+            break :blk si;
+        } else null;
         // SONNY-6529: graph-storage undoes each shard's part of the failed
         // batch (the store takes the nodes only once this returns).
         errdefer for (mg.engine.shards, 0..) |shard, si| {
+            if (si == joined_shard) continue;
             if (shard_txns[si]) |t| abortUnmirroredTxn(mg, shard, t, "node batch create");
         };
 
@@ -7810,7 +7847,7 @@ pub const StorageAdapter = struct {
         var allocated: usize = 0;
         errdefer for (out[0..allocated]) |id| {
             const si = gs.shard_count.shardOfNode(id);
-            releaseFailedNodeSlot(mg.engine.shards[si], id, shard_txns[si], true);
+            releaseFailedNodeSlot(mg.engine.shards[si], id, shard_txns[si], si != joined_shard);
         };
         var i: usize = 0;
         while (i < n) : (i += 1) {
@@ -7832,6 +7869,7 @@ pub const StorageAdapter = struct {
         // statement's undo (the batch's intents) is on disk first.
         try statement_undo.beforeOwnEngineCommit();
         for (mg.engine.shards, 0..) |shard, si| {
+            if (si == joined_shard) continue;
             if (shard_txns[si]) |t| try shard.commitTxn(t);
             shard_txns[si] = null;
         }
@@ -7983,29 +8021,39 @@ pub const StorageAdapter = struct {
         // shards correctly.  See
         // docs/bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md §3.2.
         const same_shard = gs.shard_count.shardOfNode(from_id) == gs.shard_count.shardOfNode(to_id);
+        // CANARY: REQ=REQ-SONNY-6659-SINGLE-WRITER; FEATURE="TransactionManagement"; ASPECT=CrossShardEdgeJoins; STATUS=TESTED; TEST=tests/test_sonny6659_geode_single_writer.zig; OWNER=storage; UPDATED=2026-11-16
         // SONNY-6658: `statementLocalTxn`; a create that commits its own
         // engine transaction has the statement's undo on disk first.
-        if (!same_shard) try statement_undo.beforeOwnEngineCommit();
-        if (same_shard) {
-            if (try self.statementLocalTxn(graph_name, from_id)) |local| {
-                // GAP-ENT-0024: the public-id-carrying path uses the
-                // CO-LOCATED txn add (the id rides both durable adjacency
-                // records; strictly fewer pages than addEdgeTxn's two-node
-                // write and no `to`-record read). The legacy public_id==0
-                // surface keeps the historical addEdgeTxn byte-for-byte.
-                const _edge_id = if (public_id != 0)
-                    try mg.shardEngineForNode(from_id).addEdgeColocatedTxnWithPublicId(from_id, to_id, rel_type, local, public_id)
-                else
-                    try mg.shardEngineForNode(from_id).addEdgeTxn(from_id, to_id, rel_type, local);
-                _ok_12e = true;
-                // OTel Task 13: graph data model mutation counter (fast path).
-                _om12e.recordEdgeMutation(.create, graph_name, .success);
-                return _edge_id;
-            }
+        // SONNY-6659: an edge is stored on its source's shard wherever its
+        // target is (co-location), so a cross-shard edge joins the
+        // statement's or session's transaction on that shard too, through the
+        // co-located add (it never reads `to`'s record). It committed a
+        // transaction of its own there (`ShardedGraphEngine.addEdge`) while
+        // that one was open: two open writers of the shard's pages, which
+        // graph-storage 0.4.26 refuses (`WriteConflict`).
+        if (try self.statementLocalTxn(graph_name, from_id)) |local| {
+            // GAP-ENT-0024: the public-id-carrying path uses the
+            // CO-LOCATED txn add (the id rides both durable adjacency
+            // records; strictly fewer pages than addEdgeTxn's two-node
+            // write and no `to`-record read). The legacy public_id==0
+            // surface keeps the historical addEdgeTxn byte-for-byte for a
+            // same-shard edge, and `addEdge`'s co-located add otherwise.
+            const from_shard = mg.shardEngineForNode(from_id);
+            const _edge_id = if (public_id != 0)
+                try from_shard.addEdgeColocatedTxnWithPublicId(from_id, to_id, rel_type, local, public_id)
+            else if (same_shard)
+                try from_shard.addEdgeTxn(from_id, to_id, rel_type, local)
+            else
+                try from_shard.addEdgeColocatedTxn(from_id, to_id, rel_type, local);
+            _ok_12e = true;
+            // OTel Task 13: graph data model mutation counter (fast path).
+            _om12e.recordEdgeMutation(.create, graph_name, .success);
+            return _edge_id;
         }
         // GAP-ENT-0024: auto-commit — ShardedGraphEngine.addEdge already
         // routes to the co-located add on shard(from); the WithPublicId
         // variant is the same single-shard WAL txn carrying the inline id.
+        // No transaction of this thread is open on shard(from) here.
         const _edge_id2 = (if (public_id != 0)
             mg.engine.addEdgeColocatedWithPublicId(from_id, to_id, rel_type, public_id)
         else
@@ -12192,6 +12240,7 @@ pub const StorageAdapter = struct {
         reg.register("adapter_checkpoint_failures_total", &self.checkpoint_failures_total) catch {};
         reg.register("storage_txn_aborts_undone_total", &storage_txn_aborts_undone_total) catch {}; // SONNY-6529
         reg.register("storage_txn_aborts_not_undone_total", &storage_txn_aborts_not_undone_total) catch {}; // SONNY-6529
+        reg.register("storage_txn_aborts_discarded_total", &storage_txn_aborts_discarded_total) catch {}; // SONNY-6657
     }
 
     /// Bulk write ops applied since the last checkpoint.
