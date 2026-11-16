@@ -16862,6 +16862,35 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6586-offline-grant-rule", "Run SONNY-6586 follow-up regression (offline geode grant / revoke follow the online GRANT <privilege> ON GRAPH rule: READ, WRITE, SCHEMA or ALL only - admin is a role, refused to anyone - on one --graph, never '*' or none, to a user that exists; a grant stores the GraphGrant records GRANT stores (ALL is three) and no free-form Permission record, revoke removes them and refuses a privilege not held, and the chain verifies)").dependOn(&run_tests.step);
     }
+    // SONNY-6647: an online REVOKE of a privilege not held is refused, as
+    // offline (a real server); geode user permissions lists the user's role
+    // and GraphGrant records, and geode auth prune-legacy-permissions removes
+    // the inert Permission records the old offline grant stored (real CLI).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6647_revoke_not_held.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6647-revoke-not-held", "Run SONNY-6647 item 1 regression (against a real geode serve: REVOKE READ / ALL ON GRAPH of a privilege the user does not hold there, and geode.auth.revoke of '*' with no such grant, are refused with SQLSTATE 42704; a held privilege is revoked once, and REVOKE ALL succeeds when any of the three is held)").dependOn(&run_tests.step);
+    }
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6647_user_permissions.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+        mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6647-user-permissions", "Run SONNY-6647 item 2 regression (geode user permissions prints the user's role and its GraphGrant records by graph, not the store's Permission records or invented privileges, and refuses a user that does not exist; geode auth prune-legacy-permissions --dry-run lists the inert Permission records the old offline grant stored, and without --dry-run removes them with the chain still verifying and the grants untouched)").dependOn(&run_tests.step);
+    }
     // SONNY-6586: geode query --param's JSON conversion frees a list or map
     // that fails part-way (allocation-failure sweep, depth limit).
     {
