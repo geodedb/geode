@@ -989,9 +989,23 @@ pub const ClusterCoordinator = struct {
         // from this node's own snapshot; the replay rebuilds the rest. A
         // snapshot that cannot be read refuses the start (a retried
         // statement would otherwise be applied twice).
+        // SONNY-6665: raft v0.2.6 persists a snapshot received from the
+        // leader before the store is restored from it; a node that stopped
+        // in between has a Raft log compacted past what its store reflects
+        // (raft_store.index, which a restore and this node's own snapshots
+        // record), and restores it now, before any entry after it replays.
         if (try raft.localSnapshotData(allocator)) |snap_data| {
             defer allocator.free(snap_data);
-            try raft_apply.seedFromLocalSnapshot(snap_data);
+            const point = raft.snapshotPoint();
+            if (point.index > raft_apply.storeRaftIndex() and raft_apply.isRestorableSnapshot(snap_data)) {
+                log.warn("raft: the store is behind this node's Raft snapshot (stopped before restoring it); restoring it now", &.{
+                    Attr.uint("snapshot_index", point.index),
+                    Attr.uint("store_raft_index", raft_apply.storeRaftIndex()),
+                });
+                try raft_apply.restoreSnapshotCallbackFn(allocator, snap_data, point.index, point.term);
+            } else {
+                try raft_apply.seedFromLocalSnapshot(snap_data);
+            }
         }
 
         var cluster_state = try initClusterState(allocator);
@@ -1073,6 +1087,10 @@ pub const ClusterCoordinator = struct {
 
     pub fn deinit(self: *ClusterCoordinator) void {
         self.stop();
+        // SONNY-6667: nothing ticks or steps the node now; its restore and
+        // snapshot threads, which use the store and the apply targets freed
+        // below (the idempotency table), end before any of them is freed.
+        self.raft.quiesce();
         // RC-A: `stop()` has joined every worker + the health loop, so no thread
         // can still touch the inbound registry. Free any record a worker left
         // behind (defensive — the normal path deregisters on exit) and release the

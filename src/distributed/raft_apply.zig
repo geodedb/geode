@@ -412,12 +412,28 @@ pub fn createSnapshotCallbackFn(allocator: Allocator, index: u64, term: u64) any
     if (graph_store_mod.getCurrentGlobalStore() != store) return error.RaftSnapshotNeedsDurableStore;
     const adapter = graph_store_mod.getGlobalAdapter() orelse return error.RaftSnapshotNeedsDurableStore;
     const data = try raft_snapshot_manager.encodeDurableSnapshot(allocator, adapter, g_idempotency_dedup);
+    errdefer allocator.free(data);
+    // SONNY-6665: the store reflects `index` (the node holds its applies),
+    // so a restart does not take this node's own snapshot for one received
+    // and not yet restored (cluster.zig compares the two).
+    if (index > storeRaftIndex()) {
+        try adapter.recordStoreRaftIndex(.{ .index = index, .term = term });
+        g_store_raft_index.store(index, .release);
+    }
     log.info("raft apply: durable store snapshotted", &.{
         Attr.uint("snapshot_index", index),
         Attr.uint("snapshot_term", term),
         Attr.uint("bytes", data.len),
     });
     return data;
+}
+
+/// SONNY-6665: a snapshot `restoreSnapshotCallbackFn` can restore into the
+/// registered store (a durable one, GRS3, into the durable store).
+pub fn isRestorableSnapshot(data: []const u8) bool {
+    const store = g_store orelse return false;
+    if (graph_store_mod.getCurrentGlobalStore() != store or graph_store_mod.getGlobalAdapter() == null) return false;
+    return raft_snapshot_manager.isDurableSnapshot(data);
 }
 
 /// SONNY-6636 (b): a node restarting with a snapshot of its own in its Raft

@@ -5258,6 +5258,15 @@ REQ-SONNY-6659-SINGLE-WRITER,TransactionManagement,CrossShardEdgeJoins,TESTED,sr
 REQ-SONNY-6659-SINGLE-WRITER,TransactionManagement,Regression,TESTED,tests/test_sonny6659_geode_single_writer.zig,tests/test_sonny6659_geode_single_writer.zig,,storage,2026-11-16
 REQ-SONNY-6662-CLI-AUTH-LEAK,QueryCli,ConnectErrorsFreed,TESTED,tests/test_sonny6662_cli_auth_leak.zig,tests/test_sonny6662_cli_auth_leak.zig,,cli,2026-11-16
 REQ-SONNY-6662-CLI-ERROR-MSG-FREED,QueryCli,ConnectErrorsFreed,TESTED,src/cli/main.zig,tests/test_sonny6662_cli_auth_leak.zig,,cli,2026-11-16
+REQ-SONNY-6665-CLUSTER-SNAPSHOT-RESUME,Raft Snapshot Persistence,MultiProcessRegression,TESTED,tests/test_sonny6665_cluster_snapshot_resume.zig,tests/test_sonny6665_cluster_snapshot_resume.zig,,distributed,2026-11-16
+REQ-SONNY-6665-SNAPSHOT-CHUNK-DROP-HOOK,Raft Snapshot Persistence,LostChunkHook,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6665_cluster_snapshot_resume.zig,,distributed,2026-11-16
+REQ-SONNY-6665-SNAPSHOT-RESUME,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6665_snapshot_resume.zig,tests/test_sonny6665_snapshot_resume.zig,,distributed,2026-11-16
+REQ-SONNY-6665-SNAPSHOT-STREAM,Raft Snapshot Persistence,StreamedOffInnerMutex,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6665_snapshot_resume.zig,,distributed,2026-11-16
+REQ-SONNY-6665-STAGED-INSTALL-OFF-MUTEX,Raft Snapshot Persistence,SyncStagedSnapshotUnlocked,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6665_install_lock_hold.zig,,distributed,2026-11-16
+REQ-SONNY-6665-STAGED-INSTALL-OFF-MUTEX,Raft Snapshot Persistence,Regression,TESTED,tests/test_sonny6665_install_lock_hold.zig,tests/test_sonny6665_install_lock_hold.zig,,distributed,2026-11-16
+REQ-SONNY-6665-WIRE-FIELDS,Raft Snapshot Persistence,FrameRoundTrip,TESTED,tests/test_sonny6665_wire_fields.zig,tests/test_sonny6665_wire_fields.zig,,distributed,2026-11-16
+REQ-SONNY-6667-DEDUP-RESTORE-RACE,DistributedCluster,Regression,TESTED,tests/test_sonny6667_dedup_restore_race.zig,tests/test_sonny6667_dedup_restore_race.zig,,distributed,2026-11-16
+REQ-SONNY-6667-QUIESCE-BEFORE-FREE,DistributedCluster,RestoreJoinedBeforeApplyTargetsFreed,TESTED,src/distributed/raft_consensus.zig,tests/test_sonny6667_dedup_restore_race.zig,,distributed,2026-11-16
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,src/execution/crud_operations.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,tests/test_sonny738_create_query_one_commit.zig,tests/test_sonny738_create_query_one_commit.zig,,storage,2026-11-13
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,ListsRecordsUniversal,TESTED,src/eval.zig,tests/test_sonny738_equality_consistency.zig,,eval,2026-11-13

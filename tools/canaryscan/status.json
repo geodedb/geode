@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T12:25:52.282688445Z",
+  "generated_at": "2026-11-16T13:47:45.829836295Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83060,6 +83060,172 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6665-CLUSTER-SNAPSHOT-RESUME",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "MultiProcessRegression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6665_cluster_snapshot_resume.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6665_cluster_snapshot_resume.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6665-SNAPSHOT-CHUNK-DROP-HOOK",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "LostChunkHook",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6665_cluster_snapshot_resume.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6665-SNAPSHOT-RESUME",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6665_snapshot_resume.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6665_snapshot_resume.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6665-SNAPSHOT-STREAM",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "StreamedOffInnerMutex",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6665_snapshot_resume.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6665-STAGED-INSTALL-OFF-MUTEX",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "SyncStagedSnapshotUnlocked",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6665_install_lock_hold.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        },
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6665_install_lock_hold.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6665_install_lock_hold.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6665-WIRE-FIELDS",
+      "features": [
+        {
+          "feature": "Raft Snapshot Persistence",
+          "aspect": "FrameRoundTrip",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6665_wire_fields.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6665_wire_fields.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6667-DEDUP-RESTORE-RACE",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6667_dedup_restore_race.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6667_dedup_restore_race.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6667-QUIESCE-BEFORE-FREE",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "RestoreJoinedBeforeApplyTargetsFreed",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/raft_consensus.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6667_dedup_restore_race.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-16"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -88151,7 +88317,7 @@
       "EXEMPT": 209,
       "IMPL": 566,
       "STUB": 18,
-      "TESTED": 4361
+      "TESTED": 4370
     },
     "by_aspect": {
       "2PC": 3,
@@ -89473,6 +89639,7 @@
       "Foundation": 1,
       "FrameBudget": 1,
       "FrameProbe": 1,
+      "FrameRoundTrip": 1,
       "Framework": 1,
       "FreeExtendedReadCopy": 1,
       "FreshActiveConnServiceableWithin": 1,
@@ -90057,6 +90224,7 @@
       "Lookup": 1,
       "LosslessEngineFileSnapshot": 1,
       "LostAcknowledgement": 1,
+      "LostChunkHook": 1,
       "LowestHolderEntry": 1,
       "MAGIC_NUMBERS": 2,
       "MATCH": 1,
@@ -90216,7 +90384,7 @@
       "MultiNodeMatch": 2,
       "MultiPolicy": 1,
       "MultiPollWorkers": 1,
-      "MultiProcessRegression": 1,
+      "MultiProcessRegression": 2,
       "MultiPropertyMergeCoordinator": 1,
       "MultiPropertyMergeFastPath": 1,
       "MultiPropertyMergeIndexedProbe": 1,
@@ -91057,7 +91225,7 @@
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
       "RegistrySwap": 1,
-      "Regression": 423,
+      "Regression": 426,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -91150,6 +91318,7 @@
       "RestoreDataIntegrity": 1,
       "RestoreFromReadySnapshot": 1,
       "RestoreIntoStore": 1,
+      "RestoreJoinedBeforeApplyTargetsFreed": 1,
       "RestoreThreadWhilePaused": 1,
       "RestoresAdjacencyEntriesFromMirror": 1,
       "ResultBuilder": 1,
@@ -91635,6 +91804,7 @@
       "StreamReadPollCadence": 1,
       "StreamSchemaUnread": 1,
       "StreamToFile": 1,
+      "StreamedOffInnerMutex": 1,
       "Streaming": 3,
       "StreamingIntegration": 1,
       "StreamingJoin": 1,
@@ -91679,6 +91849,7 @@
       "SuppressOutput": 1,
       "SwallowedTypeErrorRelay": 1,
       "SwapPinnedReader": 1,
+      "SyncStagedSnapshotUnlocked": 1,
       "SyntaxHighlight": 1,
       "SyntaxValidation": 1,
       "SyslogTests": 1,

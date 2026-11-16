@@ -3108,6 +3108,59 @@
   refused, which is undone, runs again up to 3 times first; see
   docs/TRANSACTION_MANAGEMENT.md. Regression: `zig build
   test-sonny6659-geode-single-writer`.
+- **A snapshot restore no longer uses a freed idempotency table
+  (SONNY-6667).** Under load `test-sonny6633-snapshot-wire` panicked
+  "incorrect alignment" in `IdempotencyDedup.deinit` from `replaceFrom` on
+  the restore thread. `ClusterCoordinator.deinit` freed the table (and the
+  applied configuration and 2PC coordinator) before `RaftNode.deinit`
+  joined the restore and snapshot threads, which run without
+  `inner_mutex` since SONNY-6636; and nothing serialised the table between
+  apply, restore and the snapshot copy. The table now has one owner lock
+  (`IdempotencyDedup.mutex`, a leaf: `record`, `lookup`, `serialize`, and
+  `replaceFrom`'s swap), and `deinit` first calls `RaftNode.quiesce`, which
+  joins both threads. The test itself freed its table before its nodes and
+  counted rounds a paused (restoring) node spent; both fixed. The
+  "InstallSnapshot ... failed: ChecksumMismatch" warnings in that run are
+  its second test, which damages the digest on purpose.
+  `test-sonny6631-apply-hydration-off-mutex` reports the longest Raft
+  `advancePersist()` (`RaftNode.stats.persist_max_ns`, new) and bounds the
+  probe's wait less that: its one failure under load (276 ms against a
+  250 ms election timeout, 0 ms apply) was disk and scheduling time, not
+  hydration. Test: `test-sonny6667-dedup-restore-race`.
+
+- **Raft snapshots: a lost chunk resumes, and no snapshot I/O runs under
+  the Raft node lock (SONNY-6665; raft v0.2.6).** geode's Raft frame and
+  its conversions dropped `InstallSnapshotResponse.last_index` and
+  `next_offset` (raft v0.2.5): when one InstallSnapshot chunk was lost the
+  leader saw a refusal, backed off and sent the whole snapshot again from
+  offset 0. Both now cross the wire (raft_schema fields 3 and 4; absent
+  from an older peer they read as 0, as raft 0.2.4 behaved), and the
+  leader resumes at the chunk the follower expects. The digest and
+  configuration of an InstallSnapshot were already carried (SONNY-6633).
+  The snapshot I/O left `inner_mutex`: a node's own snapshot is staged
+  (written and synced) on the snapshot thread with raft
+  `snapshotPoint` / `Storage.stageSnapshot` and only committed (renames,
+  log compaction) under the lock (`commitSnapshot`; a snapshot installed
+  meanwhile drops it); a leader streams a follower's snapshot chunk by
+  chunk after releasing the lock (`Config.stream_snapshots`,
+  `Ready.snapshot_sends`, `streamSnapshot` from
+  `FileStorage.openSnapshotReader`) instead of reading it whole inside
+  `tick()`; a follower writes the chunks it receives to a staged file
+  (`Config.stage_received_snapshots`, no size cap with FileStorage) and
+  syncs it with the lock released between `ready()` and
+  `advancePersist()`, which only renames it. The state machine is now
+  restored after `advancePersist()`, from the committed snapshot file; a
+  node stopped in between restores it at startup (its store's
+  `raft_store.index`, which its own snapshots now record too, is behind
+  the Raft snapshot). Measured (`test-sonny6665-install-lock-hold`, 64
+  MiB snapshot, Debug): the longest wait for a follower's `inner_mutex`
+  during the install fell from 2269 ms to 44 ms. Under GEODE_TDE_KEY the
+  sealed snapshot is still written under the lock (the TDE storage has no
+  staging; it stages in memory). Tests: `test-sonny6665-wire-fields`,
+  `test-sonny6665-snapshot-resume`, `test-sonny6665-install-lock-hold`,
+  `test-sonny6665-cluster-snapshot-resume` (three `geode serve`
+  processes; the Debug-only `GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS` hook
+  loses one chunk).
 
 - **`geode query` frees its connect and login error messages
   (SONNY-6662).** The HELLO handshake formatted "Error: <server message>"
