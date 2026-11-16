@@ -8228,6 +8228,42 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step(spec[1], spec[2]).dependOn(&run_tests.step);
     }
+    // SONNY-6586: no CLI or MCP answer claims what did not happen (real
+    // binaries, a real server for the MCP query tool).
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6586_cli_truth.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("sonny6586_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6586-cli-truth", "Run SONNY-6586 regression (geode authn stepup-check/stepup-mark are refused; user, role, policy, grant, revoke and auth reseal name a data directory that does not exist instead of DataDirLockUnavailable and create nothing; grant and revoke answer --help and usage errors without opening the auth store, so a held or missing data directory does not matter; query, shell and tenant refuse --log-level with exit 2; with the server unreachable the MCP schema and stats resources are an error document with no counts or labels; the MCP query tool passes list and map parameters to a real server; no doc names --validate-config and geode serve refuses it)").dependOn(&run_tests.step);
+    }
+    // SONNY-6593 (2): the gRPC RPCs geode serves are exactly the RPCs
+    // src/proto/geode.proto declares (a real server).
+    {
+        const opts = b.addOptions();
+        opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6593_grpc_service_contract.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        mod.addImport("sonny6593_options", opts.createModule());
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6593-grpc-service-contract", "Run SONNY-6593 item 2 regression (against a real geode serve --listen-grpc: every RPC src/proto/geode.proto's service GeodeService declares is served, including Savepoint, RollbackTo, Backup, Restore and UploadBackup, and every other /geode.GeodeService/ name, including the undeclared CdcDiag and CdcCtrl aliases, answers grpc-status 12 UNIMPLEMENTED)").dependOn(&run_tests.step);
+    }
     // SONNY-6544 (1): the table for src/client/dsn_credentials.zig.
     // SONNY-6550: the file re-exports geode-client-zig's config.redact, so
     // the table runs against the library's implementation.
