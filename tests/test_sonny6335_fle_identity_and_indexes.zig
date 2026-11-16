@@ -347,7 +347,15 @@ test "SONNY-6335 (3): an inline property map on an encrypted node or edge field 
     // The stored ciphertext itself matches for nobody.
     const ids = e.f.st.getNodesByLabel(graph_store.DEFAULT_GRAPH_NAME, "M6335") orelse return error.NoNodes;
     const stored = (try e.f.st.getNodePropertyOrError(ids[0], "ssn")).?.String;
-    const q = try std.fmt.allocPrint(e.arena.allocator(), "MATCH (n:M6335 {{ssn: '{s}'}}) RETURN n.k", .{stored});
+    // The ciphertext is random bytes: escape the literal's quote and
+    // backslash so the query names exactly the stored value, whatever the
+    // nonce produced (a raw `'` or `\` in it broke the parse).
+    var lit: std.ArrayList(u8) = .empty;
+    for (stored) |b| {
+        if (b == '\'' or b == '\\') try lit.append(e.arena.allocator(), '\\');
+        try lit.append(e.arena.allocator(), b);
+    }
+    const q = try std.fmt.allocPrint(e.arena.allocator(), "MATCH (n:M6335 {{ssn: '{s}'}}) RETURN n.k", .{lit.items});
     try testing.expectEqual(@as(usize, 0), (try ints(&e, "pii", q)).len);
     try testing.expectEqual(@as(usize, 0), (try ints(&e, "other", q)).len);
 
