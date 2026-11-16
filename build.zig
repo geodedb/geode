@@ -8305,6 +8305,17 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6531-mcp-ownership", "Run SONNY-6531 item 1 regression (every MCP method geode implements - initialize, ping, tools/list, tools/call for each tool incl. error results, resources/list, resources/read for each resource incl. unknown URIs and an unreachable server, resources/templates/list, prompts/list, prompts/get for each prompt incl. unknown, completion/complete, logging/setLevel, subscribe/unsubscribe, notifications and a batch - frees each handler result exactly once under std.testing.allocator, with no backend, an undialable DSN, a dead endpoint and a real geode serve; a real geode mcp --stdio Debug session answers every request and exits with no leak report)").dependOn(&run_tests.step);
     }
+    // SONNY-6585: a JSON-RPC error from geode's MCP server carries a message
+    // and data naming what was wrong (mcp v0.1.23 setErrorDetail).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6585_mcp_error_detail.zig"), .target = target, .optimize = optimize });
+        mod.addImport("mcp_server", gap0516_server_mod);
+        mod.link_libc = true;
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6585-mcp-error-detail", "Run SONNY-6585 regression (through the real mcp v0.1.23 processMessage dispatch: an unknown tool is -32602 'Unknown tool: <name>' with data.name, an unknown prompt -32602 'Unknown prompt: <name>', a missing, unexpected or non-string prompt argument -32602 naming it, an unknown resource -32002 'Resource not found: <uri>' with an escaped data.uri, a cursor on tools/list, resources/list or prompts/list -32602 with data.cursor; a failing notification gets no reply; every response is one line of JSON)").dependOn(&run_tests.step);
+    }
     // SONNY-6552: every MCP response has its MCP 2025-11-25 result shape
     // or JSON-RPC error code, through the real processMessage dispatch and
     // a real `geode mcp --stdio` child (one message per stdout line).
