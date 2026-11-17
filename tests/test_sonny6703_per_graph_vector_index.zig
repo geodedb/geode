@@ -147,7 +147,7 @@ const Harness = struct {
         return "ok";
     }
 
-    /// The length of the list in row 0, column 0 of `query` (knn ids).
+    /// The integer in row 0, column 0 of `query` (`size(knn(...))`).
     fn listLen(self: *Harness, query: []const u8) !usize {
         const res = self.exec(query) catch |err| {
             std.debug.print("{s}: {s}\n", .{ query, @errorName(err) });
@@ -155,8 +155,8 @@ const Harness = struct {
         };
         if (res.rows.len != 1 or res.rows[0].len != 1) return error.UnexpectedShape;
         return switch (res.rows[0][0]) {
-            .List => |l| l.len,
-            else => error.NotAList,
+            .Int => |n| @intCast(n),
+            else => error.NotAnInteger,
         };
     }
 };
@@ -242,12 +242,17 @@ test "SONNY-6703: DROP INDEX and DROP GRAPH take away one graph's index only" {
     try testing.expectEqualStrings("VectorMetricMismatch", h.outcome(k_cos));
     try testing.expectEqual(@as(usize, 1), try h.listLen(k_l2));
 
-    // DROP GRAPH tears the graph's index down with it; a re-created graph of
-    // the same name starts without one.
+    // DROP GRAPH tears the graph's runtime index down with its data: the
+    // re-created graph of the same name (its catalog row is still there) is
+    // rebuilt from the NEW graph's rows only, and g1 is untouched.
     try h.run("DROP GRAPH g2");
     try h.run("CREATE GRAPH g2");
     try h.run("USE GRAPH g2");
     try h.run("CREATE (:V {id: 3, emb: vectorf32('[1.0, 0.0]')})");
+    try h.run("CREATE (:V {id: 4, emb: vectorf32('[0.0, 1.0]')})");
+    try h.run("CREATE (:V {id: 5, emb: vectorf32('[1.0, 1.0]')})");
+    try testing.expectEqual(@as(usize, 3), try h.listLen(k_l2));
+    try h.run("USE GRAPH g1");
     try testing.expectEqual(@as(usize, 1), try h.listLen(k_cos));
 }
 

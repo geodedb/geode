@@ -105,16 +105,16 @@ test "USING vector / USING HNSW / USING vector_f32 all build a real runtime inde
         // Before the fix this was the outcome: catalog row present, index absent.
         return error.UsingVectorBuiltNoIndex;
     };
-    try testing.expectEqualStrings("uv_vector", built_vector);
+    try testing.expectEqualStrings("uv\x1fuv_vector", built_vector);
 
     _ = try h.exec("CREATE INDEX uv_hnsw ON UV2 (emb_h) USING HNSW WITH (metric = 'l2')");
     const built_hnsw = indexForProperty("emb_h") orelse return error.UsingHnswBuiltNoIndex;
-    try testing.expectEqualStrings("uv_hnsw", built_hnsw);
+    try testing.expectEqualStrings("uv\x1fuv_hnsw", built_hnsw);
 
     // The spelling that already worked keeps working.
     _ = try h.exec("CREATE INDEX uv_f32 ON UV3 (emb_f) USING vector_f32 WITH (metric = 'l2')");
     const built_f32 = indexForProperty("emb_f") orelse return error.UsingVectorF32BuiltNoIndex;
-    try testing.expectEqualStrings("uv_f32", built_f32);
+    try testing.expectEqualStrings("uv\x1fuv_f32", built_f32);
 }
 
 test "a USING vector index is queryable: knn returns the nearest rows" {
@@ -159,14 +159,14 @@ test "the validated metric reaches the built index instead of the hardcoded l2" 
 
     // Before the fix every one of these was `.l2`: the metric was validated at
     // DDL and then discarded at the build site.
-    const cos = mgr.advanced_vector_indexes.get("uvm_cos") orelse return error.MissingCosineIndex;
+    const cos = mgr.advanced_vector_indexes.get("uvm\x1fuvm_cos") orelse return error.MissingCosineIndex;
     try testing.expectEqual(@as(@TypeOf(cos.metric), .cosine), cos.metric);
 
-    const dot = mgr.advanced_vector_indexes.get("uvm_dot") orelse return error.MissingDotIndex;
+    const dot = mgr.advanced_vector_indexes.get("uvm\x1fuvm_dot") orelse return error.MissingDotIndex;
     try testing.expectEqual(@as(@TypeOf(dot.metric), .dot_product), dot.metric);
 
     // No WITH (metric = …) keeps the historical default.
-    const def = mgr.advanced_vector_indexes.get("uvm_def") orelse return error.MissingDefaultIndex;
+    const def = mgr.advanced_vector_indexes.get("uvm\x1fuvm_def") orelse return error.MissingDefaultIndex;
     try testing.expectEqual(@as(@TypeOf(def.metric), .l2), def.metric);
 }
 

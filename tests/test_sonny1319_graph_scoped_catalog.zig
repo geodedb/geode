@@ -265,18 +265,23 @@ test "SONNY-1319: index and constraint catalogs are graph-scoped (IF NOT EXISTS,
     try h.run("USE GRAPH default");
     try testing.expectEqual(@as(usize, 0), try h.constraints("uniq_k"));
 
-    // ---- a process-wide (name-keyed) runtime index cannot be twinned ----
-    // The HNSW index behind `USING HNSW` is one process-wide object per name
-    // (SONNY-1223); a second graph's same-named one would share it. That is
-    // refused loudly — the IF NOT EXISTS form included — not swallowed.
+    // ---- a vector index is per graph (SONNY-6703); a name-keyed one is not ----
+    // The HNSW index behind `USING HNSW` is keyed by graph and name at runtime
+    // (SONNY-6703, which superseded the SONNY-1223 refusal of a second graph's
+    // same-named one): both graphs get their own. The other advanced types
+    // (spatial, network, ...) are still one process-wide object per name, and a
+    // same-named one in another graph is refused loudly, IF NOT EXISTS included.
     try h.run("USE GRAPH g1");
     try h.run("CREATE INDEX vec_1319 ON V1319 (emb) USING HNSW WITH (metric = 'l2')");
+    try h.run("CREATE INDEX net_1319 ON N1319 (addr) USING network_cidr");
     try h.run("USE GRAPH g2");
     try testing.expectEqual(@as(usize, 0), try h.indexes("vec_1319"));
-    try testing.expectEqualStrings("IndexNameInUseByOtherGraph", try h.refusal("CREATE INDEX IF NOT EXISTS vec_1319 ON V1319 (emb) USING HNSW WITH (metric = 'l2')"));
-    try testing.expectEqualStrings("IndexNameInUseByOtherGraph", try h.refusal("CREATE INDEX vec_1319 FOR (n:Item) ON (n.k)"));
-    try testing.expectEqual(@as(usize, 0), try h.indexes("vec_1319"));
-    try testing.expectEqualStrings("IndexNotFound", try h.refusal("DROP INDEX vec_1319"));
+    try h.run("CREATE INDEX vec_1319 ON V1319 (emb) USING HNSW WITH (metric = 'l2')");
+    try testing.expectEqual(@as(usize, 1), try h.indexes("vec_1319"));
+    try testing.expectEqualStrings("IndexNameInUseByOtherGraph", try h.refusal("CREATE INDEX IF NOT EXISTS net_1319 ON N1319 (addr) USING network_cidr"));
+    try testing.expectEqual(@as(usize, 0), try h.indexes("net_1319"));
+    try testing.expectEqualStrings("IndexNotFound", try h.refusal("DROP INDEX net_1319"));
+    try h.run("DROP INDEX vec_1319");
     try h.run("USE GRAPH g1");
     try testing.expectEqual(@as(usize, 1), try h.indexes("vec_1319"));
 

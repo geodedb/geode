@@ -2860,7 +2860,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 };
             }
 
-            try statement_dispatcher.ensureAdvancedRuntimeIndex(allocator, index_name, ci.label, ci.properties, ci.index_type, ci.metric);
+            try statement_dispatcher.ensureAdvancedRuntimeIndex(allocator, index_graph, index_name, ci.label, ci.properties, ci.index_type, ci.metric);
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
@@ -3130,7 +3130,10 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                     }
                     if (statement_dispatcher.runtimeAdvancedIndexTypeFromCatalog(removed.value.index_type)) |kind| {
                         if (index_manager.getGlobalIndexManager()) |manager| {
-                            _ = manager.dropAdvancedIndex(removed.value.name, kind) catch false;
+                            // SONNY-6703: a vector index is keyed by its graph and name.
+                            const rt_key = if (kind == .vector_f32) try index_manager.runtimeKey(allocator, removed.value.graph, removed.value.name) else null;
+                            defer if (rt_key) |k| allocator.free(k);
+                            _ = manager.dropAdvancedIndex(rt_key orelse removed.value.name, kind) catch false;
                         }
                     }
                     // CANARY: REQ=REQ-ENG-3912-VECTOR-DIM-LIFECYCLE; FEATURE="VectorIndex"; ASPECT=DropClearsDimPin; STATUS=TESTED; TEST=tests/test_eng3912_dim_pinning.zig; OWNER=index; UPDATED=2026-08-25
@@ -3143,6 +3146,10 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                     // also covers `USING vector` (a spelling
                     // runtimeAdvancedIndexTypeFromCatalog does not map).
                     if (index_manager.getGlobalIndexManager()) |manager| {
+                        // SONNY-6703: the pin of a graph's index is keyed with it.
+                        const pin_key = try index_manager.runtimeKey(allocator, removed.value.graph, removed.value.name);
+                        defer allocator.free(pin_key);
+                        manager.unregisterVectorDimValidation(pin_key);
                         manager.unregisterVectorDimValidation(removed.value.name);
                     }
                     cat.allocator.free(removed.key);
@@ -3459,6 +3466,7 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
             // dimension enforced against rows that no longer exist.
             if (index_manager.getGlobalIndexManager()) |manager| {
                 manager.dropUnindexedVectorDimsForGraph(graph_name);
+                manager.dropVectorIndexesForGraph(graph_name); // SONNY-6703
             }
 
             // Task 9: a graph leaving the visible-graphs set affects every

@@ -142,9 +142,29 @@ fn indexNameForProperty(property: []const u8) ?[]const u8 {
 const VectorF32 = geode.types.vector.VectorF32;
 const VectorIndexWrapper = geode.index.advanced_types_index.VectorIndexWrapper;
 
+/// SONNY-6703: a vector index is keyed by its graph and name at runtime
+/// (`index_manager.runtimeKey`); the tests name it by its catalog name.
+fn keyOf(mgr: *index_manager.IndexManager, index_name: []const u8) []const u8 {
+    var it = mgr.advanced_property_indexes.keyIterator();
+    while (it.next()) |key_ptr| {
+        const key = key_ptr.*;
+        if (std.mem.eql(u8, key, index_name)) return key;
+        if (std.mem.indexOfScalar(u8, key, 0x1f)) |sep| {
+            if (std.mem.eql(u8, key[sep + 1 ..], index_name)) return key;
+        }
+    }
+    return index_name;
+}
+
+/// The catalog name inside a runtime key.
+fn plainName(key: []const u8) []const u8 {
+    const sep = std.mem.indexOfScalar(u8, key, 0x1f) orelse return key;
+    return key[sep + 1 ..];
+}
+
 fn wrapperFor(index_name: []const u8) !*VectorIndexWrapper {
     const mgr = index_manager.getGlobalIndexManager() orelse return error.NoIndexManager;
-    return mgr.advanced_vector_indexes.get(index_name) orelse error.IndexNotBuilt;
+    return mgr.advanced_vector_indexes.get(keyOf(mgr, index_name)) orelse error.IndexNotBuilt;
 }
 
 /// How many entries the BUILT index actually answers with. `scanVectorKnn`
@@ -154,7 +174,7 @@ fn wrapperFor(index_name: []const u8) !*VectorIndexWrapper {
 fn indexedNeighbourCount(index_name: []const u8, query: []const f32, k: u32) !usize {
     const mgr = index_manager.getGlobalIndexManager() orelse return error.NoIndexManager;
     const results = try mgr.queryAdvancedVectorIndexWithMetric(
-        index_name,
+        keyOf(mgr, index_name),
         VectorF32.fromSlice(query),
         k,
         (try wrapperFor(index_name)).metric,
@@ -221,7 +241,7 @@ test "ADVANCED-INDEX-RESTART: the HNSW index comes back after a restart, with it
         );
         return error.AdvancedIndexNotRebuilt;
     };
-    try testing.expectEqualStrings("air_l", rebuilt);
+    try testing.expectEqualStrings("air_l", plainName(rebuilt));
 
     // The rebuilt index is POPULATED, not an empty shell that falls back on
     // every search.
@@ -502,7 +522,7 @@ test "ADVANCED-INDEX-RESTART: an index with no explicit metric keeps the documen
     _ = try h.exec("MATCH (n:AirDef) RETURN knn('emb_x', vectorf32([1.0,2.0,3.0]), 2, 'l2')");
 
     const name = indexNameForProperty("emb_x") orelse return error.AdvancedIndexNotRebuilt;
-    try testing.expectEqualStrings("air_def", name);
+    try testing.expectEqualStrings("air_def", plainName(name));
     try testing.expectEqual(VectorIndexWrapper.DistanceMetric.l2, (try wrapperFor("air_def")).metric);
     try testing.expectEqual(
         @as(usize, 2),

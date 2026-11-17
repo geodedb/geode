@@ -23,9 +23,10 @@
 //       execution, never on catalog reload, so after a restart `SHOW INDEXES`
 //       still listed the index while mixed dimensions were accepted silently.
 //
-// (c) in the triage — "scope the registry per graph" — is deliberately NOT
-// done; see the cross-graph test at the bottom for why doing so would be a
-// data-integrity regression, and what the real fix is.
+// (c) in the triage — "scope the registry per graph" — was deliberately not
+// done while the HNSW index was one process-wide object per name. SONNY-6703
+// made the index per graph and scoped the pin with it; see the cross-graph
+// section of the lifecycle test.
 
 const std = @import("std");
 const testing = std.testing;
@@ -196,29 +197,29 @@ test "ENG-3912: vector dimension pin lifecycle (refusal, DROP, restart, cross-gr
     _ = try h.exec("CREATE (:P12B {id: 4, emb: vectorf32('[4.0, 3.0, 2.0, 1.0]')})");
     try testing.expectEqual(@as(usize, 2), try h.countRows("MATCH (n:P12B) RETURN n"));
 
-    // ---- (c) cross-graph: the pin is INTENTIONALLY process-wide ----
+    // ---- (c) cross-graph: the pin is the index's graph's own (SONNY-6703) ----
     //
-    // The triage recommended scoping the registry per graph because a write in
-    // graph B is refused by a pin established in graph A. That refusal is
-    // correct as the engine stands: the HNSW index is a PROCESS-GLOBAL object
-    // keyed by index name, and both `populateAdvancedIndex` and the
-    // incremental `rebuildAdvancedIndexesForProperty` path select nodes by
-    // label+property with NO graph filter — so graph B's vectors land in graph
-    // A's index. Scoping the validator alone would therefore re-admit
-    // mixed-dimension vectors into one index, which is exactly the corruption
-    // GAP-0918 closed. The real fix is to make vector indexes graph-scoped
-    // (the way fulltext indexes already are, one engine per graph directory);
-    // that is a design change, and the registry should be scoped in the same
-    // change. This assertion pins the CURRENT, sound behaviour so the eventual
-    // graph-scoping work has to update it deliberately.
+    // This used to pin the process-wide scope: the HNSW index was ONE object
+    // keyed by index name, and its backfill selected nodes by label+property
+    // with no graph filter, so graph B's vectors would have landed in graph
+    // A's index. SONNY-6703 made the index per graph (keyed by graph and
+    // name, backfill and incremental inserts select the graph's rows only), and
+    // the pin follows: a write in graph B is checked against graph B's own
+    // data (no index there: the per-graph pin of ENG-3922), while graph A's
+    // index keeps refusing a mixed dimension in graph A.
     _ = try h.exec("CREATE GRAPH eng3912_other");
     _ = try h.exec("USE GRAPH eng3912_other");
+    _ = try h.exec("CREATE (:P12A {id: 100, emb: vectorf32('[5.0, 5.0, 5.0]')})");
     try testing.expectError(
         error.VectorDimensionMismatch,
-        h.exec("CREATE (:P12A {id: 100, emb: vectorf32('[5.0, 5.0, 5.0]')})"),
+        h.exec("CREATE (:P12A {id: 101, emb: vectorf32('[5.0, 5.0, 5.0, 5.0]')})"),
     );
-    // The dimension graph A established is still writable from graph B.
-    _ = try h.exec("CREATE (:P12A {id: 101, emb: vectorf32('[5.0, 5.0, 5.0, 5.0]')})");
+    // Graph A's index is unaffected: its dimension is still 4.
+    _ = try h.exec("USE GRAPH eng3912");
+    try testing.expectError(
+        error.VectorDimensionMismatch,
+        h.exec("CREATE (:P12A {id: 102, emb: vectorf32('[5.0, 5.0, 5.0]')})"),
+    );
 
     // ---- (d) restart parity ----
     _ = try h.exec("USE GRAPH eng3912");

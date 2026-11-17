@@ -3250,6 +3250,32 @@
 
 ### Fixed
 
+- **A vector (HNSW) index is the graph's own; `knn()` never answers
+  unvalidated (SONNY-6703, supersedes the SONNY-1223 refusal).** The runtime
+  index was one process-wide object per index NAME. knn() used it only when
+  its label was the sole carrier of the property in the session's graph and
+  in every other graph, so a same-named vector property in another graph (or
+  a second label in the same graph) silently turned the answer into a scan
+  that never checked the query metric against the index's: `knn('emb', q, k,
+  'cosine')` on an `l2` index answered instead of 42704. Now the runtime
+  index is keyed by graph and name (`index_manager.runtimeKey`): CREATE INDEX,
+  its backfill, every rebuild, the incremental inserts of a write, the
+  dimension pin, DROP INDEX, DROP GRAPH and the lazy rebuild after a restart
+  all act on the graph's own index, so two graphs can hold a vector index
+  of one name with different metrics and dimensions (CREATE INDEX of such a
+  name in a second graph is accepted; it was 42P07), a carrier in another
+  graph does not revoke an index, and a knn answered by a scan (a second label
+  carries the property, or a tenant scope) still checks the query metric
+  against the index of the session's graph (`VectorMetricMismatch`, 42704).
+  Behaviour change: a vector dimension pin is the index's graph's (a graph
+  without the index pins its own data, ENG-3922); the other advanced index
+  types (spatial, network, signature, interval, JSONB, domain) are unchanged
+  and still refuse a same-named index in another graph. An engine-wide
+  catalog row (written before rows carried a graph) still serves every
+  graph. Regression: `zig build test-sonny6703-per-graph-vector-index`;
+  `test_sonny1319`, `test_eng3912` and the index tests that name a runtime
+  index now use its graph-qualified key.
+
 - **A first start killed before it finished no longer bricks the data
   directory (SONNY-6708).** `geode serve` on an empty data directory
   persists the admin user and the `admin` role and only then seals the

@@ -347,8 +347,8 @@ fn checkIndexScope(mode: h.Mode) !void {
     const mine2 = try s.idOf("mine2");
     const manager = geode.index_manager.getGlobalIndexManager() orelse return error.NoIndexManager;
     const near = [_]f32{ 0.0, 1.0 };
-    try manager.insertIntoAdvancedVectorIndex("doc_emb", geode.types.vector.VectorF32.fromSlice(&near), foreign);
-    try manager.insertIntoAdvancedVectorIndex("doc_emb", geode.types.vector.VectorF32.fromSlice(&near), other_graph);
+    try manager.insertIntoAdvancedVectorIndex("default\x1fdoc_emb", geode.types.vector.VectorF32.fromSlice(&near), foreign);
+    try manager.insertIntoAdvancedVectorIndex("default\x1fdoc_emb", geode.types.vector.VectorF32.fromSlice(&near), other_graph);
     try s.restrict("Hidden");
 
     // Ranked by distance to [0, 1]: the two planted rows 0, mine 1.41,

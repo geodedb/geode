@@ -24,8 +24,12 @@ ON label(property[, ...])
 - `index_name`: Name of the index to create. A name is one index of a
   graph (SONNY-6294): a second `CREATE INDEX` with a name the graph already
   uses, on any label, is refused with 42P07 (`DuplicateIndex`), and with
-  `IF NOT EXISTS` does nothing. Another graph may use the name, except for
-  vector and the other advanced index types (`IndexNameInUseByOtherGraph`).
+  `IF NOT EXISTS` does nothing. Another graph may use the name, including for
+  a vector (HNSW) index, which is the graph's own (SONNY-6703): its metric,
+  dimension and rows are that graph's. The other advanced index types
+  (spatial, network, signature, interval, JSONB, domain) are still one
+  structure per name, so a second graph's same-named one is refused
+  (`IndexNameInUseByOtherGraph`, 42P07).
 - `label`: Node label to index
 - `property`: Property or properties to index
 - `USING`: Optional. Specifies index type (default: btree)

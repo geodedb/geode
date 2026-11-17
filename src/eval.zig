@@ -3426,8 +3426,11 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
     // allocate must not turn a working query into an error.
     // SONNY-6607 (3): not silently: an index that cannot be rebuilt is logged
     // with its cause (the scan below still answers).
+    // SONNY-6703: the index is the session graph's own: another graph's
+    // same-named property neither revokes it nor is served by it.
+    const knn_graph = (try currentKnnScanScope()).graph;
     @import("execution/statement_dispatcher.zig")
-        .ensureAdvancedVectorIndexForProperty(allocator, property_name) catch |err| {
+        .ensureAdvancedVectorIndexForPropertyInGraph(allocator, knn_graph, property_name) catch |err| {
         const logging = @import("logging");
         logging.scoped("eval").warn("knn: the vector index for the property could not be rebuilt; answering by a scan", &.{
             logging.Attr.string("property", property_name),
@@ -3461,9 +3464,15 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
     // O(store) authority scan before it is ever used.
     var index_consulted = false;
     if (index_manager.getGlobalIndexManager()) |manager| {
-        if (try manager.findAdvancedVectorIndexForPropertyAlloc(allocator, property_name)) |index_name| {
+        if (try manager.findAdvancedVectorIndexForPropertyInGraphAlloc(allocator, knn_graph, property_name)) |index_name| {
             defer allocator.free(index_name);
             index_consulted = true;
+            // SONNY-6703: the query metric is checked against the index's
+            // whether the index or the scan answers. The scan used to answer
+            // without the check whenever the index was not authoritative.
+            if (manager.vectorIndexMetric(index_name)) |index_metric| {
+                if (index_metric != metric) return error.VectorMetricMismatch;
+            }
             if (advancedVectorIndexIsAuthoritative(allocator, manager, index_name, property_name)) {
                 if (try knnFromVectorIndex(allocator, manager, index_name, query_vec.vector, k, metric)) |ranked| return ranked;
             }
@@ -3590,7 +3599,9 @@ fn advancedVectorIndexIsAuthoritative(
     // With a tenant hierarchy that is more than its own tag, so every
     // tenant's carriers count (the storage filter is exact).
     const tenant = if (scope.row) |row| row.storageTenant() else scope.tenant;
-    return store.labelSolelyCarriesProperty(scope.graph, tenant, label, property_name);
+    // SONNY-6703: an index of this graph holds this graph's rows only, so a
+    // carrier in another graph neither revokes it nor needs it.
+    return store.labelSolelyCarriesPropertyScoped(scope.graph, tenant, label, property_name, manager.advancedIndexIsGraphScoped(index_name));
 }
 
 /// Which adjacency `indegree()` / `outdegree()` count.

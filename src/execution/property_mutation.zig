@@ -179,7 +179,10 @@ fn maintainAdvancedIndexesForNodeWrite(
         return;
     }
 
-    if (!manager.tryIncrementalInsertForProperty(label, property, node_id, prop)) {
+    // SONNY-6703: the node's own graph picks the indexes that take it; one
+    // that cannot be read falls to the rebuild, which selects by graph.
+    const node_graph: ?[]const u8 = if (store.nodes.getOrHydratePtr(node_id) catch null) |n| n.graph_name else null;
+    if (!manager.tryIncrementalInsertForPropertyInGraph(node_graph, label, property, node_id, prop)) {
         rebuildAdvancedIndexesForProperty(store, label, property);
     }
 }

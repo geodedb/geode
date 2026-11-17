@@ -5311,6 +5311,22 @@ pub const GraphStore = struct {
         label: []const u8,
         property: []const u8,
     ) bool {
+        return self.labelSolelyCarriesPropertyScoped(graph_name, filter_tenant, label, property, false);
+    }
+
+    /// SONNY-6703: `labelSolelyCarriesProperty` for an index that serves ONE
+    /// graph (`ignore_other_graphs`): a carrier of the property in another
+    /// graph is not a row that index could hold, so it does not revoke the
+    /// index's authority. A second label, or another tenant, in `graph_name`
+    /// still does.
+    pub fn labelSolelyCarriesPropertyScoped(
+        self: *GraphStore,
+        graph_name: []const u8,
+        filter_tenant: ?[]const u8,
+        label: []const u8,
+        property: []const u8,
+        ignore_other_graphs: bool,
+    ) bool {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.perf_c_refcount_mutex.lockUncancelable(io);
         defer self.perf_c_refcount_mutex.unlock(io);
@@ -5331,7 +5347,10 @@ pub const GraphStore = struct {
                 // A carrier of this property outside the session's graph (or,
                 // when the session is tenant-scoped, outside its tenant) means
                 // the index can hold rows this query must not see.
-                if (!std.mem.eql(u8, entry_graph, graph_name)) return false;
+                if (!std.mem.eql(u8, entry_graph, graph_name)) {
+                    if (ignore_other_graphs) continue;
+                    return false;
+                }
                 if (filter_tenant) |tid| {
                     if (!std.mem.eql(u8, entry_tenant, tid)) return false;
                 }
