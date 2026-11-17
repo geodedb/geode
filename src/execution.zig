@@ -3459,6 +3459,36 @@ fn executeStatementWithContextInner(allocator: std.mem.Allocator, stmt: ast.Stat
                 };
             }
 
+            // CANARY: REQ=REQ-SONNY-6720-DROP-GRAPH-CATALOG; FEATURE="SchemaCatalog"; ASPECT=DropGraphRemovesRows; STATUS=TESTED; TEST=tests/test_sonny6720_drop_graph_catalog.zig; OWNER=catalog; UPDATED=2026-11-17
+            // SONNY-6720: the graph's index and constraint rows go with it
+            // (saved), so a graph re-created under the name starts with no
+            // inherited definitions, across a restart too. What ran for them
+            // is torn down as DROP INDEX / DROP CONSTRAINT tear it down.
+            {
+                const gone = try cat.removeGraphRows(allocator, graph_name);
+                defer allocator.free(gone.indexes);
+                defer allocator.free(gone.constraints);
+                for (gone.indexes) |kv| {
+                    if (statement_dispatcher.runtimeAdvancedIndexTypeFromCatalog(kv.value.index_type)) |kind| {
+                        // The vector indexes of the graph were torn down below
+                        // by `dropVectorIndexesForGraph`; the other advanced
+                        // types are keyed by name alone.
+                        if (kind != .vector_f32) {
+                            if (index_manager.getGlobalIndexManager()) |manager| {
+                                _ = manager.dropAdvancedIndex(kv.value.name, kind) catch false;
+                            }
+                        }
+                    }
+                    cat.allocator.free(kv.key);
+                    cat.freeIndexInfo(kv.value);
+                }
+                for (gone.constraints) |kv| {
+                    if (catalog_mod.fencesFastPaths(kv.value)) graph_store.removeUniqueFence(kv.value.graph);
+                    cat.allocator.free(kv.key);
+                    cat.freeConstraintInfo(kv.value);
+                }
+            }
+
             // CANARY: REQ=REQ-ENG-3922-VECTOR-DIM-GUARD; FEATURE="VectorIndex"; ASPECT=UnindexedDimGraphDrop; STATUS=TESTED; TEST=tests/test_eng3922_dim_guard.zig; OWNER=index; UPDATED=2026-08-29
             // ENG-3922(a): the per-graph vector-dimension pins describe THIS
             // graph's committed data. The data is gone, so the pins must go with

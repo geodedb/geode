@@ -3250,6 +3250,23 @@
 
 ### Fixed
 
+- **DROP GRAPH removes the graph's catalog rows (SONNY-6720).** DROP GRAPH
+  dropped the graph's data and its graph record and left every index and
+  constraint row scoped to it in the catalog and in `geode_catalog.dat`: a
+  graph re-created under the name inherited them (SHOW INDEXES and SHOW
+  CONSTRAINTS listed definitions nobody created, the old UNIQUE or NOT NULL
+  enforced against the new graph), and the name of a name-keyed advanced
+  index (spatial, network, ...) stayed taken in every other graph (42P07).
+  Now it removes, with one save, every index row of every type and every
+  constraint row whose graph is the dropped one (`Catalog.removeGraphRows`;
+  if the save fails nothing is removed and the statement fails), gives back
+  the unique fence each enforced constraint held, and drops the runtime
+  index of a name-keyed row. Rows of other graphs and engine-wide rows stay.
+  FLE field metadata is not graph-scoped (it is keyed by label and field), so
+  there is none to remove. Rows an older binary left behind for a graph it
+  dropped stay until they are dropped by name. Regression:
+  `zig build test-sonny6720-drop-graph-catalog`.
+
 - **A vector (HNSW) index is the graph's own; `knn()` never answers
   unvalidated (SONNY-6703, supersedes the SONNY-1223 refusal).** The runtime
   index was one process-wide object per index NAME. knn() used it only when

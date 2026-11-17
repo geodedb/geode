@@ -1175,6 +1175,55 @@ pub const Catalog = struct {
         };
     }
 
+    // CANARY: REQ=REQ-SONNY-6720-DROP-GRAPH-CATALOG; FEATURE="SchemaCatalog"; ASPECT=DropGraphRemovesRows; STATUS=TESTED; TEST=tests/test_sonny6720_drop_graph_catalog.zig; OWNER=catalog; UPDATED=2026-11-17
+    /// The catalog rows `removeGraphRows` took out.
+    pub const GraphRows = struct {
+        indexes: []std.StringHashMap(IndexInfo).KV,
+        constraints: []std.StringHashMap(ConstraintInfo).KV,
+    };
+
+    /// SONNY-6720: DROP GRAPH: remove every index and constraint row scoped
+    /// to `graph` (rows of every type; an engine-wide row belongs to no graph
+    /// and stays) and persist once. If the save fails every row is put back
+    /// and the error returned. The caller owns the rows: free the slices with
+    /// `allocator`, each `kv.key` with the catalog's allocator, and each
+    /// value with `freeIndexInfo` / `freeConstraintInfo`, after tearing down
+    /// what ran for them (a name-keyed advanced index, a unique fence).
+    pub fn removeGraphRows(self: *Catalog, allocator: std.mem.Allocator, graph: []const u8) !GraphRows {
+        std.debug.assert(graph.len > 0);
+        self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        var index_keys: std.ArrayList([]const u8) = .empty;
+        defer index_keys.deinit(allocator);
+        var constraint_keys: std.ArrayList([]const u8) = .empty;
+        defer constraint_keys.deinit(allocator);
+        var it = self.indexes.iterator();
+        while (it.next()) |e| {
+            if (std.mem.eql(u8, e.value_ptr.graph, graph)) try index_keys.append(allocator, e.key_ptr.*);
+        }
+        var cit = self.constraints.iterator();
+        while (cit.next()) |e| {
+            if (std.mem.eql(u8, e.value_ptr.graph, graph)) try constraint_keys.append(allocator, e.key_ptr.*);
+        }
+
+        const idx_out = try allocator.alloc(std.StringHashMap(IndexInfo).KV, index_keys.items.len);
+        errdefer allocator.free(idx_out);
+        const con_out = try allocator.alloc(std.StringHashMap(ConstraintInfo).KV, constraint_keys.items.len);
+        errdefer allocator.free(con_out);
+        if (idx_out.len == 0 and con_out.len == 0) return .{ .indexes = idx_out, .constraints = con_out };
+
+        for (index_keys.items, idx_out) |key, *slot| slot.* = self.indexes.fetchRemove(key).?;
+        for (constraint_keys.items, con_out) |key, *slot| slot.* = self.constraints.fetchRemove(key).?;
+        self.save() catch |err| {
+            // The removals freed the slots these take back: no allocation.
+            for (idx_out) |kv| self.indexes.putAssumeCapacityNoClobber(kv.key, kv.value);
+            for (con_out) |kv| self.constraints.putAssumeCapacityNoClobber(kv.key, kv.value);
+            return err;
+        };
+        return .{ .indexes = idx_out, .constraints = con_out };
+    }
+
     /// Get index metadata of the default graph's catalog by label and name.
     pub fn getIndex(self: *Catalog, label: []const u8, index_name: []const u8) !?IndexInfo {
         return self.getIndexInGraph(graph_store.DEFAULT_GRAPH_NAME, label, index_name);
