@@ -695,6 +695,19 @@ pub fn initialize(
                 return error.AuthGraphUnavailable;
             };
 
+            // SONNY-6708: a first boot killed before it sealed the chain left the
+            // admin and no AuthChainRoot. That artifact (and only that) is
+            // discarded so this start runs as a first boot again; a missing root
+            // over real auth state still falls through to the tamper verdict.
+            const interrupted_first_boot = agm.recoverInterruptedBootstrap() catch |err| {
+                printAuthStateUnavailable(data_dir, "recovering an interrupted first boot", err);
+                agm.deinit();
+                return error.AuthGraphUnavailable;
+            };
+            if (interrupted_first_boot) {
+                std.debug.print("[startup] the previous first start was interrupted before it finished creating the admin user; discarding that partial admin and bootstrapping again\n", .{});
+            }
+
             if (agm.hasAuthRecords()) {
                 // Honour both env-var spellings: `GEODE_ADMIN_PASSWORD`
                 // (legacy / backward compat) and `GEODE_DEFAULT_PASSWORD`
