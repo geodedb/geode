@@ -182,8 +182,8 @@ pub fn migrateField(allocator: std.mem.Allocator, store: *graph_store.GraphStore
     // SONNY-6692: the old values out of the store files and the WAL.
     if (graph_store.getGlobalAdapter()) |adapter| {
         const scrub = try adapter.scrubGraphDeadSpace(opts.graph);
-        report.dead_pages_zeroed = scrub.free_pages_zeroed;
-        report.dead_bytes_zeroed = scrub.slab_bytes_zeroed;
+        report.dead_pages_zeroed = scrub.free_pages_zeroed + scrub.orphan_pages_freed;
+        report.dead_bytes_zeroed = scrub.slab_bytes_zeroed + scrub.var_slab_bytes_zeroed;
     }
     report.scrubbed = true;
     log.info("FLE migrate-encrypt finished", &.{

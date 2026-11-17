@@ -18418,6 +18418,21 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6692_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6692-fle-migration-scrub", "Run SONNY-6692 regression (right after CALL geode.fle.migrateEncrypt returns, no plaintext of the field, current or superseded by an update before the migration, small or spilled to the var store, is in any file of the data directory; the values still read for the permitted role)").dependOn(&run_sonny6692_tests.step);
 
+    // SONNY-6700: CALL geode.storage.scrub() -- every graph's dead space.
+    const sonny6700_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6700_storage_scrub.zig"), .target = target, .optimize = optimize });
+    sonny6700_test_mod.addImport("geode", root_mod);
+    sonny6700_test_mod.addImport("graph_storage", graph_storage_mod);
+    sonny6700_test_mod.addImport("schema", schema_mod);
+    sonny6700_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6700_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6700_test_mod.addImport("logging", logging_mod);
+    sonny6700_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6700_tests = b.addTest(.{ .root_module = sonny6700_test_mod });
+    const run_sonny6700_tests = b.addRunArtifact(sonny6700_tests);
+    spawnsBuiltGeode(sonny6700_tests);
+    shardDep(test_step, &run_sonny6700_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6700-storage-scrub", "Run SONNY-6700 regression (CALL geode.storage.scrub(), Admin only and audited, overwrites every graph's dead space -- freed var-store slab runs, allocated pages no live record owns, superseded values -- so none is in any file of the data directory; the live data reads back)").dependOn(&run_sonny6700_tests.step);
+
     // SONNY-6688: geode.fle.migrateEncrypt / geode fle migrate-encrypt.
     const sonny6688_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6688_fle_migrate_encrypt.zig"), .target = target, .optimize = optimize });
     sonny6688_test_mod.link_libc = true; // setenv/unsetenv

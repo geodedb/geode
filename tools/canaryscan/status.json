@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-17T15:57:15.238764431Z",
+  "generated_at": "2026-11-17T18:08:23.707180128Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83630,6 +83630,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6700-STORAGE-SCRUB",
+      "features": [
+        {
+          "feature": "StorageAdministration",
+          "aspect": "ScrubEveryGraph",
+          "status": "TESTED",
+          "files": [
+            "src/execution/storage_dispatch.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6700_storage_scrub.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-17"
+        },
+        {
+          "feature": "StorageAdministration",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6700_storage_scrub.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6700_storage_scrub.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -88721,7 +88754,7 @@
       "EXEMPT": 209,
       "IMPL": 563,
       "STUB": 18,
-      "TESTED": 4396
+      "TESTED": 4398
     },
     "by_aspect": {
       "2PC": 3,
@@ -91639,7 +91672,7 @@
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
       "RegistrySwap": 1,
-      "Regression": 434,
+      "Regression": 435,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -91861,6 +91894,7 @@
       "ScopedLockedClone": 1,
       "ScratchAllocator": 1,
       "ScrubDeadSpaceThenCheckpoint": 1,
+      "ScrubEveryGraph": 1,
       "SealRefusesUnsignedLegacy": 1,
       "SealedExactIndexFiles": 1,
       "SealedFleRoleGrants": 1,

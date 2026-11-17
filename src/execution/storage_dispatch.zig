@@ -60,6 +60,8 @@ const fle_catalog = @import("../schema/fle_catalog.zig");
 const fle_annotations = @import("../schema/annotations.zig");
 const fle_integration = @import("../fle_integration.zig");
 const cluster_mod = @import("../distributed/cluster.zig");
+const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
+const txn_undo_log = @import("../txn_undo_log.zig");
 const fle_migration = @import("fle_migration.zig");
 const schema = @import("schema");
 
@@ -1655,6 +1657,111 @@ pub fn executeStorage(
         return try handler(allocator, call_stmt, context);
     }
     return null;
+}
+
+/// SONNY-6700: storage administration, Admin only (`fle_admin.requireAdminFor`)
+/// and audited. `proc_name` is lowercase.
+pub fn isStorageAdministrationProcedure(proc_name: []const u8) bool {
+    return std.mem.eql(u8, proc_name, "geode.storage.scrub");
+}
+
+/// SONNY-6700: how long `CALL geode.storage.scrub()` waits for one graph's
+/// lock before it reports the graph busy and goes on.
+pub const scrub_graph_lock_timeout_ns: u64 = 30 * std.time.ns_per_s;
+
+/// SONNY-6700: the audit record of a `CALL geode.storage.scrub()` that ran
+/// (`failure` null) or failed: the graphs scrubbed and those that failed.
+pub fn auditStorageScrub(allocator: std.mem.Allocator, context: execution.ExecutionContext, details: []const u8, failure: ?anyerror) void {
+    const audit_mod = @import("../security/audit.zig");
+    var buf: [512]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    w.writeAll(details) catch {};
+    if (failure) |err| w.print("{s}error={s}", .{ if (details.len > 0) " " else "", @errorName(err) }) catch {};
+    audit_mod.logSecurityGraphEvent(allocator, .{
+        .event_type = .configuration_change,
+        .action = "geode.storage.scrub",
+        .user_id = if (context.principal) |p| (p.user_id orelse 0) else 0,
+        .username = context.user orelse "",
+        .details = w.buffered(),
+        .result_failure = failure != null,
+    });
+}
+
+// CANARY: REQ=REQ-SONNY-6700-STORAGE-SCRUB; FEATURE="StorageAdministration"; ASPECT=ScrubEveryGraph; STATUS=TESTED; TEST=tests/test_sonny6700_storage_scrub.zig; OWNER=storage; UPDATED=2026-11-17
+/// SONNY-6700: `CALL geode.storage.scrub()`: overwrite the dead space of
+/// every graph (graph-storage `scrubDeadSpace`: freed property and var-store
+/// pages, tombstoned property slab blobs, freed var-store slab runs, and
+/// allocated pages no live record owns, after a walk that proves what every
+/// live record owns) and checkpoint it in full, so no superseded value stays
+/// in the store files or the WAL. Admin only and audited
+/// (`isStorageAdministrationProcedure`). It takes each graph's lock itself,
+/// one graph after another, waiting at most `scrub_graph_lock_timeout_ns`
+/// for each; so it must be the only statement in its request (the handlers
+/// then hold no lock for it, `query_traits.isSelfLockingProgram`), and
+/// anywhere a lock is held it is refused (`ScrubLockHeld`). Refused inside a
+/// transaction (`ScrubInTransaction`: its writes are not part of it), with a
+/// RETURN or ORDER BY (`ScrubProjection`: they would read the store with no
+/// lock), with arguments, and in cluster mode (no replicated slice). One row
+/// per graph: graph, free_pages_zeroed, slab_bytes_zeroed,
+/// var_slab_bytes_zeroed, orphan_pages_freed, error (null, or why that graph
+/// was not scrubbed: e.g. CheckpointLockBusy). `audit_details` receives a
+/// summary for the audit record.
+pub fn executeStorageScrub(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure, context: execution.ExecutionContext, audit_details: *std.Io.Writer) !ExecutionResult {
+    if (call_stmt.return_clause != null or call_stmt.order_by != null) return error.ScrubProjection;
+    if (call_stmt.procedure == .Call and call_stmt.procedure.Call.args.len != 0) return error.InvalidArgs;
+    if (context.transaction_state == .Active or txn_undo_log.threadInTxn()) return error.ScrubInTransaction;
+    if (graph_store.storeLockHeldByCurrentThread() or graph_storage_adapter.threadHoldsAnyGraphLock()) return error.ScrubLockHeld;
+    try cluster_mod.gateUnreplicatedWrite();
+
+    const names = [_][]const u8{ "graph", "free_pages_zeroed", "slab_bytes_zeroed", "var_slab_bytes_zeroed", "orphan_pages_freed", "error" };
+    const columns = try allocator.alloc([]const u8, names.len);
+    for (names, columns) |n, *c| c.* = try allocator.dupe(u8, n);
+    var rows: std.ArrayList([]Value) = .empty;
+
+    const adapter = graph_store.getGlobalAdapter() orelse {
+        audit_details.writeAll("graphs=0") catch {};
+        return .{ .columns = columns, .rows = try rows.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty };
+    };
+    const graphs = try adapter.listGraphNames(allocator);
+    defer {
+        for (graphs) |g| allocator.free(g);
+        allocator.free(graphs);
+    }
+    std.mem.sort([]const u8, graphs, {}, struct {
+        fn lt(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.lt);
+
+    var failed: usize = 0;
+    var orphans: u64 = 0;
+    for (graphs) |graph_name| {
+        const row = try allocator.alloc(Value, names.len);
+        @memset(row, Value{ .Null = {} });
+        row[0] = .{ .Str = try allocator.dupe(u8, graph_name) };
+        if (adapter.scrubGraphDeadSpaceWithin(graph_name, scrub_graph_lock_timeout_ns)) |report| {
+            row[1] = .{ .Int = @intCast(report.free_pages_zeroed) };
+            row[2] = .{ .Int = @intCast(report.slab_bytes_zeroed) };
+            row[3] = .{ .Int = @intCast(report.var_slab_bytes_zeroed) };
+            row[4] = .{ .Int = @intCast(report.orphan_pages_freed) };
+            orphans += report.orphan_pages_freed;
+        } else |err| {
+            failed += 1;
+            row[5] = .{ .Str = try allocator.dupe(u8, @errorName(err)) };
+            log.warn("geode.storage.scrub: a graph was not scrubbed", &.{
+                Attr.string("graph", graph_name),
+                Attr.string("error", @errorName(err)),
+            });
+        }
+        try rows.append(allocator, row);
+    }
+    audit_details.print("graphs={d} failed={d} orphan_pages_freed={d}", .{ graphs.len, failed, orphans }) catch {};
+    log.info("geode.storage.scrub", &.{
+        Attr.uint("graphs", graphs.len),
+        Attr.uint("failed", failed),
+        Attr.uint("orphan_pages_freed", orphans),
+    });
+    return .{ .columns = columns, .rows = try rows.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty };
 }
 
 // CANARY: REQ=REQ-SONNY-2804-STORAGE-PROC-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=StorageProcedures; STATUS=TESTED; TEST=tests/test_sonny2804_storage_procs_gate.zig; OWNER=security; UPDATED=2026-09-26

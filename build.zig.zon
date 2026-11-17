@@ -751,17 +751,26 @@
             // authentication; `side_file_crypto.Kind.data_dir_identity` (9).
             // `VerifyTool` copies the WAL into `.verify-wal-<random>` inside
             // the graph's directory (0700), not $TMPDIR. Additive API, same
-            // dependencies as v0.4.25. Pinned to the release commit e850df3
-            // on MR !35 (fix/sonny-6635-registry-identity), not tagged yet.
+            // dependencies as v0.4.25. Tagged on 4ba18a0 (MR !35,
+            // fix/sonny-6635-registry-identity).
             // v0.4.27 (2026-11-17, SONNY-6692): `GraphEngine` /
             // `ShardedGraphEngine.scrubDeadSpace` overwrite dead space (free
             // property and var-store pages, tombstoned slab blobs) in one
             // logged transaction; the next checkpoint writes the cleared
             // pages and truncates the WAL. Additive API, same dependencies as
-            // v0.4.26. Pinned to the v0.4.27 tag (merge of MR !36,
+            // v0.4.26. Tagged on 2c2c560 (MR !36,
             // fix/sonny-6692-scrub-dead-space).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.27#2c2c5609204dfc44e5e568f906903037284bb4e3",
-            .hash = "graph_storage-0.4.27-9UyJS4W1NwBSUKRIWiZYvCaMa4KZalhN4lkbXPpUDxrO",
+            // v0.4.28 (2026-11-17, SONNY-6700): `scrubDeadSpace` proves
+            // ownership first (a walk of every live node's properties and
+            // labels and every out-edge's properties, following overflowed
+            // values) and also clears freed var-store slab runs and zeroes
+            // and frees allocated pages no live record owns; `ScrubReport`
+            // gains `var_slab_blocks_scrubbed`, `var_slab_bytes_zeroed`,
+            // `orphan_pages_freed`. Same dependencies as v0.4.27. Pinned to
+            // the v0.4.28 tag on 024e7be (MR !37,
+            // fix/sonny-6700-scrub-var-slab-orphans).
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.28#024e7be921c6e31356d83386f189a6bf9764bd90",
+            .hash = "graph_storage-0.4.28-9UyJSw_0NwATiWWl8SrEt2R6vuUqKhDC4khuVDHbV7ho",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting

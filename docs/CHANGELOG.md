@@ -4,6 +4,32 @@
 
 ### Security
 
+- **An operator can overwrite every graph's dead space: `CALL
+  geode.storage.scrub()` (SONNY-6700).** A value superseded by an update
+  or a DELETE stayed in `props.store` / `var.store` and the WAL until its
+  space was reused, and nothing but the end of an FLE migration
+  (SONNY-6692) cleared it. The new procedure scrubs every graph, one after
+  another: graph-storage 0.4.28 `scrubDeadSpace` (free property and
+  var-store pages, tombstoned property slab blobs, and now freed var-store
+  slab runs, labels and small values, and allocated pages no live record
+  owns, a leak or a crash leftover), then a full checkpoint, which writes
+  the cleared pages and truncates the WAL. Before it changes anything
+  graph-storage walks every live node (properties, labels) and out-edge
+  (properties), following overflowed values into the var store, and
+  aborts that graph unchanged if a reference does not resolve: live data
+  is never touched. Admin only (42501 otherwise) and audited
+  (`configuration_change`, action `geode.storage.scrub`, success or
+  failure). It takes each graph's write lock itself (up to 30 s per graph;
+  a busy graph is reported in its row's `error` column and the run goes
+  on), so it must be the only statement in its request (0A000 otherwise),
+  outside a transaction (25000), without RETURN or ORDER BY (0A000), and
+  it is refused in cluster mode (no replicated slice). One row per graph:
+  `graph, free_pages_zeroed, slab_bytes_zeroed, var_slab_bytes_zeroed,
+  orphan_pages_freed, error`. `geode.fle.migrateEncrypt`'s
+  `dead_pages_zeroed` / `dead_bytes_zeroed` now include the freed orphan
+  pages and the var-store slab bytes. Regression: `zig build
+  test-sonny6700-storage-scrub` (in process, and against a running server
+  with a readwrite user refused and both outcomes audited).
 - **After `geode.fle.migrateEncrypt` reports complete, no plaintext of the
   field is left in the data directory (SONNY-6692).** The migration
   removed each plaintext value and wrote it sealed, but superseded bytes

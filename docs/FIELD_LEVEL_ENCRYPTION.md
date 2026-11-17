@@ -933,6 +933,10 @@ Run: `python3 extended_test_runner.py`
      transaction is open on the graph the scrub is refused (55006): the
      values are migrated; run the call again once it has ended.
      `dead_pages_zeroed` and `dead_bytes_zeroed` report what was cleared.
+     An administrator can overwrite every graph's dead space at any time
+     with `CALL geode.storage.scrub()` (SONNY-6700; Admin only, audited,
+     the only statement in its request): it also clears freed var-store
+     slab runs and allocated pages no live record owns.
    - YIELDs `graph, scanned, encrypted, already_encrypted, non_string,
      skipped_tenant, skipped_rls, batches, complete, dead_pages_zeroed,
      dead_bytes_zeroed`.
