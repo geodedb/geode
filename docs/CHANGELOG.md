@@ -4,14 +4,15 @@
 
 ### Fixed
 
-- **A writing FOR refuses a RETURN stage it cannot apply (SONNY-6717).**
-  After `MATCH ... WITH` or a WITH of values, a FOR body that writes runs once
-  per element, so its RETURN's `ORDER BY`, `DISTINCT`, `SKIP`/`LIMIT` and
-  aggregates applied to each element alone (`... SET o.seen = z.k RETURN o.k
-  AS k ORDER BY k` answered `[2, 1]`). Such a body is now refused whole with
-  `0A000` before anything is written; a plain RETURN still answers a row per
-  element. Staging over the whole working table (ISO/IEC 39075:2024 14.8)
-  remains open. Test: `zig build test-sonny6717-for-write-return-stages`.
+- **A writing FOR applies its RETURN stages over the whole working table
+  (SONNY-6717).** After `MATCH ... WITH` or a WITH of values, a FOR body that
+  writes ran once per element and its RETURN's `ORDER BY`, `DISTINCT`,
+  `SKIP`/`LIMIT` and aggregates applied to each element alone (`... SET
+  o.seen = z.k RETURN o.k AS k ORDER BY k` answered `[2, 1]`; `count(*)` a
+  row of 1 per element). They now run over every element's rows together
+  (ISO/IEC 39075:2024 14.8). A RETURN that groups or buries an aggregate in a
+  bigger expression (`count(*) + 1`) is refused with `0A000` before anything
+  is written. Test: `zig build test-sonny6717-for-write-return-stages`.
 
 ### Security
 

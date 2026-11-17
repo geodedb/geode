@@ -1049,16 +1049,55 @@ fn allowWithFor(q: ast.Query, fr: ast.ForStatement, ctx: PartCtx, params: *const
         inner.outer.add(name);
     }
     const body = fr.body orelse return error.WriteClauseNotApplied;
-    if (returnStagesNeedWholeTable(body.*)) return error.WriteClauseNotApplied;
+    if (returnStagesNeedWholeTable(body.*) and !returnStagesSupported(body.*)) return error.WriteClauseNotApplied;
     try allowForHeader(fr, &inner, params);
-    try allowQuery(body.*, inner, params);
+    var item_buf: [64]ast.ReturnItem = undefined;
+    try allowQuery(try validationBody(body.*, &item_buf), inner, params);
 }
 
 /// SONNY-6717: a writing FOR body runs once per element and its results are
 /// concatenated, so a RETURN stage over the whole working table (DISTINCT,
 /// ORDER BY, SKIP / LIMIT, an aggregate, grouping) cannot be applied; such a
 /// body is refused whole instead of staging each element alone.
-fn returnStagesNeedWholeTable(body: ast.Query) bool {
+/// The stages `executeForWithBindings` runs over the whole table: DISTINCT,
+/// ORDER BY, SKIP / LIMIT and aggregates that are a RETURN item's own call
+/// (`count(*)`, `sum(e)`, `max(e)`); grouping (GROUP BY, HAVING) and an
+/// aggregate inside a bigger expression (`count(*) + 1`) are refused.
+fn returnStagesSupported(body: ast.Query) bool {
+    if (body.group_by != null or body.having != null) return false;
+    for (body.ret.items) |item| {
+        if (return_and_sorting.isAggregationExpr(item.expr) and !return_and_sorting.isAggregateCall(item.expr)) return false;
+        if (return_and_sorting.isAggregateCall(item.expr) and item.expr.Call.args.len > 1) return false;
+    }
+    return true;
+}
+
+/// `body` as the shape check sees it when its RETURN stages run over the whole
+/// working table (not in the body's own executor): the RETURN's DISTINCT,
+/// ORDER BY, window and aggregates are the FOR's, so each aggregate is
+/// checked as its argument.
+fn validationBody(body: ast.Query, buf: []ast.ReturnItem) Error!ast.Query {
+    if (!returnStagesNeedWholeTable(body)) return body;
+    if (body.ret.items.len > buf.len) return error.WriteClauseNotApplied;
+    var b = body;
+    for (body.ret.items, buf[0..body.ret.items.len]) |item, *out| {
+        out.* = item;
+        if (return_and_sorting.isAggregateCall(item.expr)) {
+            const args = item.expr.Call.args;
+            // `count(*)` names nothing: a constant stands for it.
+            out.expr = if (args.len == 0 or isStar(args[0].*)) ast.Expr{ .Int = 1 } else args[0].*;
+        }
+    }
+    b.ret = .{ .items = buf[0..body.ret.items.len], .distinct = false };
+    b.order_by = null;
+    b.limit = null;
+    b.offset = null;
+    b.limit_param = null;
+    b.offset_param = null;
+    return b;
+}
+
+pub fn returnStagesNeedWholeTable(body: ast.Query) bool {
     if (body.ret.distinct or body.order_by != null or body.limit != null or body.offset != null or
         body.limit_param != null or body.offset_param != null or body.group_by != null or body.having != null) return true;
     for (body.ret.items) |item| if (return_and_sorting.isAggregationExpr(item.expr)) return true;
@@ -1116,9 +1155,10 @@ fn allowMatchWithFor(q: ast.Query, fr: ast.ForStatement, ctx: PartCtx, params: *
     }
     if (inner.outer.overflow) return error.WriteClauseNotApplied;
     const body = fr.body orelse return error.WriteClauseNotApplied;
-    if (returnStagesNeedWholeTable(body.*)) return error.WriteClauseNotApplied;
+    if (returnStagesNeedWholeTable(body.*) and !returnStagesSupported(body.*)) return error.WriteClauseNotApplied;
     try allowForHeader(fr, &inner, params);
-    try allowQuery(body.*, inner, params);
+    var item_buf: [64]ast.ReturnItem = undefined;
+    try allowQuery(try validationBody(body.*, &item_buf), inner, params);
 }
 
 /// CREATE and INSERT statements: new nodes and relationships (no
