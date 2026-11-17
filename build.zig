@@ -1272,16 +1272,16 @@ pub fn build(b: *std.Build) void {
     // Graph Storage - Page-based graph storage engine
     const graph_storage_dep = b.dependency("graph_storage", .{ .target = target, .optimize = optimize });
     const graph_storage_mod = graph_storage_dep.module("graph_storage");
-    // SONNY-6622, SONNY-6628, SONNY-738: exactly one wal is compiled,
-    // geode's (v0.1.25, which graph-storage v0.4.20 pins). raft v0.2.5 pins
-    // v0.1.26 and timeseries-storage v0.2.22 v0.1.24. Two wal packages cannot share one
+    // SONNY-6622, SONNY-6628, SONNY-738, SONNY-6630: exactly one wal is
+    // compiled, geode's (v0.1.26, which raft v0.2.6 and timeseries-storage
+    // v0.2.24 pin). graph-storage v0.4.28 still pins v0.1.25, whose source is
+    // the same (v0.1.26 only moves otel). Two wal packages cannot share one
     // compilation (Zig 0.16: "file exists in modules 'build_optionsN' and
     // 'build_optionsM'"), so every library that imports "wal" (graph-storage
     // here, raft below, timeseries-storage further down) has that import
     // pointed at geode's module, as timeseries-storage does for thread_pool.
-    // Their own wal pins are then fetched but never compiled. v0.1.25 only
-    // adds a fail-closed truncateAfter to v0.1.24's API. Remove each line
-    // once that library pins geode's wal version.
+    // A different wal pin is then fetched but never compiled. Keep each line
+    // while any of the three can pin a wal other than geode's.
     graph_storage_mod.addImport("wal", wal_ext_mod);
 
     // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -1290,9 +1290,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const raft_ext_mod = raft_dep.module("raft");
-    // SONNY-6628: raft pins its own wal (v0.2.5: v0.1.26, which only moves
-    // otel), geode v0.1.25 (truncateAfter fails closed); one wal per
-    // compilation (see graph_storage_mod above).
+    // SONNY-6628: raft pins its own wal (v0.2.6: v0.1.26, geode's version);
+    // one wal per compilation (see graph_storage_mod above).
     // raft's root module is the only one of its modules that imports "wal".
     raft_ext_mod.addImport("wal", wal_ext_mod);
 
@@ -1332,11 +1331,9 @@ pub fn build(b: *std.Build) void {
     const timeseries_storage_ext_mod = timeseries_storage_dep.module("timeseries_storage");
     // SONNY-6479: geode hands its own *ThreadPool to the timeseries-storage
     // engine (src/timeseries/timeseries.zig), so both must compile against
-    // ONE thread_pool module. timeseries-storage v0.2.20 pins thread-pool
-    // v0.2.10 and geode pins v0.2.11 (same public API, wake-path internals
-    // only); point the library's "thread_pool" import at geode's module
-    // instead of a lockstep timeseries-storage re-release. Remove once
-    // timeseries-storage pins geode's thread-pool version.
+    // ONE thread_pool module. timeseries-storage v0.2.24 pins thread-pool
+    // v0.2.11, geode's version; the library's "thread_pool" import still
+    // points at geode's module so a later pin drift cannot split it.
     timeseries_storage_ext_mod.addImport("thread_pool", thread_pool_ext_mod);
     // SONNY-6622: and geode's wal (see graph_storage_mod above).
     timeseries_storage_ext_mod.addImport("wal", wal_ext_mod);

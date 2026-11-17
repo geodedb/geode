@@ -4,6 +4,23 @@
 
 ### Security
 
+- **quic v0.1.55: another local user can no longer take over the QUIC
+  port, and no two packets share an AEAD nonce (SONNY-6630; quic
+  SONNY-6522, SONNY-4379, SONNY-6654).** The server's UDP socket was bound
+  with SO_REUSEADDR, so a process of any user that also set it could bind
+  `--listen`'s port and receive the server's datagrams; binds are now
+  exclusive and a port in use fails to bind. Some senders (PATH_RESPONSE,
+  CONNECTION_CLOSE, the HANDSHAKE_DONE packet, among others) numbered
+  packets without the connection lock, so a packet could reuse an
+  application packet's number, and so its nonce, and the peer dropped one
+  as a duplicate (lost response pages). The upgrade also keeps long
+  transfers alive across a key update after a burst loss, resends a request
+  lost right after the handshake in ~0.1 s instead of ~1 s, and reads ACK
+  ranges from the decoded frame (release builds read a dead stack frame).
+  Pinned with geode-client-zig v0.3.20, timeseries-storage v0.2.24 and the
+  thread-pool cascade (wal v0.1.26, otel v0.1.29, json v0.1.21, slog
+  v0.1.16, config v0.1.19, uri v0.1.17, yaml v0.1.11, toml v0.1.16, uuid
+  v0.1.10). No geode code change.
 - **An operator can overwrite every graph's dead space: `CALL
   geode.storage.scrub()` (SONNY-6700).** A value superseded by an update
   or a DELETE stayed in `props.store` / `var.store` and the WAL until its
