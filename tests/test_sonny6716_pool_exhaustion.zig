@@ -26,6 +26,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
 const gs = @import("graph_storage");
+const geode = @import("geode");
 const geode_test_bin = @import("geode_test_bin");
 const util = @import("proto_test_util.zig");
 
@@ -136,4 +137,10 @@ test "SONNY-6716: a statement larger than the pool fails with 53200, applies not
     try testing.expectEqual(@as(i64, 0), try count(&c, "MATCH (n:Big6716) RETURN count(n) AS c"));
     try testing.expectEqual(@as(i64, 1), try count(&c, "MATCH (n:Keep6716) RETURN count(n) AS c"));
     try testing.expect((try status(&c, "CREATE (:Keep6716 {i: 2})")) == null);
+}
+
+test "SONNY-6716: BufferPoolFull answers 53200 and names the knob, not 58000" {
+    const info = geode.proto_util.mapError(error.BufferPoolFull);
+    try testing.expectEqualStrings("53200", info.code);
+    try testing.expect(std.mem.indexOf(u8, info.message, "GEODE_BUFFER_POOL_PAGES") != null);
 }

@@ -54,6 +54,19 @@ fn legacyStringKeys() bool {
 }
 const uuid = @import("uuid");
 const sharded_store = @import("graph_storage").sharded_store;
+
+// SONNY-6716: the undo of a failed statement may use the frames the buffer pool
+// keeps back from the statement itself (graph-storage >= 0.4.29). A no-op on an
+// older library, where the pool keeps none back.
+pub fn enterStatementUndo() void {
+    const bp = @import("graph_storage").buffer_pool;
+    if (@hasDecl(bp, "enterUndoReplay")) bp.enterUndoReplay();
+}
+
+pub fn leaveStatementUndo() void {
+    const bp = @import("graph_storage").buffer_pool;
+    if (@hasDecl(bp, "leaveUndoReplay")) bp.leaveUndoReplay();
+}
 // SONNY-1330: PUBLIC so `execution/set_operations.zig` can open/close the
 // read-only-hydration scope around a parallel UNION arm without importing the
 // file by a second path (which would give it a SECOND set of threadlocals).
