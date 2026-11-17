@@ -941,6 +941,17 @@ pub fn refuseUnappliedWrites(q: ast.Query, comptime applied: AppliedWrites) erro
     }
 }
 
+/// SONNY-6702: the ungrouped count / aggregate fast paths below answer ONE row
+/// directly. That row is the statement's whole result only when no window can
+/// drop it: an OFFSET (literal or parameter), a LIMIT parameter (its value is
+/// unknown here, and 0 drops the row) or a literal `LIMIT 0` sends the shape to
+/// the general executor, which applies the window.
+fn windowMayDropSingleRow(q: ast.Query) bool {
+    if (q.offset != null or q.limit_param != null or q.offset_param != null) return true;
+    if (q.limit) |lim| return lim == 0;
+    return false;
+}
+
 fn analyzeCountFastPath(q: ast.Query) ?CountFastPathPlan {
     // Shape: single chain, single simple node pattern, no relationship.
     if (q.match.chains.len != 1) return null;
@@ -969,12 +980,10 @@ fn analyzeCountFastPath(q: ast.Query) ?CountFastPathPlan {
     if (q.having != null) return null;
     if (q.order_by != null) return null;
     if (readFastPathDeclinesWrite(q)) return null;
-    // LIMIT 0 would require an empty result (not a single-row count); any
-    // other LIMIT value yields the same single-row count regardless, so we
-    // accept it. LIMIT literal == 0 bails to the regular path.
-    if (q.limit) |lim| {
-        if (lim == 0) return null;
-    }
+    // A window that may drop the one row (LIMIT 0, any OFFSET, a LIMIT
+    // parameter) bails to the regular path, which applies it (SONNY-6702). Any
+    // other literal LIMIT yields the same single-row count regardless.
+    if (windowMayDropSingleRow(q)) return null;
 
     // Verify the expression is `count(var)` or `count(*)` (case-insensitive).
     const call = switch (item.expr) {
@@ -1207,9 +1216,8 @@ fn analyzeEdgeCountFastPath(q: ast.Query) ?EdgeCountFastPathPlan {
     if (q.having != null) return null;
     if (q.order_by != null) return null;
     if (readFastPathDeclinesWrite(q)) return null;
-    if (q.limit) |lim| {
-        if (lim == 0) return null;
-    }
+    // SONNY-6702: the one row it answers may be windowed out.
+    if (windowMayDropSingleRow(q)) return null;
 
     // No DISTINCT (count(DISTINCT r) is a different shape — leave on the slow path).
     if (q.ret.distinct) return null;
@@ -1818,9 +1826,8 @@ pub fn propertyAggregateFastPath(
     if (q.having != null) return null;
     if (q.order_by != null) return null;
     if (readFastPathDeclinesWrite(q)) return null;
-    if (q.limit) |lim| {
-        if (lim == 0) return null;
-    }
+    // SONNY-6702: the one row it answers may be windowed out.
+    if (windowMayDropSingleRow(q)) return null;
 
     // --- Extract the aggregate shape from RETURN ---
     const item = q.ret.items[0];
@@ -2368,9 +2375,8 @@ pub fn countFilteredFastPath(
     if (q.having != null) return null;
     if (q.order_by != null) return null;
     if (readFastPathDeclinesWrite(q)) return null;
-    if (q.limit) |lim| {
-        if (lim == 0) return null;
-    }
+    // SONNY-6702: the one row it answers may be windowed out.
+    if (windowMayDropSingleRow(q)) return null;
 
     // --- RETURN must be count(n) / count(*) ---
     const item = q.ret.items[0];

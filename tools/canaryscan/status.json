@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-17T21:53:23.939001912Z",
+  "generated_at": "2026-11-17T22:37:59.290134628Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83663,6 +83663,39 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6702-LIMIT-ZERO",
+      "features": [
+        {
+          "feature": "EngineDirectRowWindow",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6702_limit_zero_node_scan.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6702_limit_zero_node_scan.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-17"
+        },
+        {
+          "feature": "AggregateFastPathWindow",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6702_window_fast_paths.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6702_window_fast_paths.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6704-SINGLE-HOP-REPEATED-VAR",
       "features": [
         {
@@ -88827,7 +88860,7 @@
       "EXEMPT": 209,
       "IMPL": 563,
       "STUB": 18,
-      "TESTED": 4402
+      "TESTED": 4404
     },
     "by_aspect": {
       "2PC": 3,
@@ -91747,7 +91780,7 @@
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
       "RegistrySwap": 1,
-      "Regression": 435,
+      "Regression": 437,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,

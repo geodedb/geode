@@ -154,6 +154,10 @@ pub const NodeScanStream = struct {
     /// predicate is present this is unused and the count is streamed.
     count_precomputed: ?usize = null,
     count_emitted: bool = false,
+    /// count mode: the statement's OFFSET / LIMIT window excludes the one
+    /// aggregate row (OFFSET >= 1, or LIMIT 0), so the stream serves no row
+    /// (SONNY-6702).
+    count_windowed_out: bool = false,
 
     // Scratch storage for the single-binding environment so makeEnv hands out
     // stable slices. Reset per call; the stream is single-threaded per page.
@@ -676,7 +680,8 @@ pub const NodeScanStream = struct {
     }
 
     fn buildCountPage(self: *NodeScanStream, allocator: std.mem.Allocator) !Page {
-        if (self.count_emitted) {
+        if (self.count_emitted or self.count_windowed_out) {
+            self.count_emitted = true;
             var columns = try allocator.alloc([]const u8, 1);
             columns[0] = try allocator.dupe(u8, self.column_name);
             return .{
@@ -1262,6 +1267,9 @@ pub fn prepare(
         .exec_context = context,
         .needed_keys = needed_keys,
         .count_precomputed = count_precomputed,
+        // SONNY-6702: an ungrouped count is ONE row; OFFSET >= 1 or LIMIT 0
+        // windows it out.
+        .count_windowed_out = eligibility.mode == .count and (offset >= 1 or (limit orelse 1) == 0),
         .env_names = .{var_name},
     };
 }
@@ -1820,6 +1828,10 @@ fn collectMatchingSlotIds(
     if (!adapter.graphExists(graph_name)) {
         return try allocator.alloc(u64, 0);
     }
+
+    // SONNY-6702: the cap is checked after each append below, so a cap of 0
+    // (`LIMIT 0`) still collected one slot. No rows are wanted: collect none.
+    if (required_rows) |cap| if (cap == 0) return try allocator.alloc(u64, 0);
 
     const row_cap = required_rows orelse std.math.maxInt(usize);
     var result = try std.ArrayList(u64).initCapacity(allocator, if (required_rows) |cap| @min(cap, 1024) else 256);

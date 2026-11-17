@@ -10051,6 +10051,24 @@ pub fn build(b: *std.Build) void {
     // SONNY-2473: `SKIP k` with no LIMIT and no WHERE returned one row on the
     // node-scan fast path: the OFFSET-only slot bound (k+1) capped slot
     // collection.
+    const sonny6702_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6702_limit_zero_node_scan.zig"), .target = target, .optimize = optimize });
+    sonny6702_test_mod.addImport("geode", root_mod);
+    sonny6702_test_mod.addImport("logging", logging_mod);
+    const sonny6702_tests = b.addTest(.{ .root_module = sonny6702_test_mod });
+    const run_sonny6702_tests = b.addRunArtifact(sonny6702_tests);
+    shardDep(test_step, &run_sonny6702_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6702_step = b.step("test-sonny6702-limit-zero", "Run SONNY-6702 regression (LIMIT 0 and a count's OFFSET / LIMIT window on the node-scan fast path)");
+    sonny6702_step.dependOn(&run_sonny6702_tests.step);
+
+    const sonny6702w_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6702_window_fast_paths.zig"), .target = target, .optimize = optimize });
+    sonny6702w_test_mod.addImport("geode", root_mod);
+    sonny6702w_test_mod.addImport("logging", logging_mod);
+    const sonny6702w_tests = b.addTest(.{ .root_module = sonny6702w_test_mod });
+    const run_sonny6702w_tests = b.addRunArtifact(sonny6702w_tests);
+    shardDep(test_step, &run_sonny6702w_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6702w_step = b.step("test-sonny6702-window-fast-paths", "Run SONNY-6702 regression (an ungrouped count or aggregate fast path answers its one row only when the OFFSET / LIMIT window keeps it: in-memory, persisted, tenant-scoped and RLS-policy sessions)");
+    sonny6702w_step.dependOn(&run_sonny6702w_tests.step);
+
     const sonny2473_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2473_skip_without_limit.zig"), .target = target, .optimize = optimize });
     sonny2473_test_mod.addImport("geode", root_mod);
     sonny2473_test_mod.addImport("logging", logging_mod);
