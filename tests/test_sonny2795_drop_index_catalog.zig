@@ -417,7 +417,7 @@ fn dropBetweenCopyAndBuild(h: *Harness) !void {
 
     const mgr = index_manager.getGlobalIndexManager() orelse return error.NoIndexManager;
     try testing.expect(!mgr.hasAdvancedVectorIndexForProperty("emb_race"));
-    try testing.expect(!mgr.vector_dim_registry.contains("v2795race"));
+    try testing.expect(!mgr.vector_dim_registry.contains("default\x1fv2795race"));
 }
 
 // One harness for every HNSW phase, and last in the file: the hnsw library
@@ -458,7 +458,7 @@ test "SONNY-2795 (3)+(2): the global index manager does not adopt a request allo
     // ...and then it arms the guard from the row.
     {
         const mgr = index_manager.getGlobalIndexManager() orelse return error.NoIndexManager;
-        try testing.expect(mgr.vector_dim_registry.contains("v2795"));
+        try testing.expect(mgr.vector_dim_registry.contains("default\x1fv2795"));
     }
 
     // ---- (2) the knn path's lazy rebuild reads the catalog under its lock ----

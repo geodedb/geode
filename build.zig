@@ -18042,6 +18042,17 @@ pub fn build(b: *std.Build) void {
     const sonny1319_step = b.step("test-sonny1319-graph-scoped-catalog", "Run SONNY-1319 regression (index and constraint catalogs are graph-scoped: IF NOT EXISTS, DROP INDEX, SHOW, CREATE CONSTRAINT across two graphs; restart; legacy engine-global catalog loads losslessly)");
     sonny1319_step.dependOn(&run_sonny1319_tests.step);
 
+    // SONNY-6703: the vector (HNSW) index is the graph's own: two graphs hold
+    // independent indexes under one name, knn() validates the metric whether
+    // the index or a scan answers. See tests/test_sonny6703_per_graph_vector_index.zig.
+    const sonny6703_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6703_per_graph_vector_index.zig"), .target = target, .optimize = optimize });
+    sonny6703_test_mod.addImport("geode", root_mod);
+    const sonny6703_tests = b.addTest(.{ .root_module = sonny6703_test_mod });
+    const run_sonny6703_tests = b.addRunArtifact(sonny6703_tests);
+    shardDep(test_step, &run_sonny6703_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny6703_step = b.step("test-sonny6703-per-graph-vector-index", "Run SONNY-6703 regression (per-graph vector indexes: two graphs, one index name, independent metrics, dimensions and rows; knn validates the metric on every path; DROP INDEX, DROP GRAPH, restart)");
+    sonny6703_step.dependOn(&run_sonny6703_tests.step);
+
     const sonny2795_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2795_drop_index_catalog.zig"), .target = target, .optimize = optimize });
     sonny2795_test_mod.addImport("geode", root_mod);
     const sonny2795_tests = b.addTest(.{ .root_module = sonny2795_test_mod });

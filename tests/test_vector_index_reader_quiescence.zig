@@ -250,16 +250,16 @@ test "vector index: readers can pin a wrapper for the duration of a knn" {
         try h.run("CREATE INDEX vq_idx ON VqDoc (emb) USING vector WITH (metric = 'l2')");
 
         // A pin that is never released must keep the wrapper addressable.
-        const handle = try mgr().requireVectorIndex("vq_idx");
+        const handle = try mgr().requireVectorIndex("vq_basic\x1fvq_idx");
         try testing.expect(try searchThroughHandle(handle, 2.0, 3) > 0);
         mgr().releaseVectorIndex(handle);
 
         // Once every reference is released the index drops cleanly.
-        try testing.expect(try mgr().dropAdvancedIndex("vq_idx", .vector_f32));
+        try testing.expect(try mgr().dropAdvancedIndex("vq_basic\x1fvq_idx", .vector_f32));
 
         // And a pin on a dropped/absent index is refused rather than handing
         // out a dangling pointer.
-        try testing.expectError(error.IndexNotFound, mgr().requireVectorIndex("vq_idx"));
+        try testing.expectError(error.IndexNotFound, mgr().requireVectorIndex("vq_basic\x1fvq_idx"));
     }
 }
 
@@ -293,7 +293,7 @@ test "vector index: DROP INDEX waits for in-flight readers to quiesce" {
             /// means the fix introduced a lock-ordering deadlock — the suite
             /// timeout is the backstop for that case.
             fn run(self: *@This()) void {
-                const handle = mgr().requireVectorIndex("vqd_idx") catch {
+                const handle = mgr().requireVectorIndex("vq_drop\x1fvqd_idx") catch {
                     self.failed.store(true, .release);
                     self.pinned.store(true, .release);
                     return;
@@ -325,7 +325,7 @@ test "vector index: DROP INDEX waits for in-flight readers to quiesce" {
         try testing.expect(reader.pinned.load(.acquire));
         try testing.expect(!reader.failed.load(.acquire));
 
-        const dropped = try mgr().dropAdvancedIndex("vqd_idx", .vector_f32);
+        const dropped = try mgr().dropAdvancedIndex("vq_drop\x1fvqd_idx", .vector_f32);
         const drop_done_at = nowMs();
         t.join();
 
@@ -345,7 +345,7 @@ test "vector index: DROP INDEX waits for in-flight readers to quiesce" {
         }
 
         // The index really is gone afterwards.
-        try testing.expectError(error.IndexNotFound, mgr().requireVectorIndex("vqd_idx"));
+        try testing.expectError(error.IndexNotFound, mgr().requireVectorIndex("vq_drop\x1fvqd_idx"));
     }
 }
 
@@ -373,7 +373,7 @@ test "vector index: a pinned reader survives the rebuild swap, later pins see th
             failed: std.atomic.Value(bool) = .init(false),
 
             fn run(self: *@This()) void {
-                const handle = mgr().requireVectorIndex("vqs_idx") catch {
+                const handle = mgr().requireVectorIndex("vq_swap\x1fvqs_idx") catch {
                     self.failed.store(true, .release);
                     self.pinned.store(true, .release);
                     return;
@@ -407,7 +407,7 @@ test "vector index: a pinned reader survives the rebuild swap, later pins see th
         const indexed = try mgr().rebuildAdvancedVectorIndexNonBlocking(
             testing.allocator,
             "vq_swap",
-            "vqs_idx",
+            "vq_swap\x1fvqs_idx",
         );
         try testing.expectEqual(@as(usize, 6), indexed);
 
@@ -417,7 +417,7 @@ test "vector index: a pinned reader survives the rebuild swap, later pins see th
 
         // A pin taken after the swap resolves to the freshly built wrapper,
         // not the retired one the reader was holding.
-        const fresh = try mgr().requireVectorIndex("vqs_idx");
+        const fresh = try mgr().requireVectorIndex("vq_swap\x1fvqs_idx");
         defer mgr().releaseVectorIndex(fresh);
         try testing.expect(@intFromPtr(wrapperPtr(fresh)) != reader.old_ptr.load(.acquire));
         try testing.expect(try searchThroughHandle(fresh, 1.0, 3) > 0);
@@ -449,7 +449,7 @@ test "vector index: total_entries does not drift across rebuild and drop" {
     const indexed = try mgr().rebuildAdvancedVectorIndexNonBlocking(
         testing.allocator,
         "vq_stats",
-        "vqst_idx",
+        "vq_stats\x1fvqst_idx",
     );
     try testing.expectEqual(@as(usize, 5), indexed);
 
@@ -462,7 +462,7 @@ test "vector index: total_entries does not drift across rebuild and drop" {
         return error.RebuildDoubleCountsEntries;
     }
 
-    try testing.expect(try mgr().dropAdvancedIndex("vqst_idx", .vector_f32));
+    try testing.expect(try mgr().dropAdvancedIndex("vq_stats\x1fvqst_idx", .vector_f32));
     const after_drop = mgr().statistics.total_entries;
     if (after_drop != 0) {
         std.debug.print(
@@ -503,13 +503,13 @@ test "vector index: the index name resolved for a property is owned by the calle
         const name = (try mgr().findAdvancedVectorIndexForPropertyAlloc(testing.allocator, "emb")) orelse
             return error.VectorIndexNotResolvedForProperty;
         defer testing.allocator.free(name);
-        try testing.expectEqualStrings("vqm_idx", name);
+        try testing.expectEqualStrings("vq_meta\x1fvqm_idx", name);
 
         // The DROP frees every manager-owned metadata string. A borrowed
         // result would be dangling on the next line; an owned duplicate is
         // still readable and still correct.
-        try testing.expect(try mgr().dropAdvancedIndex("vqm_idx", .vector_f32));
-        try testing.expectEqualStrings("vqm_idx", name);
+        try testing.expect(try mgr().dropAdvancedIndex("vq_meta\x1fvqm_idx", .vector_f32));
+        try testing.expectEqualStrings("vq_meta\x1fvqm_idx", name);
 
         // ...and the property no longer resolves to anything.
         const gone = try mgr().findAdvancedVectorIndexForPropertyAlloc(testing.allocator, "emb");

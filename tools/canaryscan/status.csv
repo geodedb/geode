@@ -5294,6 +5294,7 @@ REQ-SONNY-6700-STORAGE-SCRUB,StorageAdministration,ScrubEveryGraph,TESTED,src/ex
 REQ-SONNY-6700-STORAGE-SCRUB,StorageAdministration,Regression,TESTED,tests/test_sonny6700_storage_scrub.zig,tests/test_sonny6700_storage_scrub.zig,,storage,2026-11-17
 REQ-SONNY-6702-LIMIT-ZERO,EngineDirectRowWindow,Regression,TESTED,tests/test_sonny6702_limit_zero_node_scan.zig,tests/test_sonny6702_limit_zero_node_scan.zig,,engine,2026-11-17
 REQ-SONNY-6702-LIMIT-ZERO,AggregateFastPathWindow,Regression,TESTED,tests/test_sonny6702_window_fast_paths.zig,tests/test_sonny6702_window_fast_paths.zig,,engine,2026-11-17
+REQ-SONNY-6703-PER-GRAPH-VECTOR-INDEX,VectorIndex,PerGraphIndex,TESTED,tests/test_sonny6703_per_graph_vector_index.zig,tests/test_sonny6703_per_graph_vector_index.zig,,index,2026-11-17
 REQ-SONNY-6704-SINGLE-HOP-REPEATED-VAR,RepeatedPatternVariable,SingleHopEndpointUnify,TESTED,src/execution/match_operations.zig,tests/test_sonny6704_single_hop_repeated_variable.zig,,engine,2026-11-17
 REQ-SONNY-6704-SINGLE-HOP-REPEATED-VAR,RepeatedPatternVariable,SingleHopEndpointUnify,TESTED,tests/test_sonny6704_single_hop_repeated_variable.zig,,,engine,2026-11-17
 REQ-SONNY-6705-SET-ALL-FROM-ELEMENT,SetClauseSemantics,SetAllFromElement,TESTED,src/execution/property_mutation.zig,tests/test_sonny6704_single_hop_repeated_variable.zig,,engine,2026-11-17

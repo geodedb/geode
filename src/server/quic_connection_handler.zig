@@ -1322,7 +1322,7 @@ fn maintainBulkAdvancedIndexes(
     const mgr = geode.index_manager.getGlobalIndexManager() orelse return;
     for (labels) |label| {
         for (kvs) |kv| {
-            const names = mgr.advancedIndexNamesForPropertyAlloc(allocator, label, kv.key) catch |err| {
+            const names = mgr.advancedIndexNamesForPropertyInGraphAlloc(allocator, graph, label, kv.key) catch |err| {
                 log.warn("fast-path advanced index maintenance failed", &.{
                     Attr.string("label", label),
                     Attr.string("property", kv.key),
@@ -1335,7 +1335,7 @@ fn maintainBulkAdvancedIndexes(
                 allocator.free(names);
             }
             if (names.len == 0) continue;
-            if (mgr.tryIncrementalInsertForProperty(label, kv.key, node_id, kv.value)) continue;
+            if (mgr.tryIncrementalInsertForPropertyInGraph(graph, label, kv.key, node_id, kv.value)) continue;
             for (names) |name| {
                 _ = mgr.rebuildAdvancedVectorIndexNonBlocking(allocator, graph, name) catch |err| {
                     log.warn("fast-path advanced index rebuild failed", &.{

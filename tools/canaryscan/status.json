@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-17T22:37:59.290134628Z",
+  "generated_at": "2026-11-17T23:57:04.197256699Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83696,6 +83696,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6703-PER-GRAPH-VECTOR-INDEX",
+      "features": [
+        {
+          "feature": "VectorIndex",
+          "aspect": "PerGraphIndex",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6703_per_graph_vector_index.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6703_per_graph_vector_index.zig"
+          ],
+          "benches": [],
+          "owner": "index",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6704-SINGLE-HOP-REPEATED-VAR",
       "features": [
         {
@@ -88860,7 +88879,7 @@
       "EXEMPT": 209,
       "IMPL": 563,
       "STUB": 18,
-      "TESTED": 4404
+      "TESTED": 4405
     },
     "by_aspect": {
       "2PC": 3,
@@ -91320,6 +91339,7 @@
       "PerConnectionRxWake": 1,
       "PerConnectionTxCreditWake": 1,
       "PerDocumentCache": 1,
+      "PerGraphIndex": 1,
       "PerGroupAggregates": 1,
       "PerLabelBackfillFromPostings": 1,
       "PerMapHolders": 1,
