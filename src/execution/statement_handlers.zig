@@ -734,7 +734,7 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
     const staged = @import("write_shape.zig").returnStagesNeedWholeTable(body.*);
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    const carrier = if (staged) try stagedCarrierBody(arena.allocator(), body.*) else null;
+    const carrier = if (staged) try @import("write_shape.zig").stagedCarrierBody(arena.allocator(), body.*) else null;
     const run_body: *const ast.Query = if (carrier) |*c| c else body;
     var acc = ForBodyAccumulator{};
     errdefer acc.deinit(allocator);
@@ -753,88 +753,31 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
         defer if (items.owned) allocator.free(items.values);
         try runForBodyInto(allocator, for_stmt, run_body, items.values, with_result.columns, row, context, &acc);
     }
-    if (staged) return stageForReturn(allocator, arena.allocator(), body.*, &acc, context);
+    if (staged) return stageForReturn(allocator, body.*, &acc, context);
     return acc.finish(allocator);
-}
-
-fn carrierName(arena: std.mem.Allocator, i: usize) ![]const u8 {
-    return std.fmt.allocPrint(arena, "__c{d}", .{i});
-}
-
-fn carrierIdent(arena: std.mem.Allocator, i: usize) !*ast.Expr {
-    const name = try carrierName(arena, i);
-    const e = try arena.create(ast.Expr);
-    e.* = .{ .Ident = .{ .orig = name, .cnf = try std.ascii.allocUpperString(arena, name) } };
-    return e;
-}
-
-// CANARY: REQ=REQ-SONNY-6717-FOR-WRITE-RETURN-STAGES; FEATURE="ForStatement"; ASPECT=WriteBodyReturnStages; STATUS=TESTED; TEST=tests/test_sonny6717_for_write_return_stages.zig; OWNER=engine; UPDATED=2026-11-17
-/// SONNY-6717: `body` with its RETURN reduced to the values each element
-/// contributes to the stages: one column `__c<i>` per RETURN item, holding the
-/// item's expression, or an aggregate call's argument (`count(*)`: 1). The
-/// stages (DISTINCT, ORDER BY, SKIP / LIMIT, aggregates) then run over every
-/// element's rows together (`stageForReturn`), ISO/IEC 39075:2024 14.8.
-fn stagedCarrierBody(arena: std.mem.Allocator, body: ast.Query) !ast.Query {
-    var carrier = body;
-    const items = try arena.alloc(ast.ReturnItem, body.ret.items.len);
-    for (body.ret.items, items, 0..) |item, *out, i| {
-        var expr = item.expr;
-        if (@import("return_and_sorting.zig").isAggregateCall(expr)) {
-            const args = expr.Call.args;
-            const star = args.len == 0 or (args[0].* == .Ident and std.mem.eql(u8, args[0].Ident.orig, "*"));
-            expr = if (star) ast.Expr{ .Int = 1 } else args[0].*;
-        }
-        out.* = .{ .expr = expr, .alias = try carrierName(arena, i) };
-    }
-    carrier.ret = .{ .items = items, .distinct = false };
-    carrier.order_by = null;
-    carrier.limit = null;
-    carrier.offset = null;
-    carrier.limit_param = null;
-    carrier.offset_param = null;
-    return carrier;
 }
 
 /// SONNY-6717: the RETURN of a writing FOR body over the rows every element
 /// contributed (`acc`, `stagedCarrierBody`'s columns): its items projected and
 /// aggregated over all of them, then DISTINCT, ORDER BY, SKIP and LIMIT, as
 /// `executeForReturn` stages a FOR's RETURN.
-fn stageForReturn(allocator: std.mem.Allocator, arena: std.mem.Allocator, body: ast.Query, acc: *ForBodyAccumulator, context: ExecutionContext) !ExecutionResult {
+fn stageForReturn(allocator: std.mem.Allocator, body: ast.Query, acc: *ForBodyAccumulator, context: ExecutionContext) !ExecutionResult {
+    const return_clause = body.ret;
+    try execution.validateGroupBy(return_clause, body.group_by);
+    try execution.validateNoNestedAggregate(return_clause);
     var input = try acc.finish(allocator);
     defer {
         // The projection below holds the values; free the arrays only.
         input.owns_value_memory = false;
         input.deinit(allocator);
     }
-    const return_clause = body.ret;
-    const items = try arena.alloc(ast.ReturnItem, return_clause.items.len);
-    for (return_clause.items, items, 0..) |item, *out, i| {
-        const ident = try carrierIdent(arena, i);
-        if (@import("return_and_sorting.zig").isAggregateCall(item.expr)) {
-            const args = try arena.alloc(*ast.Expr, 1);
-            args[0] = ident;
-            const call = item.expr.Call;
-            const e = try arena.create(ast.Expr);
-            e.* = .{ .Call = .{ .callee = call.callee, .args = args, .distinct = call.distinct } };
-            out.* = .{ .expr = e.*, .alias = item.alias };
-        } else {
-            out.* = .{ .expr = ident.*, .alias = item.alias };
-        }
-    }
-    // An empty input has no carrier columns: the projection names them.
-    if (input.columns.len == 0) {
-        const cols = try allocator.alloc([]const u8, return_clause.items.len);
-        errdefer allocator.free(cols);
-        for (cols, 0..) |*c, i| c.* = try carrierName(arena, i);
-        input.columns = cols;
-    }
-    const projection = ast.WithClause{ .items = items };
+    const projection = ast.WithClause{ .items = return_clause.items };
     var result = try execution.executeWithClauseWithGroupByAndParams(
         allocator,
         input,
         projection,
-        null,
-        null,
+        body.group_by,
+        body.having,
         context.query_param_names,
         context.query_param_values,
     );

@@ -10,9 +10,12 @@
   `SKIP`/`LIMIT` and aggregates applied to each element alone (`... SET
   o.seen = z.k RETURN o.k AS k ORDER BY k` answered `[2, 1]`; `count(*)` a
   row of 1 per element). They now run over every element's rows together
-  (ISO/IEC 39075:2024 14.8). A RETURN that groups or buries an aggregate in a
-  bigger expression (`count(*) + 1`) is refused with `0A000` before anything
-  is written. Test: `zig build test-sonny6717-for-write-return-stages`.
+  (ISO/IEC 39075:2024 14.8): DISTINCT, ORDER BY, SKIP/LIMIT, aggregates,
+  aggregates inside larger expressions (`count(*) + 1`, `sum(x) * 2`,
+  evaluated after aggregation), GROUP BY and HAVING. The body runs per element
+  with a RETURN that carries only the variables the stages name; the real
+  RETURN is then evaluated once over those rows, as a plain FOR's is. Test:
+  `zig build test-sonny6717-for-write-return-stages`.
 
 ### Security
 
