@@ -7299,6 +7299,16 @@
   `U:HeuristicIndexSelection`, sent with every query that had a WHERE or
   FILTER equality whether or not an index existed, is no longer sent.
   Regression: `zig build test-sonny6276-explain-access-path` (new).
+- **EXPLAIN and PROFILE name an index from the session graph only
+  (SONNY-6707).** The catalog lookup behind `IndexSeek` and a profile's
+  `index_name` (`planned_read_runtime.equalityIndexName`) read every row of
+  the index catalog by label and property and never compared the row's
+  graph, although SONNY-1319 made index rows graph-scoped: a graph with the
+  same label and property but no such index was explained and profiled as
+  seeking on another graph's index, and the profile named it. It now counts
+  only rows of the session graph (an engine-wide legacy row included).
+  Query results were never affected. Regression:
+  `zig build test-sonny6707-explain-index-graph-scope` (new).
 - **The deepest nesting the parser allows fits a gRPC connection thread
   again (SONNY-738).** Nine nested FOR bodies (`... FOR x IN [1] MATCH (n)
   WITH n FOR ...`), within the documented limit of 10, were refused with
