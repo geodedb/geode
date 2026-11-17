@@ -3250,6 +3250,23 @@
 
 ### Fixed
 
+- **`LIMIT 0` returned a row, and an ungrouped `count(*)` ignored its window
+  (SONNY-6702).** On the engine-direct node scan (an unfiltered `MATCH (n:L)`
+  over a persisted store, the server's QUIC and gRPC path) `RETURN n.p LIMIT 0`,
+  `LIMIT $l` with `l = 0`, `RETURN n LIMIT 0` and `... OFFSET 0 LIMIT 0` answered
+  one row: slot collection appended a slot and only then compared the count to
+  its cap of 0. `RETURN count(*) AS c LIMIT 0` and `... SKIP 1` / `OFFSET 1`
+  answered the count row, as the stream never applied OFFSET or LIMIT to its one
+  aggregate row. ISO/IEC 39075:2024 14.10: a limit of 0 yields no rows, and the
+  one aggregate row is windowed like any other. The QUIC handler's own count
+  fast paths (`countNodesLabelRefcountFastPath`, `countNodesFastPath`,
+  `countEdgesFastPath`, `countFilteredFastPath`, `propertyAggregateFastPath`)
+  answered the one row before the executor and declined only a literal `LIMIT 0`,
+  so a count with an OFFSET, or with `LIMIT $l` and `l = 0`, was never windowed
+  either; they now decline any window that may drop the row. Both now answer no
+  rows. Regression: `zig build test-sonny6702-limit-zero` and
+  `zig build test-sonny6702-window-fast-paths`.
+
 - **A discarded engine abort is counted and documented; the
   `AbortNotUndone` quarantine test forces the case that still fails closed
   (SONNY-6657, SONNY-6529).** Since the graph-storage v0.4.24 pin, an abort
