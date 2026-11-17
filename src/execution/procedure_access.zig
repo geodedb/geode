@@ -163,6 +163,8 @@ pub fn classifyProcedureName(proc_name: []const u8) ProcedureAccess {
 /// `query_traits.isSelfLockingProgram`.
 const self_locking_procedure_names = [_][]const u8{
     "geode.tenant.backfill_edge_tags",
+    // SONNY-6700: scrubs every graph, one graph's lock after another.
+    "geode.storage.scrub",
 };
 
 // CANARY: REQ=REQ-SONNY-2790-FTS-DEFAULT-GRAPH; FEATURE="FullText"; ASPECT=DefaultGraphProcedures; STATUS=TESTED; TEST=tests/test_sonny2790_fts_graph_lock.zig; OWNER=index; UPDATED=2026-09-26

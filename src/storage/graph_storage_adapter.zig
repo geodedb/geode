@@ -12235,6 +12235,15 @@ pub const StorageAdapter = struct {
     /// second graph's lock could deadlock). `error.TransactionsOpen` when an
     /// engine transaction of the graph is open.
     pub fn scrubGraphDeadSpace(self: *StorageAdapter, graph_name: []const u8) !gs.ScrubReport {
+        return self.scrubGraphDeadSpaceWithin(graph_name, null);
+    }
+
+    /// SONNY-6700: `scrubGraphDeadSpace` waiting at most `acquire_timeout_ns`
+    /// for the graph's lock when it takes it (`error.CheckpointLockBusy`
+    /// past it; null waits). `CALL geode.storage.scrub()` scrubs one graph
+    /// after another holding no other lock, and a busy graph is reported,
+    /// not waited on forever.
+    pub fn scrubGraphDeadSpaceWithin(self: *StorageAdapter, graph_name: []const u8, acquire_timeout_ns: ?u64) !gs.ScrubReport {
         const holds = self.threadHoldsGraphWriteLock(graph_name);
         if (!holds and threadHoldsAnyGraphLock()) return error.GraphLockOrder;
         const mg = blk: {
@@ -12246,7 +12255,7 @@ pub const StorageAdapter = struct {
         };
         defer self.unpinGraph(mg);
         var scrub: ScrubOutcome = .{};
-        switch (self.checkpointOneGraph(mg, false, !holds, null, null, .{ .lock_held = holds, .scrub = &scrub })) {
+        switch (self.checkpointOneGraph(mg, false, !holds, if (holds) null else acquire_timeout_ns, null, .{ .lock_held = holds, .scrub = &scrub })) {
             .ok => {},
             .skipped_busy => return error.CheckpointLockBusy,
             .engine_failed => return error.CheckpointFailed,

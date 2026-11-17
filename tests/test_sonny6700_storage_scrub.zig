@@ -209,7 +209,7 @@ test "SONNY-6700: CALL geode.storage.scrub() clears every graph's freed var-stor
         std.debug.print("SONNY-6700: {d} of {d} dead values are still in the data directory after CALL geode.storage.scrub()\n", .{ after, dead_markers.len });
         return error.DeadBytesRemain;
     }
-    try testing.expectEqualStrings(live_value, try e.str("MATCH (n:K6700 {k: 1}) RETURN n.v"));
+    try testing.expectEqualStrings(live_value, try e.str("USE GRAPH default; MATCH (n:K6700 {k: 1}) RETURN n.v"));
     try testing.expectEqualStrings(live_value, try e.str("USE GRAPH g6700; MATCH (n:K6700 {k: 3}) RETURN n.v"));
 }
 
@@ -343,7 +343,7 @@ test "SONNY-6700: against a running server, geode.storage.scrub is refused for a
             std.debug.print("SONNY-6700: {d} superseded values are in the running server's data directory after CALL geode.storage.scrub()\n", .{after});
             return error.DeadBytesRemain;
         }
-        const v1 = try quicStrs(arena.allocator(), &admin, "MATCH (n:S6700 {k: 1}) RETURN n.v");
+        const v1 = try quicStrs(arena.allocator(), &admin, "USE GRAPH default; MATCH (n:S6700 {k: 1}) RETURN n.v");
         try testing.expectEqualStrings(live_value, v1[0]);
         const v3 = try quicStrs(arena.allocator(), &admin, "USE GRAPH g6700s; MATCH (n:S6700 {k: 3}) RETURN n.v");
         try testing.expectEqualStrings(live_value, v3[0]);

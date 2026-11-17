@@ -750,7 +750,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6700-storage-scrub", .reason = "intentionally red TDD reproduction (SONNY-6700, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -18419,8 +18418,7 @@ pub fn build(b: *std.Build) void {
     const sonny6700_tests = b.addTest(.{ .root_module = sonny6700_test_mod });
     const run_sonny6700_tests = b.addRunArtifact(sonny6700_tests);
     spawnsBuiltGeode(sonny6700_tests);
-    // Intentionally red until the fix (KNOWN_TEST_ISSUES): out of the aggregate.
-    if (g_test_compile_step) |c| c.dependOn(&sonny6700_tests.step);
+    shardDep(test_step, &run_sonny6700_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6700-storage-scrub", "Run SONNY-6700 regression (CALL geode.storage.scrub(), Admin only and audited, overwrites every graph's dead space -- freed var-store slab runs, allocated pages no live record owns, superseded values -- so none is in any file of the data directory; the live data reads back)").dependOn(&run_sonny6700_tests.step);
 
     // SONNY-6688: geode.fle.migrateEncrypt / geode fle migrate-encrypt.

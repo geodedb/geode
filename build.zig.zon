@@ -760,8 +760,17 @@
             // pages and truncates the WAL. Additive API, same dependencies as
             // v0.4.26. Pinned to the release commit cee4ee7 on MR !36
             // (fix/sonny-6692-scrub-dead-space), not tagged yet.
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#cee4ee7320ef145a9f3e72a104b1867214575db4",
-            .hash = "graph_storage-0.4.27-9UyJS4W1NwBSUKRIWiZYvCaMa4KZalhN4lkbXPpUDxrO",
+            // v0.4.28 (2026-11-17, SONNY-6700): `scrubDeadSpace` proves
+            // ownership first (a walk of every live node's properties and
+            // labels and every out-edge's properties, following overflowed
+            // values) and also clears freed var-store slab runs and zeroes
+            // and frees allocated pages no live record owns; `ScrubReport`
+            // gains `var_slab_blocks_scrubbed`, `var_slab_bytes_zeroed`,
+            // `orphan_pages_freed`. Same dependencies as v0.4.27. Pinned to
+            // the release commit 0692d02 on MR !37
+            // (fix/sonny-6700-scrub-var-slab-orphans), not tagged yet.
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#0692d02c7fc400babdea3740fbb235a39d5ba232",
+            .hash = "graph_storage-0.4.28-9UyJSw_0NwATiWWl8SrEt2R6vuUqKhDC4khuVDHbV7ho",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting

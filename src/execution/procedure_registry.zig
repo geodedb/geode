@@ -127,6 +127,8 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
     // the CDC_DIAGNOSTICS / CDC_CONTROL frames are (a readwrite or readonly
     // user read cdc.status() and ran cdc.enable() / cdc.disable()).
     if (storage_dispatch.isCdcProcedure(proc_name)) try fle_admin.requireAdminFor(allocator, proc_name, context, "CDC administration");
+    // SONNY-6700: storage administration (geode.storage.scrub) likewise.
+    if (storage_dispatch.isStorageAdministrationProcedure(proc_name)) try fle_admin.requireAdminFor(allocator, proc_name, context, "storage administration");
 
     if (context.principal) |princ| {
         const access_class = procedure_access.classifyProcedureName(proc_name);
@@ -232,6 +234,17 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
     // ---- geode.storage.* procedures (storage inspection) ----
     if (std.mem.startsWith(u8, proc_name, "geode.storage.")) {
+        // SONNY-6700: a scrub is an audit event, whether it succeeds or fails.
+        if (storage_dispatch.isStorageAdministrationProcedure(proc_name)) {
+            var details_buf: [256]u8 = undefined;
+            var details: std.Io.Writer = .fixed(&details_buf);
+            const scrubbed = storage_dispatch.executeStorageScrub(allocator, call_stmt, context, &details) catch |err| {
+                storage_dispatch.auditStorageScrub(allocator, context, details.buffered(), err);
+                return err;
+            };
+            storage_dispatch.auditStorageScrub(allocator, context, details.buffered(), null);
+            return scrubbed;
+        }
         if (try storage_dispatch.executeStorage(allocator, proc_name, call_stmt, context)) |result| {
             return result;
         }

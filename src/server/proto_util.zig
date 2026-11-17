@@ -621,6 +621,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.GraphLockHeld => .{ .code = "0A000", .message = "geode.tenant.backfill_edge_tags takes each graph's lock itself; send it as the only statement in its request" },
         error.BackfillInTransaction => .{ .code = "25000", .message = "geode.tenant.backfill_edge_tags cannot run inside a transaction: ROLLBACK would not undo its re-tags (a dry run can)" },
         error.BackfillProjection => .{ .code = "0A000", .message = "geode.tenant.backfill_edge_tags takes no RETURN or ORDER BY: it runs with no statement lock, and they would read the store; YIELD its columns instead" },
+        // SONNY-6700: geode.storage.scrub refusals.
+        error.ScrubLockHeld => .{ .code = "0A000", .message = "geode.storage.scrub takes each graph's lock itself; send it as the only statement in its request" },
+        error.ScrubInTransaction => .{ .code = "25000", .message = "geode.storage.scrub cannot run inside a transaction: ROLLBACK would not undo it" },
+        error.ScrubProjection => .{ .code = "0A000", .message = "geode.storage.scrub takes no RETURN or ORDER BY: it runs with no statement lock, and they would read the store; YIELD its columns instead" },
         // SONNY-2686: a MERGE whose pattern only nodes the session's row-level
         // security hides match is refused (nothing bound, updated or created)
         // rather than binding the hidden node or creating a duplicate of it.
