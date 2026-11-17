@@ -4,6 +4,25 @@
 
 ### Security
 
+- **After `geode.fle.migrateEncrypt` reports complete, no plaintext of the
+  field is left in the data directory (SONNY-6692).** The migration
+  removed each plaintext value and wrote it sealed, but superseded bytes
+  stayed on disk: in `props.store` and the WAL until the next checkpoint,
+  in freed var-store pages for values larger than a property page, and in
+  tombstoned slab blobs left by updates made before the migration. After
+  its last batch the procedure now overwrites the graph's dead space
+  (graph-storage 0.4.27 `scrubDeadSpace`: free property and var-store
+  pages, tombstoned slab blobs) and checkpoints the graph in full, which
+  writes the cleared pages and truncates the WAL
+  (`StorageAdapter.scrubGraphDeadSpace`). It runs under the request's
+  write lock on the graph, held as it is, or takes it when the caller
+  holds none; another graph's lock is refused (0A000), and an open
+  transaction on the graph refuses the scrub (55006, the values stay
+  migrated; rerun). `complete` now also requires the scrub; new columns
+  `dead_pages_zeroed` and `dead_bytes_zeroed`. Regression: `zig build
+  test-sonny6692-fle-migration-scrub` (in process and through `geode fle
+  migrate-encrypt` against a running server, values above the page size
+  and updated before the migration).
 - **Existing plaintext of a newly encrypted field can be migrated:
   `CALL geode.fle.migrateEncrypt` and `geode fle migrate-encrypt`
   (SONNY-6688).** `geode.fle.configureField` encrypted values written

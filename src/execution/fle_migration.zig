@@ -20,6 +20,16 @@
 //!     caller must be the session's own when it has one (else 42501).
 //!   * RLS: a node the session's row policies hide is not touched (counted
 //!     `skipped_rls`); the run then reports `complete = false`.
+//!   * Nothing left on disk (SONNY-6692): when the run reports `complete`,
+//!     no plaintext of the field is in any file of the data directory.
+//!     After the last batch the graph's dead space is overwritten
+//!     (graph-storage `scrubDeadSpace`: freed property and var-store pages,
+//!     including the spill pages of values larger than a page, and
+//!     tombstoned slab blobs, including the copies an update before the
+//!     migration left) and the graph is checkpointed in full, which writes
+//!     the cleared pages and truncates the WAL that held the old images
+//!     (`StorageAdapter.scrubGraphDeadSpace`). It runs under the request's
+//!     write lock on the graph (held as it is) or takes it.
 //!   * Not left on disk: graph-storage keeps a replaced value's bytes in
 //!     the tombstoned slot it moves out of (the undo needs them), so a plain
 //!     overwrite left the plaintext in `props.store`. Each value is removed
@@ -89,10 +99,17 @@ pub const Report = struct {
     /// Nodes the session's row policies hide.
     skipped_rls: u64 = 0,
     batches: u64 = 0,
+    /// SONNY-6692: the graph's dead space was overwritten and checkpointed
+    /// (always for a persisted store; an in-memory one writes no files).
+    scrubbed: bool = false,
+    /// Free pages and dead slab bytes the scrub cleared.
+    dead_pages_zeroed: u64 = 0,
+    dead_bytes_zeroed: u64 = 0,
 
-    /// Every value the session could migrate is sealed.
+    /// Every value the session could migrate is sealed, and nothing of
+    /// the old values is left in the data directory.
     pub fn complete(self: Report) bool {
-        return self.skipped_rls == 0;
+        return self.skipped_rls == 0 and self.scrubbed;
     }
 };
 
@@ -162,6 +179,13 @@ pub fn migrateField(allocator: std.mem.Allocator, store: *graph_store.GraphStore
         if (batch.items.len >= opts.batch_size) try runBatch(allocator, store, opts, &report, &batch);
     }
     if (batch.items.len > 0) try runBatch(allocator, store, opts, &report, &batch);
+    // SONNY-6692: the old values out of the store files and the WAL.
+    if (graph_store.getGlobalAdapter()) |adapter| {
+        const scrub = try adapter.scrubGraphDeadSpace(opts.graph);
+        report.dead_pages_zeroed = scrub.free_pages_zeroed;
+        report.dead_bytes_zeroed = scrub.slab_bytes_zeroed;
+    }
+    report.scrubbed = true;
     log.info("FLE migrate-encrypt finished", &.{
         Attr.string("graph", opts.graph),
         Attr.string("type", opts.type_name),

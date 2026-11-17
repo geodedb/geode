@@ -753,8 +753,15 @@
             // the graph's directory (0700), not $TMPDIR. Additive API, same
             // dependencies as v0.4.25. Pinned to the release commit e850df3
             // on MR !35 (fix/sonny-6635-registry-identity), not tagged yet.
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.26#4ba18a017d5f800e2acf973e6fe36932a5bb25c6",
-            .hash = "graph_storage-0.4.26-9UyJS9lyNwCuF0IKB6A7dsduW2V5z0b1t-CZxfZTjx_N",
+            // v0.4.27 (2026-11-17, SONNY-6692): `GraphEngine` /
+            // `ShardedGraphEngine.scrubDeadSpace` overwrite dead space (free
+            // property and var-store pages, tombstoned slab blobs) in one
+            // logged transaction; the next checkpoint writes the cleared
+            // pages and truncates the WAL. Additive API, same dependencies as
+            // v0.4.26. Pinned to the v0.4.27 tag (merge of MR !36,
+            // fix/sonny-6692-scrub-dead-space).
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.27#2c2c5609204dfc44e5e568f906903037284bb4e3",
+            .hash = "graph_storage-0.4.27-9UyJS4W1NwBSUKRIWiZYvCaMa4KZalhN4lkbXPpUDxrO",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting

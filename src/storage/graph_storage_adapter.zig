@@ -11436,7 +11436,7 @@ pub const StorageAdapter = struct {
             // Bounded rwlock deadline for the periodic LIGHT checkpoint;
             // unbounded (null) for the durability-critical FULL checkpoint.
             const timeout_ns: ?u64 = if (light) 5 * std.time.ns_per_s else null;
-            switch (self.checkpointOneGraph(mg, light, set_writer_pref, timeout_ns, null)) {
+            switch (self.checkpointOneGraph(mg, light, set_writer_pref, timeout_ns, null, .{})) {
                 .ok => {},
                 .engine_failed => any_engine_failed = true,
                 // GAP-0900 bug #2: an rwlock-deadline skip leaves the graph's
@@ -11604,6 +11604,22 @@ pub const StorageAdapter = struct {
     ///   FULL path's exact-index persist decision actually did. Left at
     ///   `.not_attempted` on every path that runs no decision (LIGHT, busy
     ///   rwlock, failed engine checkpoint, dir-path error).
+    /// SONNY-6692: extra work of one graph's checkpoint.
+    const CheckpointExtras = struct {
+        /// The caller already holds `mg.rwlock` EXCLUSIVE (its own write
+        /// lock): it is neither taken nor released here.
+        lock_held: bool = false,
+        /// Scrub the engine's dead space (`ShardedGraphEngine.scrubDeadSpace`)
+        /// under the lock, before the (FULL) engine checkpoint.
+        scrub: ?*ScrubOutcome = null,
+    };
+
+    /// SONNY-6692: what a scrubbing checkpoint did.
+    pub const ScrubOutcome = struct {
+        report: gs.ScrubReport = .{},
+        err: ?anyerror = null,
+    };
+
     fn checkpointOneGraph(
         self: *StorageAdapter,
         mg: *ManagedGraph,
@@ -11611,6 +11627,7 @@ pub const StorageAdapter = struct {
         set_writer_pref: bool,
         acquire_timeout_ns: ?u64,
         exact_out: ?*ExactIndexPersistOutcome,
+        extras: CheckpointExtras,
     ) OneGraphCheckpointOutcome {
         if (exact_out) |o| o.* = .not_attempted;
         const _t_start = monoNanosNow();
@@ -11657,7 +11674,7 @@ pub const StorageAdapter = struct {
         // explicit FULL checkpoint) spins via `tryLock` so durability is never
         // sacrificed.
         const io_cp = std.Io.Threaded.global_single_threaded.io();
-        if (!mg.rwlock.tryLock(io_cp)) {
+        if (!extras.lock_held and !mg.rwlock.tryLock(io_cp)) {
             var sleep_ns: u64 = 100 * std.time.ns_per_us;
             const max_sleep_ns: u64 = 2 * std.time.ns_per_ms;
             const cp_deadline_ns: ?u64 = if (acquire_timeout_ns) |t| _t_start + t else null;
@@ -11699,7 +11716,7 @@ pub const StorageAdapter = struct {
         // SONNY-3028: dropped while this checkpoint waited for its lock (the
         // caller pinned it): there is nothing left to save.
         if (mg.isDropped()) {
-            mg.rwlock.unlock(io_cp);
+            if (!extras.lock_held) mg.rwlock.unlock(io_cp);
             return .ok;
         }
         // CANARY: REQ=REQ-SONNY-6528-APPLY-CHECKPOINT-EXCLUSION; FEATURE="DistributedCluster"; ASPECT=CheckpointWaitsForApply; STATUS=TESTED; TEST=tests/test_sonny6528_apply_checkpoint_exclusion.zig; OWNER=storage; UPDATED=2026-11-14
@@ -11719,6 +11736,12 @@ pub const StorageAdapter = struct {
         // store does NOT bump the manifest counter or strand counter-stamped
         // snapshots.
         var engine_ok = true;
+        // SONNY-6692: dead space overwritten first, so the checkpoint below
+        // writes the cleared pages and truncates the WAL that held the old
+        // images.
+        if (extras.scrub) |out| {
+            if (mg.engine.scrubDeadSpace()) |r| out.report = r else |err| out.err = err;
+        }
         if (light) {
             mg.engine.checkpointLight() catch |err| {
                 // SONNY-6523 (6): counted, and logged at ERROR once per
@@ -11889,7 +11912,7 @@ pub const StorageAdapter = struct {
                 });
             }
         }
-        mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (!extras.lock_held) mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
         return if (engine_ok) .ok else .engine_failed;
     }
 
@@ -12229,6 +12252,37 @@ pub const StorageAdapter = struct {
     /// `ensureGraphHydrated`). Busy past the deadline => error; the caller
     /// logs loudly and degrades (products stay memory-only until the next
     /// full checkpoint — pre-Task-3 behaviour).
+    // CANARY: REQ=REQ-SONNY-6692-SCRUB-CHECKPOINT; FEATURE="FieldLevelEncryption"; ASPECT=ScrubDeadSpaceThenCheckpoint; STATUS=TESTED; TEST=tests/test_sonny6692_fle_migration_scrub.zig; OWNER=security; UPDATED=2026-11-17
+    /// SONNY-6692: overwrite `graph_name`'s dead space (graph-storage
+    /// `scrubDeadSpace`: freed property and var-store pages, tombstoned slab
+    /// blobs) and run a FULL checkpoint, under the graph's EXCLUSIVE lock, so
+    /// no superseded value stays in the store files or the WAL. When this
+    /// thread already holds the graph's write lock (a statement's request
+    /// lock) it is used as held; when it holds none it is taken (waiting);
+    /// holding another graph's lock is refused (`GraphLockOrder`: taking a
+    /// second graph's lock could deadlock). `error.TransactionsOpen` when an
+    /// engine transaction of the graph is open.
+    pub fn scrubGraphDeadSpace(self: *StorageAdapter, graph_name: []const u8) !gs.ScrubReport {
+        const holds = self.threadHoldsGraphWriteLock(graph_name);
+        if (!holds and threadHoldsAnyGraphLock()) return error.GraphLockOrder;
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            const found = try self.requireExistingGraphLocked(graph_name);
+            _ = found.pins.fetchAdd(1, .acq_rel);
+            break :blk found;
+        };
+        defer self.unpinGraph(mg);
+        var scrub: ScrubOutcome = .{};
+        switch (self.checkpointOneGraph(mg, false, !holds, null, null, .{ .lock_held = holds, .scrub = &scrub })) {
+            .ok => {},
+            .skipped_busy => return error.CheckpointLockBusy,
+            .engine_failed => return error.CheckpointFailed,
+        }
+        if (scrub.err) |err| return err;
+        return scrub.report;
+    }
+
     pub fn checkpointGraph(self: *StorageAdapter, graph_name: []const u8) !void {
         return self.checkpointGraphEx(graph_name, null);
     }
@@ -12251,7 +12305,7 @@ pub const StorageAdapter = struct {
             break :blk found;
         };
         defer self.unpinGraph(mg);
-        switch (self.checkpointOneGraph(mg, false, true, 5 * std.time.ns_per_s, exact_out)) {
+        switch (self.checkpointOneGraph(mg, false, true, 5 * std.time.ns_per_s, exact_out, .{})) {
             .ok => {},
             .skipped_busy => return error.CheckpointLockBusy,
             .engine_failed => return error.CheckpointFailed,
