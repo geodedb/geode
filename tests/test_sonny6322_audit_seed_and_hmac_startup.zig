@@ -232,16 +232,21 @@ const Server = struct {
 
     fn start(allocator: std.mem.Allocator, cwd: []const u8, data_dir: []const u8, env_kv: []const [2][]const u8) !Server {
         var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
-        errdefer threaded.deinit();
+        var parts_owned = true;
+        errdefer if (parts_owned) threaded.deinit();
         var env = std.process.Environ.Map.init(allocator);
-        errdefer env.deinit();
+        errdefer if (parts_owned) env.deinit();
         inline for (.{ "PATH", "HOME", "LD_LIBRARY_PATH" }) |name| {
             if (std.c.getenv(name)) |v| try env.put(name, std.mem.span(v));
         }
         try env.put("GEODE_ADMIN_PASSWORD", admin_pw);
         for (env_kv) |kv| try env.put(kv[0], kv[1]);
         const addr = try util.formatAddr(allocator, try test_ports.freeUdpPort());
-        errdefer allocator.free(addr);
+        // `addr` is the caller's until `server` exists; from then on `server.stop`
+        // (the errdefer below) frees it. An errdefer on both freed it twice when
+        // the server never became ready (SONNY-6708 triage).
+        var addr_owned = true;
+        errdefer if (addr_owned) allocator.free(addr);
         const inherit = std.c.getenv("GEODE_TEST_INHERIT_SERVER_STDERR") != null;
         const child = try std.process.spawn(threaded.io(), .{
             .argv = &.{ geode_binary, "serve", "--listen", addr, "--data-dir", data_dir },
@@ -252,6 +257,8 @@ const Server = struct {
             .stderr = if (inherit) .inherit else .ignore,
         });
         var server: Server = .{ .threaded = threaded, .env = env, .child = child, .addr = addr };
+        addr_owned = false;
+        parts_owned = false;
         errdefer server.stop(allocator);
         try util.waitForServerReady(allocator, addr, 60_000);
         return server;
@@ -284,7 +291,9 @@ const Server = struct {
 };
 
 fn exec(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query: []const u8) !void {
-    var r = try client.executeAndCollect(allocator, query, util.emptyParams(), 1000);
+    // A Debug server hashing a password (Argon2id) on a loaded machine needs more than
+    // the 5 s default no-progress timeout; this is a client wait, not an assertion.
+    var r = try client.executeAndCollectWait(allocator, query, util.emptyParams(), 1000, 90, .{ .while_server_alive_ms = 90_000 }, null);
     defer r.deinit(allocator);
     if (r.error_code) |code| {
         std.debug.print("SONNY-6322: {s}: {s} {s}\n", .{ query, code, r.error_message orelse "" });
