@@ -13628,6 +13628,23 @@ pub fn build(b: *std.Build) void {
     const sonny3125_step = b.step("test-sonny3125-shared-node-set", "Run SONNY-3125 regression (a SET reading a node that N matched rows share is applied N times: hop, two-hop, multi-chain; gRPC in process)");
     sonny3125_step.dependOn(&run_sonny3125_tests.step);
 
+    // SONNY-6704 / SONNY-6705: a one-hop pattern naming one variable at both ends
+    // matches only a loop; SET a = b copies a node's properties and refuses a
+    // non-map value instead of wiping a (real gRPC handlers in process).
+    const sonny6704_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6704_single_hop_repeated_variable.zig"), .target = target, .optimize = optimize });
+    sonny6704_test_mod.link_libc = true;
+    sonny6704_test_mod.addImport("geode", root_mod);
+    sonny6704_test_mod.addImport("schema", schema_mod);
+    sonny6704_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6704_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6704_test_mod.addImport("logging", logging_mod);
+    sonny6704_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6704_tests = b.addTest(.{ .root_module = sonny6704_test_mod });
+    const run_sonny6704_tests = b.addRunArtifact(sonny6704_tests);
+    shardDep(test_step, &run_sonny6704_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6704_step = b.step("test-sonny6704-single-hop-repeated-variable", "Run SONNY-6704/6705 regression (one variable at both ends of a one-hop pattern names one node; SET a = b copies, a non-map is refused; gRPC in process)");
+    sonny6704_step.dependOn(&run_sonny6704_tests.step);
+
     const sonny3245_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny3245_create_merge_forms.zig"), .target = target, .optimize = optimize });
     sonny3245_test_mod.link_libc = true;
     sonny3245_test_mod.addImport("geode", root_mod);
