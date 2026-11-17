@@ -274,6 +274,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.MigrationInTransaction => .{ .code = "25000", .message = "geode.fle.migrateEncrypt commits batch by batch and cannot run inside an explicit transaction" },
         error.CorruptFleMigrationJournal => .{ .code = "XX001", .message = "fle_migration.journal is damaged: the FLE migration batch it records cannot be finished" },
         error.MigrationNeedsDurableCommits => .{ .code = "55000", .message = "geode.fle.migrateEncrypt needs durable commits; the store runs with GEODE_WAL_SYNC=deferred" },
+        // SONNY-6692: the post-migration scrub.
+        error.TransactionsOpen => .{ .code = "55006", .message = "A transaction is open on the graph, so its dead space cannot be overwritten now: the values are migrated; run geode.fle.migrateEncrypt again when it has ended" },
+        error.GraphLockOrder => .{ .code = "0A000", .message = "geode.fle.migrateEncrypt of another graph than the session's: USE GRAPH <graph> first" },
         error.MigrationInterrupted => .{ .code = "58030", .message = "The FLE migration stopped part way; the batches done are kept. Run it again to finish" },
         error.MergeOnEncryptedField => .{ .code = "0A000", .message = "MERGE on an FLE-encrypted property is not supported: the stored value is randomized ciphertext, so a pattern value never matches it and MERGE would create a duplicate. MERGE on an unencrypted key and set the encrypted property with ON CREATE SET / SET" },
         error.IndexOnEncryptedField => .{ .code = "0A000", .message = "The field is FLE-encrypted: an index or UNIQUE / NODE KEY constraint over it would hold ciphertext (or plaintext); none can be created. Equality search over an encrypted field is not available; index or constrain an unencrypted property instead" },

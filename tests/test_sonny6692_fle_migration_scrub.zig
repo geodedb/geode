@@ -14,7 +14,10 @@
 //       blob left the old blob, with the old value, in a tombstoned slab
 //       slot nothing reaches.
 // The whole data directory is read back right after the procedure returns:
-// no small or large value, current or superseded, is in any file.
+// no small or large value, current or superseded, is in any file. In
+// process (the procedure takes the graph's write lock for the scrub) and
+// against a real `geode serve` through `geode fle migrate-encrypt` (it runs
+// under the request's write lock, held as it is), with the server running.
 //
 // Real executor, real persisted store. No mocks.
 //
@@ -24,6 +27,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
+const geode_test_bin = @import("geode_test_bin");
+const util = @import("proto_test_util.zig");
 const fx = @import("sonny738_r12_grpc_fixture.zig");
 
 const execution = geode.execution;
@@ -200,4 +205,130 @@ test "SONNY-6692: after migrateEncrypt returns, no plaintext of the field is in 
     try testing.expectEqualStrings(small_after, small[0]);
     const large = try e.strs("pii", "MATCH (n:P6692 {k: 2}) RETURN n.ssn");
     try testing.expectEqualStrings(comptime big(big_after_marker), large[0]);
+}
+
+// ---------------------------------------------------------------------------
+// A real server, through the CLI
+// ---------------------------------------------------------------------------
+
+fn quicOk(client: *util.QuicProtoClient, query: []const u8) !void {
+    var r = try client.executeAndCollect(testing.allocator, query, util.emptyParams(), 100);
+    defer r.deinit(testing.allocator);
+    if (r.error_code) |c| {
+        std.debug.print("{s}: {s} {?s}\n", .{ query, c, r.error_message });
+        return error.UnexpectedStatus;
+    }
+}
+
+/// The first column of every row as strings, sorted (the caller frees with
+/// the arena).
+fn quicStrs(aa: std.mem.Allocator, client: *util.QuicProtoClient, query: []const u8) ![]const []const u8 {
+    var r = try client.executeAndCollect(testing.allocator, query, util.emptyParams(), 100);
+    defer r.deinit(testing.allocator);
+    if (r.error_code) |c| {
+        std.debug.print("{s}: {s} {?s}\n", .{ query, c, r.error_message });
+        return error.UnexpectedStatus;
+    }
+    var out: std.ArrayList([]const u8) = .empty;
+    for (r.rows) |row| try out.append(aa, switch (row[0]) {
+        .string => |s| try aa.dupe(u8, s),
+        else => "",
+    });
+    std.mem.sort([]const u8, out.items, {}, struct {
+        fn lt(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.lt);
+    return out.items;
+}
+
+const Server = struct {
+    handle: util.ServerHandle,
+    addr: []u8,
+
+    fn start(data_dir: []const u8) !Server {
+        const allocator = testing.allocator;
+        const port = try util.getRandomPort();
+        const addr = try util.formatAddr(allocator, port);
+        errdefer allocator.free(addr);
+        var handle = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir }, &.{"GEODE_MASTER_KEY=" ++ master_key});
+        errdefer handle.deinit();
+        try util.waitForServerReady(allocator, addr, 30000);
+        return .{ .handle = handle, .addr = addr };
+    }
+
+    fn stop(self: *Server) void {
+        self.handle.deinit();
+        testing.allocator.free(self.addr);
+    }
+
+    /// SIGTERM: the server's own shutdown, whose checkpoint writes the
+    /// pages and truncates the WAL.
+    fn stopClean(self: *Server) !void {
+        const outcome = self.handle.stopGracefully(60_000);
+        testing.allocator.free(self.addr);
+        if (outcome != .exited) return error.ServerDidNotStopCleanly;
+    }
+
+    fn admin(self: *Server, fle_role: []const u8) !util.QuicProtoClient {
+        var c = try util.QuicProtoClient.connect(testing.allocator, self.addr);
+        errdefer c.deinit();
+        var h = try c.helloAs(testing.allocator, util.defaultUsername(), util.defaultPassword(), fle_role);
+        defer h.deinit(testing.allocator);
+        if (!h.success) return error.HelloRefused;
+        return c;
+    }
+};
+
+test "SONNY-6692: geode fle migrate-encrypt against a running server leaves no plaintext of the field in the data directory when it returns" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var dir_buf: [64]u8 = undefined;
+    const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-6692-{d}", .{std.os.linux.getpid()});
+    std.Io.Dir.cwd().deleteTree(io(), data_dir) catch {};
+    try std.Io.Dir.cwd().createDirPath(io(), data_dir);
+    defer std.Io.Dir.cwd().deleteTree(io(), data_dir) catch {};
+
+    var server = try Server.start(data_dir);
+    defer server.stop();
+    var a = try server.admin("admin");
+    defer a.deinit();
+    try quicOk(&a, "CREATE (:S6692 {k: 1, ssn: '" ++ small_before ++ "'})");
+    try quicOk(&a, "MATCH (n:S6692 {k: 1}) SET n.ssn = '" ++ small_after ++ "', n.note = 'grown'");
+    try quicOk(&a, "CREATE (:S6692 {k: 2, ssn: '" ++ comptime big(big_before_marker) ++ "'})");
+    try quicOk(&a, "MATCH (n:S6692 {k: 2}) SET n.ssn = '" ++ comptime big(big_after_marker) ++ "'");
+    try quicOk(&a, "CALL geode.fle.configureField('S6692', 'ssn', { algorithm: 'AES-256-GCM', visibility: ['admin'] })");
+    try quicOk(&a, "CALL geode.fle.grantRole('geode', 'admin')");
+
+    {
+        var threaded = std.Io.Threaded.init(testing.allocator, .{});
+        defer threaded.deinit();
+        const res = try std.process.run(testing.allocator, threaded.io(), .{
+            .argv = &.{ geode_test_bin.geode_exe, "fle", "migrate-encrypt", "default", "S6692", "ssn", "1", "--server", server.addr, "--insecure-tls-skip-verify", "--user", util.defaultUsername(), "--password", util.defaultPassword() },
+            .stdout_limit = .limited(1 << 20),
+            .stderr_limit = .limited(1 << 20),
+        });
+        defer testing.allocator.free(res.stdout);
+        defer testing.allocator.free(res.stderr);
+        const ok = switch (res.term) {
+            .exited => |c| c == 0,
+            else => false,
+        };
+        if (!ok or std.mem.indexOf(u8, res.stdout, "true") == null) {
+            std.debug.print("SONNY-6692: geode fle migrate-encrypt: {any}\nstdout: {s}\nstderr: {s}\n", .{ res.term, res.stdout, res.stderr });
+            return error.CliFailed;
+        }
+    }
+    // The server is still running: the procedure itself left nothing.
+    var found: usize = 0;
+    for (all_markers) |m| {
+        if (try dirContains(testing.allocator, data_dir, m)) found += 1;
+    }
+    if (found != 0) {
+        std.debug.print("SONNY-6692: {d} plaintext values of the migrated field are in the running server's data directory\n", .{found});
+        return error.PlaintextRemains;
+    }
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const vals = try quicStrs(arena.allocator(), &a, "MATCH (n:S6692) RETURN n.ssn");
+    try testing.expectEqual(@as(usize, 2), vals.len);
 }

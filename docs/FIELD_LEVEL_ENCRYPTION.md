@@ -920,14 +920,22 @@ Run: `python3 extended_test_runner.py`
      deferred WAL mode is refused.
    - Resumable: values already sealed are recognized and skipped
      (`already_encrypted`); run it again after an interruption.
-   - At rest: each value is removed (its record's property blob rewritten
-     in place, the freed bytes zeroed) before its envelope is written, so
-     the old plaintext does not stay in a dead slot. The store files and
-     the WAL drop the old bytes at the next checkpoint (periodic, or at
-     shutdown). A value larger than a property page (spilled to the var
-     store) keeps its freed pages' bytes until they are reused.
+   - At rest (SONNY-6692): when the call returns `complete = true`, no
+     plaintext of the field is in any file of the data directory. Each
+     value is removed (its record's property blob rewritten in place, the
+     freed bytes zeroed) before its envelope is written; then the graph's
+     dead space is overwritten (graph-storage `scrubDeadSpace`: free
+     property and var-store pages, including the spill pages of values
+     larger than a page, and tombstoned slab blobs, including the copies
+     an update before the migration left) and the graph is checkpointed in
+     full, which writes the cleared pages and truncates the WAL. This runs
+     under the request's write lock on the graph. While another
+     transaction is open on the graph the scrub is refused (55006): the
+     values are migrated; run the call again once it has ended.
+     `dead_pages_zeroed` and `dead_bytes_zeroed` report what was cleared.
    - YIELDs `graph, scanned, encrypted, already_encrypted, non_string,
-     skipped_tenant, skipped_rls, batches, complete`.
+     skipped_tenant, skipped_rls, batches, complete, dead_pages_zeroed,
+     dead_bytes_zeroed`.
 
 4. **Access during migration:**
    - Authorized users: still see values (plaintext or decrypted)

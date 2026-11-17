@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-16T18:32:09.724374956Z",
+  "generated_at": "2026-11-17T15:44:40.505542683Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83559,6 +83559,44 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6692-FLE-MIGRATION-SCRUB",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6692_fle_migration_scrub.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6692_fle_migration_scrub.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6692-SCRUB-CHECKPOINT",
+      "features": [
+        {
+          "feature": "FieldLevelEncryption",
+          "aspect": "ScrubDeadSpaceThenCheckpoint",
+          "status": "TESTED",
+          "files": [
+            "src/storage/graph_storage_adapter.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6692_fle_migration_scrub.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -88650,7 +88688,7 @@
       "EXEMPT": 209,
       "IMPL": 563,
       "STUB": 18,
-      "TESTED": 4392
+      "TESTED": 4394
     },
     "by_aspect": {
       "2PC": 3,
@@ -91567,7 +91605,7 @@
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
       "RegistrySwap": 1,
-      "Regression": 432,
+      "Regression": 433,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
@@ -91788,6 +91826,7 @@
       "ScopedEdgeLookup": 1,
       "ScopedLockedClone": 1,
       "ScratchAllocator": 1,
+      "ScrubDeadSpaceThenCheckpoint": 1,
       "SealRefusesUnsignedLegacy": 1,
       "SealedExactIndexFiles": 1,
       "SealedFleRoleGrants": 1,

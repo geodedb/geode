@@ -750,7 +750,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6692-fle-migration-scrub", .reason = "intentionally red TDD reproduction (SONNY-6692); compiled by test-compile; registered through shardDep by the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -18403,7 +18402,8 @@ pub fn build(b: *std.Build) void {
     sonny6692_test_mod.addImport("transport/quic", transport_quic_mod);
     const sonny6692_tests = b.addTest(.{ .root_module = sonny6692_test_mod });
     const run_sonny6692_tests = b.addRunArtifact(sonny6692_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6692_tests.step);
+    spawnsBuiltGeode(sonny6692_tests);
+    shardDep(test_step, &run_sonny6692_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6692-fle-migration-scrub", "Run SONNY-6692 regression (right after CALL geode.fle.migrateEncrypt returns, no plaintext of the field, current or superseded by an update before the migration, small or spilled to the var store, is in any file of the data directory; the values still read for the permitted role)").dependOn(&run_sonny6692_tests.step);
 
     // SONNY-6688: geode.fle.migrateEncrypt / geode fle migrate-encrypt.

@@ -1254,7 +1254,7 @@ pub fn executeFleMigrate(allocator: std.mem.Allocator, call_stmt: ast.CallProced
         else => return err,
     };
 
-    const names = [_][]const u8{ "graph", "scanned", "encrypted", "already_encrypted", "non_string", "skipped_tenant", "skipped_rls", "batches", "complete" };
+    const names = [_][]const u8{ "graph", "scanned", "encrypted", "already_encrypted", "non_string", "skipped_tenant", "skipped_rls", "batches", "complete", "dead_pages_zeroed", "dead_bytes_zeroed" };
     const columns = try allocator.alloc([]const u8, names.len);
     for (names, columns) |n, *c| c.* = try allocator.dupe(u8, n);
     const row = try allocator.alloc(Value, names.len);
@@ -1267,6 +1267,8 @@ pub fn executeFleMigrate(allocator: std.mem.Allocator, call_stmt: ast.CallProced
     row[6] = .{ .Int = @intCast(report.skipped_rls) };
     row[7] = .{ .Int = @intCast(report.batches) };
     row[8] = .{ .Bool = report.complete() };
+    row[9] = .{ .Int = @intCast(report.dead_pages_zeroed) };
+    row[10] = .{ .Int = @intCast(report.dead_bytes_zeroed) };
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
