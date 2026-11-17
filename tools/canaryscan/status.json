@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-17T18:08:23.707180128Z",
+  "generated_at": "2026-11-17T20:50:38.797966888Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83663,6 +83663,40 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6708-INTERRUPTED-FIRST-BOOT",
+      "features": [
+        {
+          "feature": "AuthGraphManager Bootstrap",
+          "aspect": "CrashSafeFirstBoot",
+          "status": "TESTED",
+          "files": [
+            "src/security/auth_graph_manager.zig",
+            "tests/test_sonny6708_interrupted_first_boot.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6708_interrupted_first_boot.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-17"
+        },
+        {
+          "feature": "AuthGraphManager Bootstrap",
+          "aspect": "RealServerRecoversInterruptedFirstBoot",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6708_real_server_restart.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6708_real_server_restart.zig"
+          ],
+          "benches": [],
+          "owner": "security",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -88754,7 +88788,7 @@
       "EXEMPT": 209,
       "IMPL": 563,
       "STUB": 18,
-      "TESTED": 4398
+      "TESTED": 4400
     },
     "by_aspect": {
       "2PC": 3,
@@ -89424,6 +89458,7 @@
       "Coverage": 1,
       "CoveredEntriesNotReapplied": 1,
       "CrashPointHook": 1,
+      "CrashSafeFirstBoot": 1,
       "Create": 1,
       "CreateClassifiedAsCreate": 1,
       "CreateConstraintValidates": 2,
@@ -91619,6 +91654,7 @@
       "RealImplementation": 3,
       "RealPlanGeneration": 1,
       "RealServer": 1,
+      "RealServerRecoversInterruptedFirstBoot": 1,
       "RealStatistics": 1,
       "RealStoreMeasurement": 1,
       "RealityFreshnessGuard": 1,

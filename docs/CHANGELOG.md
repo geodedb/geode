@@ -3250,6 +3250,22 @@
 
 ### Fixed
 
+- **A first start killed before it finished no longer bricks the data
+  directory (SONNY-6708).** `geode serve` on an empty data directory
+  persists the admin user and the `admin` role and only then seals the
+  HMAC chain (writes the AuthChainRoot). A process killed in between
+  (SIGKILL, an OOM kill, a crash, power loss) left auth records and no
+  root, and every later start of that directory exited with
+  `AUTH TAMPER DETECTED ... MissingChainRoot` / `AuthChainTampered`
+  although nothing was tampered with: the operator's only way out was
+  deleting the data directory. Startup now recognises exactly that
+  artifact (no root, one user, at most the bootstrap's own `admin` role,
+  no other auth record), discards it, and bootstraps again, so the first
+  start can simply be repeated. A missing root over any other auth state
+  (a second user, a grant, a policy) is still the tamper verdict, and a
+  store with its root is untouched. Regression: `zig build
+  test-sonny6708-interrupted-first-boot`.
+
 - **A discarded engine abort is counted and documented; the
   `AbortNotUndone` quarantine test forces the case that still fails closed
   (SONNY-6657, SONNY-6529).** Since the graph-storage v0.4.24 pin, an abort

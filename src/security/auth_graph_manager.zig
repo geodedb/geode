@@ -1214,6 +1214,56 @@ pub const AuthGraphManager = struct {
         };
     }
 
+    // CANARY: REQ=REQ-SONNY-6708-INTERRUPTED-FIRST-BOOT; FEATURE="AuthGraphManager Bootstrap"; ASPECT=CrashSafeFirstBoot; STATUS=TESTED; TEST=tests/test_sonny6708_interrupted_first_boot.zig; OWNER=security; UPDATED=2026-11-17
+    /// SONNY-6708: discard the records of a first boot that was interrupted
+    /// before its seal, so the start can run as a first boot again.
+    ///
+    /// `bootstrapDefaultAdmin` is not atomic: it persists the admin :User, the
+    /// `admin` role and the HAS_ROLE edge, and only then seals the chain (writes
+    /// the AuthChainRoot). A process killed in between (SIGKILL, OOM kill, crash,
+    /// power loss) leaves auth records and no root, which the next start reports
+    /// as tampering (`MissingChainRoot`) and refuses forever, although nothing
+    /// was tampered with and the half-written admin could never have been used
+    /// (the listener opens after the bootstrap).
+    ///
+    /// The artifact is exactly: no AuthChainRoot, one user, and at most the
+    /// bootstrap's own `admin` role, and no other auth record of any kind. Only
+    /// that is discarded (returns true; `hasAuthRecords()` is then false and the
+    /// caller bootstraps). Anything else - a second user, a grant, a policy, a
+    /// role the bootstrap does not write - is not this artifact and is left alone
+    /// (returns false), so a missing root over real auth state stays the loud
+    /// tamper signal. A chain root that cannot be read is the read's error.
+    ///
+    /// Equivalent to the exposure that already exists: whoever can delete the
+    /// root of a one-user store can already delete the whole security graph,
+    /// which is a first boot.
+    pub fn recoverInterruptedBootstrap(self: *Self) !bool {
+        if ((try self.storage.loadChainRoot()) != null) return false;
+
+        const users = self.storage.cachedUserCount();
+        const roles = self.storage.role_cache.count();
+        if (users != 1 or roles > 1) return false;
+        if (self.countAuthRecords() != @as(u64, users) + @as(u64, roles)) return false;
+
+        var role_id: ?u64 = null;
+        if (roles == 1) {
+            var role_it = self.storage.role_cache.valueIterator();
+            const role = role_it.next() orelse return false;
+            if (!std.mem.eql(u8, role.getName(), "admin")) return false;
+            role_id = role.id;
+        }
+        var user_it = self.storage.userIterator();
+        const user_id = (user_it.next() orelse return false).id;
+
+        log.warn("interrupted first boot detected: the admin user was persisted but the auth chain was never sealed (the process was killed during the first start); discarding it and bootstrapping again", &.{
+            Attr.uint("user_id", user_id),
+        });
+        try self.storage.removeUser(user_id);
+        if (role_id) |id| try self.storage.removeRole(id);
+        self.next_user_id = 1;
+        return true;
+    }
+
     // -- User Creation --
 
     /// Create a new user with HMAC and reseal the chain.
