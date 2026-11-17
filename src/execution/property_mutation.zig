@@ -563,19 +563,60 @@ pub fn setEdgePropertyFromValue(
     rebuildAdvancedIndexesForProperty(store, edge_type, key);
 }
 
+// CANARY: REQ=REQ-SONNY-6705-SET-ALL-FROM-ELEMENT; FEATURE="SetClauseSemantics"; ASPECT=SetAllFromElement; STATUS=TESTED; TEST=tests/test_sonny6704_single_hop_repeated_variable.zig; OWNER=engine; UPDATED=2026-11-17
+/// SONNY-6705: the map `SET a = <rhs>` replaces a's properties with. A map is
+/// itself; a node or relationship contributes its stored properties (the
+/// openCypher `SET n = m` copy, read the way `properties(m)` reads them, so
+/// the field-level-encryption read policy applies); any other value, NULL
+/// included, is `TypeMismatch` (22G03). It used to clear every property of `a`
+/// and report success for a rhs that was no map.
+fn replacementMap(arena: std.mem.Allocator, rhs: Value) !Value {
+    switch (rhs) {
+        .Map => return rhs,
+        .Node => |src| {
+            var map = std.StringHashMap(Value).init(arena);
+            var it = src.properties.iterator();
+            while (it.next()) |entry| {
+                const v: Value = if (entry.value_ptr.* == .String)
+                    Value{ .Str = try fle_integration.readStoredStringForEntity(arena, .node, if (src.labels.len > 0) src.labels[0] else "Unknown", entry.key_ptr.*, entry.value_ptr.String, src.id, src.tenant_id) }
+                else
+                    try property_codec.propertyValueToProjectedValue(arena, entry.value_ptr.*);
+                try map.put(entry.key_ptr.*, v);
+            }
+            return Value{ .Map = map };
+        },
+        .Edge => |src| {
+            var map = std.StringHashMap(Value).init(arena);
+            var it = src.properties.iterator();
+            while (it.next()) |entry| {
+                const v: Value = if (entry.value_ptr.* == .String)
+                    Value{ .Str = try fle_integration.readStoredStringForEntity(arena, .edge, src.label, entry.key_ptr.*, entry.value_ptr.String, src.id, src.tenant_id) }
+                else
+                    try property_codec.propertyValueToProjectedValue(arena, entry.value_ptr.*);
+                try map.put(entry.key_ptr.*, v);
+            }
+            return Value{ .Map = map };
+        },
+        else => return error.TypeMismatch,
+    }
+}
+
 pub fn replaceNodeProperties(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
     node: *graph_store.Node,
-    props_value: Value,
+    rhs: Value,
 ) !void {
+    // SONNY-6705: `SET a = a` keeps a as it is.
+    if (rhs == .Node and rhs.Node.id == node.id) return;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const props_value = try replacementMap(arena_state.allocator(), rhs);
     // SONNY-6421: an indexed string the map drops or changes leaves its words
     // in the fulltext index (the clear below and the SETs after it see no old
     // value): queue its covering indexes for a rebuild at the statement's end.
     queueRebuildsForReplacedText(node, props_value);
     clearNodeProperties(store, node);
-
-    if (props_value != .Map) return;
 
     var map_iter = props_value.Map.iterator();
     while (map_iter.next()) |entry| {
@@ -611,11 +652,14 @@ pub fn replaceEdgeProperties(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
     edge: *graph_store.Edge,
-    props_value: Value,
+    rhs: Value,
 ) !void {
+    // SONNY-6705: `SET r = r` keeps r as it is.
+    if (rhs == .Edge and rhs.Edge.id == edge.id) return;
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const props_value = try replacementMap(arena_state.allocator(), rhs);
     clearEdgeProperties(store, edge);
-
-    if (props_value != .Map) return;
 
     var map_iter = props_value.Map.iterator();
     while (map_iter.next()) |entry| {

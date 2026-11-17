@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-17T20:50:38.797966888Z",
+  "generated_at": "2026-11-17T21:53:23.939001912Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83663,6 +83663,45 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6704-SINGLE-HOP-REPEATED-VAR",
+      "features": [
+        {
+          "feature": "RepeatedPatternVariable",
+          "aspect": "SingleHopEndpointUnify",
+          "status": "TESTED",
+          "files": [
+            "src/execution/match_operations.zig",
+            "tests/test_sonny6704_single_hop_repeated_variable.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6704_single_hop_repeated_variable.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6705-SET-ALL-FROM-ELEMENT",
+      "features": [
+        {
+          "feature": "SetClauseSemantics",
+          "aspect": "SetAllFromElement",
+          "status": "TESTED",
+          "files": [
+            "src/execution/property_mutation.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6704_single_hop_repeated_variable.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6708-INTERRUPTED-FIRST-BOOT",
       "features": [
         {
@@ -88788,7 +88827,7 @@
       "EXEMPT": 209,
       "IMPL": 563,
       "STUB": 18,
-      "TESTED": 4400
+      "TESTED": 4402
     },
     "by_aspect": {
       "2PC": 3,
@@ -92035,6 +92074,7 @@
       "SessionToken": 1,
       "SessionTxnEnd": 1,
       "Set": 2,
+      "SetAllFromElement": 1,
       "SetButUnusableKeyRefuses": 1,
       "SetClauses": 1,
       "SetFiltering": 1,
@@ -92121,6 +92161,7 @@
       "SingleDurableWriter": 1,
       "SingleFlightLeak": 1,
       "SingleHopEdgeTraversal": 1,
+      "SingleHopEndpointUnify": 1,
       "SingleNodeTrueOnly": 1,
       "SinglePacketFramedWrites": 1,
       "SingleRequestExecution": 1,

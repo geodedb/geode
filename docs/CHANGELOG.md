@@ -3265,6 +3265,26 @@
   (a second user, a grant, a policy) is still the tamper verdict, and a
   store with its root is untouched. Regression: `zig build
   test-sonny6708-interrupted-first-boot`.
+- **A one-hop pattern that names one variable at both ends matches only a
+  loop (SONNY-6704; SONNY-3242 item 3).** `MATCH (a)-[r:S]->(a)` matched
+  every `S` edge: the read answered the start node of an edge that goes to
+  another node, `count(*)` counted it, and a SET or REMOVE wrote it. One
+  variable names one node (ISO/IEC 39075:2024 4.11, 16.7), so the single-hop
+  traversal, its aggregate path and the unlabelled edge-count pushdown now
+  require the far end to be the node the hop started from (GAP-0912 did so
+  for variable-length hops only). A multi-hop cycle through one variable was
+  already right. Regression: `zig build
+  test-sonny6704-single-hop-repeated-variable`; black-box spec
+  `sonny3242_set_semantics.yml` in the test harness.
+- **`SET a = b` copies a node's or relationship's properties, and a value
+  that is no map is refused instead of wiping `a` (SONNY-6705; SONNY-3242
+  item 2).** The right-hand side of a set-all-properties item that was not
+  a map cleared every property of `a` and reported success. A node or
+  relationship on the right now replaces `a`'s properties with its own,
+  read the way `properties(b)` reads them (so the field-level-encryption read
+  policy applies, and `SET a = a` changes nothing); any other value, NULL
+  included, is refused with 22G03 before anything is cleared. Regression:
+  `zig build test-sonny6704-single-hop-repeated-variable`.
 
 - **A discarded engine abort is counted and documented; the
   `AbortNotUndone` quarantine test forces the case that still fails closed

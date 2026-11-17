@@ -5292,6 +5292,9 @@ REQ-SONNY-6692-FLE-MIGRATION-SCRUB,FieldLevelEncryption,Regression,TESTED,tests/
 REQ-SONNY-6692-SCRUB-CHECKPOINT,FieldLevelEncryption,ScrubDeadSpaceThenCheckpoint,TESTED,src/storage/graph_storage_adapter.zig,tests/test_sonny6692_fle_migration_scrub.zig,,security,2026-11-17
 REQ-SONNY-6700-STORAGE-SCRUB,StorageAdministration,ScrubEveryGraph,TESTED,src/execution/storage_dispatch.zig,tests/test_sonny6700_storage_scrub.zig,,storage,2026-11-17
 REQ-SONNY-6700-STORAGE-SCRUB,StorageAdministration,Regression,TESTED,tests/test_sonny6700_storage_scrub.zig,tests/test_sonny6700_storage_scrub.zig,,storage,2026-11-17
+REQ-SONNY-6704-SINGLE-HOP-REPEATED-VAR,RepeatedPatternVariable,SingleHopEndpointUnify,TESTED,src/execution/match_operations.zig,tests/test_sonny6704_single_hop_repeated_variable.zig,,engine,2026-11-17
+REQ-SONNY-6704-SINGLE-HOP-REPEATED-VAR,RepeatedPatternVariable,SingleHopEndpointUnify,TESTED,tests/test_sonny6704_single_hop_repeated_variable.zig,,,engine,2026-11-17
+REQ-SONNY-6705-SET-ALL-FROM-ELEMENT,SetClauseSemantics,SetAllFromElement,TESTED,src/execution/property_mutation.zig,tests/test_sonny6704_single_hop_repeated_variable.zig,,engine,2026-11-17
 REQ-SONNY-6708-INTERRUPTED-FIRST-BOOT,AuthGraphManager Bootstrap,CrashSafeFirstBoot,TESTED,src/security/auth_graph_manager.zig,tests/test_sonny6708_interrupted_first_boot.zig,,security,2026-11-17
 REQ-SONNY-6708-INTERRUPTED-FIRST-BOOT,AuthGraphManager Bootstrap,CrashSafeFirstBoot,TESTED,tests/test_sonny6708_interrupted_first_boot.zig,,,security,2026-11-17
 REQ-SONNY-6708-INTERRUPTED-FIRST-BOOT,AuthGraphManager Bootstrap,RealServerRecoversInterruptedFirstBoot,TESTED,tests/test_sonny6708_real_server_restart.zig,tests/test_sonny6708_real_server_restart.zig,,security,2026-11-17

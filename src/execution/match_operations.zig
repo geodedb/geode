@@ -1194,6 +1194,10 @@ fn analyzeEdgeCountFastPath(q: ast.Query) ?EdgeCountFastPathPlan {
     if (hop.left.props != null) return null;
     if (hop.right.labels.len != 0) return null;
     if (hop.right.props != null) return null;
+    // SONNY-6704: the node names ARE relevant when both ends share one: that
+    // pattern counts only the edges that leave and return to one node, which
+    // the O(1) edge count cannot know.
+    if (hop.left.name != null and hop.right.name != null and std.mem.eql(u8, hop.left.name.?, hop.right.name.?)) return null;
 
     // No WHERE, WITH, GROUP BY, ORDER BY, HAVING, SET, LIMIT 0.
     if (q.where_clause != null) return null;
@@ -7715,6 +7719,16 @@ fn valueReferencesEnvBuffer(v: Value, bound: Value) bool {
 /// Processes outgoing and incoming edges, applying all filters (type, tenant,
 /// properties, labels, WHERE, FILTER), SET mutations, and row building.
 /// Appends matching rows to the provided rows list.
+/// SONNY-6704: one variable named at both ends of a hop names ONE node
+/// (ISO/IEC 39075:2024 4.11, 16.7: a binding variable denotes one element), so
+/// the hop's far end must be the node it started from. GAP-0912 did this for
+/// variable-length hops only; the single-hop traversals matched every edge.
+fn endsViolateSharedVariable(left_var: ?[]const u8, right_var: ?[]const u8, left_id: u64, right_id: u64) bool {
+    const l = left_var orelse return false;
+    const r = right_var orelse return false;
+    return std.mem.eql(u8, l, r) and left_id != right_id;
+}
+
 fn executeSingleHopEdgeTraversal(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
@@ -7785,6 +7799,8 @@ fn executeSingleHopEdgeTraversal(
             // were never checked, so `RETURN h.s` read a denied node's
             // properties and `RETURN h` returned it whole.
             if (!scope.nodeVisible(right_node_ptr)) continue;
+            // CANARY: REQ=REQ-SONNY-6704-SINGLE-HOP-REPEATED-VAR; FEATURE="RepeatedPatternVariable"; ASPECT=SingleHopEndpointUnify; STATUS=TESTED; TEST=tests/test_sonny6704_single_hop_repeated_variable.zig; OWNER=engine; UPDATED=2026-11-17
+            if (endsViolateSharedVariable(left_node_var, right_node_var, left_node.id, right_node_id)) continue;
 
             // CANARY: REQ=REQ-GQL-SINGLEHOP-RIGHTNODE; FEATURE="SingleHopRightNodeFilter"; ASPECT=LabelFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
             // Filter right node by labels if specified
@@ -9657,6 +9673,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         // loop checked none of them, so `count(h)` counted a
                         // denied or foreign node and `collect(h)` returned it.
                         if (!hop_scope.nodeVisible(right_node_ptr)) continue;
+                        // SONNY-6704: one variable at both ends names one node.
+                        if (endsViolateSharedVariable(left_node_var, right_node_var, left_node.id, right_node_id)) continue;
 
                         // Filter right node by labels
                         if (right_labels.len > 0) {
@@ -9755,6 +9773,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         // loop checked none of them, so `count(h)` counted a
                         // denied or foreign node and `collect(h)` returned it.
                         if (!hop_scope.nodeVisible(right_node_ptr)) continue;
+                        // SONNY-6704: one variable at both ends names one node.
+                        if (endsViolateSharedVariable(left_node_var, right_node_var, left_node.id, right_node_id)) continue;
 
                         // Filter right node by labels
                         if (right_labels.len > 0) {
