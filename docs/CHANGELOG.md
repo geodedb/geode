@@ -2,6 +2,17 @@
 
 ## [Unreleased] - Time-Series Audit and Gap Closure
 
+### Fixed
+
+- **A writing FOR refuses a RETURN stage it cannot apply (SONNY-6717).**
+  After `MATCH ... WITH` or a WITH of values, a FOR body that writes runs once
+  per element, so its RETURN's `ORDER BY`, `DISTINCT`, `SKIP`/`LIMIT` and
+  aggregates applied to each element alone (`... SET o.seen = z.k RETURN o.k
+  AS k ORDER BY k` answered `[2, 1]`). Such a body is now refused whole with
+  `0A000` before anything is written; a plain RETURN still answers a row per
+  element. Staging over the whole working table (ISO/IEC 39075:2024 14.8)
+  remains open. Test: `zig build test-sonny6717-for-write-return-stages`.
+
 ### Security
 
 - **An operator can overwrite every graph's dead space: `CALL

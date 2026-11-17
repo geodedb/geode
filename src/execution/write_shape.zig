@@ -1049,8 +1049,20 @@ fn allowWithFor(q: ast.Query, fr: ast.ForStatement, ctx: PartCtx, params: *const
         inner.outer.add(name);
     }
     const body = fr.body orelse return error.WriteClauseNotApplied;
+    if (returnStagesNeedWholeTable(body.*)) return error.WriteClauseNotApplied;
     try allowForHeader(fr, &inner, params);
     try allowQuery(body.*, inner, params);
+}
+
+/// SONNY-6717: a writing FOR body runs once per element and its results are
+/// concatenated, so a RETURN stage over the whole working table (DISTINCT,
+/// ORDER BY, SKIP / LIMIT, an aggregate, grouping) cannot be applied; such a
+/// body is refused whole instead of staging each element alone.
+fn returnStagesNeedWholeTable(body: ast.Query) bool {
+    if (body.ret.distinct or body.order_by != null or body.limit != null or body.offset != null or
+        body.limit_param != null or body.offset_param != null or body.group_by != null or body.having != null) return true;
+    for (body.ret.items) |item| if (return_and_sorting.isAggregationExpr(item.expr)) return true;
+    return false;
 }
 
 // CANARY: REQ=REQ-SONNY-6613-MATCH-WITH-FOR-WRITE; FEATURE="ForStatement"; ASPECT=WriteBodyAfterMatchWith; STATUS=TESTED; TEST=tests/test_sonny6613_match_with_for_write.zig; OWNER=engine; UPDATED=2026-11-15
@@ -1104,6 +1116,7 @@ fn allowMatchWithFor(q: ast.Query, fr: ast.ForStatement, ctx: PartCtx, params: *
     }
     if (inner.outer.overflow) return error.WriteClauseNotApplied;
     const body = fr.body orelse return error.WriteClauseNotApplied;
+    if (returnStagesNeedWholeTable(body.*)) return error.WriteClauseNotApplied;
     try allowForHeader(fr, &inner, params);
     try allowQuery(body.*, inner, params);
 }

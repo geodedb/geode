@@ -1444,7 +1444,7 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026
 REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig,257
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,967
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,20176
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,20177
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,200
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,2656
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1494
@@ -1591,7 +1591,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,secu
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,125
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,20185
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,20186
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1482
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,,,security,2026-06-11,src/cli/main.zig,1638
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,,,security,2026-06-11,src/cli/main.zig,841
@@ -1603,7 +1603,7 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,QueryOptions,IMPL,,,security,2026
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,2026-05-21,tests/test_gps_mcp_wire.zig,27
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig,7725
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,166
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,20197
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,20198
 REQ-GPS-WIRE-002,GPS Distributed Wire,PolicyVersionMismatch,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,107
 REQ-GPS-WIRE-002,GPS Distributed Wire,QueryOptionsField,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,25
 REQ-GPS-WIRE-002,GPS Distributed Wire,WorkerRoundTrip,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,50
@@ -4496,8 +4496,8 @@ REQ-SONNY-3166-STATEMENT-BOUNDARY,StatementBoundary,WholeProgram,TESTED,,,engine
 REQ-SONNY-3166-WRITE-ALLOWLIST,WriteShapeAllowlist,Entry,TESTED,,,engine,2026-09-27,src/execution/write_shape.zig,833
 REQ-SONNY-3166-WRITE-ALLOWLIST,WriteShapeAllowlist,Facts,TESTED,,,engine,2026-09-27,src/execution/write_shape.zig,490
 REQ-SONNY-3166-WRITE-ALLOWLIST,WriteShapeAllowlist,FastPathGate,TESTED,,,engine,2026-09-27,src/execution/bulk_ingest.zig,591
-REQ-SONNY-3166-WRITE-ALLOWLIST,WriteShapeAllowlist,FastPathGate,TESTED,,,engine,2026-09-27,src/execution/write_shape.zig,2045
-REQ-SONNY-3166-WRITE-ALLOWLIST,WriteShapeAllowlist,QueryFieldFacts,TESTED,,,engine,2026-09-27,src/execution/write_shape.zig,1229
+REQ-SONNY-3166-WRITE-ALLOWLIST,WriteShapeAllowlist,FastPathGate,TESTED,,,engine,2026-09-27,src/execution/write_shape.zig,2058
+REQ-SONNY-3166-WRITE-ALLOWLIST,WriteShapeAllowlist,QueryFieldFacts,TESTED,,,engine,2026-09-27,src/execution/write_shape.zig,1242
 REQ-SONNY-3166-WRITE-ALLOWLIST,WriteShapeAllowlist,ShapeTable,TESTED,,,engine,2026-09-27,src/execution/write_shape.zig,658
 REQ-SONNY-3166-WRITE-ALLOWLIST,WriteShapeAllowlist,ShapeTable,TESTED,,,engine,2026-09-27,src/execution/write_shape.zig,681
 REQ-SONNY-3166-WRITE-ALLOWLIST,WriteStep,ReturnAfterSet,TESTED,,,engine,2026-09-27,src/execution/match_operations.zig,9389
@@ -4517,9 +4517,9 @@ REQ-SONNY-3182-EXPRESSION-WRITES,WriteShapeAllowlist,ExpressionWalk,TESTED,,,eng
 REQ-SONNY-3182-EXPRESSION-WRITES,WriteShapeAllowlist,MutationClassification,TESTED,,,query_traits,2026-09-28,src/query/query_traits.zig,513
 REQ-SONNY-3182-EXPRESSION-WRITES,WriteShapeAllowlist,MutationClassification,TESTED,,,query_traits,2026-09-28,src/query/query_traits.zig,1197
 REQ-SONNY-3182-EXPRESSION-WRITES,WriteShapeAllowlist,OneWalk,TESTED,,,engine,2026-09-28,src/execution/write_walk.zig,34
-REQ-SONNY-3183-SCOPE,WriteShapeAllowlist,ExpressionWalk,TESTED,,,engine,2026-09-28,src/execution/write_shape.zig,1603
-REQ-SONNY-3183-SCOPE,WriteShapeAllowlist,ScopeCheck,TESTED,,,engine,2026-09-27,src/execution/write_shape.zig,1905
-REQ-SONNY-3183-UNION-BINDINGS,WriteShapeAllowlist,SharedPredicate,TESTED,,,engine,2026-09-27,src/execution/write_shape.zig,2025
+REQ-SONNY-3183-SCOPE,WriteShapeAllowlist,ExpressionWalk,TESTED,,,engine,2026-09-28,src/execution/write_shape.zig,1616
+REQ-SONNY-3183-SCOPE,WriteShapeAllowlist,ScopeCheck,TESTED,,,engine,2026-09-27,src/execution/write_shape.zig,1918
+REQ-SONNY-3183-UNION-BINDINGS,WriteShapeAllowlist,SharedPredicate,TESTED,,,engine,2026-09-27,src/execution/write_shape.zig,2038
 REQ-SONNY-3184-OPTIONAL-MATCH,OptionalMatchLeftOuterJoin,Dispatch,TESTED,,,engine,2026-11-11,src/execution/match_operations.zig,9273
 REQ-SONNY-3184-OPTIONAL-MATCH,OptionalMatchLeftOuterJoin,Dispatch,TESTED,,,engine,2026-11-11,src/execution/optional_match.zig,36
 REQ-SONNY-3184-OPTIONAL-MATCH,OptionalMatchLeftOuterJoin,LeftOuterJoin,TESTED,,,engine,2026-11-11,src/execution/optional_match.zig,139
@@ -4546,7 +4546,7 @@ REQ-SONNY-3240-WRITE-SCOPE,WriteScope,BoundVariables,TESTED,,,engine,2026-09-28,
 REQ-SONNY-3240-WRITE-SCOPE,WriteScope,MergeActions,TESTED,,,engine,2026-09-28,src/execution/crud_operations.zig,3590
 REQ-SONNY-3240-WRITE-SCOPE,WriteScope,Regression,TESTED,,,engine,2026-09-28,tests/test_sonny_write_allowlist_r4.zig,22
 REQ-SONNY-3240-WRITE-SCOPE,WriteScope,ScopeCorrespondence,TESTED,,,engine,2026-09-28,tests/test_sonny_write_allowlist_r4.zig,239
-REQ-SONNY-3240-WRITE-SCOPE,WriteScope,ValidatorScope,TESTED,,,engine,2026-09-28,src/execution/write_shape.zig,1827
+REQ-SONNY-3240-WRITE-SCOPE,WriteScope,ValidatorScope,TESTED,,,engine,2026-09-28,src/execution/write_shape.zig,1840
 REQ-SONNY-3241-FAST-PATH-PARITY,WriteFastPathParity,SoleHolderEndpoint,TESTED,,,storage,2026-11-12,src/storage/graph_storage_adapter.zig,7637
 REQ-SONNY-3241-FAST-PATH-PARITY,WriteFastPathParity,SoleHolderEndpointTenantScope,TESTED,,,storage,2026-11-12,src/storage/graph_storage_adapter.zig,7703
 REQ-SONNY-3241-FAST-PATH-PARITY,WriteFastPathParity,WireRegression,TESTED,,,transport,2026-11-12,tests/test_sonny3241_fast_path_parity_wire.zig,19
@@ -4930,7 +4930,7 @@ REQ-SONNY-6377-SECURITY-RESIDUALS,RLS Expression Wiring,Regression,TESTED,,,secu
 REQ-SONNY-6378-SERVER-EXIT-HYGIENE,Server Hygiene,ExitLeaksArgonBoundsLoggerDocker,TESTED,,,server,2026-11-12,tests/test_sonny6378_server_exit_and_hygiene.zig,25
 REQ-SONNY-6383-CALL-RETURN-FLAGS,ProcedureYield,FlagsKept,TESTED,,,engine,2026-11-12,tests/test_sonny6383_call_return_flags.zig,10
 REQ-SONNY-6383-CALL-WITH-RETURN,CallSubquery,ParserReturnTail,TESTED,,,parser,2026-11-12,src/gql/parser.zig,2117
-REQ-SONNY-6383-PLAIN-MATCH-CLAUSES,WriteShapeAllowlist,MatchClauseRecord,TESTED,,,engine,2026-11-12,src/execution/write_shape.zig,2055
+REQ-SONNY-6383-PLAIN-MATCH-CLAUSES,WriteShapeAllowlist,MatchClauseRecord,TESTED,,,engine,2026-11-12,src/execution/write_shape.zig,2068
 REQ-SONNY-6383-QUERY-RESIDUALS,ReadSemanticsBatch,Regression,TESTED,,,engine,2026-11-12,tests/test_sonny6383_query_residuals.zig,28
 REQ-SONNY-6383-STREAM-MATCH-CLAUSES,NodeScanStream,MatchClauseGate,TESTED,,,engine,2026-11-12,tests/test_sonny6383_scan_stream_match_clauses.zig,18
 REQ-SONNY-6383-WITH-ORDER-KEYS-ONCE,WithOrderBy,KeysOncePerRow,TESTED,,,engine,2026-11-12,src/execution.zig,5068
@@ -5467,7 +5467,7 @@ REQ-SONNY-6613-LEADING-LET,LetStatement,StatementLeading,TESTED,,,parser,2026-11
 REQ-SONNY-6613-LEADING-UNWIND,Unwind,StatementLeading,TESTED,,,parser,2026-11-15,src/gql/parser.zig,7327
 REQ-SONNY-6613-LEADING-UNWIND,Unwind,StatementLeadingWrite,TESTED,,,engine,2026-11-15,tests/test_sonny6613_leading_unwind_write.zig,17
 REQ-SONNY-6613-MATCH-WITH-FOR-WRITE,ForStatement,WriteBodyAfterMatchWith,TESTED,,,engine,2026-11-15,src/execution/query_execution.zig,143
-REQ-SONNY-6613-MATCH-WITH-FOR-WRITE,ForStatement,WriteBodyAfterMatchWith,TESTED,,,engine,2026-11-15,src/execution/write_shape.zig,1056
+REQ-SONNY-6613-MATCH-WITH-FOR-WRITE,ForStatement,WriteBodyAfterMatchWith,TESTED,,,engine,2026-11-15,src/execution/write_shape.zig,1068
 REQ-SONNY-6613-MATCH-WITH-FOR-WRITE,ForStatement,WriteBodyAfterMatchWith,TESTED,,,engine,2026-11-15,tests/test_sonny6613_match_with_for_write.zig,18
 REQ-SONNY-6613-PATH-OWNERSHIP,PathValues,OwnedPathCopies,TESTED,,,engine,2026-11-15,src/execution/value_utilities.zig,301
 REQ-SONNY-6613-PATH-OWNERSHIP,PathValues,ResultOwnsPathArrays,TESTED,,,engine,2026-11-15,src/execution.zig,882
@@ -5624,6 +5624,7 @@ REQ-SONNY-6700-STORAGE-SCRUB,StorageAdministration,ScrubEveryGraph,TESTED,,,stor
 REQ-SONNY-6708-INTERRUPTED-FIRST-BOOT,AuthGraphManager Bootstrap,CrashSafeFirstBoot,TESTED,,,security,2026-11-17,src/security/auth_graph_manager.zig,1217
 REQ-SONNY-6708-INTERRUPTED-FIRST-BOOT,AuthGraphManager Bootstrap,CrashSafeFirstBoot,TESTED,,,security,2026-11-17,tests/test_sonny6708_interrupted_first_boot.zig,20
 REQ-SONNY-6708-INTERRUPTED-FIRST-BOOT,AuthGraphManager Bootstrap,RealServerRecoversInterruptedFirstBoot,TESTED,,,security,2026-11-17,tests/test_sonny6708_real_server_restart.zig,15
+REQ-SONNY-6717-FOR-WRITE-RETURN-STAGES,ForStatement,WriteBodyReturnStages,TESTED,,,engine,2026-11-17,tests/test_sonny6717_for_write_return_stages.zig,10
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,,,storage,2026-11-13,src/execution/crud_operations.zig,1521
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,,,storage,2026-11-13,tests/test_sonny738_create_query_one_commit.zig,20
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,EverySite,TESTED,,,eval,2026-11-13,tests/test_sonny738_equality_consistency.zig,38
