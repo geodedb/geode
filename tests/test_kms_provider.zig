@@ -5,6 +5,9 @@ const kms = @import("security/kms");
 // CANARY: REQ=REQ-GQL-SEC-KMS-001; FEATURE="KMSProviderSystem"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SEC_KMS_001_ComprehensiveKMSProvider; OWNER=security; UPDATED=2025-10-05
 
 test "TestCANARY_REQ_GQL_SEC_KMS_001_ComprehensiveKMSProvider" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     // The provider KMSProvider implements (SONNY-2441 removed remote_kms,
@@ -32,6 +35,9 @@ test "TestCANARY_REQ_GQL_SEC_KMS_001_ComprehensiveKMSProvider" {
 }
 
 test "KMS external provider deterministic behavior" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     // Same seed: the same wrapping key
@@ -66,6 +72,9 @@ test "KMS external provider deterministic behavior" {
 }
 
 test "KMS external provider different seeds" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var provider1 = try kms.externalKMSProvider(allocator, 0x1111111111111111);
@@ -98,6 +107,9 @@ test "KMS external provider different seeds" {
 }
 
 test "KMS metadata handling" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     const plaintext = "metadata_test_key_12345678901234"; // 32 bytes
@@ -122,6 +134,9 @@ test "KMS metadata handling" {
 }
 
 test "KMS error handling" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     // Test invalid key length for external KMS
@@ -145,6 +160,9 @@ test "KMS error handling" {
 }
 
 test "KMS factory functions" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     // Test externalKMSProvider factory
@@ -156,6 +174,9 @@ test "KMS factory functions" {
 }
 
 test "KMS custom master key ID" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     const custom_key_id = "custom-enterprise-key-2025";
@@ -178,6 +199,9 @@ test "KMS custom master key ID" {
 }
 
 test "KMS cross-provider compatibility" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     // Test that providers with same seed produce compatible results
@@ -203,6 +227,9 @@ test "KMS cross-provider compatibility" {
 }
 
 test "KMS large scale operations" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
     var provider = try kms.externalKMSProvider(allocator, 0x1122334455667788);
     defer provider.deinit();
@@ -236,6 +263,9 @@ test "KMS large scale operations" {
 // SONNY-6453: moved from src/security/kms.zig, whose inline tests ran in no
 // step (the ones test_kms_provider.zig did not already cover).
 test "KMS provider types report their configuration (external_kms, vault_transit)" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const configs = [_]kms.KMSConfig{
         .{ .provider_type = .external_kms, .seed = 0x12345 },
         .{ .provider_type = .vault_transit, .endpoint = "https://vault.example.com", .auth_token = "test_token" },
@@ -257,4 +287,9 @@ test "GAP-0066: isProductionSafe identifies external_kms as unsafe and vault_tra
 test "GAP-0066: default config is external_kms" {
     const default_config = kms.KMSConfig{};
     try testing.expectEqual(kms.KMSProviderType.external_kms, default_config.provider_type);
+}
+
+test "SONNY-6775: a release build refuses the non-production external_kms provider" {
+    if (!kms.is_production_build) return error.SkipZigTest;
+    try testing.expectError(error.UnsafeKMSProvider, kms.KMSProvider.init(testing.allocator, .{ .provider_type = .external_kms, .seed = 1 }));
 }
