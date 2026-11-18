@@ -51,8 +51,9 @@ fn portOf(id: u64) u16 {
 }
 
 fn nowMillis() i64 {
-    var ts: std.os.linux.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    // libc's clock_gettime: the raw Linux syscall is SIGSYS on macOS.
+    var ts: std.c.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
 
