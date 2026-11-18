@@ -3346,6 +3346,27 @@
   graph. Regression: `zig build test-sonny6703-per-graph-vector-index`;
   `test_sonny1319`, `test_eng3912` and the index tests that name a runtime
   index now use its graph-qualified key.
+- **A cluster leader replicates DECIMAL values, `INSERT`, multi-chain
+  `CREATE` and list / date properties; a MERGE that matches and SETs no
+  longer kills the leader (SONNY-6718).** On a cluster leader
+  `CREATE (:L {v: 3.5})` (an exact numeric literal is a DECIMAL),
+  `MERGE ... SET n.v = 3.5` and `MATCH ... SET n.v = 3.5` were refused with
+  `ClusterWriteNotReplicable`: no replication codec carried a decimal. Every
+  codec (`GNC1`, `GNC2`, `GMRG`, `GUPD`, `GBAT`, and the 2PC write sets) now
+  carries a DECIMAL's i128 coefficient and scale (property tag 5), so a
+  follower stores `1.50` as `1.50`; other extended values (lists, dates, ...)
+  travel in their property-store encoding (tag 6). `INSERT (...)` replicates as
+  `CREATE` does, and `CREATE (a:A), (b:B), (a)-[:R]->(b)` (several chains)
+  replicates as one multi-create entry. Separately, a MERGE that MATCHED an
+  existing node and had a `SET` / `ON MATCH SET` built its property list in
+  the statement arena and freed it with the request allocator: libc aborted
+  the leader process (`free(): invalid pointer`) and the cluster lost its
+  leader. What is still refused, and why, is in `docs/CLUSTER_WRITES.md`.
+  Rolling upgrade: upgrade every node before the first decimal or extended
+  property write (an older node answers `CorruptPayload`). Tests:
+  `zig build test-sonny6718-codec`, `test-sonny6718-cluster-decimal-merge`,
+  `test-sonny6718-cluster-wire` (3 `geode serve` processes);
+  harness spec `sonny6718_cluster_decimal_merge.yml`.
 
 - **A first start killed before it finished no longer bricks the data
   directory (SONNY-6708).** `geode serve` on an empty data directory

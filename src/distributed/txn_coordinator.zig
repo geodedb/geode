@@ -131,6 +131,14 @@ fn appendProps(list: *std.ArrayList(u8), a: Allocator, props: []const Prop) !voi
                 try appendU32(list, a, s.len);
                 try list.appendSlice(a, s);
             },
+            // SONNY-6718: same tag as cluster_replication.zig (coefficient, scale).
+            .Decimal => |d| {
+                try list.append(a, 5);
+                var b: [16]u8 = undefined;
+                std.mem.writeInt(i128, &b, d.coeff, .little);
+                try list.appendSlice(a, &b);
+                try list.append(a, d.scale);
+            },
             else => return CodecError.UnsupportedPropertyType,
         }
     }
@@ -190,6 +198,12 @@ const Reader = struct {
         self.pos += 8;
         return v;
     }
+    fn readI128(self: *Reader) !i128 {
+        if (self.pos + 16 > self.data.len) return CodecError.CorruptPayload;
+        const v = std.mem.readInt(i128, self.data[self.pos..][0..16], .little);
+        self.pos += 16;
+        return v;
+    }
     fn readU64(self: *Reader) !u64 {
         if (self.pos + 8 > self.data.len) return CodecError.CorruptPayload;
         const v = std.mem.readInt(u64, self.data[self.pos..][0..8], .little);
@@ -231,6 +245,7 @@ fn readProps(r: *Reader, allocator: Allocator) ![]Prop {
             2 => .{ .Float = @bitCast(try r.readU64()) },
             3 => .{ .Bool = (try r.byte()) != 0 },
             4 => .{ .String = try r.str32() },
+            5 => .{ .Decimal = .{ .coeff = try r.readI128(), .scale = try r.byte() } },
             else => return CodecError.CorruptPayload,
         };
         p.* = .{ .key = key, .value = val };

@@ -94,7 +94,8 @@ go through `cluster_auth.validateClusterToken`. Regression:
 - `ClusterCoordinator` (`cluster.zig`): static membership, leader tracking,
   health (`cluster_health.zig`), token authentication (`cluster_auth.zig`,
   `nonce_tracker.zig`) and replication (`cluster_replication.zig`).
-- Raft-replicated writes within the documented slice; statements are proposed
+- Raft-replicated writes within the documented slice (`docs/CLUSTER_WRITES.md`:
+  what replicates, what is refused); statements are proposed
   through `statement_proposals.zig`. Write surfaces with no replication slice
   fail closed (`ClusterNotLeader` / `ClusterWriteNotReplicable`).
 - Principal envelopes (`principal_envelope.zig`). EXPLAIN/PROFILE are

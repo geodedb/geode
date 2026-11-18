@@ -26,6 +26,7 @@
 
 const std = @import("std");
 const graph_store = @import("../graph_store.zig");
+const property_value_codec = @import("../property_value_codec.zig");
 const PropertyValue = graph_store.PropertyValue;
 const GraphStore = graph_store.GraphStore;
 const logging = @import("logging");
@@ -144,6 +145,14 @@ fn losesText(store: *GraphStore, node_id: u64, key: []const u8, new: ?PropertyVa
 
 pub const Prop = struct { key: []const u8, value: PropertyValue };
 
+/// Property value tag of a DECIMAL (i128 coefficient little-endian, u8 scale).
+/// Tags 0-4 are null/int/float/bool/string (SONNY-6718 added 5).
+const TAG_DECIMAL: u8 = 5;
+/// Property value tag of an extended value (list, date/time, ...): the
+/// value's property-store encoding (`property_value_codec.encodePropertyValue`),
+/// u32 length prefixed. SONNY-6718.
+const TAG_ENCODED: u8 = 6;
+
 pub const CodecError = error{ UnsupportedPropertyType, CorruptPayload };
 
 fn appendU16(list: *std.ArrayList(u8), a: std.mem.Allocator, v: usize) !void {
@@ -181,35 +190,7 @@ pub fn serializeNodeCreate(
     try appendStr16(&list, allocator, graph);
     try appendU16(&list, allocator, labels.len);
     for (labels) |l| try appendStr16(&list, allocator, l);
-    try appendU16(&list, allocator, props.len);
-    for (props) |p| {
-        try appendStr16(&list, allocator, p.key);
-        switch (p.value) {
-            .Null => try list.append(allocator, 0),
-            .Int => |i| {
-                try list.append(allocator, 1);
-                var b: [8]u8 = undefined;
-                std.mem.writeInt(i64, &b, i, .little);
-                try list.appendSlice(allocator, &b);
-            },
-            .Float => |f| {
-                try list.append(allocator, 2);
-                var b: [8]u8 = undefined;
-                std.mem.writeInt(u64, &b, @bitCast(f), .little);
-                try list.appendSlice(allocator, &b);
-            },
-            .Bool => |bo| {
-                try list.append(allocator, 3);
-                try list.append(allocator, if (bo) 1 else 0);
-            },
-            .String => |s| {
-                try list.append(allocator, 4);
-                try appendU32(&list, allocator, s.len);
-                try list.appendSlice(allocator, s);
-            },
-            else => return CodecError.UnsupportedPropertyType,
-        }
-    }
+    try appendProps(&list, allocator, props);
     return list.toOwnedSlice(allocator);
 }
 
@@ -237,6 +218,12 @@ const Reader = struct {
         if (self.pos + 8 > self.data.len) return CodecError.CorruptPayload;
         const v = std.mem.readInt(i64, self.data[self.pos..][0..8], .little);
         self.pos += 8;
+        return v;
+    }
+    fn readI128(self: *Reader) !i128 {
+        if (self.pos + 16 > self.data.len) return CodecError.CorruptPayload;
+        const v = std.mem.readInt(i128, self.data[self.pos..][0..16], .little);
+        self.pos += 16;
         return v;
     }
     fn readU64(self: *Reader) !u64 {
@@ -287,6 +274,8 @@ const Reader = struct {
 pub fn applyNodeCreatePayload(allocator: std.mem.Allocator, store: *GraphStore, data: []const u8, node_id: u64) !u64 {
     if (!isNodeCreatePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC.len };
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
 
     const graph = try r.graphName();
     store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
@@ -310,17 +299,8 @@ pub fn applyNodeCreatePayload(allocator: std.mem.Allocator, store: *GraphStore, 
     const nprops = try r.readU16();
     var pi: usize = 0;
     while (pi < nprops) : (pi += 1) {
-        const key = try r.str16();
-        const tag = try r.byte();
-        const val: PropertyValue = switch (tag) {
-            0 => .Null,
-            1 => .{ .Int = try r.readI64() },
-            2 => .{ .Float = @bitCast(try r.readU64()) },
-            3 => .{ .Bool = (try r.byte()) != 0 },
-            4 => .{ .String = try r.str32() },
-            else => return CodecError.CorruptPayload,
-        };
-        try store.setNodeProperty(node_id, key, val);
+        const p = try readProp(&r, scratch.allocator());
+        try store.setNodeProperty(node_id, p.key, p.value);
     }
 
     // FTS symmetry: maintain covering fulltext indexes exactly like the
@@ -447,7 +427,22 @@ fn appendProps(list: *std.ArrayList(u8), a: std.mem.Allocator, props: []const Pr
                 try appendU32(list, a, s.len);
                 try list.appendSlice(a, s);
             },
-            else => return CodecError.UnsupportedPropertyType,
+            // SONNY-6718: a DECIMAL travels as its coefficient and scale, so a
+            // follower stores exactly the value the leader evaluated.
+            .Decimal => |d| {
+                try list.append(a, TAG_DECIMAL);
+                var b: [16]u8 = undefined;
+                std.mem.writeInt(i128, &b, d.coeff, .little);
+                try list.appendSlice(a, &b);
+                try list.append(a, d.scale);
+            },
+            .ExtValue => {
+                const enc = property_value_codec.encodePropertyValue(a, p.value) catch return CodecError.UnsupportedPropertyType;
+                defer a.free(enc);
+                try list.append(a, TAG_ENCODED);
+                try appendU32(list, a, enc.len);
+                try list.appendSlice(a, enc);
+            },
         }
     }
 }
@@ -516,7 +511,9 @@ pub fn serializeMultiCreate(
     return list.toOwnedSlice(allocator);
 }
 
-fn readProp(r: *Reader) !Prop {
+/// `scratch` owns what an extended value decodes into (the caller frees it
+/// after the value is stored: the store deep-copies).
+fn readProp(r: *Reader, scratch: std.mem.Allocator) !Prop {
     const key = try r.str16();
     const tag = try r.byte();
     const val: PropertyValue = switch (tag) {
@@ -525,6 +522,8 @@ fn readProp(r: *Reader) !Prop {
         2 => .{ .Float = @bitCast(try r.readU64()) },
         3 => .{ .Bool = (try r.byte()) != 0 },
         4 => .{ .String = try r.str32() },
+        TAG_DECIMAL => .{ .Decimal = .{ .coeff = try r.readI128(), .scale = try r.byte() } },
+        TAG_ENCODED => property_value_codec.decodePropertyValue(scratch, try r.str32()) catch return CodecError.CorruptPayload,
         else => return CodecError.CorruptPayload,
     };
     return .{ .key = key, .value = val };
@@ -566,6 +565,8 @@ fn applyMultiCreatePayloadAt(
 ) !usize {
     if (!isMultiCreatePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC2.len };
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
 
     const graph = try r.graphName();
     store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
@@ -597,7 +598,7 @@ fn applyMultiCreatePayloadAt(
         const nprops = try r.readU16();
         var pi: usize = 0;
         while (pi < nprops) : (pi += 1) {
-            const p = try readProp(&r);
+            const p = try readProp(&r, scratch.allocator());
             try store.setNodeProperty(node_id, p.key, p.value);
         }
 
@@ -638,7 +639,7 @@ fn applyMultiCreatePayloadAt(
 
         var pi: usize = 0;
         while (pi < nprops) : (pi += 1) {
-            const p = try readProp(&r);
+            const p = try readProp(&r, scratch.allocator());
             if (!created) continue;
             // Idempotent: overwrites in place (repairs a partial first-apply).
             // The edge exists (created or already there, above); a missing
@@ -856,9 +857,10 @@ pub fn serializeMerge(
 /// writes are clean no-ops. Returns the node id. Naturally idempotent across
 /// restart re-apply (set-by-id overwrites in place).
 pub fn applyMergePayload(allocator: std.mem.Allocator, store: *GraphStore, data: []const u8) !u64 {
-    _ = allocator;
     if (!isMergePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC_MERGE.len };
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
 
     const graph = try r.graphName();
     store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
@@ -871,7 +873,7 @@ pub fn applyMergePayload(allocator: std.mem.Allocator, store: *GraphStore, data:
     const nprops = try r.readU16();
     var pi: usize = 0;
     while (pi < nprops) : (pi += 1) {
-        const p = try readProp(&r);
+        const p = try readProp(&r, scratch.allocator());
         const lost = losesText(store, node_id, p.key, p.value); // SONNY-6433
         // Idempotent: overwrites in place. SONNY-6636 (b): a node that is not
         // there (deleted by a later entry, this one replayed) is skipped.
@@ -982,9 +984,10 @@ pub fn serializeUpdate(
 /// no-ops; a label add/remove on an absent node is swallowed). Returns the number
 /// of node-update records applied.
 pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data: []const u8) !usize {
-    _ = allocator;
     if (!isUpdatePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC_UPDATE.len };
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
 
     const graph = try r.graphName();
     store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
@@ -1003,7 +1006,7 @@ pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data
         const nset = try r.readU16();
         var si: usize = 0;
         while (si < nset) : (si += 1) {
-            const p = try readProp(&r);
+            const p = try readProp(&r, scratch.allocator());
             const lost = losesText(store, node_id, p.key, p.value); // SONNY-6433
             // Idempotent: overwrites in place. SONNY-6636 (b): a node that is
             // not there (deleted by a later entry, this one replayed) is
@@ -1446,6 +1449,11 @@ fn skipProps(r: *Reader) bool {
             1, 2 => _ = r.readU64() catch return false,
             3 => _ = r.byte() catch return false,
             4 => _ = r.str32() catch return false,
+            TAG_DECIMAL => {
+                _ = r.readI128() catch return false;
+                _ = r.byte() catch return false;
+            },
+            TAG_ENCODED => _ = r.str32() catch return false,
             else => return false,
         }
     }
@@ -1685,7 +1693,7 @@ pub const Effect = struct {
 fn readProps(allocator: std.mem.Allocator, r: *Reader) ![]const Prop {
     const n = try r.readU16();
     const props = try allocator.alloc(Prop, n);
-    for (props) |*p| p.* = try readProp(r);
+    for (props) |*p| p.* = try readProp(r, allocator);
     return props;
 }
 
@@ -1878,11 +1886,20 @@ test "two committed entries get deterministic raft-index-derived ids on every no
     try std.testing.expect(a1 != a0);
 }
 
-test "unsupported property type is rejected at serialize time" {
+test "SONNY-6718 an extended value (a list) round-trips through serialize -> apply" {
     const a = std.testing.allocator;
-    const labels = [_][]const u8{"N"};
-    const props = [_]Prop{.{ .key = "d", .value = .{ .Decimal = .{ .coeff = 1, .scale = 0 } } }};
-    try std.testing.expectError(CodecError.UnsupportedPropertyType, serializeNodeCreate(a, "g", &labels, &props));
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    const ExtValue = @import("../eval_extended.zig").ExtValue;
+    var items = [_]ExtValue{ .{ .Int = 1 }, .{ .Int = 2 }, .{ .Int = 3 } };
+    const props = [_]Prop{.{ .key = "l", .value = .{ .ExtValue = .{ .List = &items } } }};
+    const payload = try serializeNodeCreate(a, "g", &.{"N"}, &props);
+    defer a.free(payload);
+    const id = try applyNodeCreatePayload(a, &store, payload, 5);
+    const got = (try store.getNodePropertyOrError(id, "l")).?;
+    try std.testing.expect(got == .ExtValue and got.ExtValue == .List);
+    try std.testing.expectEqual(@as(usize, 3), got.ExtValue.List.len);
+    try std.testing.expectEqual(@as(i64, 2), got.ExtValue.List[1].Int);
 }
 
 test "truncated payload is rejected, not crashed" {
@@ -2387,4 +2404,128 @@ test "GUPD truncated payload is rejected, not crashed" {
     const full = try serializeUpdate(a, "default", &updates);
     defer a.free(full);
     try std.testing.expectError(CodecError.CorruptPayload, applyUpdatePayload(a, &store, full[0 .. full.len - 3]));
+}
+
+// CANARY: REQ=REQ-SONNY-6718-CLUSTER-DECIMAL; FEATURE="DistributedCluster"; ASPECT=DecimalCodec; STATUS=TESTED; TEST=src/distributed/cluster_replication.zig; OWNER=distributed; UPDATED=2026-11-18
+/// SONNY-6718: DECIMAL values the codecs must carry exactly (coefficient AND
+/// scale): a plain literal, a negative with a leading-zero fraction, the widest
+/// i128 coefficient at the widest scale, an integral decimal of scale 0 and a
+/// trailing-zero decimal (1.50 is not 1.5: scale 2 vs 1).
+const decimal_cases = [_]struct { coeff: i128, scale: u8 }{
+    .{ .coeff = 35, .scale = 1 },
+    .{ .coeff = -1, .scale = 6 },
+    .{ .coeff = std.math.maxInt(i128), .scale = 38 },
+    .{ .coeff = std.math.minInt(i128) + 1, .scale = 38 },
+    .{ .coeff = 0, .scale = 0 },
+    .{ .coeff = 150, .scale = 2 },
+};
+
+fn expectDecimal(v: ?PropertyValue, coeff: i128, scale: u8) !void {
+    const got = v orelse return error.PropertyMissing;
+    try std.testing.expect(got == .Decimal);
+    try std.testing.expectEqual(coeff, got.Decimal.coeff);
+    try std.testing.expectEqual(scale, got.Decimal.scale);
+}
+
+test "SONNY-6718 GNC1 node create carries DECIMAL coefficient and scale exactly" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    var props: [decimal_cases.len]Prop = undefined;
+    var keys: [decimal_cases.len][4]u8 = undefined;
+    for (decimal_cases, 0..) |c, i| {
+        keys[i] = .{ 'd', '0' + @as(u8, @intCast(i)), 0, 0 };
+        props[i] = .{ .key = keys[i][0..2], .value = .{ .Decimal = .{ .coeff = c.coeff, .scale = c.scale } } };
+    }
+    const payload = try serializeNodeCreate(a, "default", &.{"Dec"}, &props);
+    defer a.free(payload);
+    const id = try applyNodeCreatePayload(a, &store, payload, 9);
+    for (decimal_cases, 0..) |c, i| try expectDecimal(try store.getNodePropertyOrError(id, keys[i][0..2]), c.coeff, c.scale);
+    // The payload's effect decodes (footprint of a held write).
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const eff = try effectOf(arena.allocator(), payload);
+    try std.testing.expectEqual(@as(usize, 1), eff.created.len);
+    try std.testing.expectEqual(decimal_cases.len, eff.created[0].props.len);
+}
+
+test "SONNY-6718 GNC2 multi-create carries DECIMAL node and edge properties" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    const la = [_][]const u8{"W"};
+    const nprops = [_]Prop{.{ .key = "d", .value = .{ .Decimal = .{ .coeff = 35, .scale = 1 } } }};
+    const eprops = [_]Prop{.{ .key = "w", .value = .{ .Decimal = .{ .coeff = -125, .scale = 3 } } }};
+    const nodes = [_]NodeSpec{ .{ .labels = &la, .props = &nprops }, .{ .labels = &la, .props = &.{} } };
+    const edges = [_]EdgeSpec{.{ .from = .{ .position = 0 }, .to = .{ .position = 1 }, .edge_type = "E", .props = &eprops }};
+    const payload = try serializeMultiCreate(a, "default", &nodes, &edges);
+    defer a.free(payload);
+    _ = try applyMultiCreatePayload(a, &store, payload, 3);
+    const n0 = deriveMultiNodeId(3, 0);
+    try expectDecimal(try store.getNodePropertyOrError(n0, "d"), 35, 1);
+    const e0 = deriveMultiEdgeId(3, 0);
+    const w = store.edges.get(e0).?.properties.get("w").?;
+    try std.testing.expect(w == .Decimal);
+    try std.testing.expectEqual(@as(i128, -125), w.Decimal.coeff);
+    try std.testing.expectEqual(@as(u8, 3), w.Decimal.scale);
+}
+
+test "SONNY-6718 GMRG merge and GUPD update carry DECIMAL values exactly" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    try store.createNodeWithId(77, &.{"M"}, "default");
+    const mp = [_]Prop{.{ .key = "v", .value = .{ .Decimal = .{ .coeff = 12345678901234567890, .scale = 9 } } }};
+    const mpay = try serializeMerge(a, "default", 77, &mp);
+    defer a.free(mpay);
+    _ = try applyMergePayload(a, &store, mpay);
+    try expectDecimal(try store.getNodePropertyOrError(77, "v"), 12345678901234567890, 9);
+
+    const up = [_]Prop{.{ .key = "v", .value = .{ .Decimal = .{ .coeff = 425, .scale = 2 } } }};
+    const updates = [_]NodeUpdate{.{ .node_id = 77, .set_props = &up }};
+    const upay = try serializeUpdate(a, "default", &updates);
+    defer a.free(upay);
+    _ = try applyUpdatePayload(a, &store, upay);
+    try expectDecimal(try store.getNodePropertyOrError(77, "v"), 425, 2);
+}
+
+test "SONNY-6718 GBAT batch carries DECIMAL values of its create, merge and update entries" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    const cp = [_]Prop{.{ .key = "d", .value = .{ .Decimal = .{ .coeff = 35, .scale = 1 } } }};
+    const create = try serializeNodeCreate(a, "default", &.{"B"}, &cp);
+    defer a.free(create);
+    try store.createNodeWithId(500, &.{"B"}, "default");
+    const mp = [_]Prop{.{ .key = "m", .value = .{ .Decimal = .{ .coeff = -7, .scale = 4 } } }};
+    const merge = try serializeMerge(a, "default", 500, &mp);
+    defer a.free(merge);
+    const up = [_]Prop{.{ .key = "u", .value = .{ .Decimal = .{ .coeff = 99, .scale = 0 } } }};
+    const updates = [_]NodeUpdate{.{ .node_id = 500, .set_props = &up }};
+    const update = try serializeUpdate(a, "default", &updates);
+    defer a.free(update);
+    const entries = [_]BatchEntry{
+        .{ .mutation = .create, .graph = "default", .data = create },
+        .{ .mutation = .merge, .graph = "default", .data = merge },
+        .{ .mutation = .update, .graph = "default", .data = update },
+    };
+    const payload = try serializeBatch(a, null, &entries);
+    defer a.free(payload);
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    for ([_][]const u8{ create, merge, update }) |entry| _ = try effectOf(arena.allocator(), entry);
+    _ = try applyBatchPayload(a, &store, payload, 41, null);
+    try expectDecimal(try store.getNodePropertyOrError(500, "m"), -7, 4);
+    try expectDecimal(try store.getNodePropertyOrError(500, "u"), 99, 0);
+    try expectDecimal(try store.getNodePropertyOrError(batchLaneBase(41, 0), "d"), 35, 1);
+}
+
+test "SONNY-6718 a DECIMAL payload cut short is rejected, not crashed" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    const props = [_]Prop{.{ .key = "d", .value = .{ .Decimal = .{ .coeff = 35, .scale = 1 } } }};
+    const payload = try serializeNodeCreate(a, "default", &.{"Dec"}, &props);
+    defer a.free(payload);
+    try std.testing.expectError(CodecError.CorruptPayload, applyNodeCreatePayload(a, &store, payload[0 .. payload.len - 5], 1));
 }

@@ -275,6 +275,7 @@ fn propEql(a: cluster_replication.Prop, b: cluster_replication.Prop) bool {
         .Float => |x| b.value == .Float and b.value.Float == x,
         .Bool => |x| b.value == .Bool and b.value.Bool == x,
         .String => |x| b.value == .String and std.mem.eql(u8, b.value.String, x),
+        .Decimal => |x| b.value == .Decimal and b.value.Decimal.coeff == x.coeff and b.value.Decimal.scale == x.scale,
         else => false,
     };
 }

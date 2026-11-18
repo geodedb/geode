@@ -5304,6 +5304,11 @@ REQ-SONNY-6708-INTERRUPTED-FIRST-BOOT,AuthGraphManager Bootstrap,RealServerRecov
 REQ-SONNY-6716-POOL-EXHAUSTION,BufferPool,SmallPoolFloorAndCleanOversizedStatement,TESTED,tests/test_sonny6716_pool_exhaustion.zig,tests/test_sonny6716_pool_exhaustion.zig,,storage,2026-11-17
 REQ-SONNY-6717-FOR-WRITE-RETURN-STAGES,ForStatement,WriteBodyReturnStages,TESTED,src/execution/write_shape.zig,tests/test_sonny6717_for_write_return_stages.zig,,engine,2026-11-17
 REQ-SONNY-6717-FOR-WRITE-RETURN-STAGES,ForStatement,WriteBodyReturnStages,TESTED,tests/test_sonny6717_for_write_return_stages.zig,,,engine,2026-11-17
+REQ-SONNY-6718-CLUSTER-DECIMAL,DistributedCluster,DecimalCodec,TESTED,src/distributed/cluster_replication.zig,src/distributed/cluster_replication.zig,,distributed,2026-11-18
+REQ-SONNY-6718-CLUSTER-ORDINARY-WRITES,DistributedCluster,DecimalReplicatesToFollowers,TESTED,tests/test_cluster_replicable_mutations.zig,tests/test_cluster_replicable_mutations.zig,,distributed,2026-11-18
+REQ-SONNY-6718-CLUSTER-ORDINARY-WRITES,DistributedCluster,MatchedMergeSetKeepsLeader,TESTED,tests/test_cluster_replicable_mutations.zig,tests/test_cluster_replicable_mutations.zig,,distributed,2026-11-18
+REQ-SONNY-6718-CLUSTER-ORDINARY-WRITES,DistributedCluster,InsertMultiChainReplicates,TESTED,tests/test_cluster_replicable_mutations.zig,tests/test_cluster_replicable_mutations.zig,,distributed,2026-11-18
+REQ-SONNY-6718-CLUSTER-ORDINARY-WRITES,DistributedCluster,DecimalAndMergeShapes,TESTED,tests/test_sonny6718_cluster_decimal_merge.zig,tests/test_sonny6718_cluster_decimal_merge.zig,,distributed,2026-11-18
 REQ-SONNY-6720-DROP-GRAPH-CATALOG,SchemaCatalog,LoadRemovesOrphanRows,TESTED,src/execution.zig,tests/test_sonny6720_drop_graph_catalog.zig,,catalog,2026-11-17
 REQ-SONNY-6720-DROP-GRAPH-CATALOG,SchemaCatalog,DropGraphRemovesRows,TESTED,src/execution.zig,tests/test_sonny6720_drop_graph_catalog.zig,,catalog,2026-11-17
 REQ-SONNY-6720-DROP-GRAPH-CATALOG,SchemaCatalog,DropGraphRemovesRows,TESTED,src/schema/catalog.zig,,,catalog,2026-11-17

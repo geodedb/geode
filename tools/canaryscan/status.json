@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-18T02:10:32.48060273Z",
+  "generated_at": "2026-11-18T02:10:38.519265132Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83827,6 +83827,86 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6718-CLUSTER-DECIMAL",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "DecimalCodec",
+          "status": "TESTED",
+          "files": [
+            "src/distributed/cluster_replication.zig"
+          ],
+          "tests": [
+            "src/distributed/cluster_replication.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-18"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6718-CLUSTER-ORDINARY-WRITES",
+      "features": [
+        {
+          "feature": "DistributedCluster",
+          "aspect": "DecimalReplicatesToFollowers",
+          "status": "TESTED",
+          "files": [
+            "tests/test_cluster_replicable_mutations.zig"
+          ],
+          "tests": [
+            "tests/test_cluster_replicable_mutations.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-18"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "MatchedMergeSetKeepsLeader",
+          "status": "TESTED",
+          "files": [
+            "tests/test_cluster_replicable_mutations.zig"
+          ],
+          "tests": [
+            "tests/test_cluster_replicable_mutations.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-18"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "InsertMultiChainReplicates",
+          "status": "TESTED",
+          "files": [
+            "tests/test_cluster_replicable_mutations.zig"
+          ],
+          "tests": [
+            "tests/test_cluster_replicable_mutations.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-18"
+        },
+        {
+          "feature": "DistributedCluster",
+          "aspect": "DecimalAndMergeShapes",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6718_cluster_decimal_merge.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6718_cluster_decimal_merge.zig"
+          ],
+          "benches": [],
+          "owner": "distributed",
+          "updated": "2026-11-18"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6720-DROP-GRAPH-CATALOG",
       "features": [
         {
@@ -88966,7 +89046,7 @@
       "EXEMPT": 209,
       "IMPL": 563,
       "STUB": 18,
-      "TESTED": 4410
+      "TESTED": 4415
     },
     "by_aspect": {
       "2PC": 3,
@@ -89748,12 +89828,15 @@
       "DecidePopulateAttributes": 2,
       "DecideShowMetadata": 1,
       "DecideShowMetadataAdmin": 1,
+      "DecimalAndMergeShapes": 1,
+      "DecimalCodec": 1,
       "DecimalConversion": 1,
       "DecimalLiteralScratch": 1,
       "DecimalOverflowAvg": 1,
       "DecimalOverflowHandling": 1,
       "DecimalOverflowSum": 1,
       "DecimalPropertySupport": 2,
+      "DecimalReplicatesToFollowers": 1,
       "DecimalScaling": 1,
       "DecimalSort": 2,
       "DecimalSupport": 1,
@@ -90662,6 +90745,7 @@
       "InsecureAllowAllBypass": 1,
       "InsecureAllowAllDefault": 1,
       "Insert": 1,
+      "InsertMultiChainReplicates": 1,
       "InsertPrePass": 1,
       "InsertSyntaxRules": 1,
       "Instrumentation": 1,
@@ -90943,6 +91027,7 @@
       "MatchRLSPrincipalUsername": 1,
       "MatchRelationshipProperties": 1,
       "MatchSetResolution": 1,
+      "MatchedMergeSetKeepsLeader": 1,
       "MatchedNodeShard": 1,
       "MaterializeCapNeedsLimit": 1,
       "MaterializeKnownOnly": 1,

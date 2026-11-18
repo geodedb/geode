@@ -702,6 +702,8 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-sonny6375-global-store-race-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); the thread_pool dependency's work-stealing queue races (SONNY-6328, KNOWN_TEST_ISSUES) can fail it; the file runs uninstrumented in the aggregate" },
     .{ .name = "test-sonny6375-ordered-scan-locking-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); the thread_pool dependency's work-stealing queue races (SONNY-6328, KNOWN_TEST_ISSUES) can fail it; the file runs uninstrumented in the aggregate" },
     .{ .name = "test-parallel-index-rebuild-tsan", .reason = "TSan companion (LLVM backend, -fsanitize-thread, slow); fails on the data races ThreadSanitizer reports in the thread_pool dependency's work-stealing queues (SONNY-6328, KNOWN_TEST_ISSUES); the file runs uninstrumented in the aggregate" },
+    // Filtered subsets of a file whose full set runs in the aggregate.
+    .{ .name = "test-sonny6718-cluster-wire", .reason = "the SONNY-6718 subset (filter) of tests/test_cluster_replicable_mutations.zig, whose full set (these tests included) runs in the aggregate through test-cluster-replicable-mutations" },
     // Members of the end-to-end lane (test-e2e).
     .{ .name = "test-gap0203", .reason = "e2e lane (test-e2e): QUIC pipeline suite with a 5 s read deadline, flaky under load (KNOWN_TEST_ISSUES)" },
     .{ .name = "test-gql-conformance", .reason = "e2e lane (test-e2e): spawns QUIC servers per case" },
@@ -2700,6 +2702,21 @@ pub fn build(b: *std.Build) void {
     spawnsBuiltGeode(cluster_replicable_mut_tests);
     const cluster_replicable_mut_step = b.step("test-cluster-replicable-mutations", "Run 3-node subprocess edge/delete/merge/SET replication regression (2026-06-09 gaps)");
     cluster_replicable_mut_step.dependOn(&run_cluster_replicable_mut_tests.step);
+
+    // SONNY-6718: only the DECIMAL / matched-MERGE / INSERT tests of that file.
+    const sonny6718_wire_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_cluster_replicable_mutations.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .filters = &.{"SONNY-6718"},
+    });
+    sonny6718_wire_tests.root_module.link_libc = true;
+    const run_sonny6718_wire_tests = b.addRunArtifact(sonny6718_wire_tests);
+    spawnsBuiltGeode(sonny6718_wire_tests);
+    const sonny6718_wire_step = b.step("test-sonny6718-cluster-wire", "Run the SONNY-6718 3-process cluster tests (DECIMAL values replicate to followers with their scale; a MERGE that matches and SETs keeps the leader alive; INSERT, multi-chain CREATE and list properties replicate)");
+    sonny6718_wire_step.dependOn(&run_sonny6718_wire_tests.step);
 
     // SONNY-6636 (c): server-side Raft snapshots in a cluster of three
     // `geode serve` processes (127.0.0.51-53, GEODE_RAFT_SNAPSHOT_ENTRIES
@@ -6597,12 +6614,20 @@ pub fn build(b: *std.Build) void {
             "distributed.raft_consensus.test.",
             "distributed.cluster.test.",
             "distributed.cluster_auth.test.",
+            "distributed.cluster_replication.test.SONNY-6718",
         },
     });
     const run_distributed_inline_tests = b.addRunArtifact(distributed_inline_tests);
     const distributed_inline_step = b.step("test-sonny6459-distributed-inline", "Run the inline tests of src/distributed/raft_consensus.zig, cluster.zig and cluster_auth.zig (SONNY-6459 item 7)");
     distributed_inline_step.dependOn(&run_distributed_inline_tests.step);
     shardDep(test_step, &run_distributed_inline_tests.step, 1, test_shard_loads, test_shard_index);
+
+    // SONNY-6718: just the DECIMAL replication-codec tests of cluster_replication.zig.
+    const sonny6718_codec_tests = b.addTest(.{ .root_module = distributed_inline_mod, .filters = &.{"distributed.cluster_replication.test.SONNY-6718"} });
+    const run_sonny6718_codec_tests = b.addRunArtifact(sonny6718_codec_tests);
+    const sonny6718_codec_step = b.step("test-sonny6718-codec", "Run the SONNY-6718 DECIMAL replication-codec tests (create, multi-create, merge, update, batch)");
+    sonny6718_codec_step.dependOn(&run_sonny6718_codec_tests.step);
+    shardDep(test_step, &run_sonny6718_codec_tests.step, 1, test_shard_loads, test_shard_index);
 
     // rls_core.zig's inline tests (the GAP-0496 QueryRewriter tests went with
     // the dead QueryRewriter, SONNY-3038).
@@ -13540,6 +13565,22 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny3348c_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny3348c_step = b.step("test-sonny3348-cluster-batch", "Run SONNY-3348 round 19 regression (on a cluster leader a statement's writes are ONE Raft entry or none: FOR ... CREATE and MATCH ... MERGE with a limit on the last row propose nothing, and succeed as one GBAT batch; MERGE matches the statement's own held create; a read a held write could change is refused; the batch codec is versioned; an in-process 3-node cluster through the real gRPC handler)");
     sonny3348c_step.dependOn(&run_sonny3348c_tests.step);
+
+    // SONNY-6718: a cluster leader replicates DECIMAL values and the ordinary
+    // MERGE / SET / CREATE shapes (in-process 3-node cluster, gRPC in process).
+    const sonny6718_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6718_cluster_decimal_merge.zig"), .target = target, .optimize = optimize });
+    sonny6718_test_mod.link_libc = true;
+    sonny6718_test_mod.addImport("geode", root_mod);
+    sonny6718_test_mod.addImport("schema", schema_mod);
+    sonny6718_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6718_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6718_test_mod.addImport("logging", logging_mod);
+    sonny6718_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6718_tests = b.addTest(.{ .root_module = sonny6718_test_mod });
+    const run_sonny6718_tests = b.addRunArtifact(sonny6718_tests);
+    shardDep(test_step, &run_sonny6718_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6718_step = b.step("test-sonny6718-cluster-decimal-merge", "Run SONNY-6718 regression (a cluster leader replicates DECIMAL property values losslessly in every codec and the ordinary CREATE / MERGE / SET shapes; matched MERGE ... SET does not hang)");
+    sonny6718_step.dependOn(&run_sonny6718_tests.step);
 
     // SONNY-2726: a replicated write is applied under the writing session's
     // tenant (GTN1 envelope).
