@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 
@@ -12,6 +13,8 @@ inline fn contains(hay: []const u8, needle: []const u8) bool {
 }
 
 test "flags: DISTINCT unordered emits DistinctOutputUnordered" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1 AS x UNION RETURN 1 AS x" });
     defer std.testing.allocator.free(res.out);
@@ -21,6 +24,8 @@ test "flags: DISTINCT unordered emits DistinctOutputUnordered" {
 }
 
 test "flags: ordered query has OrderTiebreak but not DistinctOutputUnordered" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer std.testing.allocator.free(res.out);
@@ -31,6 +36,8 @@ test "flags: ordered query has OrderTiebreak but not DistinctOutputUnordered" {
 }
 
 test "flags: NullsFirstPolicy present in DISTINCT unordered set where NULL participates" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN null AS a UNION RETURN 1 AS a" });
     defer std.testing.allocator.free(res.out);
@@ -46,6 +53,8 @@ test "flags: NullsFirstPolicy present in DISTINCT unordered set where NULL parti
 // client, and EXPLAIN/PROFILE render under "explain"/"profile", not
 // "result":{"type":...}. Those cases were dropped or updated.
 test "flags: EXPLAIN includes base policy flags" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "EXPLAIN RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer std.testing.allocator.free(res.out);
@@ -58,6 +67,8 @@ test "flags: EXPLAIN includes base policy flags" {
 }
 
 test "flags: PROFILE includes base policy flags and per-op timings" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer std.testing.allocator.free(res.out);

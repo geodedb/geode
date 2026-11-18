@@ -248,6 +248,8 @@ test "perf_gate: modeFor -- claims are reported unless the override is exactly e
 }
 
 test "perf_gate: a clearly-violating claim FAILS when enforced (GEODE_PERF_GATES=enforce)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // Synthetic values: a 10x ratio against a 1.05 bound; cv 5.0 against 0.22;
     // p95/mean 9.0 against 2.55.
     try std.testing.expectError(error.PerfClaimViolated, checkIn(.enforced, false, "synthetic ratio", 10.0 <= 1.05, "ratio={d:.2}", .{10.0}));
@@ -259,6 +261,8 @@ test "perf_gate: a clearly-violating claim FAILS when enforced (GEODE_PERF_GATES
 }
 
 test "perf_gate: a violated claim is reported but NOT enforced by default" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try checkIn(.reported, false, "synthetic ratio", 10.0 <= 1.05, "ratio={d:.2}", .{10.0});
     try envelopeIn(.reported, false, "synthetic envelope", @as(f64, 5.0), @as(f64, 9.0), 0.22, 2.55);
 }

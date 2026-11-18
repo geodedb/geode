@@ -1,9 +1,12 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const util = @import("proto_test_util.zig");
 
 // Protocol test: PROFILE includes GraphStore metrics.
 test "protocol: PROFILE graph_store metrics" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("PROFILE graph_store metrics");
     errdefer util.testFail();
 

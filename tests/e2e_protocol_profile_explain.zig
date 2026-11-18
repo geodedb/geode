@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -37,6 +38,8 @@ fn contains(hay: []const u8, needle: []const u8) bool {
 }
 
 test "protocol: EXPLAIN emits explain payload" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("EXPLAIN emits explain payload");
     errdefer util.testFail();
 
@@ -75,6 +78,8 @@ test "protocol: EXPLAIN emits explain payload" {
 }
 
 test "protocol: PROFILE emits profile payload" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("PROFILE emits profile payload");
     errdefer util.testFail();
 

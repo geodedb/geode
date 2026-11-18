@@ -20,6 +20,7 @@
 // would only fire after peer 3's 1s sleep completes, so this test FAILS there.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 
 const raft_consensus = geode.distributed.raft_consensus;
@@ -99,6 +100,8 @@ fn mkPeer(id: u64) Peer {
 }
 
 test "raft per-peer drain: a slow peer's blocking send does not delay other peers" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = std.testing.allocator;
 
     var rec = Recorder{};

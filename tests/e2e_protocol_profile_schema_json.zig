@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("profile_test_util.zig");
 
@@ -13,6 +14,8 @@ fn hasField(obj: std.json.ObjectMap, name: []const u8) bool {
 }
 
 test "protocol: PROFILE matches core schema fields (light validator)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const out = try util.runProfile(testing.allocator, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1", null);
     defer testing.allocator.free(out);
     var parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, out, .{});

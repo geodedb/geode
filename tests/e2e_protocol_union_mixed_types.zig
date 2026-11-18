@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 
@@ -13,6 +14,8 @@ fn contains(h: []const u8, n: []const u8) bool {
 
 // Ensure numeric 1 and string "1" are NOT collapsed by canonical numeric dedup in UNION DISTINCT.
 test "protocol: UNION DISTINCT keeps numeric vs string distinct" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const exe = geode_test_bin.geode_exe;
     const q = "RETURN 1 AS x UNION RETURN \"1\" AS x";
     const res = try run(&.{ exe, q });

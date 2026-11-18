@@ -1,10 +1,13 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 const parity = @import("transport_parity_util.zig");
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Order Metadata"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_OrderMetadata; OWNER=engine; UPDATED=2025-09-24
 test "protocol: transport parity order metadata (ordered + order_keys)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("transport parity order metadata");
     errdefer util.testFail();
 

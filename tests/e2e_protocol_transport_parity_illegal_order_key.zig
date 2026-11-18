@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -17,6 +18,8 @@ fn execGrpc(client: *util.GrpcProtoClient, allocator: std.mem.Allocator, query: 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Diagnostics IllegalOrderKey"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_IllegalOrderKey; OWNER=engine; UPDATED=2025-09-24
 
 test "protocol: transport parity diagnostics (IllegalOrderKey) QUIC vs gRPC (gated)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("transport parity diagnostics (IllegalOrderKey) QUIC vs gRPC");
     errdefer util.testFail();
 

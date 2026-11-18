@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
@@ -7,6 +8,8 @@ const test_scratch = @import("test_scratch.zig");
 // Simple evidence test: start server with explicit --data_dir and ensure query runs.
 // CANARY: REQ=REQ-GQL-091; FEATURE="ServerDataDirFlag"; ASPECT=CliErgonomics; STATUS=TESTED; TEST=tests/e2e_client_server_arg_passthrough.zig; OWNER=client; UPDATED=2026-11-14
 test "client: explicit server data_dir allows dataset query" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("explicit server data_dir allows dataset query");
     errdefer util.testFail();
 

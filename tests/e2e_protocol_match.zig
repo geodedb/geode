@@ -1,9 +1,12 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const util = @import("proto_test_util.zig");
 
 // Basic E2E over QUIC for MATCH ORDER/LIMIT and US001 policy
 // CANARY: REQ=REQ-GQL-017; FEATURE="MATCH ORDER/LIMIT determinism"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=tests/e2e_protocol_match.zig; OWNER=engine; UPDATED=2026-11-14
 test "protocol: MATCH ORDER/LIMIT ordered metadata" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("MATCH ORDER/LIMIT ordered metadata");
     errdefer util.testFail();
 
@@ -41,6 +44,8 @@ test "protocol: MATCH ORDER/LIMIT ordered metadata" {
 // dropped: unordered pagination succeeds (docs/BINARY_PROTOCOL.md). Both
 // cases below seed a node; MATCH (n) over the empty store has no rows.
 test "protocol: MATCH DISTINCT dedup rows" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("MATCH DISTINCT dedup rows");
     errdefer util.testFail();
 

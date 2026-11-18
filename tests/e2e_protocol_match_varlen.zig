@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 const schema = @import("schema");
@@ -13,6 +14,8 @@ fn execSimple(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query
 // CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Path Determinism UA005/UA006"; ASPECT=ProtocolE2E; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_VarLenDeterminism_QUIC; OWNER=engine; UPDATED=2026-11-14
 
 test "protocol QUIC: MATCH varlen 1..2 determinism" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("MATCH varlen 1..2 determinism");
     errdefer util.testFail();
 

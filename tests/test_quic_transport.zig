@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const repl_util = @import("repl_test_util.zig");
@@ -10,6 +11,8 @@ const repl_dispatch = geode.repl.repl_dispatch;
 // CANARY: REQ=REQ-REPL-QUIC-003; FEATURE="REPL QUIC Transport Tests"; ASPECT=UnitTests; STATUS=IMPL; TEST=geodetestlab/specs/geode_quic_transport.yml; TEST=test_transport_interface; OWNER=repl; UPDATED=2026-11-14
 
 test "transport interface - quic connectivity" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var server = try repl_util.startServer(allocator);
     defer server.deinit();
@@ -22,6 +25,8 @@ test "transport interface - quic connectivity" {
 }
 
 test "transport interface - client session with quic transport" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var server = try repl_util.startServer(allocator);
     defer server.deinit();
@@ -122,6 +127,8 @@ test "json escaping - repl dispatch" {
 }
 
 test "transport interface - connection lifecycle" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var server = try repl_util.startServer(allocator);
     defer server.deinit();
@@ -232,6 +239,8 @@ test "protocol messages - comprehensive validation" {
 // Issue #413: Regression tests for WouldBlock and memory leak fixes
 
 test "session cleanup - deinitSourcedFileCache called on deinit" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var server = try repl_util.startServer(allocator);
     defer server.deinit();
@@ -249,6 +258,8 @@ test "session cleanup - deinitSourcedFileCache called on deinit" {
 }
 
 test "session lifecycle - memory safety with transaction operations" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // Use GeneralPurposeAllocator to detect memory leaks
     var gpa = std.heap.DebugAllocator(.{}){};
     defer {

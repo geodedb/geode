@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 
 // Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
@@ -84,6 +85,8 @@ fn isEnabled(allocator: std.mem.Allocator) bool {
 // --- GAP-0519: Multi-label posting-list intersection benchmark ---
 
 test "GAP-0519 bench: multi-label intersection on 1K node graph" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -122,6 +125,8 @@ test "GAP-0519 bench: multi-label intersection on 1K node graph" {
 // --- GAP-0520: PathIterator streaming benchmark ---
 
 test "GAP-0520 bench: PathIterator streaming with LIMIT" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -166,6 +171,8 @@ test "GAP-0520 bench: PathIterator streaming with LIMIT" {
 // --- GAP-0523: ReadView snapshot benchmark ---
 
 test "GAP-0523 bench: ReadView epoch-check fast path" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -218,6 +225,8 @@ test "GAP-0523 bench: ReadView epoch-check fast path" {
 // --- GAP-0522: Full-scan with LIMIT pushdown ---
 
 test "GAP-0522 bench: MATCH with LIMIT pushdown" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -19,6 +20,8 @@ fn execGrpc(client: *util.GrpcProtoClient, allocator: std.mem.Allocator, query: 
 // CANARY: REQ=REQ-GQL-017; FEATURE="OPTIONAL MATCH + VarLen NullPreserve"; ASPECT=ProtocolE2E_GRPC; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_OptionalVarLenNull_GRPC; OWNER=engine; UPDATED=2026-11-14
 
 test "protocol gRPC: OPTIONAL MATCH varlen null-preserving" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("gRPC: OPTIONAL MATCH varlen null-preserving");
     errdefer util.testFail();
 
@@ -98,6 +101,8 @@ test "protocol gRPC: OPTIONAL MATCH varlen null-preserving" {
 // CANARY: REQ=REQ-GQL-017; FEATURE="OPTIONAL MATCH + VarLen NullPreserve"; ASPECT=ProtocolE2E_QUIC; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_OptionalVarLenNull_QUIC; OWNER=engine; UPDATED=2026-11-14
 
 test "protocol QUIC: OPTIONAL MATCH varlen null-preserving" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("QUIC: OPTIONAL MATCH varlen null-preserving");
     errdefer util.testFail();
 

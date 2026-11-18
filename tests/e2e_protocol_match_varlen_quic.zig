@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
@@ -9,6 +10,8 @@ fn run(allocator: std.mem.Allocator, addr: []const u8, args: []const []const u8)
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Path Determinism UA005/UA006"; ASPECT=ProtocolE2E_QUIC; STATUS=TESTED; TEST=tests/e2e_protocol_match_varlen_quic.zig; OWNER=engine; UPDATED=2026-11-14
 test "protocol QUIC: MATCH varlen 1..2 determinism" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("MATCH varlen 1..2 determinism (QUIC)");
     errdefer util.testFail();
 

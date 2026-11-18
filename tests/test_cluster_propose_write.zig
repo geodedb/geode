@@ -32,6 +32,7 @@
 //     unit test on RaftNode directly (the wrapper only forwards).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 
 const ClusterCoordinator = geode.distributed.cluster.ClusterCoordinator;
@@ -152,6 +153,8 @@ fn allAppliedTarget(coords: []*ClusterCoordinator) bool {
 }
 
 test "three-node cluster: propose to leader, apply on followers" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = std.testing.allocator;
 
     // Pre-allocate 3 cluster ports.  These are reserved for the (unused)

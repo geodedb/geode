@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
@@ -15,6 +16,8 @@ fn runOne(allocator: std.mem.Allocator, server: []const u8, query: []const u8) !
 // Expected: schema lists columns a, c (heuristic type INT); rows contain distinct a values with counts.
 
 test "group by basic non-profile" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("group by basic non-profile");
     errdefer util.testFail();
 

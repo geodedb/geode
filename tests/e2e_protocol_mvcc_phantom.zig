@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const proto = @import("proto_test_util.zig");
 const schema = @import("schema");
@@ -110,10 +111,14 @@ fn runPhantomTest() !void {
 
 // E2E: snapshot isolation should prevent seeing inserted rows mid-transaction (no phantoms)
 test "protocol MVCC phantom reads prevented under SI" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try runPhantomTest();
 }
 
 // CANARY wrapper providing named test for scanner linkage
 test "TestCANARY_REQ_GQL_013_SSIPhantomPrevention" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try runPhantomTest();
 }

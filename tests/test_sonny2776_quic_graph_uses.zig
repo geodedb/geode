@@ -12,6 +12,7 @@
 // CANARY: REQ=REQ-SONNY-2776-TXN-ONE-GRAPH; FEATURE="StatementAuthorization"; ASPECT=QuicE2E; STATUS=TESTED; TEST=tests/test_sonny2776_quic_graph_uses.zig; OWNER=security; UPDATED=2026-09-26
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -93,6 +94,8 @@ const Server = struct {
 };
 
 test "SONNY-2776: over QUIC the label-deny post-filter applies the policies of the graph a graph-switching read ran on" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var s: Server = .{ .server = undefined, .addr = undefined };
     try s.start(allocator, "rls");
@@ -143,6 +146,8 @@ test "SONNY-2776: over QUIC the label-deny post-filter applies the policies of t
 }
 
 test "SONNY-2776: over QUIC a transaction changes one graph" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var s: Server = .{ .server = undefined, .addr = undefined };
     try s.start(allocator, "txn");

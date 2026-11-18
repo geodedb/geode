@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
@@ -23,6 +24,8 @@ fn extract_rows(allocator: std.mem.Allocator, out: []const u8) ![]u8 {
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity MATCH VarLen Rows"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_MatchVarLenRows; OWNER=engine; UPDATED=2025-09-24
 // Deterministic varlen path slice under ORDER with LIMIT/OFFSET; compares full rows across transports.
 test "protocol: transport parity MATCH varlen rows QUIC (gated)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("transport parity MATCH varlen rows QUIC");
     errdefer util.testFail();
 

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 const schema = @import("schema");
@@ -6,6 +7,8 @@ const schema = @import("schema");
 // Protocol-level integration test: request CDC_DIAGNOSTICS via QUIC protobuf.
 // Assertions: presence of core fields from exportDiagnostics payload.
 test "protocol: CDC diagnostics protobuf roundtrip" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("CDC diagnostics protobuf roundtrip");
     errdefer util.testFail();
 

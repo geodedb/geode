@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
@@ -267,6 +268,8 @@ test "GAP-0203 Fix #3: error response format" {
 // ============================================================================
 
 test "GAP-0203 Fix #4: QUIC transaction state is in-memory" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var addr_buf: [32]u8 = undefined;
     const addr = try freeAddr(&addr_buf);
@@ -300,6 +303,8 @@ const ResumeLater = struct {
 };
 
 test "GAP-0203 Fix #4: a live-but-slow server is waited for, not timed out" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var addr_buf: [32]u8 = undefined;
     const addr = try freeAddr(&addr_buf);
@@ -320,6 +325,8 @@ test "GAP-0203 Fix #4: a live-but-slow server is waited for, not timed out" {
 }
 
 test "GAP-0203 Fix #4: a server that exited fails fast, not after the reply deadline" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var addr_buf: [32]u8 = undefined;
     const addr = try freeAddr(&addr_buf);
@@ -376,6 +383,8 @@ test "GAP-0203 Fix #10: debug logging is gated off by default" {
 // ============================================================================
 
 test "GAP-0203 Benchmark: Query execution throughput baseline" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var addr_buf: [32]u8 = undefined;
     const addr = try freeAddr(&addr_buf);
@@ -405,6 +414,8 @@ test "GAP-0203 Benchmark: Query execution throughput baseline" {
 }
 
 test "GAP-0203 Benchmark: Query execution with connection reuse" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var addr_buf: [32]u8 = undefined;
     const addr = try freeAddr(&addr_buf);
@@ -441,6 +452,8 @@ test "GAP-0203 Benchmark: Query execution with connection reuse" {
 }
 
 test "GAP-0203 Benchmark: Graph management query detection cost" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const queries = [_][]const u8{
         "RETURN 1 AS x",
         "MATCH (n:Person) WHERE n.age > 30 RETURN n.name",

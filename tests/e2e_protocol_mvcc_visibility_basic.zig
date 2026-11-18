@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const schema = @import("schema");
@@ -67,6 +68,8 @@ fn runMvccScenario(allocator: std.mem.Allocator, addr: []const u8) !struct { bef
 // 3. T1 SELECT count() again (still expect 0 under snapshot isolation)
 // 4. T1 COMMIT
 test "mvcc visibility snapshot isolation (QUIC)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     proto_util.testStart("mvcc visibility snapshot isolation (QUIC)");
     errdefer proto_util.testFail();
 
@@ -106,6 +109,8 @@ test "mvcc visibility snapshot isolation (QUIC)" {
 
 // CANARY wrapper providing named test for scanner linkage
 test "TestCANARY_REQ_GQL_013_SSIPhantomPrevention" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     proto_util.testStart("SSI Phantom Prevention");
     errdefer proto_util.testFail();
 

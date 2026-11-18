@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 
@@ -14,6 +15,8 @@ inline fn contains(h: []const u8, n: []const u8) bool {
 // Property-style fuzz: generate random decimal pairs (as strings) and ensure ordering via RETURN ... UNION ... ORDER BY preserves numeric ascending order.
 // We only test sign/scale normalization consistency, not full transitive closure across large sets (kept small for CI perf). 10k iterations.
 test "protocol: decimal ordering fuzz pairs" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const exe = geode_test_bin.geode_exe;
     var prng = std.rand.DefaultPrng.init(123456789); // fixed seed for reproducibility
     const rnd = prng.random();

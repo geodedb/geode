@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
@@ -13,6 +14,8 @@ fn run_query(allocator: std.mem.Allocator, server: []const u8, query: []const u8
 }
 
 test "OPTIONAL MATCH left-outer preservation and path alias" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("OPTIONAL MATCH left-outer preservation and path alias");
     errdefer util.testFail();
 

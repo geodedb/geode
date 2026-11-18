@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("profile_test_util.zig");
 
@@ -8,6 +9,8 @@ const util = @import("profile_test_util.zig");
 // (docs/EXPLAIN_PROFILE.md); the version-1 payload this checks comes from a
 // data change (and from tenant-bound and RLS sessions).
 test "protocol: PROFILE conforms to schema v1 minimal" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const out = try util.runProfile(testing.allocator, "PROFILE CREATE (:SchemaV1_6548 {k: 1})", null);
     defer testing.allocator.free(out);
     const profile_line = out;

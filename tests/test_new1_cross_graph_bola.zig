@@ -8,11 +8,14 @@
 //   through gps.decide(.bind_graph)) make every assertion GREEN.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
 test "QUIC HELLO graph-bind RBAC: non-admin may not bind ungranted graph (cross-graph BOLA)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     // Persistent data-dir required: user + grant DDL must survive across the
@@ -100,6 +103,8 @@ test "QUIC HELLO graph-bind RBAC: non-admin may not bind ungranted graph (cross-
 }
 
 test "QUIC HELLO race-recovery path: ReadOnly user bind to existing ungranted graph is denied" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // NOTE: This test covers the existing-graph deny path. The race-recovery sub-path guard
     // (lines 5904-5915) rests on code-symmetry with this path + the guard added in this commit.
     // The race cannot be triggered deterministically; the guard mirrors the block at

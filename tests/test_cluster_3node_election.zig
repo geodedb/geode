@@ -30,6 +30,7 @@
 //   library exposes InProcessTransport precisely for this use case.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 
 const ClusterCoordinator = geode.distributed.cluster.ClusterCoordinator;
@@ -70,6 +71,8 @@ fn sleepMs(ms: u64) void {
 }
 
 test "three coordinators on loopback elect a single leader within 10s" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = std.testing.allocator;
 
     // Pre-allocate 3 cluster ports.  These are reserved for the (unused)

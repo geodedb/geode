@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const schema = @import("schema");
@@ -80,6 +81,8 @@ fn buildCreateBatchQuery(allocator: std.mem.Allocator, label: []const u8, count:
 }
 
 test "protocol clients share parameter binding query path over QUIC and gRPC" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var pair = try startProtocolPair(allocator);
@@ -115,6 +118,8 @@ test "protocol clients share parameter binding query path over QUIC and gRPC" {
 }
 
 test "protocol clients share ordered large-result query path over QUIC and gRPC" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var pair = try startProtocolPair(allocator);
@@ -149,6 +154,8 @@ test "protocol clients share ordered large-result query path over QUIC and gRPC"
 }
 
 test "protocol clients share error query path over QUIC and gRPC" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var pair = try startProtocolPair(allocator);

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -38,6 +39,8 @@ inline fn contains(h: []const u8, n: []const u8) bool {
 // We assert substrings in expected relative order to avoid brittle full-line goldens while freezing key fields.
 
 test "protocol: PROFILE golden simple query" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("PROFILE golden simple query");
     errdefer util.testFail();
 

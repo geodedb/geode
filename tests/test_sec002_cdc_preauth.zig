@@ -8,6 +8,7 @@
 // Run via: zig build test-sec002-cdc-preauth
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 const schema = @import("schema");
@@ -19,6 +20,8 @@ fn spawnCdcServer(allocator: std.mem.Allocator) !util.ServerHandle {
 }
 
 test "unauthenticated connection cannot invoke cdc_ctrl (SEC-002)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var server = spawnCdcServer(allocator) catch {
         util.testSkip();
@@ -45,6 +48,8 @@ test "unauthenticated connection cannot invoke cdc_ctrl (SEC-002)" {
 }
 
 test "unauthenticated connection cannot read cdc_diag (SEC-002)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var server = spawnCdcServer(allocator) catch {
         util.testSkip();
@@ -75,6 +80,8 @@ test "unauthenticated connection cannot read cdc_diag (SEC-002)" {
 // traffic (.ping) and does NOT break authenticated paths.
 
 test "unauthenticated ping is allowed (liveness allow-list)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var server = util.spawnServerRandom(allocator, util.TestEnv.standard()) catch {
         util.testSkip();
@@ -88,6 +95,8 @@ test "unauthenticated ping is allowed (liveness allow-list)" {
 }
 
 test "authenticated admin CDC path reaches handler (gate positive control)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const env = &[_][]const u8{"GEODE_CDC_ENABLE=1"};
     var server = util.spawnServerRandom(allocator, env) catch {

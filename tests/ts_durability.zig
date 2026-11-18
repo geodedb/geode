@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 
 // GAP-0865: Time-series durability regression suite.
@@ -159,6 +160,8 @@ fn insertAndFlush(st: *ts.Store, key: ts.SeriesKey, pts: []const ts.Point) !void
 // ---------------------------------------------------------------------------
 
 test "GAP-0865a corrupted segment fails closed on open (default durability)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const data_dir = try makeTempDir(allocator, "failclosed");
     defer cleanupTempDir(allocator, data_dir);
@@ -192,6 +195,8 @@ test "GAP-0865a corrupted segment fails closed on open (default durability)" {
 }
 
 test "GAP-0865a best_effort durability degrades to in-memory instead of failing" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const data_dir = try makeTempDir(allocator, "besteffort");
     defer cleanupTempDir(allocator, data_dir);
@@ -221,6 +226,8 @@ test "GAP-0865a best_effort durability degrades to in-memory instead of failing"
 // ---------------------------------------------------------------------------
 
 test "GAP-0865b hard-kill without flush/deinit preserves accepted writes via WAL replay" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const data_dir = try makeTempDir(allocator, "hardkill");
     defer cleanupTempDir(allocator, data_dir);
@@ -256,6 +263,8 @@ test "GAP-0865b hard-kill without flush/deinit preserves accepted writes via WAL
 // ---------------------------------------------------------------------------
 
 test "GAP-0865c retention pass deletes expired segments from disk and queries" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const data_dir = try makeTempDir(allocator, "retention");
     defer cleanupTempDir(allocator, data_dir);
@@ -301,6 +310,8 @@ test "GAP-0865c retention pass deletes expired segments from disk and queries" {
 }
 
 test "GAP-0865c retention disabled by default — runRetention is a no-op" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const data_dir = try makeTempDir(allocator, "noretention");
     defer cleanupTempDir(allocator, data_dir);
@@ -335,6 +346,8 @@ fn resetGlobalStorage(allocator: std.mem.Allocator) void {
 }
 
 test "GAP-0865d backup -> wipe -> restore round-trips time-series points" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     defer resetGlobalStorage(allocator);
 
@@ -394,6 +407,8 @@ test "GAP-0865d backup -> wipe -> restore round-trips time-series points" {
 // ---------------------------------------------------------------------------
 
 test "GAP-0865e TDE round-trip: reopen with key succeeds, without key fails closed" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const data_dir = try makeTempDir(allocator, "tde");
     defer cleanupTempDir(allocator, data_dir);

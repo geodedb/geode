@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const cli_test_util = @import("cli_test_util.zig");
@@ -232,6 +233,8 @@ fn writeQueryFile(tmp: *std.testing.TmpDir, allocator: std.mem.Allocator, file_n
 }
 
 test "query and shell share result semantics for gap_0200 chained WITH query" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try proto_test_util.spawnServerRandom(allocator, proto_test_util.TestEnv.standard());
@@ -257,6 +260,8 @@ test "query and shell share result semantics for gap_0200 chained WITH query" {
 }
 
 test "query graph flag and shell use command share graph-scoped execution semantics" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try proto_test_util.spawnServerRandom(allocator, proto_test_util.TestEnv.standard());
@@ -288,6 +293,8 @@ test "query graph flag and shell use command share graph-scoped execution semant
 }
 
 test "query and shell stay aligned for gap_0257 ordered and unordered large result sets" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try proto_test_util.spawnServerRandom(allocator, proto_test_util.TestEnv.standard());
@@ -345,6 +352,8 @@ test "query and shell stay aligned for gap_0257 ordered and unordered large resu
 }
 
 test "query and shell share explain and profile payload semantics" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try proto_test_util.spawnServerRandom(allocator, proto_test_util.TestEnv.standard());
@@ -389,6 +398,8 @@ test "query and shell share explain and profile payload semantics" {
 }
 
 test "query and shell share server error payload semantics" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try proto_test_util.spawnServerRandom(allocator, proto_test_util.TestEnv.standard());
@@ -413,6 +424,8 @@ test "query and shell share server error payload semantics" {
 }
 
 test "query file mode and shell source mode apply the same batch semantics" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try proto_test_util.spawnServerRandom(allocator, proto_test_util.TestEnv.standard());

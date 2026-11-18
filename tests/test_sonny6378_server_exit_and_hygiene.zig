@@ -44,7 +44,7 @@ fn sleepMs(ms: u64) void {
 }
 
 fn monoMs() u64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    var ts: std.os.linux.timespec = .{ .sec = 0, .nsec = 0 };
     _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
     return @as(u64, @intCast(ts.sec)) * 1000 + @as(u64, @intCast(ts.nsec)) / std.time.ns_per_ms;
 }

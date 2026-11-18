@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("profile_test_util.zig");
 
@@ -6,6 +7,8 @@ const util = @import("profile_test_util.zig");
 const FRAG_SLACK_NUM: usize = 13; // numerator (<= 1.3x)
 const FRAG_SLACK_DEN: usize = 10; // denominator
 test "protocol: PROFILE memory fragmentation slack bound" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // Use a query with multiple operators to accumulate allocations.
     const out = try util.runProfile(testing.allocator, "PROFILE RETURN 1 AS x DISTINCT ORDER BY x OFFSET 1 LIMIT 3", null);
     defer testing.allocator.free(out);

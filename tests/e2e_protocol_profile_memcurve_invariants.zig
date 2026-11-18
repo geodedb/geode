@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const profile_util = @import("profile_test_util.zig");
 
@@ -49,6 +50,8 @@ fn parseMemCurve(profile_line: []const u8) !struct { indices: []usize, nets: []u
 // (docs/EXPLAIN_PROFILE.md). The op count is taken from `ops` only: the
 // substring count also counted peak_contributors' `{op, bytes_alloc}`.
 test "protocol: PROFILE mem_curve invariants monotonic indices & nets" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     const profile_line = try profile_util.runProfile(a, "PROFILE CREATE (:MemCurve6548 {k: 1})", &.{"GEODE_PROFILE_MEMCURVE=1"});
     defer a.free(profile_line);

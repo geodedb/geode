@@ -30,6 +30,7 @@
 // because the AST arena is hot in cache).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 const graph_store = geode.graph_store;
 
@@ -62,6 +63,8 @@ fn medianU64(samples: []const u64, scratch: []u64) u64 {
 }
 
 test "GAP-0810: cached parse reuse across store reset does not regress execute" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // Use the production allocator — DebugAllocator's bookkeeping would
     // manufacture a regression that does not exist in the server path
     // (see test docblock).

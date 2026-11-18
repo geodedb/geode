@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -14,6 +15,8 @@ fn hasStatus(statuses: [][]const u8, name: []const u8) bool {
 }
 
 test "protocol: MATCH guard trip surfaces additional ExecutionGuardTrip" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("MATCH guard trip surfaces ExecutionGuardTrip");
     errdefer util.testFail();
 

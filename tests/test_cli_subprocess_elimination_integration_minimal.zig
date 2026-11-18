@@ -2,6 +2,7 @@
 // Minimal integration tests for CLI subprocess elimination - focus on exit codes
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const expect = testing.expect;
@@ -32,6 +33,8 @@ fn getExitCode(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
 
 // Test --insecure flag returns success exit code
 test "integration --insecure returns exit code 0" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try spawnTestServer(allocator);
@@ -88,6 +91,8 @@ test "integration invalid command returns non-zero exit code" {
 
 // Test with different queries all return success with --insecure
 test "integration various queries with --insecure return success" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try spawnTestServer(allocator);
@@ -132,6 +137,8 @@ test "integration invalid server address returns error" {
 
 // Test binary can be executed (basic smoke test)
 test "integration binary execution smoke test" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try spawnTestServer(allocator);
@@ -154,6 +161,8 @@ test "integration binary execution smoke test" {
 
 // CANARY compliance test
 test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_003" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try spawnTestServer(allocator);

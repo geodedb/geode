@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 
@@ -12,6 +13,8 @@ fn contains(hay: []const u8, needle: []const u8) bool {
 }
 
 test "protocol: multiple ORDER BY keys emitted and stable for large payloads" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const exe = geode_test_bin.geode_exe;
     const q = "RETURN 1 AS a, 2 AS b, 3 AS c ORDER BY a, b, c LIMIT 1";
     const res = try run(&.{ exe, q });
@@ -23,6 +26,8 @@ test "protocol: multiple ORDER BY keys emitted and stable for large payloads" {
 }
 
 test "protocol: ORDER BY keys preserved with long aliases" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const exe = geode_test_bin.geode_exe;
     var buf: [1024]u8 = undefined;
     const long = std.fmt.bufPrint(&buf, "{s}{s}{s}", .{ "abcdefghijklmnopqrstuvwxyz", "0123456789", "ABCDEFGHIJKLMNOPQRSTUVWXYZ" }) catch unreachable;

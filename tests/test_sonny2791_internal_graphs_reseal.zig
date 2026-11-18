@@ -19,6 +19,7 @@
 // CANARY: REQ=REQ-SONNY-2791-INTERNAL-GRAPHS; FEATURE="GraphRBACEnforcement"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2791_internal_graphs_reseal.zig; OWNER=security; UPDATED=2026-09-26
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
@@ -410,6 +411,8 @@ test "SONNY-2791: without a plant, the recovery reseal signs what verifies, as b
 }
 
 test "SONNY-2791: over QUIC no HELLO binds an internal graph, and an Admin cannot USE one" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const port = try util.getRandomPort();
     const io_fs = std.Io.Threaded.global_single_threaded.io();

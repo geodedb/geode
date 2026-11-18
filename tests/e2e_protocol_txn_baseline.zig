@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -28,6 +29,8 @@ fn startServerAndClient(allocator: std.mem.Allocator) !TestContext {
 
 // Test baseline transaction functionality: BEGIN/COMMIT/ROLLBACK
 test "e2e: transaction baseline BEGIN/COMMIT/ROLLBACK" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("transaction baseline BEGIN/COMMIT/ROLLBACK");
     errdefer util.testFail();
 
@@ -82,6 +85,8 @@ test "e2e: transaction baseline BEGIN/COMMIT/ROLLBACK" {
 
 // Test transaction rollback functionality
 test "e2e: transaction rollback" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("transaction rollback");
     errdefer util.testFail();
 
@@ -115,6 +120,8 @@ test "e2e: transaction rollback" {
 
 // Test transaction state management
 test "e2e: transaction state management" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("transaction state management");
     errdefer util.testFail();
 

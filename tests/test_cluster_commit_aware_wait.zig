@@ -75,6 +75,7 @@
 // CANARY: REQ=REQ-DIST-CLUSTER-COMMIT-AWARE-WAIT; FEATURE="DistributedCluster"; ASPECT=CommitAwarePostProposeWait; STATUS=TESTED; TEST=tests/test_cluster_commit_aware_wait.zig; OWNER=distributed; UPDATED=2026-06-12
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 
 const cluster = geode.distributed.cluster;
@@ -271,6 +272,8 @@ fn allCommittedTarget(coords: []*ClusterCoordinator) bool {
 // index, which is what crud_operations must call instead of the apply-only wait.)
 // ---------------------------------------------------------------------------
 test "RC-1 live: commit-aware wait returns success for a committed index" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     if (comptime @hasDecl(ClusterCoordinator, "waitForCommittedThenApplied") and
         @hasDecl(ClusterCoordinator, "committedIndex"))
     {

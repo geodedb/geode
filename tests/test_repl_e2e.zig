@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const repl_util = @import("repl_test_util.zig");
@@ -9,6 +10,8 @@ const repl_dispatch = geode.repl.repl_dispatch;
 const repl_loop = geode.repl.repl_loop;
 
 test "repl server handshake simulation" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var server = try repl_util.startServer(allocator);
     defer server.deinit();
@@ -27,6 +30,8 @@ test "repl server handshake simulation" {
 }
 
 test "repl transaction isolation" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var server = try repl_util.startServer(allocator);
     defer server.deinit();
@@ -55,6 +60,8 @@ test "repl transaction isolation" {
 }
 
 test "repl query result pagination" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var server = try repl_util.startServer(allocator);
     defer server.deinit();
@@ -75,6 +82,8 @@ test "repl query result pagination" {
 }
 
 test "repl error recovery" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var server = try repl_util.startServer(allocator);
     defer server.deinit();
@@ -99,6 +108,8 @@ test "repl error recovery" {
 }
 
 test "repl concurrent operations simulation" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var server = try repl_util.startServer(allocator);
     defer server.deinit();
@@ -126,6 +137,8 @@ test "repl concurrent operations simulation" {
 }
 
 test "repl security context" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var server = try repl_util.startServer(allocator);
     defer server.deinit();

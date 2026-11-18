@@ -34,6 +34,7 @@
 // candidate loop itself.
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 // Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
 fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
@@ -196,6 +197,8 @@ fn runMatchSetLoop(h: *Harness, n_iters: usize) !u64 {
 // of MATCH + SET queries must complete in a budget that is only sane if the
 // label index is actually used to enumerate candidates.
 test "REGRESSION: MATCH+SET stays fast with noise nodes (label-indexed scan)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var h = try Harness.init(allocator);
     defer h.deinit();
@@ -230,6 +233,8 @@ test "REGRESSION: MATCH+SET stays fast with noise nodes (label-indexed scan)" {
 // a proportional slowdown. The label index keeps MATCH candidate enumeration
 // dependent on the :Target posting list (tiny) instead of the full store.
 test "REGRESSION: MATCH+SET scales sub-linearly in noise population" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = std.testing.allocator;
 
     const iters: usize = 30;
@@ -282,6 +287,8 @@ test "REGRESSION: MATCH+SET scales sub-linearly in noise population" {
 // full-scan path. Verify it also benefits from the label-indexed candidate
 // enumeration.
 test "REGRESSION: MATCH+REMOVE stays fast with noise nodes (label-indexed scan)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var h = try Harness.init(allocator);
     defer h.deinit();

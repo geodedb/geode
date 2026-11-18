@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 
 // Zig 0.16 compat: std.time.nanoTimestamp removed; clock_gettime(MONOTONIC).
@@ -128,6 +129,8 @@ pub fn runPathCacheDegreeBucketUtilizationVarianceEnvelope() !void {
 }
 
 test "BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelope" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try runPathCacheDegreeBucketUtilizationVarianceEnvelope();
 }
 

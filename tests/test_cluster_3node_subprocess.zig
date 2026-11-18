@@ -258,6 +258,8 @@ test "child capture drains data without blocking on a quiet pipe" {
 }
 
 test "child teardown reaps an exited subprocess through the host ABI" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
     defer threaded.deinit();
     const io = threaded.io();

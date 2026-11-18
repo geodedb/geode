@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 
 // GAP-0862: Restore data-integrity regression.
@@ -170,6 +171,8 @@ fn assertRestoredIntegrity(restored: *graph_store.GraphStore, seed: SeededGraph)
 // Default BackupConfig path (which requests .zstd — see the compression test
 // for why that lands as .none on disk).
 test "GAP-0862 restore preserves node/edge counts and properties" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     defer resetGlobalStorage(allocator);
 
@@ -216,6 +219,8 @@ test "GAP-0862 restore preserves node/edge counts and properties" {
 // is available via `.gzip` (see tests/test_gap0880_backup_upload.zig for the
 // gzip round-trip + magic-byte verification).
 test "GAP-0862 zstd request is rejected with UnsupportedCompression" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     defer resetGlobalStorage(allocator);
 
@@ -240,6 +245,8 @@ test "GAP-0862 zstd request is rejected with UnsupportedCompression" {
 // A corrupted backup payload must be rejected by checksum verification rather
 // than silently restoring garbage. Proves the integrity guard is real.
 test "GAP-0862 corrupted backup payload is rejected on restore" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     defer resetGlobalStorage(allocator);
 

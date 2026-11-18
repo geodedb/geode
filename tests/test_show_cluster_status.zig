@@ -23,6 +23,7 @@
 // coordinator handle and the row-builder logic only.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 
 const ClusterCoordinator = geode.distributed.cluster.ClusterCoordinator;
@@ -113,6 +114,8 @@ test "SHOW CLUSTER STATUS in standalone mode returns one row with role=standalon
 // ---------------------------------------------------------------------------
 
 test "SHOW CLUSTER STATUS in 3-node cluster returns 3 rows with consistent leader" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = std.testing.allocator;
 
     // Make sure no stale global pointer is set before we install ours.

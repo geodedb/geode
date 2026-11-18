@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const cli_test_util = @import("cli_test_util.zig");
@@ -30,6 +31,8 @@ fn contains(hay: []const u8, needle: []const u8) bool {
 // available future feature per the 2025-09-26 spec; it is hardcoded false at
 // grpc_server.zig and quic_connection_handler.zig and is deliberately not wired.
 test "protocol: transport parity diagnostics (US001) QUIC vs gRPC (gated)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("transport parity diagnostics (US001) QUIC vs gRPC");
     errdefer util.testFail();
 

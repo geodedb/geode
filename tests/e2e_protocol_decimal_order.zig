@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 
@@ -17,6 +18,8 @@ inline fn contains(h: []const u8, n: []const u8) bool {
 // NOTE: If decimal literal syntax not yet implemented, this test just ensures existing INT ordering is stable; adjust once decimals are exposed at parse level.
 
 test "protocol: numeric ordering stable (placeholder for decimal)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 2 AS x UNION RETURN 1 AS x UNION RETURN 3 AS x ORDER BY x" });
     defer std.testing.allocator.free(res.out);
@@ -33,6 +36,8 @@ test "protocol: numeric ordering stable (placeholder for decimal)" {
 // `"-1.2"`; integers stay JSON numbers.
 // Mixed scale decimals with negatives: ensure normalization treats -1.2 and -1.20 as equal and ordering places them before 0 and positive values.
 test "protocol: decimal ordering negatives and mixed scales" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN -1.2 AS a UNION RETURN -1.20 AS a UNION RETURN 0 AS a UNION RETURN 1.2 AS a ORDER BY a" });
     defer std.testing.allocator.free(res.out);
@@ -49,6 +54,8 @@ test "protocol: decimal ordering negatives and mixed scales" {
 
 // Mixed ints and decimals ordering: negatives, zeros, positives with decimal granularity.
 test "protocol: numeric ordering mixed ints and decimals" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN -2 AS x UNION RETURN -1.5 AS x UNION RETURN -1 AS x UNION RETURN 0 AS x UNION RETURN 1 AS x UNION RETURN 1.25 AS x UNION RETURN 2 AS x ORDER BY x" });
     defer std.testing.allocator.free(res.out);
@@ -81,6 +88,8 @@ test "protocol: numeric ordering mixed ints and decimals" {
 
 // Dedup across int and decimal forms of same numeric value.
 test "protocol: union distinct dedup int vs decimal canonical equality" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1 AS x UNION RETURN 1.0 AS x UNION RETURN 1.00 AS x" });
     defer std.testing.allocator.free(res.out);

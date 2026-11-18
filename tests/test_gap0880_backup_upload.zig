@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 
 // GAP-0880: Backup protocol upload ingestion + honest compression codec.
@@ -108,6 +109,8 @@ fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 // metadata) records `.gzip`, the payload bytes carry the gzip magic, and the
 // round-trip restores the graph intact.
 test "GAP-0880 gzip backup compresses for real and round-trips" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     defer resetGlobalStorage(allocator);
 
@@ -176,6 +179,8 @@ test "GAP-0880 gzip backup compresses for real and round-trips" {
 // recording a codec that wasn't applied (or silently degrading) lies to the
 // caller about what they got.
 test "GAP-0880 zstd request fails with UnsupportedCompression" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     defer resetGlobalStorage(allocator);
 
@@ -206,6 +211,8 @@ test "GAP-0880 zstd request fails with UnsupportedCompression" {
 // to disk, registers the backup durably in the metadata log, and the result
 // is restorable. Before GAP-0880 the handlers created an EMPTY file.
 test "GAP-0880 upload ingestion stores payload bytes and registers durably" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     defer resetGlobalStorage(allocator);
 
@@ -280,6 +287,8 @@ test "GAP-0880 upload ingestion stores payload bytes and registers durably" {
 
 // Rejection paths: nothing may be written or registered for bad uploads.
 test "GAP-0880 upload ingestion rejects invalid payloads" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     defer resetGlobalStorage(allocator);
 

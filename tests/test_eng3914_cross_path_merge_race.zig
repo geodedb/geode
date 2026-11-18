@@ -49,6 +49,7 @@
 // a mutation. No mocks, no simulated store.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 
@@ -326,6 +327,8 @@ fn generalMerge(
 // ---------------------------------------------------------------------------
 
 test "ENG-3914 T0 control: bulk and general MERGE probes resolve the SAME node (sequential)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
     try h.setUpGraph();
@@ -373,6 +376,8 @@ fn bulkOnlyWorker(ctx: *BulkOnlyCtx) void {
 }
 
 test "ENG-3914 T1: concurrent SAME-KEY bulk MERGE yields exactly one node per key" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // Regression guard for the striped `merge_tuple_locks` path
     // (graph_storage_adapter.zig:4466). GAP-0894's suite gives every worker a
     // DISJOINT key range, so it never proves the tuple lock actually
@@ -485,6 +490,8 @@ fn crossPathWorker(ctx: *CrossPathCtx) void {
 }
 
 test "ENG-3914 T2 regression: cross-path bulk/general MERGE of the SAME key must not duplicate" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // THE ENG-3914 RC-2 REPRODUCER.
     //
     // The bulk MERGE writer drops `mg.rwlock` SHARED between its probe
@@ -634,6 +641,8 @@ fn singleCrossPathWorker(ctx: *SingleCtx) void {
 }
 
 test "ENG-3914 T2b regression: cross-path SINGLE-property MERGE of the SAME key must not duplicate" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // Same race, single-property merge key — the GAP-0894 striping path
     // (graph_storage_adapter.zig:4269, probe :4321-4362, insert :4380).
     var h = try Harness.init(testing.allocator);
@@ -884,6 +893,8 @@ fn creationWindowWorker(ctx: *CreationWindowCtx) void {
 
 // CANARY: REQ=REQ-ENG-3914-MERGE-CROSS-PATH-RACE; FEATURE="MergeIdempotency"; ASPECT=CreationWindowLockUnification; STATUS=TESTED; TEST=tests/test_eng3914_cross_path_merge_race.zig; OWNER=storage; UPDATED=2026-08-30
 test "ENG-3914 T2d regression: an UNMATERIALIZED graph must still lock PER-GRAPH, never the global exclusive" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // Deterministic statement of the RC-3 contract — no race needed. The two
     // MERGE implementations are mutually exclusive only if they lock the SAME
     // object, so this asserts (a) the write-lock acquire returns a per-graph
@@ -921,6 +932,8 @@ test "ENG-3914 T2d regression: an UNMATERIALIZED graph must still lock PER-GRAPH
 
 // CANARY: REQ=REQ-ENG-3914-MERGE-CROSS-PATH-RACE; FEATURE="MergeIdempotency"; ASPECT=CreationWindowConcurrency; STATUS=TESTED; TEST=tests/test_eng3914_cross_path_merge_race.zig; OWNER=storage; UPDATED=2026-08-30
 test "ENG-3914 T2c regression: cross-path MERGE racing the graph-CREATION window must not duplicate" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // The window exists exactly ONCE per store lifetime (the first write to a
     // not-yet-materialized graph), so the whole scenario is re-run against a
     // fresh store each round to make the one-shot race observable. The wire

@@ -1,9 +1,12 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
 // Transactions lifecycle: BEGIN -> nested BEGIN error -> RUN query -> COMMIT -> ROLLBACK error
 test "transactions e2e basic lifecycle" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("transactions e2e basic lifecycle");
     errdefer util.testFail();
 

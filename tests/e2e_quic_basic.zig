@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
@@ -11,6 +12,8 @@ fn run_quic(allocator: std.mem.Allocator, addr: []const u8) !cli_test_util.CliRe
 
 // CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICProtocol; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICProtocol; OWNER=wire; UPDATED=2025-09-22
 test "TestCANARY_REQ_GQL_074_QUICProtocol" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("QUIC Protocol basic");
     errdefer util.testFail();
 

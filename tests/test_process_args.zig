@@ -15,6 +15,7 @@
 // CANARY: REQ=REQ-CLI-PORTABLE-ARGV-001; FEATURE="PortableProcessArgv"; ASPECT=CrossPlatform; STATUS=TESTED; TEST=tests/test_process_args.zig; OWNER=cli; UPDATED=2026-06-12
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const cli_args = @import("cli_args");
 // Reach the holder through cli_args so the test and parseArgs share one
@@ -84,6 +85,8 @@ test "init is idempotent (first capture wins)" {
 }
 
 test "parseArgsFromSlice consumes getArgs output (end-to-end shape)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // Proves the portable holder feeds the real parser with the same slice
     // type the prior /proc/self/cmdline path produced ([]const []const u8).
     process_args.resetForTesting();

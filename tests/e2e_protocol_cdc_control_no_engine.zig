@@ -1,10 +1,13 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDCControlProtocol"; ASPECT=E2ENoEngine; STATUS=TESTED; TEST=protocol_CDC_CONTROL_no_engine; OWNER=cdc; UPDATED=2025-09-20
 
 test "protocol: CDC control when engine disabled" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("CDC control when engine disabled");
     errdefer util.testFail();
 

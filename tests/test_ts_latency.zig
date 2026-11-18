@@ -24,6 +24,7 @@
 // The correctness assertions always run.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 
@@ -73,6 +74,8 @@ fn colIndex(res: execution.ExecutionResult, name: []const u8) ?usize {
 }
 
 test "TS latency: CALL geode.ts.range returns seeded points within budget" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var store = Store.init(allocator);
     defer store.deinit();

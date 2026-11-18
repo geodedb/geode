@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
@@ -17,6 +18,8 @@ inline fn contains(h: []const u8, n: []const u8) bool {
 // (Future: structured parse when JSON DOM helper exists.)
 
 test "profile: memory block contains total_alloc_bytes (v2)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1" });
     defer testing.allocator.free(res.out);
@@ -32,6 +35,8 @@ test "profile: memory block contains total_alloc_bytes (v2)" {
 // and sum `ops` only. A UNION takes the version-1 payload, which measures
 // no allocation (SONNY-6596: every figure 0; they were a fixed model).
 test "profile: per-op bytes_alloc sum equals memory.total_alloc_bytes" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x UNION RETURN 2 AS x ORDER BY x" });

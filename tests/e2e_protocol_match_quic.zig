@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
@@ -9,6 +10,8 @@ fn run(allocator: std.mem.Allocator, addr: []const u8, args: []const []const u8)
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="MATCH ORDER/LIMIT determinism"; ASPECT=ProtocolE2E_QUIC; STATUS=TESTED; TEST=tests/e2e_protocol_match_quic.zig; OWNER=engine; UPDATED=2026-11-14
 test "protocol QUIC: MATCH ORDER/LIMIT ordered metadata" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("MATCH ORDER/LIMIT ordered metadata (QUIC)");
     errdefer util.testFail();
 
@@ -43,6 +46,8 @@ test "protocol QUIC: MATCH ORDER/LIMIT ordered metadata" {
 // OPTIONAL MATCH QUIC smoke: expect NULLs preserved when no relationship
 // CANARY: REQ=REQ-GQL-017; FEATURE="OPTIONAL MATCH null-preserve"; ASPECT=ProtocolE2E_QUIC; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_OptionalMatchNullPreserve_QUIC; OWNER=engine; UPDATED=2026-11-14
 test "protocol QUIC: OPTIONAL MATCH null-preserving semantics" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("OPTIONAL MATCH null-preserving semantics (QUIC)");
     errdefer util.testFail();
 

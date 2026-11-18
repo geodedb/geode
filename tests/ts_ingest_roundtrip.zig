@@ -13,6 +13,7 @@
 //! → the global `g_timeseries_store`, so each test installs an in-process Store
 //! via `eval.setGlobalTimeseriesStore` (the server-boot wiring path).
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 const execution = geode.execution;
 const eval = geode.eval;
@@ -241,6 +242,8 @@ test "ts gql: range end-bound inclusive (in-memory) + aggregates see boundary" {
 // including the boundary point at exactly end_ts. Drives the Store directly so
 // both engine modes are compared in one test.
 test "ts store: queryRange in-memory == durable (boundary inclusive)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const key = SeriesKey{ .device_id = 42, .metric = "v" };
     const pts = [_]Point{
@@ -303,6 +306,8 @@ test "ts store: queryRange in-memory == durable (boundary inclusive)" {
 // ---------------------------------------------------------------------------
 
 test "ts gql: durable insert survives restart (last)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = std.testing.allocator;
 
     const pid = if (@import("builtin").os.tag == .linux) std.os.linux.getpid() else 0;

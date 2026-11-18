@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
@@ -40,6 +41,8 @@ const seed_statements = [_][]const u8{
 // `./data/varlen_determinism`, which outlived every run; a store left there
 // with other credentials made the step fail, and no dataset was ever seeded.
 test "protocol: transport parity varlen dataset rows QUIC (gated)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("transport parity varlen dataset rows QUIC");
     errdefer util.testFail();
 

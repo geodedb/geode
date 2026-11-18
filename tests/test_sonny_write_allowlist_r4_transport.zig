@@ -575,6 +575,8 @@ const Fixture = struct {
 };
 
 test "round 4a over gRPC: PROFILE repros refused, C3, I2, I11 and I8" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
@@ -757,6 +759,8 @@ test "round 4b-1c over gRPC: a WHERE that keeps nothing over two 1,499-pair chai
 
 // CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=MemoryOverQuic; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-29
 test "round 4b-1c over QUIC: flat server memory for a WHERE that keeps nothing, 53200 for the product, and a disconnect stops a join that completes nothing (SONNY-3368)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -865,6 +869,8 @@ test "round 4b-1c over QUIC: flat server memory for a WHERE that keeps nothing, 
 
 // CANARY: REQ=REQ-SONNY-3385-GRPC-OWNED-ENTITIES; FEATURE="GrpcStreaming"; ASPECT=RealServer; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=transport; UPDATED=2026-09-29
 test "round 4b-1c over a real gRPC server: a node a chained part returns is pulled, and the server serves on (SONNY-3385)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -970,6 +976,8 @@ fn handlerInChild(job: *HandlerJob, stack: usize) ?u8 {
 }
 
 test "round 4a over gRPC: the deepest nesting the parser allows runs on an 8 MiB connection thread; one level more is refused (54001)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
@@ -1038,6 +1046,8 @@ fn quicAnswer(aa: std.mem.Allocator, client: *util.QuicProtoClient, query: []con
 }
 
 test "round 4a over QUIC: PROFILE repros refused, C3, I2, I11 (the MERGE fast path too) and I8" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();

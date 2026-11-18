@@ -21,6 +21,7 @@
 // correctness assertions always run.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 
@@ -97,6 +98,8 @@ const Harness = struct {
 };
 
 test "FTS latency: CALL geode.fts.search returns matching docs within budget" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
