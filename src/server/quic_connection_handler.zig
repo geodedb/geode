@@ -2403,17 +2403,20 @@ pub const BufferedProtoReader = struct {
 /// diagnostic to `decodeBufferedMessage`. This export pins that diagnostic:
 /// with a torn/corrupt reader (`start_index > buffer.len`) the decoder must NOT
 /// index out of bounds. `BufferedProtoReader` is private, so this thin export
-/// is the seam. The `transport`/`stream` pointers are NOT dereferenced by
-/// `decodeBufferedMessage` (it only touches `self.buffer`/`self.start_index`),
-/// so dummy pointers are safe here.
+/// is the seam. `decodeBufferedMessage` touches only `self.buffer` and
+/// `self.start_index`, so the transport and the stream's connection are dummy
+/// pointers. `init` reads `stream.connection` (SONNY-6466: the connection id),
+/// so the stream itself is a real value on this frame (SONNY-6773: a dummy
+/// stream pointer segfaulted there); nothing dereferences the connection.
 pub fn decodeBufferedMessageForTest(
     allocator: std.mem.Allocator,
     bytes: []const u8,
     start_index: usize,
 ) !?schema.ClientPacket {
     const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_F00D_1000);
-    const dummy_stream: *quic_transport.QuicStream = @ptrFromInt(0xDEAD_F00D_2000);
-    var reader = try BufferedProtoReader.init(allocator, dummy_transport, dummy_stream);
+    var stream: quic_transport.QuicStream = undefined;
+    stream.connection = @ptrFromInt(0xDEAD_F00D_2000);
+    var reader = try BufferedProtoReader.init(allocator, dummy_transport, &stream);
     defer reader.deinit();
     try reader.buffer.appendSlice(allocator, bytes);
     reader.start_index = start_index;
