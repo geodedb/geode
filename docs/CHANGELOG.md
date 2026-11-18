@@ -4,7 +4,7 @@
 
 ### Security
 
-- **quic v0.1.55: another local user can no longer take over the QUIC
+- **quic v0.1.56: another local user can no longer take over the QUIC
   port, and no two packets share an AEAD nonce (SONNY-6630; quic
   SONNY-6522, SONNY-4379, SONNY-6654).** The server's UDP socket was bound
   with SO_REUSEADDR, so a process of any user that also set it could bind
@@ -17,10 +17,16 @@
   transfers alive across a key update after a burst loss, resends a request
   lost right after the handshake in ~0.1 s instead of ~1 s, and reads ACK
   ranges from the decoded frame (release builds read a dead stack frame).
-  Pinned with geode-client-zig v0.3.20, timeseries-storage v0.2.24 and the
-  thread-pool cascade (wal v0.1.26, otel v0.1.29, json v0.1.21, slog
-  v0.1.16, config v0.1.19, uri v0.1.17, yaml v0.1.11, toml v0.1.16, uuid
-  v0.1.10). No geode code change.
+  Pinned with geode-client-zig v0.3.21 and the SONNY-6630 cascade, which
+  leaves one version of every package in the build (`detect-diamond-deps`
+  clean, 37 packages; it flagged 13 names before): otel v0.1.30 (grpc-zig
+  v0.1.16), wal v0.1.27, raft v0.2.7, graph-storage v0.4.30,
+  timeseries-storage v0.2.25, audit v0.1.25, dns v0.1.29, cli v0.1.15, gql
+  v0.1.23, mcp v0.1.27, auth v0.1.23, fle v0.1.21, hnsw v0.1.18, rtree
+  v0.1.18, timeseries v0.1.20, vulkan v0.1.21, repl v0.1.23, strings
+  v0.1.7, json v0.1.21, slog v0.1.16, config v0.1.19, uri v0.1.17, yaml
+  v0.1.11, toml v0.1.16, uuid v0.1.10, thread-pool v0.2.11. No geode code
+  change.
 - **An operator can overwrite every graph's dead space: `CALL
   geode.storage.scrub()` (SONNY-6700).** A value superseded by an update
   or a DELETE stayed in `props.store` / `var.store` and the WAL until its
