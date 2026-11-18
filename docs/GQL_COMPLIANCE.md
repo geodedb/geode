@@ -330,6 +330,7 @@ MATCH (n) REMOVE n.temporary_field;
 
 -- Deleting elements
 MATCH (n:Person) DELETE n;
+MATCH (n:Person) NODETACH DELETE n;  -- same as DELETE (ISO 13.5)
 MATCH (n) DETACH DELETE n;
 
 -- Merge (upsert) operations

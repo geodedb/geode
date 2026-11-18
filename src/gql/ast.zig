@@ -644,6 +644,12 @@ pub const SessionParameterName = struct {
     specification: []const u8, // parameter specification
 };
 
+/// SONNY-6727: the callee name the parser gives CURRENT_GRAPH and
+/// CURRENT_PROPERTY_GRAPH when they are value expressions; the evaluator
+/// answers it with the session's graph name. The `__` prefix keeps it out of
+/// the variable scope check and out of the user-callable function namespace.
+pub const session_graph_value_fn = "__current_graph";
+
 pub const SessionResetStatement = struct {
     arguments: ?SessionResetArguments = null,
 };

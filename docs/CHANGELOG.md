@@ -4,6 +4,57 @@
 
 ### Fixed
 
+- **A DELETE of a node that still has edges answers GQLSTATUS G1001
+  (SONNY-6738).** `MATCH (a:A) DELETE a` (and `NODETACH DELETE a`) on a node
+  with an edge the statement does not delete failed with the generic 58000
+  (system error), because NodeHasEdges had no entry in
+  `proto_util.mapError`. ISO/IEC 39075:2024 13.5 GR 5 names the condition
+  "dependent object error - edges still exist" (G1001, 23.1 Table 8, class
+  G1); QUIC and gRPC now send G1001 with a message that says the node still
+  has edges and points to DETACH DELETE. BREAKING for a client that matched
+  58000 for this refusal. Test:
+  `zig build test-sonny6738-edges-still-exist-status`.
+
+- **A DELETE removes a node whose edges it deletes too (SONNY-6728).**
+  `MATCH (a:A)-[r:R]->(b:B) DELETE r, a, b` was refused with NodeHasEdges
+  because each node was checked against the store before any edge went.
+  ISO/IEC 39075:2024 13.5 GR 4, 5 and 7 collect the nodes and edges over every
+  row of the statement, raise G1001 only for a node with a connected edge the
+  statement does not delete, then delete the edges and nodes. The check now
+  counts the statement's own edges (a node with an edge it leaves, or a DELETE
+  that names the nodes and not their edge, is still refused with nothing
+  deleted), and a DELETE without DETACH deletes its edges before its nodes. A
+  cluster leader applies the same rule before it proposes the delete. Test:
+  `zig build test-sonny6728-delete-node-and-edges`.
+
+- **`NODETACH DELETE` parses (SONNY-6729).** ISO/IEC 39075:2024 13.5 defines
+  `<delete statement>` as `[ DETACH | NODETACH ] DELETE <delete item list>`
+  (NODETACH is the default, SR 6), but `MATCH (a:A) NODETACH DELETE a` was a
+  parse error ("expected token 'RETURN', got 'identifier'"). The lexer library
+  has no NODETACH token, so the parser reads the identifier NODETACH before
+  DELETE, in a MATCH ... DELETE, a DELETE after a SET or REMOVE and a
+  statement-level DELETE, and the statement behaves as a plain DELETE (a node
+  with an edge left is refused with NodeHasEdges). Test:
+  `zig build test-sonny6729-nodetach-delete`.
+
+- **`RETURN CURRENT_GRAPH` and `CURRENT_PROPERTY_GRAPH` name the session's
+  graph (SONNY-6727).** Both worked as a `USE GRAPH` / `SESSION SET GRAPH`
+  target but were a 42000 "Variable not in scope" as a value expression, though
+  docs/SESSION_MANAGEMENT.md and ISO/IEC 39075:2024 define them. The parser now
+  reads an undelimited `CURRENT_GRAPH` / `CURRENT_PROPERTY_GRAPH` (any case, no
+  parenthesis) as a value that the evaluator answers with the session's graph
+  name: the default graph until `USE GRAPH` or `SESSION SET GRAPH` moves it,
+  then that graph, and the default again after `SESSION RESET GRAPH`. A
+  delimited `` `CURRENT_GRAPH` `` is still a plain variable. Test:
+  `zig build test-sonny6727-current-graph-value`.
+
+- **`SESSION RESET TIME ZONE` parses (SONNY-6726).** TIME lexes as the TIME
+  keyword, and the reset parser matched only an identifier named TIME, so
+  the statement (ISO/IEC 39075:2024 7.1 `<session reset arguments>`,
+  docs/SESSION_MANAGEMENT.md) was a 42000 parse error. It is accepted and
+  clears the session's time zone. Test:
+  `zig build test-sonny6726-session-reset-time-zone`.
+
 - **A writing FOR applies its RETURN stages over the whole working table
   (SONNY-6717).** After `MATCH ... WITH` or a WITH of values, a FOR body that
   writes ran once per element and its RETURN's `ORDER BY`, `DISTINCT`,
