@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- **A startup refusal closes the transaction undo log (SONNY-6767).**
+  `geode serve` opens `txn_undo.wal` early in startup (SONNY-2979); a refusal
+  after it (FLE migration recovery, a missing or unusable HMAC key, an
+  unavailable auth graph) returned without closing it and leaked the log.
+  Startup now closes it on every such refusal.
 - **A gRPC client that disconnects or resets its stream cancels its
   statement (SONNY-6759).** The QUIC handler cancels a statement whose
   client closed its connection (SONNY-3390); a gRPC RPC's only cancel source

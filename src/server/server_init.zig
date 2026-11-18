@@ -644,6 +644,10 @@ pub fn initialize(
     // cannot be opened or read refuses startup: the store may hold changes
     // of a transaction that never committed.
     try openTxnUndoLog(allocator, store);
+    // SONNY-6767: a refusal below (FLE migration recovery, HMAC key, auth
+    // graph) returns before main's shutdown tail, which closes the log on a
+    // normal stop (SONNY-6758); close it here instead of leaking it.
+    errdefer if (geode.txn_durable_undo.uninstall()) |undo_log| undo_log.close();
     // SONNY-6688: an FLE migration batch a crash cut short is finished.
     geode.fle_migration.recoverAtStartup(allocator, store) catch |err| {
         std.debug.print("[startup] finishing the FLE migration batch in fle_migration.journal failed ({s}); refusing to start: a migrated value may be missing until it is finished\n", .{@errorName(err)});
