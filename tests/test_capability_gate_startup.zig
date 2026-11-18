@@ -18,7 +18,10 @@ fn expectedCanonicalReason() ![]const u8 {
 }
 
 test "real startup gate refuses before every listener and releases its lock" {
-    if (@import("builtin").os.tag != .linux) return error.NativeObservationPlatformUnavailable;
+    // The native observation (process-tree and listener scan) is Linux-only.
+    // SONNY-6770: the step runs in the aggregate on every OS (SONNY-2772),
+    // so off Linux it skips; failing there broke test-macos-unit.
+    if (@import("builtin").os.tag != .linux) return error.SkipZigTest;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
     defer threaded.deinit();
     const expected_reason = try expectedCanonicalReason();
