@@ -131,6 +131,22 @@
   relationships (`ownGraphEntities`), and the accumulator links a tracker it
   cannot absorb. Test: the 64-element case of the same step.
 
+- **`latlon('lat,lon')` and `latlonalt('lat,lon,alt[,ref]')` are accepted
+  again (SONNY-6742).** The SONNY-6637 arity table gave `latlon` exactly two
+  arguments and `latlonalt` three or four, but both constructors, and the
+  parser, also take a single string. The table now says `latlon` 1..2 and
+  `latlonalt` 1..4, and marks both as literal-operand constructors like the
+  other type constructors. Test: `zig build test-sonny2739-float-narrowing`
+  (11/11); `test-sonny6637-function-arity` still holds.
+
+- **`test-advanced-property-ga` reads a vector index by its graph-scoped key
+  (SONNY-6743).** SONNY-6703 registers an advanced vector index under
+  `<graph>\x1f<name>`; the test still looked the index up by its bare name and
+  failed on `advanced_vector_indexes.contains("vec_idx")`. The test now takes
+  the key from `findAdvancedVectorIndexForPropertyAlloc("embedding")`, checks
+  that it ends with `\x1fvec_idx`, and uses it for the lookup and the query.
+  A test fix; no engine change.
+
 ### Security
 
 - **quic v0.1.55: another local user can no longer take over the QUIC
