@@ -312,31 +312,52 @@ const Cluster = struct {
     }
 
     fn query(self: *Cluster, i: usize, q: []const u8) ![]u8 {
+        const res = try self.run(i, q);
+        self.gpa.free(res.stderr);
+        return res.stdout;
+    }
+
+    /// Run `q` on node `i`; the caller owns both stdout and stderr.
+    fn run(self: *Cluster, i: usize, q: []const u8) !std.process.RunResult {
         const server = try std.fmt.allocPrint(self.aa, "{s}:{d}", .{ NODE_IPS[i], client_port });
         const argv = [_][]const u8{ BINARY_PATH, "query", "--server", server, "--ca-cert", self.certs.ca, "-U", "geode", "-P", ADMIN_PW, q };
         const res = try std.process.run(self.gpa, self.io, .{
             .argv = &argv,
             .timeout = .{ .duration = .{ .raw = std.Io.Duration.fromNanoseconds(20 * std.time.ns_per_s), .clock = .awake } },
         });
-        defer self.gpa.free(res.stderr);
         if (res.term != .exited or res.term.exited != 0) {
             std.debug.print("[6665] query on node {d} exited {any}: {s}\n", .{ i + 1, res.term, res.stderr[0..@min(res.stderr.len, 400)] });
         }
-        return res.stdout;
+        return res;
     }
 
-    /// Write `k` once through the current leader (never retried: a lost
-    /// reply after commit would make a retry a second row).
+    /// Write `k` through the current leader. A write the node refused
+    /// because it was not (or no longer) the leader was never applied, so
+    /// it is retried on the new leader. Any other outcome, including a
+    /// timeout, is not retried: a lost reply after commit would make a
+    /// retry a second row.
     fn write(self: *Cluster, k: usize) !void {
-        const l = try self.waitLeader();
         const q = try std.fmt.allocPrint(self.aa, "CREATE (:Snap6665 {{k: {d}, pad: '{s}'}})", .{ k, PAD });
-        const out = self.query(l, q) catch |err| switch (err) {
-            error.Timeout => return,
-            else => return err,
-        };
-        defer self.gpa.free(out);
-        if (std.mem.indexOf(u8, out, "error") != null or std.mem.indexOf(u8, out, "Error") != null) {
-            std.debug.print("[6665] write {d} on node {d}: {s}\n", .{ k, l + 1, out[0..@min(out.len, 400)] });
+        var attempt: usize = 0;
+        while (true) : (attempt += 1) {
+            const l = try self.waitLeader();
+            const res = self.run(l, q) catch |err| switch (err) {
+                error.Timeout => return,
+                else => return err,
+            };
+            defer self.gpa.free(res.stdout);
+            defer self.gpa.free(res.stderr);
+            const refused = std.mem.indexOf(u8, res.stdout, "ClusterNotLeader") != null or
+                std.mem.indexOf(u8, res.stderr, "ClusterNotLeader") != null;
+            if (refused and attempt < 20) {
+                std.debug.print("[6665] write {d} refused by node {d} (not leader); retrying\n", .{ k, l + 1 });
+                sleepMs(250);
+                continue;
+            }
+            if (std.mem.indexOf(u8, res.stdout, "error") != null or std.mem.indexOf(u8, res.stdout, "Error") != null) {
+                std.debug.print("[6665] write {d} on node {d}: {s}\n", .{ k, l + 1, res.stdout[0..@min(res.stdout.len, 400)] });
+            }
+            return;
         }
     }
 
