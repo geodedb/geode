@@ -71,6 +71,7 @@ const server_flags = geode.server_flags;
 const diagnostics = geode.diagnostics;
 const execution = geode.execution;
 const graph_store = geode.graph_store;
+const read_budget = geode.read_budget;
 const server_state = geode.server_state;
 const query_runner = geode.query_runner;
 const query_traits = geode.query_traits;
@@ -1392,6 +1393,17 @@ fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTrans
         defer allocator.free(err_resp);
         return sendUnaryResponse(trans, err_resp);
     }
+    // SONNY-6753: the shutdown flag is this handler's statement cancel source,
+    // the gRPC counterpart of the QUIC handler's `stream.shutdown_requested`.
+    // The read and write executors capture it when their budget scope opens
+    // and poll it at every row boundary, so SIGTERM aborts an in-flight gRPC
+    // statement with 57014 within one row. Without it the statement ran on to
+    // completion: the shutdown sat out the whole gRPC drain timeout, skipped
+    // the store free, and reached the allocator leak check (or the teardown
+    // watchdog) with the statement's working set still allocated.
+    const prev_cancel = read_budget.streamCancelSource();
+    read_budget.setStreamCancelSource(&g_grpc_shutting_down);
+    defer read_budget.setStreamCancelSource(prev_cancel);
 
     log.info("gRPC dispatch", &.{
         Attr.string("method", if (method.len > 0) method else "(empty)"),

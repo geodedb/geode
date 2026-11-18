@@ -4,6 +4,20 @@
 
 ### Fixed
 
+- **SIGTERM cancels an in-flight gRPC statement (SONNY-6753).** A gRPC
+  handler never installed a statement cancel source for the read and write
+  executors (`read_budget.setStreamCancelSource`); only the QUIC handler did.
+  At shutdown a QUIC statement was cancelled, but a gRPC statement ran on: the
+  shutdown waited out the whole gRPC drain timeout (30 s), skipped the store
+  free, and reached the allocator leak check with the store and the
+  statement's working set still allocated. A 3-way cartesian over 200 nodes
+  took 62 s to exit with 1,640 leak reports, and in a loaded sweep
+  `test-grpc-shutdown-drain` missed its 90 s deadline. `handlePacket` now
+  installs the gRPC shutdown flag as the handler's cancel source, so the
+  statement aborts with SQLSTATE 57014 at the next row, the gRPC drain
+  completes, the store is freed, and the server exits in about 5 s.
+  `zig build test-sonny6753-grpc-shutdown-cancel` is 1/1.
+
 - **A follower restoring the leader's snapshot no longer keeps the graph it
   had before (SONNY-6749).** In `test-sonny6665-cluster-snapshot-resume` a
   restarted follower with 30 rows installed the leader's snapshot (99 rows)
