@@ -1878,11 +1878,20 @@ test "two committed entries get deterministic raft-index-derived ids on every no
     try std.testing.expect(a1 != a0);
 }
 
-test "unsupported property type is rejected at serialize time" {
+test "SONNY-6718 an extended value (a list) round-trips through serialize -> apply" {
     const a = std.testing.allocator;
-    const labels = [_][]const u8{"N"};
-    const props = [_]Prop{.{ .key = "d", .value = .{ .Decimal = .{ .coeff = 1, .scale = 0 } } }};
-    try std.testing.expectError(CodecError.UnsupportedPropertyType, serializeNodeCreate(a, "g", &labels, &props));
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    const ExtValue = @import("../eval_extended.zig").ExtValue;
+    var items = [_]ExtValue{ .{ .Int = 1 }, .{ .Int = 2 }, .{ .Int = 3 } };
+    const props = [_]Prop{.{ .key = "l", .value = .{ .ExtValue = .{ .List = &items } } }};
+    const payload = try serializeNodeCreate(a, "g", &.{"N"}, &props);
+    defer a.free(payload);
+    const id = try applyNodeCreatePayload(a, &store, payload, 5);
+    const got = (try store.getNodePropertyOrError(id, "l")).?;
+    try std.testing.expect(got == .ExtValue and got.ExtValue == .List);
+    try std.testing.expectEqual(@as(usize, 3), got.ExtValue.List.len);
+    try std.testing.expectEqual(@as(i64, 2), got.ExtValue.List[1].Int);
 }
 
 test "truncated payload is rejected, not crashed" {
@@ -2387,4 +2396,128 @@ test "GUPD truncated payload is rejected, not crashed" {
     const full = try serializeUpdate(a, "default", &updates);
     defer a.free(full);
     try std.testing.expectError(CodecError.CorruptPayload, applyUpdatePayload(a, &store, full[0 .. full.len - 3]));
+}
+
+// CANARY: REQ=REQ-SONNY-6718-CLUSTER-DECIMAL; FEATURE="DistributedCluster"; ASPECT=DecimalCodec; STATUS=TESTED; TEST=src/distributed/cluster_replication.zig; OWNER=distributed; UPDATED=2026-11-18
+/// SONNY-6718: DECIMAL values the codecs must carry exactly (coefficient AND
+/// scale): a plain literal, a negative with a leading-zero fraction, the widest
+/// i128 coefficient at the widest scale, an integral decimal of scale 0 and a
+/// trailing-zero decimal (1.50 is not 1.5: scale 2 vs 1).
+const decimal_cases = [_]struct { coeff: i128, scale: u8 }{
+    .{ .coeff = 35, .scale = 1 },
+    .{ .coeff = -1, .scale = 6 },
+    .{ .coeff = std.math.maxInt(i128), .scale = 38 },
+    .{ .coeff = std.math.minInt(i128) + 1, .scale = 38 },
+    .{ .coeff = 0, .scale = 0 },
+    .{ .coeff = 150, .scale = 2 },
+};
+
+fn expectDecimal(v: ?PropertyValue, coeff: i128, scale: u8) !void {
+    const got = v orelse return error.PropertyMissing;
+    try std.testing.expect(got == .Decimal);
+    try std.testing.expectEqual(coeff, got.Decimal.coeff);
+    try std.testing.expectEqual(scale, got.Decimal.scale);
+}
+
+test "SONNY-6718 GNC1 node create carries DECIMAL coefficient and scale exactly" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    var props: [decimal_cases.len]Prop = undefined;
+    var keys: [decimal_cases.len][4]u8 = undefined;
+    for (decimal_cases, 0..) |c, i| {
+        keys[i] = .{ 'd', '0' + @as(u8, @intCast(i)), 0, 0 };
+        props[i] = .{ .key = keys[i][0..2], .value = .{ .Decimal = .{ .coeff = c.coeff, .scale = c.scale } } };
+    }
+    const payload = try serializeNodeCreate(a, "default", &.{"Dec"}, &props);
+    defer a.free(payload);
+    const id = try applyNodeCreatePayload(a, &store, payload, 9);
+    for (decimal_cases, 0..) |c, i| try expectDecimal(try store.getNodePropertyOrError(id, keys[i][0..2]), c.coeff, c.scale);
+    // The payload's effect decodes (footprint of a held write).
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const eff = try effectOf(arena.allocator(), payload);
+    try std.testing.expectEqual(@as(usize, 1), eff.created.len);
+    try std.testing.expectEqual(decimal_cases.len, eff.created[0].props.len);
+}
+
+test "SONNY-6718 GNC2 multi-create carries DECIMAL node and edge properties" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    const la = [_][]const u8{"W"};
+    const nprops = [_]Prop{.{ .key = "d", .value = .{ .Decimal = .{ .coeff = 35, .scale = 1 } } }};
+    const eprops = [_]Prop{.{ .key = "w", .value = .{ .Decimal = .{ .coeff = -125, .scale = 3 } } }};
+    const nodes = [_]NodeSpec{ .{ .labels = &la, .props = &nprops }, .{ .labels = &la, .props = &.{} } };
+    const edges = [_]EdgeSpec{.{ .from = .{ .position = 0 }, .to = .{ .position = 1 }, .edge_type = "E", .props = &eprops }};
+    const payload = try serializeMultiCreate(a, "default", &nodes, &edges);
+    defer a.free(payload);
+    _ = try applyMultiCreatePayload(a, &store, payload, 3);
+    const n0 = deriveMultiNodeId(3, 0);
+    try expectDecimal(try store.getNodePropertyOrError(n0, "d"), 35, 1);
+    const e0 = deriveMultiEdgeId(3, 0);
+    const w = store.edges.get(e0).?.properties.get("w").?;
+    try std.testing.expect(w == .Decimal);
+    try std.testing.expectEqual(@as(i128, -125), w.Decimal.coeff);
+    try std.testing.expectEqual(@as(u8, 3), w.Decimal.scale);
+}
+
+test "SONNY-6718 GMRG merge and GUPD update carry DECIMAL values exactly" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    try store.createNodeWithId(77, &.{"M"}, "default");
+    const mp = [_]Prop{.{ .key = "v", .value = .{ .Decimal = .{ .coeff = 12345678901234567890, .scale = 9 } } }};
+    const mpay = try serializeMerge(a, "default", 77, &mp);
+    defer a.free(mpay);
+    _ = try applyMergePayload(a, &store, mpay);
+    try expectDecimal(try store.getNodePropertyOrError(77, "v"), 12345678901234567890, 9);
+
+    const up = [_]Prop{.{ .key = "v", .value = .{ .Decimal = .{ .coeff = 425, .scale = 2 } } }};
+    const updates = [_]NodeUpdate{.{ .node_id = 77, .set_props = &up }};
+    const upay = try serializeUpdate(a, "default", &updates);
+    defer a.free(upay);
+    _ = try applyUpdatePayload(a, &store, upay);
+    try expectDecimal(try store.getNodePropertyOrError(77, "v"), 425, 2);
+}
+
+test "SONNY-6718 GBAT batch carries DECIMAL values of its create, merge and update entries" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    const cp = [_]Prop{.{ .key = "d", .value = .{ .Decimal = .{ .coeff = 35, .scale = 1 } } }};
+    const create = try serializeNodeCreate(a, "default", &.{"B"}, &cp);
+    defer a.free(create);
+    try store.createNodeWithId(500, &.{"B"}, "default");
+    const mp = [_]Prop{.{ .key = "m", .value = .{ .Decimal = .{ .coeff = -7, .scale = 4 } } }};
+    const merge = try serializeMerge(a, "default", 500, &mp);
+    defer a.free(merge);
+    const up = [_]Prop{.{ .key = "u", .value = .{ .Decimal = .{ .coeff = 99, .scale = 0 } } }};
+    const updates = [_]NodeUpdate{.{ .node_id = 500, .set_props = &up }};
+    const update = try serializeUpdate(a, "default", &updates);
+    defer a.free(update);
+    const entries = [_]BatchEntry{
+        .{ .mutation = .create, .graph = "default", .data = create },
+        .{ .mutation = .merge, .graph = "default", .data = merge },
+        .{ .mutation = .update, .graph = "default", .data = update },
+    };
+    const payload = try serializeBatch(a, null, &entries);
+    defer a.free(payload);
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    for ([_][]const u8{ create, merge, update }) |entry| _ = try effectOf(arena.allocator(), entry);
+    _ = try applyBatchPayload(a, &store, payload, 41, null);
+    try expectDecimal(try store.getNodePropertyOrError(500, "m"), -7, 4);
+    try expectDecimal(try store.getNodePropertyOrError(500, "u"), 99, 0);
+    try expectDecimal(try store.getNodePropertyOrError(batchLaneBase(41, 0), "d"), 35, 1);
+}
+
+test "SONNY-6718 a DECIMAL payload cut short is rejected, not crashed" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    const props = [_]Prop{.{ .key = "d", .value = .{ .Decimal = .{ .coeff = 35, .scale = 1 } } }};
+    const payload = try serializeNodeCreate(a, "default", &.{"Dec"}, &props);
+    defer a.free(payload);
+    try std.testing.expectError(CodecError.CorruptPayload, applyNodeCreatePayload(a, &store, payload[0 .. payload.len - 5], 1));
 }

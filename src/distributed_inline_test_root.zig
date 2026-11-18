@@ -22,4 +22,5 @@ test {
     _ = @import("distributed/raft_consensus.zig");
     _ = @import("distributed/cluster.zig");
     _ = @import("distributed/cluster_auth.zig");
+    _ = @import("distributed/cluster_replication.zig"); // SONNY-6718: the DECIMAL codec tests
 }

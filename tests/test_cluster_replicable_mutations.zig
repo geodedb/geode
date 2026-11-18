@@ -1091,3 +1091,82 @@ test "cluster: a lost mutation acknowledgement does not duplicate CREATE" {
         runQueryDiscardingAcknowledgement,
     );
 }
+
+// ---------------------------------------------------------------------------
+// SONNY-6718: DECIMAL values replicate, and a MERGE that matches and SETs
+// replicates without killing the leader (3 real `geode serve` processes).
+// ---------------------------------------------------------------------------
+
+/// No node crashed: a process abort or an allocator panic would leave one of
+/// these in its captured output.
+fn expectNoNodeCrashed(cluster: *Cluster) !void {
+    drainAll(&cluster.captures, &cluster.children, cluster.gpa, cluster.io);
+    for (cluster.captures, 0..) |c, i| {
+        for ([_][]const u8{ "invalid pointer", "Invalid free", "panic:", "Segmentation fault" }) |needle| {
+            if (std.mem.indexOf(u8, c.buf.items, needle) != null) {
+                std.debug.print("\n[repl] node {d} crashed: its output contains '{s}'\n", .{ i + 1, needle });
+                return error.NodeCrashed;
+            }
+        }
+    }
+}
+
+// CANARY: REQ=REQ-SONNY-6718-CLUSTER-ORDINARY-WRITES; FEATURE="DistributedCluster"; ASPECT=DecimalReplicatesToFollowers; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-11-18
+test "SONNY-6718 cluster: DECIMAL values replicate to every follower with their scale" {
+    if (skipPreflight()) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    var cluster = try startCluster(gpa, arena.allocator(), threaded.io());
+    defer cluster.deinit();
+
+    try assertMutationReplicates(&cluster, "Dec#create", "CREATE (:Dec6718 {k: 1, v: 3.5, e: 1.50})", "MATCH (n:Dec6718 {k: 1}) RETURN n.v AS v", "\"v\":\"3.5\"");
+    // 1.50 keeps its scale (not 1.5).
+    try assertMutationReplicates(&cluster, "Dec#scale", "RETURN 1 AS x", "MATCH (n:Dec6718 {k: 1}) RETURN n.e AS e", "\"e\":\"1.50\"");
+    try assertMutationReplicates(&cluster, "Dec#type", "RETURN 1 AS x", "MATCH (n:Dec6718 {k: 1}) RETURN n.v AS v", "\"type\":\"DECIMAL\"");
+    try assertMutationReplicates(&cluster, "Dec#merge-create", "MERGE (n:Dec6718 {k: 2}) SET n.v = 0.25", "MATCH (n:Dec6718 {k: 2}) RETURN n.v AS v", "\"v\":\"0.25\"");
+    try assertMutationReplicates(&cluster, "Dec#match-set", "MATCH (n:Dec6718 {k: 1}) SET n.v = 4.75", "MATCH (n:Dec6718 {k: 1}) RETURN n.v AS v", "\"v\":\"4.75\"");
+    try expectNoNodeCrashed(&cluster);
+}
+
+// CANARY: REQ=REQ-SONNY-6718-CLUSTER-ORDINARY-WRITES; FEATURE="DistributedCluster"; ASPECT=MatchedMergeSetKeepsLeader; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-11-18
+test "SONNY-6718 cluster: a MERGE that matches and SETs replicates and the leader stays up" {
+    if (skipPreflight()) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    var cluster = try startCluster(gpa, arena.allocator(), threaded.io());
+    defer cluster.deinit();
+
+    try assertMutationReplicates(&cluster, "MSet#1", "MERGE (n:MSet6718 {id: 21}) SET n.v = 2", "MATCH (n:MSet6718) RETURN n.v AS v", "\"v\":2");
+    // The second MERGE MATCHES: its SET list was freed with the wrong
+    // allocator and aborted the leader process.
+    try assertMutationReplicates(&cluster, "MSet#2", "MERGE (n:MSet6718 {id: 21}) SET n.v = 3", "MATCH (n:MSet6718) RETURN n.v AS v", "\"v\":3");
+    try assertMutationReplicates(&cluster, "MSet#3", "MERGE (n:MSet6718 {id: 21}) ON MATCH SET n.m = 1, n.v = 4", "MATCH (n:MSet6718) RETURN n.v AS v, n.m AS m", "\"m\":1");
+    try assertMutationReplicates(&cluster, "MSet#count", "RETURN 1 AS x", "MATCH (n:MSet6718) RETURN count(n) AS c", "\"c\":1}");
+    try expectNoNodeCrashed(&cluster);
+    // And the cluster still takes a write.
+    try assertMutationReplicates(&cluster, "MSet#after", "CREATE (:MSetAfter6718 {i: 1})", "MATCH (n:MSetAfter6718) RETURN count(n) AS c", "\"c\":1}");
+}
+
+// CANARY: REQ=REQ-SONNY-6718-CLUSTER-ORDINARY-WRITES; FEATURE="DistributedCluster"; ASPECT=InsertMultiChainReplicates; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-11-18
+test "SONNY-6718 cluster: INSERT, a multi-chain CREATE and a list property replicate to followers" {
+    if (skipPreflight()) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    var cluster = try startCluster(gpa, arena.allocator(), threaded.io());
+    defer cluster.deinit();
+
+    try assertMutationReplicates(&cluster, "Ins", "INSERT (:Ins6718 {id: 5})", "MATCH (n:Ins6718) RETURN count(n) AS c", "\"c\":1}");
+    try assertMutationReplicates(&cluster, "Chains", "CREATE (a:CA6718 {k: 1}), (b:CB6718 {k: 2}), (a)-[:LINKS6718]->(b)", "MATCH (:CA6718)-[r:LINKS6718]->(:CB6718) RETURN count(r) AS c", "\"c\":1}");
+    try assertMutationReplicates(&cluster, "Two", "CREATE (:Two6718 {id: 8}), (:Two6718 {id: 9})", "MATCH (n:Two6718) RETURN count(n) AS c", "\"c\":2}");
+    try assertMutationReplicates(&cluster, "List", "CREATE (:Lst6718 {id: 1, l: [1, 2, 3]})", "MATCH (n:Lst6718) RETURN size(n.l) AS s", "\"s\":3");
+    try expectNoNodeCrashed(&cluster);
+}
