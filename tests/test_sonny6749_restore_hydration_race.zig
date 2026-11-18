@@ -76,6 +76,37 @@ fn growLeader(a: std.mem.Allocator, dir: []const u8, total: usize) !void {
     try store.saveToFile();
 }
 
+fn copyTree(a: std.mem.Allocator, src: []const u8, dst: []const u8) !void {
+    var d = try std.Io.Dir.cwd().openDir(io, src, .{ .iterate = true });
+    defer d.close(io);
+    try std.Io.Dir.cwd().createDirPath(io, dst);
+    var it = d.iterate();
+    while (try it.next(io)) |e| {
+        if (std.mem.eql(u8, e.name, ".geode.lock")) continue;
+        const s = try std.fmt.allocPrint(a, "{s}/{s}", .{ src, e.name });
+        defer a.free(s);
+        const t = try std.fmt.allocPrint(a, "{s}/{s}", .{ dst, e.name });
+        defer a.free(t);
+        switch (e.kind) {
+            .directory => try copyTree(a, s, t),
+            .file => try std.Io.Dir.copyFile(std.Io.Dir.cwd(), s, std.Io.Dir.cwd(), t, io, .{}),
+            else => {},
+        }
+    }
+}
+
+/// A query's first touch of G while a restore replaces it: it builds
+/// nothing and fails with WouldBlock (the next touch after the restore
+/// builds the restored graph).
+fn expectTouchRefused(store: *GraphStore, when: []const u8) !void {
+    _ = graph_store.takeQuarantinedReadError();
+    const n = store.countNodesByLabel(G, SNAP, null);
+    const err = graph_store.takeQuarantinedReadError();
+    std.debug.print("SONNY-6749: a first touch {s}: {d} nodes, read error {?}\n", .{ when, n, err });
+    try testing.expectEqual(@as(usize, 0), n);
+    try testing.expectEqual(@as(?graph_store.HydrationReadError, error.WouldBlock), err);
+}
+
 const Readers = struct {
     store: *GraphStore,
     stop: std.atomic.Value(bool) = .init(false),
@@ -159,4 +190,51 @@ test "SONNY-6749: a graph restored from a durable snapshot while queries hydrate
     if (first_wrong) |fw| std.debug.print(" (first in round {d}: {d} nodes, the snapshot has {d})", .{ fw.round, fw.got, fw.want });
     std.debug.print("\n", .{});
     try testing.expectEqual(@as(usize, 0), wrong);
+}
+
+test "SONNY-6749: no first touch builds a graph from its old files while a restore replaces them" {
+    if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
+    const a = testing.allocator;
+    var root = try test_scratch.ScratchDir.create("sonny6749-restore-window");
+    defer root.remove();
+    defer graph_store.setDataDirOverride(a, null);
+    const leader_dir = try std.fmt.allocPrint(a, "{s}/leader", .{root.path()});
+    defer a.free(leader_dir);
+    const follower_dir = try std.fmt.allocPrint(a, "{s}/follower", .{root.path()});
+    defer a.free(follower_dir);
+
+    try growLeader(a, leader_dir, SMALL);
+    const small = try snapshotOf(a, leader_dir);
+    defer a.free(small);
+    try growLeader(a, leader_dir, LARGE);
+
+    const store = try open(a, follower_dir);
+    defer close();
+    raft_apply.setGlobalStore(store);
+    defer raft_apply.resetGlobalStore();
+    try raft_apply.restoreSnapshotCallbackFn(a, small, 10, 2);
+    try testing.expectEqual(SMALL, store.countNodesByLabel(G, SNAP, null));
+
+    // The leader's G at LARGE nodes, restored under its own uuid in the
+    // steps `restoreDurableSnapshot` takes, a first touch in between.
+    const uuid = GraphStore.getGraphUuid(G) orelse return error.GraphMissing;
+    const hex = std.fmt.bytesToHex(uuid, .lower);
+    const src = try std.fmt.allocPrint(a, "{s}/{s}", .{ leader_dir, &hex });
+    defer a.free(src);
+    const adapter = graph_store.getGlobalAdapter() orelse return error.NoAdapter;
+    {
+        graph_store.acquireStoreWriteLock();
+        defer graph_store.releaseStoreWriteLock();
+        try store.forgetGraphBeforeRestore(G);
+        try expectTouchRefused(store, "after the old graph is forgotten");
+        var r = try adapter.beginGraphRestore(&.{.{ .name = G, .uuid = uuid }});
+        defer r.deinit();
+        try copyTree(a, src, r.staged_dirs[0]);
+        try adapter.commitGraphRestore(&r);
+        try expectTouchRefused(store, "after the files are swapped");
+        try store.resetGraphAfterRestore(G);
+    }
+    try testing.expectEqual(LARGE, store.countNodesByLabel(G, SNAP, null));
+    try testing.expectEqual(@as(?graph_store.HydrationReadError, null), graph_store.takeQuarantinedReadError());
+    try testing.expectEqual(@as(u64, LARGE), try adapter.nodeCount(G));
 }
