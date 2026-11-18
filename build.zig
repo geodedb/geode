@@ -15722,6 +15722,17 @@ pub fn build(b: *std.Build) void {
     const read_budget_step = b.step("test-gap0044-read-budget-cancel", "Run GAP-ENT-0044/0045 read-executor budget + cancel-on-disconnect regression (53200 budget abort, 57014 cancel within one batch)");
     read_budget_step.dependOn(&run_read_budget_tests.step);
 
+    // SONNY-6747: a write statement (`MATCH ... DETACH DELETE n RETURN count(n)`)
+    // must never be aborted by the READ-executor budget; a pure read of the
+    // same nodes still aborts with 53200.
+    const sonny6747_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6747_write_not_read_budgeted.zig"), .target = target, .optimize = optimize });
+    sonny6747_mod.addImport("geode", root_mod);
+    const sonny6747_tests = b.addTest(.{ .root_module = sonny6747_mod });
+    const run_sonny6747_tests = b.addRunArtifact(sonny6747_tests);
+    shardDep(test_step, &run_sonny6747_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6747_step = b.step("test-sonny6747-write-not-read-budgeted", "Run SONNY-6747 regression (write statements are never aborted by the read-executor budget)");
+    sonny6747_step.dependOn(&run_sonny6747_tests.step);
+
     // SONNY-1841: a per-stream QUIC CANCEL must abort an abandoned WRITE-carrying
     // mutation and RELEASE the per-graph write lock so a concurrent writer
     // proceeds promptly (57014) instead of stalling to the ~120 s deadline.
