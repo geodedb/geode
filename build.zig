@@ -11525,6 +11525,21 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6758_undo_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6758_undo_step = b.step("test-sonny6758-txn-undo-log-close", "Run SONNY-6758 regression (a real geode serve commits a transaction, exits 0 on SIGTERM with no leak report from txn_durable_undo.zig, and a restart reopens txn_undo.wal and reads the committed data)");
     sonny6758_undo_step.dependOn(&run_sonny6758_undo_tests.step);
+    // SONNY-6759: a gRPC client that closes its connection or resets the
+    // statement's stream (RST_STREAM) cancels its statement, as a QUIC client
+    // that closes its connection does. Subprocess e2e.
+    const sonny6759_grpc_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6759_grpc_disconnect_cancel.zig"), .target = target, .optimize = optimize });
+    sonny6759_grpc_test_mod.link_libc = true;
+    sonny6759_grpc_test_mod.addImport("geode", root_mod);
+    sonny6759_grpc_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6759_grpc_test_mod.addImport("schema", schema_mod);
+    sonny6759_grpc_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6759_grpc_tests = b.addTest(.{ .root_module = sonny6759_grpc_test_mod });
+    const run_sonny6759_grpc_tests = b.addRunArtifact(sonny6759_grpc_tests);
+    spawnsBuiltGeode(sonny6759_grpc_tests);
+    shardDep(test_step, &run_sonny6759_grpc_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6759_grpc_step = b.step("test-sonny6759-grpc-disconnect-cancel", "Run SONNY-6759 regression (a real geode serve running a minutes-long comma join over gRPC goes idle within 20 s when the client closes its TCP connection, and again when it sends RST_STREAM for the statement's stream; the server still answers and exits 0 on SIGTERM)");
+    sonny6759_grpc_step.dependOn(&run_sonny6759_grpc_tests.step);
     // SONNY-6632: a rebuilt open-failed graph is readable, a relationship-type
     // count that cannot be allocated fails the hydration, and a checkpoint
     // reclaims the retired entries of a graph that is not being built.
