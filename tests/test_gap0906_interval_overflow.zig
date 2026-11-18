@@ -22,7 +22,7 @@ const execution = geode.execution;
 
 test "GAP-0906: 9-digit year interval must error cleanly, not panic" {
     // 999999999 * 12 overflows i32 — this panicked before the fix.
-    try testing.expectError(datetime.Date.Error.ParseError, datetime.Interval.fromStr("P999999999Y"));
+    try testing.expectError(error.IntervalFieldOverflow, datetime.Interval.fromStr("P999999999Y"));
 }
 
 test "GAP-0906: year-months boundary is exact" {
@@ -31,14 +31,14 @@ test "GAP-0906: year-months boundary is exact" {
     try testing.expectEqual(@as(i32, 2_147_483_640), ok.months);
 
     // 178956971 * 12 = 2147483652 > i32 max — must error, not wrap.
-    try testing.expectError(datetime.Date.Error.ParseError, datetime.Interval.fromStr("P178956971Y"));
+    try testing.expectError(error.IntervalFieldOverflow, datetime.Interval.fromStr("P178956971Y"));
 }
 
 test "GAP-0906: repeated-unit accumulator overflow errors cleanly" {
     // Each unit may repeat; the additions must be checked too.
-    try testing.expectError(datetime.Date.Error.ParseError, datetime.Interval.fromStr("P2147483647D2147483647D"));
-    try testing.expectError(datetime.Date.Error.ParseError, datetime.Interval.fromStr("P2147483647M2147483647M"));
-    try testing.expectError(datetime.Date.Error.ParseError, datetime.Interval.fromStr("PT2147483647H2147483647H"));
+    try testing.expectError(error.IntervalFieldOverflow, datetime.Interval.fromStr("P2147483647D2147483647D"));
+    try testing.expectError(error.IntervalFieldOverflow, datetime.Interval.fromStr("P2147483647M2147483647M"));
+    try testing.expectError(error.IntervalFieldOverflow, datetime.Interval.fromStr("PT2147483647H2147483647H"));
 }
 
 test "GAP-0906: ordinary intervals still parse" {
@@ -61,7 +61,7 @@ test "GAP-0906: query-level Interval() overflow raises a typed error" {
     var parsed = try geode.parseGql("RETURN Interval('P999999999Y')", aa);
     defer parsed.deinit();
     try testing.expectError(
-        error.DurationParse,
+        error.IntervalFieldOverflow,
         execution.executeStatementWithContext(aa, parsed.program.statements[0], ctx),
     );
 }
