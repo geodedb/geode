@@ -230,6 +230,10 @@ pub fn restoreDurableSnapshot(
         defer graph_storage_adapter.endReplicatedRestore();
         graph_store.acquireStoreWriteLock();
         defer graph_store.releaseStoreWriteLock();
+        // SONNY-6749: requests take no store lock; no first touch builds
+        // these graphs from the old files until they are reset, also when
+        // the restore stops before that.
+        defer for (snap.graphs) |g| store.endGraphRestore(g.name);
         // Nothing of the old graphs stays resident across the swap (and no
         // checkpoint writes their products into the restored directories).
         for (snap.graphs) |g| try store.forgetGraphBeforeRestore(g.name);

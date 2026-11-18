@@ -265,15 +265,25 @@ below for what is left.
      under at-rest encryption) records the snapshot's Raft index and term.
      Each graph is then written and verified byte for byte. Nothing a
      reader sees changes during this step.
-  2. The store's write lock is taken, so no request runs during the rest.
-     For each graph, `GraphStore.forgetGraphBeforeRestore` drops what is
-     resident and leaves the graph unbuilt, so no checkpoint can write the
-     old graph's IdMap or hydration snapshots into the restored directory.
-  3. The swap is committed (`commitGraphRestore`, unchanged below).
+  2. The store's write lock is taken, which keeps out the persistence
+     thread's checkpoints but not requests: a statement takes no store
+     lock. For each graph, `GraphStore.forgetGraphBeforeRestore` drops what
+     is resident, leaves the graph unbuilt and marks it restoring
+     (SONNY-6749). Until step 4 no first touch builds it: the read fails
+     with WouldBlock instead of building the old graph, whose completion
+     persist wrote its IdMap and hydration snapshots into the restored
+     directory, stamped with the restored engine's checkpoint epoch, where
+     step 4 adopted them.
+  3. The swap is committed (`commitGraphRestore`, unchanged below). While
+     it runs, nothing opens the graphs' engines (`WouldBlock`); an open
+     during the rename failed with FileNotFound, which the adapter
+     remembered for the uuid, so the restored graph never opened again.
   4. `resetGraphAfterRestore` registers each graph for a build from its
      new files: resident nodes and edges, label postings and counts, MERGE
      entries (resident or not), lean backfill marks and the IdMap are gone,
-     and the restored uuid is recorded.
+     and the restored uuid is recorded. The graph builds again on its next
+     touch (`endGraphRestore` also clears the mark when the restore stops
+     before this step).
   5. Each graph the snapshot does not carry is dropped. The default graph
      and `__geode_security` are never dropped.
   6. The idempotency table is replaced. The server's hook

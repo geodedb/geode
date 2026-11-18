@@ -2537,6 +2537,15 @@ const HydrationEntry = struct {
     /// retired-cache reclaims (`hasUnfinishedHydration`); a graph waiting for
     /// its first touch or for the retry of a failed build does not.
     building: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// SONNY-6749: a Raft snapshot restore is replacing this graph's files,
+    /// from `forgetGraphBeforeRestore` to `resetGraphAfterRestore` (or
+    /// `endGraphRestore`). Set and cleared under `mutex`. Requests take no
+    /// store lock, so a first touch meanwhile built the graph from the old
+    /// files, and its completion persist could write that state into the
+    /// restored directory stamped with the restored engine's checkpoint
+    /// epoch: the reset adopted it and the graph kept the old nodes. No
+    /// build runs while it is set; the read fails with WouldBlock.
+    restoring: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 };
 
 /// SONNY-6523 (7): keys DROP GRAPH collects per scan of a shared map.
@@ -5844,10 +5853,12 @@ pub const GraphStore = struct {
     /// property index belong to its engine, which the swap replaced; the
     /// vector indexes are the caller's (they are not per graph).
     ///
-    /// The caller holds the store's write lock (`acquireStoreWriteLock`),
-    /// so no request reads the graph between the swap and this. Waits for a
-    /// running build of the graph (its hydration entry) and of any graph
-    /// (`hydration_build_mutex`), the order a build takes them.
+    /// The caller holds the store's write lock (`acquireStoreWriteLock`).
+    /// Requests take no store lock: SONNY-6749, no build of the graph runs
+    /// from `forgetGraphBeforeRestore` to the end of this (its hydration
+    /// entry is `restoring`), so none builds it from the old files. Waits
+    /// for a running build of the graph (its hydration entry) and of any
+    /// graph (`hydration_build_mutex`), the order a build takes them.
     pub fn resetGraphAfterRestore(self: *GraphStore, graph_name: []const u8) !void {
         return self.resetGraphForRestore(graph_name, .after_swap);
     }
@@ -5895,13 +5906,34 @@ pub const GraphStore = struct {
         entry.done.store(false, .release);
         self.dirty.store(true, .release);
         incrementMutationEpoch();
-        if (phase == .before_swap) return;
+        if (phase == .before_swap) {
+            // SONNY-6749: nothing builds it until the restored files are in.
+            entry.restoring.store(true, .release);
+            return;
+        }
         {
             self.graphs_mutex.lockUncancelable(io);
             defer self.graphs_mutex.unlock(io);
             try self.setGraphUuidLocked(graph_name, restored_uuid);
         }
         try self.loadOneGraphFromAdapter(adapter, graph_name);
+        entry.restoring.store(false, .release);
+    }
+
+    /// SONNY-6749: the restore that `forgetGraphBeforeRestore` began for
+    /// `graph_name` is over, also when it failed before
+    /// `resetGraphAfterRestore`: the graph builds again on its next touch
+    /// (from whichever files are in place). Idempotent.
+    pub fn endGraphRestore(self: *GraphStore, graph_name: []const u8) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const entry = blk: {
+            self.hydration_mutex.lockUncancelable(io);
+            defer self.hydration_mutex.unlock(io);
+            break :blk self.pending_hydration.get(graph_name) orelse return;
+        };
+        entry.mutex.lockUncancelable(io);
+        defer entry.mutex.unlock(io);
+        entry.restoring.store(false, .release);
     }
 
     // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphIsolation"; ASPECT=CreateNode; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
@@ -14033,6 +14065,14 @@ pub const GraphStore = struct {
         entry.mutex.lockUncancelable(io);
         defer entry.mutex.unlock(io);
         if (entry.done.load(.acquire)) return null;
+        // CANARY: REQ=REQ-SONNY-6749-NO-BUILD-DURING-RESTORE; FEATURE="Raft Snapshot Persistence"; ASPECT=FirstTouchRefusedMidRestore; STATUS=TESTED; TEST=tests/test_sonny6749_restore_hydration_race.zig; OWNER=storage; UPDATED=2026-11-18
+        // SONNY-6749: a restore is replacing the graph's files: built now it
+        // would hold (and persist) the old graph. This read fails and the
+        // next one builds the restored graph.
+        if (entry.restoring.load(.acquire)) {
+            noteTransientHydrationFailure(graph_name, error.WouldBlock);
+            return error.WouldBlock;
+        }
 
         const adapter = global_adapter orelse {
             entry.done.store(true, .release);

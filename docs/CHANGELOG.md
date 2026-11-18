@@ -4,6 +4,25 @@
 
 ### Fixed
 
+- **A follower restoring the leader's snapshot no longer keeps the graph it
+  had before (SONNY-6749).** In `test-sonny6665-cluster-snapshot-resume` a
+  restarted follower with 30 rows installed the leader's snapshot (99 rows)
+  and then read 51 for as long as it ran: its 30 old rows and the 21 written
+  after the snapshot. The restore takes the store's write lock and assumed no
+  request reads the graph meanwhile, but a statement takes no store lock. A
+  query's first touch after `forgetGraphBeforeRestore` built the graph from
+  its old files, and its completion persist could land after the swap and
+  write that state's IdMap and hydration snapshots into the restored
+  directory, stamped with the restored engine's checkpoint epoch, where
+  `resetGraphAfterRestore` adopted them. A query that opened the graph's
+  engine while the swap renamed its directory failed with FileNotFound, which
+  the adapter remembered for the graph's uuid, so the restored graph never
+  opened again on that node (quarantined until a restart). From the forget to
+  the reset no build of the graph runs and, during the swap, nothing opens its
+  engine: such a read fails with WouldBlock and the next one reads the
+  restored graph; a remembered open failure of the replaced files is
+  forgotten. `zig build test-sonny6749-restore-hydration-race` is 2/2.
+
 - **A DELETE statement is no longer aborted by the read budget
   (SONNY-6747).** With `GEODE_READ_EXECUTOR_BUDGET_MB=1` and about 2 MiB of fat
   nodes, `MATCH (n:L) DETACH DELETE n RETURN count(n)` failed with SQLSTATE

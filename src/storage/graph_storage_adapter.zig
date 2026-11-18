@@ -4795,6 +4795,13 @@ pub const StorageAdapter = struct {
     /// adapter opened (owned keys), with the uuid tried and the error, under
     /// `mutex` (`openGraphRememberingFailureLocked`).
     open_failures: std.StringHashMapUnmanaged(OpenFailure) = .empty,
+    /// SONNY-6749: graphs whose files `commitGraphRestore` is swapping
+    /// (names borrowed from the restore's entries), under `mutex`. Nothing
+    /// opens their engine meanwhile (`openGraphRememberingFailureLocked`
+    /// answers WouldBlock): a statement that opened one while its directory
+    /// was renamed got FileNotFound, which `open_failures` kept for the
+    /// graph's uuid, so the restored graph never opened again.
+    restoring_graph_names: std.StringHashMapUnmanaged(void) = .empty,
     /// SONNY-6606 (3): registry entries (owned names, with the uuid) whose
     /// unreadable manifest `refreshRegistryHeaderNextIdsLocked` has logged,
     /// under `mutex`: once per boot, not at every registry save.
@@ -5355,6 +5362,8 @@ pub const StorageAdapter = struct {
         while (fit.next()) |k| self.allocator.free(k.*);
         self.open_failures.deinit(self.allocator);
         self.open_failures = .empty;
+        self.restoring_graph_names.deinit(self.allocator);
+        self.restoring_graph_names = .empty;
         var uit = self.unreadable_manifests_logged.keyIterator();
         while (uit.next()) |k| self.allocator.free(k.*);
         self.unreadable_manifests_logged.deinit(self.allocator);
@@ -5793,9 +5802,12 @@ pub const StorageAdapter = struct {
                     if (threadTxnOn(mg)) return error.ObjectInUse;
                 }
             }
+            try self.restoring_graph_names.ensureUnusedCapacity(a, @intCast(r.entries.len));
             try self.writeGraphRestoreIntent(true, r.entries, r.raft);
             r.committed = true;
             for (r.entries, detached) |e, *d| {
+                // SONNY-6749: no engine of it opens until the swap is over.
+                self.restoring_graph_names.putAssumeCapacity(e.name, {});
                 const kv = self.engines.fetchRemove(e.name) orelse continue;
                 const mg = kv.value;
                 if (self.default_engine == mg) self.default_engine = null;
@@ -5803,6 +5815,17 @@ pub const StorageAdapter = struct {
                 _ = mg.pins.fetchAdd(1, .acq_rel);
                 _ = mg.pins.fetchOr(ManagedGraph.dropped_bit, .acq_rel);
                 d.* = mg;
+            }
+        }
+        // SONNY-6749: the swap is over (or stopped: a retry or the next open
+        // finishes it); an open failure remembered for the old files is
+        // forgotten, so the graph opens on the files now in place.
+        defer {
+            self.mutex.lockUncancelable(io);
+            defer self.mutex.unlock(io);
+            for (r.entries) |e| {
+                _ = self.restoring_graph_names.remove(e.name);
+                if (self.open_failures.fetchRemove(e.name)) |kv| a.free(kv.key);
             }
         }
         // Drain: a writer or checkpoint inside the old engine finishes; one
@@ -13370,6 +13393,9 @@ pub const StorageAdapter = struct {
     /// still fail closed with the SONNY-6523 quarantine (58000). Running out
     /// of memory is not remembered. Caller holds `mutex`.
     fn openGraphRememberingFailureLocked(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8) !*ManagedGraph {
+        // CANARY: REQ=REQ-SONNY-6749-NO-OPEN-DURING-SWAP; FEATURE="Raft Snapshot Persistence"; ASPECT=EngineOpenRefusedMidSwap; STATUS=TESTED; TEST=tests/test_sonny6749_restore_hydration_race.zig; OWNER=storage; UPDATED=2026-11-18
+        // SONNY-6749: its files are being swapped; the caller retries.
+        if (self.restoring_graph_names.contains(name)) return error.WouldBlock;
         if (self.open_failures.get(name)) |f| {
             if (std.mem.eql(u8, &f.uuid, &graph_uuid)) return f.err;
         }
