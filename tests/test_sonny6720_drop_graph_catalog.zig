@@ -228,3 +228,72 @@ test "SONNY-6720: the removal is saved: a restart does not bring the rows back" 
     try h.run("USE GRAPH g2");
     try testing.expectEqual(@as(usize, 1), try h.indexes("keep_idx"));
 }
+
+const Catalog = @typeInfo(std.meta.fieldInfo(execution.ExecutionContext, .catalog).type).pointer.child;
+
+/// How many index and constraint rows of the catalog are scoped to `graph`.
+fn rowsOfGraph(cat: *Catalog, graph: []const u8) usize {
+    var n: usize = 0;
+    var it = cat.indexes.valueIterator();
+    while (it.next()) |row| {
+        if (std.mem.eql(u8, row.graph, graph)) n += 1;
+    }
+    var cit = cat.constraints.valueIterator();
+    while (cit.next()) |row| {
+        if (std.mem.eql(u8, row.graph, graph)) n += 1;
+    }
+    return n;
+}
+
+fn seedRows(cat: *Catalog, graph: []const u8, tag: []const u8) !void {
+    const aa = testing.allocator;
+    const idx_name = try std.fmt.allocPrint(aa, "idx_{s}", .{tag});
+    defer aa.free(idx_name);
+    var cols = [_][]const u8{"k"};
+    try cat.addIndex(.{ .name = idx_name, .index_type = "btree", .table_name = "Orph", .columns = &cols, .graph = graph });
+    const con_name = try std.fmt.allocPrint(aa, "uq_{s}", .{tag});
+    defer aa.free(con_name);
+    var props = [_][]const u8{"id"};
+    try cat.addConstraint(.{ .name = con_name, .constraint_type = .unique, .label = "Orph", .properties = &props, .is_enforced = true, .graph = graph });
+}
+
+test "SONNY-6720: catalog load removes the rows of a graph that no longer exists, and only those" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+    try h.run("CREATE GRAPH live1");
+    try h.run("CREATE GRAPH gone1");
+    const cat = h.ctx.catalog;
+
+    // What a pre-fix binary left in geode_catalog.dat: rows of a graph that
+    // never had a record (`ghost`), rows of a graph an old DROP GRAPH dropped
+    // from the store and the graph list (`gone1`), a live graph's rows, an
+    // engine-wide row, and the default graph's.
+    try seedRows(cat, "ghost", "ghost");
+    try seedRows(cat, "gone1", "gone1");
+    try seedRows(cat, "live1", "live1");
+    try seedRows(cat, "", "wide");
+    try seedRows(cat, graph_store.DEFAULT_GRAPH_NAME, "dflt");
+    // `live1` is not touched again before the restart, so it is not resident after it.
+    const store = graph_store.getGlobalStore(testing.allocator);
+    try store.dropGraph("gone1");
+    try cat.removeGraph("gone1");
+    try testing.expectEqual(@as(usize, 2), rowsOfGraph(cat, "gone1"));
+
+    try h.restartWith(null);
+    const after = h.ctx.catalog;
+    try testing.expectEqual(@as(usize, 0), rowsOfGraph(after, "ghost"));
+    try testing.expectEqual(@as(usize, 0), rowsOfGraph(after, "gone1"));
+    // Rows of graphs that exist (the default, and `live1`, never hydrated), and the engine-wide one, stay.
+    try testing.expectEqual(@as(usize, 2), rowsOfGraph(after, "live1"));
+    try testing.expectEqual(@as(usize, 2), rowsOfGraph(after, graph_store.DEFAULT_GRAPH_NAME));
+    try testing.expectEqual(@as(usize, 2), rowsOfGraph(after, ""));
+
+    // The repair was saved: a second restart finds nothing more to do, and a
+    // graph created under a dropped name starts empty.
+    try h.restartWith(null);
+    try testing.expectEqual(@as(usize, 0), rowsOfGraph(h.ctx.catalog, "gone1"));
+    try testing.expectEqual(@as(usize, 2), rowsOfGraph(h.ctx.catalog, "live1"));
+    try h.run("CREATE GRAPH gone1");
+    try h.run("USE GRAPH gone1");
+    try testing.expectEqual(@as(usize, 0), try h.indexes("idx_gone1"));
+}
