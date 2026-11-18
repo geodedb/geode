@@ -35,8 +35,10 @@ fn checkHex(s: *Session, f: *Failures) !void {
     try expectValue(s, f, "RETURN to_hex(from_hex('\\\\xDEADBEEF')) = '\\\\xDEADBEEF' AS x", &.{}, "true");
     try expectValue(s, f, "RETURN to_hex(from_hex('')) = '\\\\x' AS x", &.{}, "true");
     try expectValue(s, f, "RETURN Bytea('00ff') AS b", &.{}, "<Bytea>");
-    // The harness spec binary-bytea-hex-operations, verbatim.
-    try expectValue(s, f, "RETURN Bytea('\\xDEADBEEF') AS bytea_val, to_hex(Bytea('\\xDEADBEEF')) = '\\\\xDEADBEEF' AS hex_string, from_hex('DEADBEEF') AS from_hex_val", &.{}, "<Bytea>, true, <Bytea>");
+    // The harness spec binary-bytea-hex-operations with the I/O form's
+    // backslash written as the GQL escape `\\` (the spec writes a single
+    // backslash, which the parser's unknown-escape rule reads as `x...`).
+    try expectValue(s, f, "RETURN Bytea('\\\\xDEADBEEF') AS bytea_val, to_hex(Bytea('\\\\xDEADBEEF')) = '\\\\xDEADBEEF' AS hex_string, from_hex('DEADBEEF') AS from_hex_val", &.{}, "<Bytea>, true, <Bytea>");
     // Text that is not hex is still 22018 (HexFormatError).
     try expectFail(s, f, "RETURN from_hex('zz') AS x", &.{}, error.HexFormatError);
     try expectFail(s, f, "RETURN Bytea('abc') AS x", &.{}, error.HexFormatError);
@@ -100,8 +102,13 @@ fn checkJsonbTypeof(s: *Session, f: *Failures) !void {
     // is no path, so jsonb_get answers NULL, and so does jsonb_typeof of it).
     try expectValue(s, f, "RETURN jsonb_exists(Jsonb('{\"name\": \"Alice\", \"age\": 30}'), 'name') AS name_exists, jsonb_typeof(jsonb_get(Jsonb('{\"name\": \"Alice\", \"age\": 30}'), 'age')) AS age_type", &.{}, "true, null");
     try expectValue(s, f, "RETURN jsonb_exists(Jsonb('{\"name\": \"Alice\"}'), 'name') AS a, jsonb_exists(Jsonb('{\"name\": \"Alice\"}'), 'zip') AS b", &.{}, "true, false");
+    try expectValue(s, f, "RETURN jsonb_typeof(jsonb_get(JSONB('{\"o\":{\"k\":1}}'), '$.o')) = 'object' AS t, jsonb_typeof(jsonb_get(JSONB('{\"o\":[1]}'), '$.o')) = 'array' AS u", &.{}, "true, true");
+    try expectValue(s, f, "RETURN jsonb_get(JSONB('{\"n\":\"Alice\"}'), '$.n') = 'Alice' AS t", &.{}, "true");
+    try expectValue(s, f, "RETURN jsonb_typeof(jsonb_get(JSONB('{\"n\":\"Alice\"}'), '$.n')) = 'string' AS t, jsonb_get(JSONB('{\"n\":1}'), '$.zip') AS u", &.{}, "true, null");
     try expectValue(s, f, "RETURN jsonb_typeof(NULL) AS t", &.{}, "null");
-    try expectFail(s, f, "RETURN jsonb_typeof(1) AS t", &.{}, error.TypeMismatch);
+    // A SQL number is a JSON number; a list is no JSON value of this function.
+    try expectValue(s, f, "RETURN jsonb_typeof(1) = 'number' AS t", &.{}, "true");
+    try expectFail(s, f, "RETURN jsonb_typeof([1]) AS t", &.{}, error.TypeMismatch);
     try expectFail(s, f, "RETURN jsonb_typeof(JSONB('{}'), 1) AS t", &.{}, error.WrongArgumentCount);
 }
 

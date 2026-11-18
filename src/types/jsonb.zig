@@ -57,13 +57,11 @@ pub const JsonbDocument = struct {
         return JsonbDocument{ .data = canonical, .allocator = allocator };
     }
 
-    pub fn get(self: JsonbDocument, path: []const u8) ?JsonbValue {
+    /// The value at `path` (`$.a.b.0`) within a parsed document, or null.
+    fn walk(root: *std.json.Value, path: []const u8) ?*std.json.Value {
         if (!std.mem.startsWith(u8, path, "$.")) return null;
 
-        var parsed = std.json.parseFromSlice(std.json.Value, self.allocator, self.data, .{}) catch return null;
-        defer parsed.deinit();
-
-        var current = &parsed.value;
+        var current = root;
         var path_parts = std.mem.splitScalar(u8, path[2..], '.');
 
         while (path_parts.next()) |part| {
@@ -79,9 +77,33 @@ pub const JsonbDocument = struct {
                 else => return null,
             }
         }
+        return current;
+    }
+
+    pub fn get(self: JsonbDocument, path: []const u8) ?JsonbValue {
+        if (!std.mem.startsWith(u8, path, "$.")) return null;
+
+        var parsed = std.json.parseFromSlice(std.json.Value, self.allocator, self.data, .{}) catch return null;
+        defer parsed.deinit();
+
+        const current = walk(&parsed.value, path) orelse return null;
 
         // P2-3: Pass allocator to jsonValueToJsonb
         return jsonValueToJsonb(self.allocator, current.*);
+    }
+
+    /// SONNY-6733: the value at `path` as JSON text in `allocator` (owned by
+    /// the caller), or null when the path names nothing. `get` hands back
+    /// strings that point into the parse it frees, so it cannot answer the
+    /// objects and arrays (or a string) the evaluator returns.
+    pub fn getText(self: JsonbDocument, allocator: std.mem.Allocator, path: []const u8) ?[]u8 {
+        if (!std.mem.startsWith(u8, path, "$.")) return null;
+
+        var parsed = std.json.parseFromSlice(std.json.Value, self.allocator, self.data, .{}) catch return null;
+        defer parsed.deinit();
+
+        const current = walk(&parsed.value, path) orelse return null;
+        return std.json.Stringify.valueAlloc(allocator, current.*, .{}) catch null;
     }
 
     pub fn exists(self: JsonbDocument, key: []const u8) bool {
