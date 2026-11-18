@@ -35,20 +35,26 @@
 
         // Unicode string library with SIMD acceleration
         .strings = .{
-            .url = "git+https://gitlab.com/devnw/zig/strings.git?ref=v0.1.6#a0de39afeaa103a49b4458882f42457077eeaede",
-            .hash = "strings-0.1.6-adMOtbUoYwCleEij9NYkFEnisu2MZULZlL4tb1excHFe",
+            // 2026-11-18: v0.1.7 (c43105f, SONNY-6630) — re-released on otel v0.1.30
+            // / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/strings.git?ref=v0.1.7#c43105f1b847aeecc081279675482599f17bd3a9",
+            .hash = "strings-0.1.7-adMOtbcoYwAaTh4bv0HI7C53-uDwzrQQBQyJmpCNLltw",
         },
 
         // REPL library with Emacs/Vi keybindings
         .repl = .{
-            .url = "git+https://gitlab.com/devnw/zig/repl.git?ref=v0.1.22#1f4db816d3524895a0ab24b4f7319ea34a28e00b",
-            .hash = "repl-0.1.22-gwF1T1whCABQdVsXpucrPDH0OV71vbtG9K_uKmp3cYx7",
+            // 2026-11-18: v0.1.23 (653c909, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/repl.git?ref=v0.1.23#653c909b226529322966ef60ca84d190d8cd99a5",
+            .hash = "repl-0.1.23-gwF1T1whCAABOf0oN0iLrRORxNMcxxmPqcdPtgmIfBKn",
         },
 
         // Vulkan compute library
         .vulkan = .{
-            .url = "git+https://gitlab.com/devnw/zig/vulkan.git?ref=v0.1.20#e4aed09dd22c1d078aa0e72efa314cf773e382da",
-            .hash = "vulkan-0.1.20-zh1htbIPEgCHYSE8Zz9vsYcgjpPMFJqDBUgi7m0YDxSp",
+            // 2026-11-18: v0.1.21 (e66fdf2, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/vulkan.git?ref=v0.1.21#e66fdf2713d86ef521931bcc823bab051a4978af",
+            .hash = "vulkan-0.1.21-zh1htbQPEgDeCI0DerJkJR5-ZRLXQXEEHGxATENCvk8D",
         },
 
         // =======================================================================
@@ -232,8 +238,11 @@
             // decoded frame and writer/ACK lock fairness (0.1.55). tls v0.1.28,
             // thread-pool v0.2.11; its lazy otel is still v0.1.28. Lockstep with
             // geode-client-zig v0.3.20 (one quic module).
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.55#0f52e640334450dce222f0ab7a6cc2bc16f0fc3a",
-            .hash = "quic-0.1.55-gBIqUZM9RwBj6KPXyDPRBdtoGBILdscXslrfZyPmo1tq",
+            // 2026-11-18: v0.1.56 (54491db, SONNY-6630) — otel v0.1.30 (lazy), so
+            // one otel/thread-pool tree; no transport change (test-only fixes since
+            // v0.1.55). Lockstep with geode-client-zig v0.3.21 (one quic module).
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.56#54491db86e1aceec79b80053938a67c0ec1e772f",
+            .hash = "quic-0.1.56-gBIqUQlKRwAs1d-cRuoA3iM__-rxYczHsSkBSy3waYeZ",
         },
 
         // =======================================================================
@@ -269,8 +278,10 @@
             // 2026-11-17: v0.1.29 (3cdcb91, SONNY-6630) — slog, json, config, yaml,
             // metrics and tls pins carry thread-pool v0.2.11; raft v0.2.6 and wal
             // v0.1.26 pin it.
-            .url = "git+https://gitlab.com/devnw/zig/otel.git?ref=v0.1.29#3cdcb910623eeca1b77073a6fe508ec3fa6f5b6b",
-            .hash = "otel-0.1.29-B0v3lrGuNQCOn83lNntyyw52jyFfRPYIeOFfuO1GQeAI",
+            // 2026-11-18: v0.1.30 (dbf58ba, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/otel.git?ref=v0.1.30#dbf58bae612ef3f5f78c62c130b4c6d63f5aa297",
+            .hash = "otel-0.1.30-B0v3lrGuNQDL0D3_KAb6qK6MaYmz2QeutCp0Sg3SL1H7",
         },
 
         // Configuration management - XDG compliant, multi-format support
@@ -285,8 +296,10 @@
 
         // CLI framework - Cobra/Viper-class command-line interface
         .cli = .{
-            .url = "git+https://gitlab.com/devnw/zig/cli.git?ref=v0.1.14#75b181d1afcb4a3f246a4c08c3adf5f9895d6723",
-            .hash = "cli-0.1.14-0aso9I9HCwDxOBxILQV8gOiOROxsEotN9GE0ILMZhD5h",
+            // 2026-11-18: v0.1.15 (a0ca22c, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/cli.git?ref=v0.1.15#a0ca22c4ac03918ded371a3c3ce9a66b2f22100d",
+            .hash = "cli-0.1.15-0aso9JFHCwDTP9dzHsBA9zlowbJN0aPugKesm_vjjOMP",
         },
 
         // DNS resolution - RFC 1035 compliant with caching and DoT/DoH/DoQ support
@@ -297,8 +310,10 @@
         // Lockstep with audit v0.1.24, which pins the same dns, and with
         // geode-client-zig v0.3.18 (2026-11-15; v0.3.17 pinned dns v0.1.27).
         .dns = .{
-            .url = "git+https://gitlab.com/devnw/zig/dns.git?ref=v0.1.28#3c0a5602afd42aef6e5543dccb5b0dc8a92cabf5",
-            .hash = "dns-0.1.28-x4U-zSWCGAA2rnMI5f5kDd8OoAIp2LoOXz_gJKOg3XgQ",
+            // 2026-11-18: v0.1.29 (3c184d3, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/dns.git?ref=v0.1.29#3c184d3678ee8709f47a7f5ec58cba17376dc5d7",
+            .hash = "dns-0.1.29-x4U-zSeCGACiftNR0oJoHugYo1ElseP7po9H8LkiXyNO",
         },
 
         // Thread Pool - Bounded, lock-free thread pool with work-stealing
@@ -362,8 +377,10 @@
         // -32600. createTask/getTask return copies (geode uses neither).
         // Same json/thread_pool/otel/fips pins.
         .mcp = .{
-            .url = "git+https://gitlab.com/devnw/zig/mcp.git?ref=v0.1.26#c0c0178cbdd037abf46d9cbc3338a16bd09fb256",
-            .hash = "mcp-0.1.26-exAeBPQiCwDRiWMeX2tjdmmFeAq0JiM99ZujsNjCcT0Z",
+            // 2026-11-18: v0.1.27 (6fabfce, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/mcp.git?ref=v0.1.27#6fabfceabe325133c0afc2778238ba3089ad068a",
+            .hash = "mcp-0.1.27-exAeBIkrCwC8T0H43m6k1EG4YjIqbS0i_gl494j_lrAm",
         },
 
         // Protocol Buffers - Zig 0.15.2 compatible
@@ -379,8 +396,10 @@
             // 2026-09-15: the whole telemetry stack WAS repinned together by
             // the zig-tool sync-diamond cascade onto grpc-zig v0.1.10
             // (SONNY-1568 per-connection reader threads); otel is now v0.1.20.
-            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git?ref=fe88ba8dd81911a784b55118b24c9d8508596578#fe88ba8dd81911a784b55118b24c9d8508596578",
-            .hash = "grpc_zig-0.1.15-7FnvpLMcCQB93y-UXU0IyaKVxjIUIElCi8OiCtl859lp",
+            // 2026-11-18: v0.1.16 (1e73a20, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git?ref=v0.1.16#1e73a20c1796c3b5ea122f784c70bbe0518a479d",
+            .hash = "grpc_zig-0.1.16-7FnvpLMcCQBudY4wp5FufefXiFQYeJ_THNcjiSaUcP1g",
         },
         .geode_client_zig = .{
             // 2026-05-01: bumped to d1af792 — picks up the matching
@@ -508,8 +527,12 @@
             // v0.1.16, uri v0.1.17, uuid v0.1.10, gql v0.1.22, metrics v0.1.10,
             // otel v0.1.29). No API change.
             // Pinned to the release commit on MR !51 until v0.3.20 is tagged.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.20#9ca52063f32b3d4679f5bdab76d272dd63ff9b44",
-            .hash = "geode_client_zig-0.3.20-8ysbV3vvDQD0Zeyr6QPVgCJDxs7ep4NRwt1VRQ7GmOEI",
+            // 2026-11-18: v0.3.21 (805e2eb, SONNY-6630) — quic v0.1.56 and the
+            // cascade tags (dns v0.1.29, strings v0.1.7, auth v0.1.23, gql v0.1.23,
+            // otel v0.1.30); no API change. Pinned to the release commit on MR !53
+            // until v0.3.21 is tagged.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=release/sonny-6630-v0.3.21#805e2ebb7906dac80859e1956d6315f58614b255",
+            .hash = "geode_client_zig-0.3.21-8ysbV8bwDQAsjTaviAFGaNIGeSaC2nuullOzNcBEr4Tb",
         },
 
         // =======================================================================
@@ -538,8 +561,10 @@
             // source as v0.1.25). raft v0.2.6 and timeseries-storage v0.2.24 pin it;
             // graph-storage v0.4.28 still pins v0.1.25. build.zig still points all
             // three libraries' "wal" import at this module: one wal is compiled.
-            .url = "git+https://gitlab.com/devnw/zig/wal.git?ref=v0.1.26#0c94adb032b85de62cc0a22d40123f8c0211449c",
-            .hash = "wal-0.1.26-EqPqpqU_CAD6CHg4JLglN6xzhhoDxfIlhh9mM95NcQBl",
+            // 2026-11-18: v0.1.27 (e8d1c51, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/wal.git?ref=v0.1.27#e8d1c51ea00e7788fe950e6f3251c48e8852d2bc",
+            .hash = "wal-0.1.27-EqPqpqU_CAB-RfhJaHAM2nOpRpSxl6sykpzcdKXPuKpd",
         },
 
         // Page-based graph storage engine
@@ -788,8 +813,10 @@
             // `orphan_pages_freed`. Same dependencies as v0.4.27. Pinned to
             // the v0.4.28 tag on 024e7be (MR !37,
             // fix/sonny-6700-scrub-var-slab-orphans).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.29#a07cd8a273312f22ca9980a1509f57afca542a7c",
-            .hash = "graph_storage-0.4.29-9UyJS_AOOAAtJNsS0DHC4Iup4t1dl5n6RqNX3S5n9ST6",
+            // 2026-11-18: v0.4.30 (ccd73b5, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.30#ccd73b5118c266b0f4cb08afae4e4a81a2144545",
+            .hash = "graph_storage-0.4.30-9UyJS9AOOAAWdZCcHhGeN5jLrUYwnZeT0XxuNCc19SsG",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -848,8 +875,10 @@
         // copies of its committed entries); RaftNode.init reads only the
         // snapshot's metadata.
         .raft = .{
-            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.2.6#daf2d8df6ef650a8ee23e21b51ee3b5c926d4c33",
-            .hash = "raft-0.2.6-PqJyvlfYCwDzmyuXk_AUFH_0QshAW2leYO7tyJxqAAbe",
+            // 2026-11-18: v0.2.7 (59fe60a, SONNY-6630) — re-released on otel v0.1.30
+            // / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.2.7#59fe60ad298c17ab544a38053cb8ff31c33922d9",
+            .hash = "raft-0.2.7-PqJyvlfYCwBeWqfg8yCK_Uy5dOI56sxT1V3jpWSpaCBa",
         },
 
         // =======================================================================
@@ -860,20 +889,26 @@
         // 2026-11-13: v0.1.24 (55335ac) — tagged release; pins dns v0.1.28
         // (SONNY-6447) in lockstep with geode's dns pin.
         .audit = .{
-            .url = "git+https://gitlab.com/devnw/zig/audit.git?ref=v0.1.24#55335ac747e556f002903397bd560c2abb0ba484",
-            .hash = "audit-0.1.24-J9TtCEDMBgDwI59tWiqQGXe9blJspf-GVfmW0Et5ls1z",
+            // 2026-11-18: v0.1.25 (ec8d224, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/audit.git?ref=v0.1.25#ec8d2249283916e1dc8053a4e20f8e41303e8424",
+            .hash = "audit-0.1.25-J9TtCEDMBgCpXS-Ug4bnr_NC0rqf0RcjhVhxGHV0awHw",
         },
 
         // HNSW - Approximate nearest-neighbor index with configurable distance metrics
         .hnsw = .{
-            .url = "git+https://gitlab.com/devnw/zig/hnsw.git?ref=v0.1.17#0ffbb2d6494ae4e205dc7be0013cb2471999f3d7",
-            .hash = "hnsw-0.1.17-wYzBy4pyAgBgcdWPAWWeB_wD2H83jS0zUYQVYjqdKnO1",
+            // 2026-11-18: v0.1.18 (73c081b, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/hnsw.git?ref=v0.1.18#73c081b0463bd8d5995c1faa5ec584573ef0b488",
+            .hash = "hnsw-0.1.18-wYzBy4xyAgAgH2xWVIaoHP36C9MMRb6l7jEv81AfUt6i",
         },
 
         // R-tree - Spatial index with bounding-box search
         .rtree = .{
-            .url = "git+https://gitlab.com/devnw/zig/rtree.git?ref=v0.1.17#a8d4995bc50cbf41a84e4b9fbd68d27eedd43a41",
-            .hash = "rtree-0.1.17-kIpcH9FZAgBcI-Q9hnRz56fOyiGa4NWqJqz609uz1qsL",
+            // 2026-11-18: v0.1.18 (d63760c, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/rtree.git?ref=v0.1.18#d63760c452442a56b4184a238368df58a562efa7",
+            .hash = "rtree-0.1.18-kIpcH9NZAgCSIKx-O2jZbJSrm-wKgDVV86rrd-i6Hlc8",
         },
 
         // Advanced Types - Network, vector, geographic, URL, range value types
@@ -884,20 +919,26 @@
 
         // FLE - Field-level encryption with AEAD, HKDF, blind indices
         .fle = .{
-            .url = "git+https://gitlab.com/devnw/zig/fle.git?ref=e36aab23ea10f196181fdc6ff400463514978e2f#e36aab23ea10f196181fdc6ff400463514978e2f",
-            .hash = "fle-0.1.20-1CfwlRJ7AwB8_xJq8Ip-fI6ho1Svbg-BTblTjrSuRJE6",
+            // 2026-11-18: v0.1.21 (e55d6fd, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/fle.git?ref=v0.1.21#e55d6fd17e5df079b37991889c8242412f673c44",
+            .hash = "fle-0.1.21-1CfwlRR7AwDa_s1omEm4qpW9NEQVvGU1U7PyoHKVN-e6",
         },
 
         // GQL - ISO/IEC 39075:2024 Graph Query Language front-end (lexer, parser, AST)
         .gql = .{
-            .url = "git+https://gitlab.com/devnw/zig/gql.git?ref=v0.1.22#d9dfb9ec4806f0eaa9e8fb6c4ecd4068a62bda42",
-            .hash = "gql-0.1.22-T1ANDchWDAAgAach6i-xfzgh8MTjPPTEfIJGfNCkAsMU",
+            // 2026-11-18: v0.1.23 (b56fcb3, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/gql.git?ref=v0.1.23#b56fcb3076d9a5f36322ce6c72abf118404b9cdc",
+            .hash = "gql-0.1.23-T1ANDcpWDACFyCqIAKvNtH4Jfb8aelISperbi7WP6Dcc",
         },
 
         // Timeseries - Pattern matching, DTW, matrix profile, PELT change-point detection
         .timeseries = .{
-            .url = "git+https://gitlab.com/devnw/zig/timeseries.git?ref=v0.1.19#3ef621add8b956631b03a17f7e4d2a371e56a23f",
-            .hash = "timeseries-0.1.19-iAEwOt7rBgAfiHIzZ9HxM8BIOu9Ob6nz66d4lg2Idwy7",
+            // 2026-11-18: v0.1.20 (1ef2dc5, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/timeseries.git?ref=v0.1.20#1ef2dc5bd6d6c7ab452b84526c52974369cc5625",
+            .hash = "timeseries-0.1.20-iAEwOuDrBgDcTwcL4fmFJrFfsHhX44UT1djmObKjT7XC",
         },
 
         .timeseries_storage = .{
@@ -918,8 +959,10 @@
             // v0.1.10, geode's pins; v0.2.23 (SONNY-6634): the batch-mode WAL
             // syncer skips the fdatasync when nothing was appended
             // (WalManager.syncCount() added).
-            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=v0.2.24#3c6d6251885324f5edfa8defcb6da62de6df39ab",
-            .hash = "timeseries_storage-0.2.24-5wzBJOnzFABXQphFEMqg1DkGcscmHKTqK_XgV9cgjaa8",
+            // 2026-11-18: v0.2.25 (84f9ac8, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=v0.2.25#84f9ac8ca2008e6c4410faa97f6bdfd1c889e048",
+            .hash = "timeseries_storage-0.2.25-5wzBJOnzFAC0y6DNbeuevz1ZgWEy2eJe3Xgec7_5yI0w",
         },
         // Full-text-search storage engine (inverted index + BM25, LSM, zero deps)
         .fts_storage = .{
@@ -933,8 +976,10 @@
 
         // Auth - HMAC chain, API keys, TOTP/MFA primitives
         .auth = .{
-            .url = "git+https://gitlab.com/devnw/zig/auth.git?ref=4620287e7e99107d87f26f5cf5e8e07c046397e5#4620287e7e99107d87f26f5cf5e8e07c046397e5",
-            .hash = "auth-0.1.22-W76ZZzjwAgC00Xx0xfUNK7N8nMYJOfCeqq43H7gn5LWR",
+            // 2026-11-18: v0.1.23 (c66e50e, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/auth.git?ref=v0.1.23#c66e50e05f14a714d839c63e16598e8f02c77cd1",
+            .hash = "auth-0.1.23-W76ZZzjwAgAqBGyY2To8qNdvJff2taUcJCaM35M5TAsh",
         },
 
         // FIPS crypto seam — OpenSSL FIPS 140-3 backend (used when -Dfips=true).
