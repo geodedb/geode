@@ -4309,15 +4309,15 @@ fn clusterReplicateDelete(
     // into "no incident edges" would replicate a GDEL payload that drops the
     // node but keeps its edges — the same dangling-edge corruption as the
     // standalone path, propagated to EVERY node in the cluster. Fail closed.
-    for (node_ids.items) |node_id| {
-        if (d.detach) {
+    if (d.detach) {
+        for (node_ids.items) |node_id| {
             for (try read_store.getOutgoingEdgeIdsChecked(node_id)) |eid| try appendUniqueId(allocator, &edge_ids, eid);
             for (try read_store.getIncomingEdgeIdsChecked(node_id)) |eid| try appendUniqueId(allocator, &edge_ids, eid);
-        } else {
-            const has_outgoing = (try read_store.getOutgoingEdgeIdsChecked(node_id)).len > 0;
-            const has_incoming = (try read_store.getIncomingEdgeIdsChecked(node_id)).len > 0;
-            if (has_outgoing or has_incoming) return error.NodeHasEdges;
         }
+    } else {
+        // SONNY-6728: the statement's own edges do not count (apply deletes
+        // the payload's edges before its nodes).
+        try checkDeleteEligible(allocator, node_ids.items, edge_ids.items, false);
     }
 
     // Bounds: refuse to propose a payload larger than the GDEL cap (fail-closed).
@@ -4884,31 +4884,71 @@ pub fn executeClusterMatchCreateIfNeeded(
     }
 }
 
-/// SONNY-2694: delete one statement's resolved nodes, then its resolved edges,
-/// and return how many were deleted (`executeDelete`, and a DELETE after a SET
-/// or REMOVE, `executeMatchDeleteQuery`). A node that still has an edge refuses
-/// the whole statement, before anything is deleted, unless `detach`, which
-/// deletes its edges with it. Called with the graph's write lock held.
-/// A DELETE without DETACH refuses a node that still has an edge
-/// (NodeHasEdges), before it deletes anything. SONNY-3042: a statement that
-/// writes before it deletes checks this before its first write, so a refused
-/// statement changes nothing.
-pub fn checkDeleteEligible(allocator: std.mem.Allocator, node_ids: []const u64, detach: bool) !void {
+/// SONNY-2694: delete one statement's resolved nodes and edges, and return how
+/// many were deleted (`executeDelete`, and a DELETE after a SET or REMOVE,
+/// `executeMatchDeleteQuery`). A node that still has an edge the statement does
+/// not delete refuses the whole statement, before anything is deleted, unless
+/// `detach`, which deletes its edges with it. Called with the graph's write
+/// lock held.
+/// A DELETE without DETACH refuses a node that has an edge the statement does
+/// not delete (NodeHasEdges, ISO/IEC 39075:2024 13.5 GR 5: G1001), before it
+/// deletes anything. SONNY-6728: the edges the statement deletes (`edge_ids`,
+/// over all of its rows) do not count, so `MATCH (a)-[r]->(b) DELETE r, a, b`
+/// deletes both nodes. SONNY-3042: a statement that writes before it deletes
+/// checks this before its first write, so a refused statement changes nothing.
+pub fn checkDeleteEligible(allocator: std.mem.Allocator, node_ids: []const u64, edge_ids: []const u64, detach: bool) !void {
     if (detach) return;
     // GAP-0511: DELETE stages IDs before mutating, so cloning a QueryReadSession
     // adds O(total graph size) overhead without improving correctness under the
     // graph write lock.
     const read_store: *graph_store.GraphStore = graph_store.getWritableGlobalStore(allocator);
+    // The statement's own edges, for membership (null: it deletes none).
+    var deleting: ?std.AutoHashMap(u64, void) = null;
+    defer if (deleting) |*set| set.deinit();
+    if (edge_ids.len != 0) {
+        deleting = std.AutoHashMap(u64, void).init(allocator);
+        try deleting.?.ensureTotalCapacity(@intCast(edge_ids.len));
+        for (edge_ids) |eid| deleting.?.putAssumeCapacity(eid, {});
+    }
     for (node_ids) |node_id| {
         // ENG-3983: the CHECKED readers — an unreadable adjacency must
         // NOT be mistaken for "this node has no edges" and let a plain
         // DELETE through the GQL edge guard.
-        const has_outgoing = (try read_store.getOutgoingEdgeIdsChecked(node_id)).len > 0;
-        const has_incoming = (try read_store.getIncomingEdgeIdsChecked(node_id)).len > 0;
-        if (has_outgoing or has_incoming) {
-            return error.NodeHasEdges;
+        for (try read_store.getOutgoingEdgeIdsChecked(node_id)) |eid| {
+            if (deleting == null or !deleting.?.contains(eid)) return error.NodeHasEdges;
+        }
+        for (try read_store.getIncomingEdgeIdsChecked(node_id)) |eid| {
+            if (deleting == null or !deleting.?.contains(eid)) return error.NodeHasEdges;
         }
     }
+}
+
+/// Delete the statement's relationship-targeted edges (GAP #56) and return how
+/// many it deleted. `taken` are the edges a DETACH'd node already took with
+/// it in this statement: gone, and not counted again.
+fn deleteExplicitEdges(store: *graph_store.GraphStore, edge_ids: []const u64, taken: []const u64) !usize {
+    var deleted_count: usize = 0;
+    for (edge_ids) |edge_id| {
+        // SONNY-1841: poll cancellation between edge deletes too.
+        try write_budget.check();
+        if ((try store.getEdgePtrHydratedChecked(edge_id)) == null) {
+            // Already gone (removed as an incident edge of a DETACH'd node
+            // above) — do not double-count it.
+            if (std.mem.indexOfScalar(u64, taken, edge_id) != null) continue;
+            // ENG-3983: the MATCH resolved this edge id, so the row is NOT
+            // an honestly-empty match — the body simply cannot be read back,
+            // and `deleteEdge` would be a silent no-op. Fail closed rather
+            // than report success for a delete that did not happen. (An
+            // empty match resolves zero edge ids and never reaches here, so
+            // `MATCH … DELETE r` over no rows stays a successful 00000.)
+            return error.EdgeBodyUnresolvable;
+        }
+        try store.deleteEdgeChecked(edge_id);
+        if ((try store.getEdgePtrHydratedChecked(edge_id)) == null) {
+            deleted_count += 1;
+        }
+    }
+    return deleted_count;
 }
 
 pub fn deleteElements(allocator: std.mem.Allocator, node_ids: []const u64, edge_ids: []const u64, detach: bool, current_graph: ?[]const u8) !usize {
@@ -4919,7 +4959,14 @@ pub fn deleteElements(allocator: std.mem.Allocator, node_ids: []const u64, edge_
     const read_store: *graph_store.GraphStore = store;
     var deleted_count: usize = 0;
 
-    try checkDeleteEligible(allocator, node_ids, detach);
+    try checkDeleteEligible(allocator, node_ids, edge_ids, detach);
+
+    // SONNY-6728: without DETACH the statement's own edges go first, so the
+    // nodes that had no other edge are deleted with none left (ISO/IEC
+    // 39075:2024 13.5 GR 7: members of EDGES, then of NODES). With DETACH the
+    // nodes go first, taking their incident edges, and the explicit edges
+    // that remain go after (so an edge a DETACH'd node took is not counted).
+    if (!detach) deleted_count += try deleteExplicitEdges(store, edge_ids, &.{});
 
     // ENG-3983: edge ids removed as incident edges of a DETACH'd node in THIS
     // statement. The relationship loop below needs them to tell "already
@@ -4996,33 +5043,7 @@ pub fn deleteElements(allocator: std.mem.Allocator, node_ids: []const u64, edge_
     // GAP #56: relationship-targeted DELETE. The ids come from the same
     // resolved match set, so a WHERE over the relationship variable is
     // honoured here exactly as it is for nodes.
-    for (edge_ids) |edge_id| {
-        // SONNY-1841: poll cancellation between edge deletes too.
-        try write_budget.check();
-        if ((try store.getEdgePtrHydratedChecked(edge_id)) == null) {
-            // Already gone (removed as an incident edge of a DETACH'd node
-            // above) — do not double-count it.
-            var already_detached = false;
-            for (detached_edge_ids.items) |done| {
-                if (done == edge_id) {
-                    already_detached = true;
-                    break;
-                }
-            }
-            if (already_detached) continue;
-            // ENG-3983: the MATCH resolved this edge id, so the row is NOT
-            // an honestly-empty match — the body simply cannot be read back,
-            // and `deleteEdge` would be a silent no-op. Fail closed rather
-            // than report success for a delete that did not happen. (An
-            // empty match resolves zero edge ids and never reaches here, so
-            // `MATCH … DELETE r` over no rows stays a successful 00000.)
-            return error.EdgeBodyUnresolvable;
-        }
-        try store.deleteEdgeChecked(edge_id);
-        if ((try store.getEdgePtrHydratedChecked(edge_id)) == null) {
-            deleted_count += 1;
-        }
-    }
+    if (detach) deleted_count += try deleteExplicitEdges(store, edge_ids, detached_edge_ids.items);
 
     return deleted_count;
 }
@@ -5069,7 +5090,7 @@ pub fn executeMatchDeleteQuery(
     defer deleted.deinit(allocator);
 
     // SONNY-3042: before the SET or REMOVE.
-    try checkDeleteEligible(allocator, deleted.node_ids, q.detach_delete);
+    try checkDeleteEligible(allocator, deleted.node_ids, deleted.edge_ids, q.detach_delete);
     if (q.ret.items.len != 0 and (q.set_clauses.len != 0 or q.remove_clauses.len != 0)) {
         try match_operations.checkReturnBeforeDelete(allocator, q, &bindings.rows, param_names, param_values, deleted);
     }

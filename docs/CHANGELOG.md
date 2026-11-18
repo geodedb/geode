@@ -4,6 +4,18 @@
 
 ### Fixed
 
+- **A DELETE removes a node whose edges it deletes too (SONNY-6728).**
+  `MATCH (a:A)-[r:R]->(b:B) DELETE r, a, b` was refused with NodeHasEdges
+  because each node was checked against the store before any edge went.
+  ISO/IEC 39075:2024 13.5 GR 4, 5 and 7 collect the nodes and edges over every
+  row of the statement, raise G1001 only for a node with a connected edge the
+  statement does not delete, then delete the edges and nodes. The check now
+  counts the statement's own edges (a node with an edge it leaves, or a DELETE
+  that names the nodes and not their edge, is still refused with nothing
+  deleted), and a DELETE without DETACH deletes its edges before its nodes. A
+  cluster leader applies the same rule before it proposes the delete. Test:
+  `zig build test-sonny6728-delete-node-and-edges`.
+
 - **`NODETACH DELETE` parses (SONNY-6729).** ISO/IEC 39075:2024 13.5 defines
   `<delete statement>` as `[ DETACH | NODETACH ] DELETE <delete item list>`
   (NODETACH is the default, SR 6), but `MATCH (a:A) NODETACH DELETE a` was a

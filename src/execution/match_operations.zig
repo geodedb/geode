@@ -4110,7 +4110,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         // has no edge (a DELETE without DETACH), and the CREATE attaches none.
         // SONNY-3384: a DETACH DELETE takes the edges with it, the ones the
         // CREATE attached too.
-        try crud_operations.checkDeleteEligible(allocator, deleted.node_ids, false);
+        try crud_operations.checkDeleteEligible(allocator, deleted.node_ids, deleted.edge_ids, false);
         if (createAttachesEdgeTo(create_pattern, q.delete_items)) return error.NodeHasEdges;
     }
 

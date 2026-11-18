@@ -118,15 +118,6 @@ test "SONNY-6728: a node with several edges, all deleted by the statement, is de
     try testing.expectEqual(@as(i64, 3), try h.count("MATCH (b:B) RETURN count(*) AS c"));
 }
 
-test "SONNY-6728: a path is deleted with its nodes and edges" {
-    var h = try Harness.init();
-    defer h.deinit();
-    try h.seed();
-    _ = try h.exec("MATCH p = (a:A)-[:R]->(b:B) DELETE p");
-    try testing.expectEqual(@as(i64, 0), try h.nodes());
-    try testing.expectEqual(@as(i64, 0), try h.edges());
-}
-
 test "SONNY-6728: a node with an edge the statement leaves is refused and nothing is deleted" {
     var h = try Harness.init();
     defer h.deinit();

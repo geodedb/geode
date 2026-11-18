@@ -647,7 +647,7 @@ REQ-DEFAULT-PASSWORD-001,Secure Default Password,Security,TESTED,,,security,2026
 REQ-DELETE-COLD-STORE-EDGES-001,RelationshipDelete,ColdStoreResolution,TESTED,,,execution,2026-08-30,tests/test_eng3983_cold_delete_edges.zig,26
 REQ-DELETE-MATCH-SET-RESOLUTION,DeleteWhereEvaluation,MatchSetResolution,TESTED,,,crud_operations,2026-08-25,src/execution/crud_operations.zig,779
 REQ-DELETE-MATCH-SET-RESOLUTION,DeleteWhereEvaluation,Regression,TESTED,,,crud_operations,2026-08-25,tests/test_eng3913_where_delete.zig,1
-REQ-DELETE-WHERE-001,DeleteWhereEvaluation,WhereClause,TESTED,,,crud_operations,2026-08-25,src/execution/crud_operations.zig,5165
+REQ-DELETE-WHERE-001,DeleteWhereEvaluation,WhereClause,TESTED,,,crud_operations,2026-08-25,src/execution/crud_operations.zig,5186
 REQ-DIST-CLI-001,DistributedClusterCLI,ArgParsing,TESTED,,,core,2026-05-25,tests/test_cli_args_cluster.zig,1
 REQ-DIST-CLI-001,DistributedClusterCLI,ClusterPort,TESTED,,,core,2026-05-25,src/server/cli_args.zig,632
 REQ-DIST-CLI-001,DistributedClusterCLI,PeersList,TESTED,,,core,2026-05-25,src/server/cli_args.zig,636
@@ -707,7 +707,7 @@ REQ-DIST-CLUSTER-REPLICATE-CREATE,DistributedCluster,WriteReplicationNodeCreate,
 REQ-DIST-CLUSTER-REPLICATE-DELETE,DistributedCluster,ApplyDelete,TESTED,,,distributed,2026-06-09,src/distributed/raft_apply.zig,820
 REQ-DIST-CLUSTER-REPLICATE-DELETE,DistributedCluster,DeleteCodec,TESTED,,,distributed,2026-06-09,src/distributed/cluster_replication.zig,682
 REQ-DIST-CLUSTER-REPLICATE-DELETE,DistributedCluster,DeleteRoundTrip,TESTED,,,distributed,2026-06-09,tests/test_raft_apply.zig,269
-REQ-DIST-CLUSTER-REPLICATE-DELETE,DistributedCluster,ExecutorProposeDelete,TESTED,,,distributed,2026-06-09,src/execution/crud_operations.zig,5139
+REQ-DIST-CLUSTER-REPLICATE-DELETE,DistributedCluster,ExecutorProposeDelete,TESTED,,,distributed,2026-06-09,src/execution/crud_operations.zig,5160
 REQ-DIST-CLUSTER-REPLICATE-DELETE,DistributedCluster,LeaderProposeDelete,TESTED,,,distributed,2026-06-09,src/execution/crud_operations.zig,4246
 REQ-DIST-CLUSTER-REPLICATE-EDGE-CREATE,DistributedCluster,ApplyEdgeCreate,TESTED,,,distributed,2026-06-09,src/distributed/raft_apply.zig,786
 REQ-DIST-CLUSTER-REPLICATE-EDGE-CREATE,DistributedCluster,IdBandCollisionSweep,TESTED,,,distributed,2026-06-09,src/distributed/cluster_replication.zig,2084
@@ -3053,7 +3053,7 @@ REQ-MULTI-GRAPH-023,MultiGraphIsolation,SimpleNodeFilter,TESTED,,,engine,2025-12
 REQ-MULTI-GRAPH-024,MultiGraphIsolation,CountFiltering,IMPL,,,engine,2026-11-14,tests/test_gap_0193_priority_categories.zig,151
 REQ-MULTI-GRAPH-031,MultiGraphIsolation,DropGraphReset,TESTED,,,repl,2025-12-23,src/client/repl/repl_dispatch.zig,2555
 REQ-MULTI-GRAPH-032,MultiGraphIsolation,UseGraphValidation,TESTED,,,engine,2025-12-27,src/execution.zig,3645
-REQ-MULTI-GRAPH-DELETE-001,MultiGraphIsolation,DeleteGraphFilter,TESTED,,,engine,2025-12-24,src/execution/crud_operations.zig,5132
+REQ-MULTI-GRAPH-DELETE-001,MultiGraphIsolation,DeleteGraphFilter,TESTED,,,engine,2025-12-24,src/execution/crud_operations.zig,5153
 REQ-MULTI-GRAPH-EDGE-ISOLATION,GraphIsolationEdgeScan,GetEdgesByType,TESTED,,,engine,2026-04-11,src/graph_store.zig,11903
 REQ-MULTI-GRAPH-RBAC-WIRE-001,GraphRBACEnforcement,GlobalInstance,TESTED,,,security,2026-06-11,src/server/quic_connection_handler.zig,439
 REQ-MULTI-GRAPH-RBAC-WIRE-002,GraphRBACEnforcement,QuicGraphAuth,TESTED,,,security,2026-06-27,src/server/quic_connection_handler.zig,7314
@@ -4087,11 +4087,11 @@ REQ-SONNY-2693-EDGE-TAG-BACKFILL,PerTenantIsolation,BackfillProcedure,TESTED,,,s
 REQ-SONNY-2693-EDGE-TAG-BACKFILL,PerTenantIsolation,EdgeTagBackfill,TESTED,,,security,2026-09-25,src/graph_store.zig,10005
 REQ-SONNY-2693-EDGE-TENANT-RULE,PerTenantIsolation,EdgeTenantRule,TESTED,,,security,2026-09-25,src/execution/tenant_visibility.zig,514
 REQ-SONNY-2693-EDGE-TENANT-RULE,PerTenantIsolation,Regression,TESTED,,,security,2026-09-25,tests/test_sonny2693_edge_tenant_rule.zig,22
-REQ-SONNY-2694-DELETE-RETURN,WriteBehindAggregate,DeleteReturn,TESTED,,,engine,2026-09-27,src/execution/crud_operations.zig,5091
+REQ-SONNY-2694-DELETE-RETURN,WriteBehindAggregate,DeleteReturn,TESTED,,,engine,2026-09-27,src/execution/crud_operations.zig,5112
 REQ-SONNY-2694-FAST-PATH-WRITES,ReadFastPaths,StructuralWriteGuard,TESTED,,,engine,2026-09-26,src/execution/match_operations.zig,882
 REQ-SONNY-2694-MATCH-CREATE,WriteBehindAggregate,MatchCreateRows,TESTED,,,engine,2026-09-27,src/execution/match_operations.zig,4048
 REQ-SONNY-2694-MATCH-MERGE,WriteBehindAggregate,MergeOncePerMatchedRow,TESTED,,,engine,2026-09-27,src/execution/query_execution.zig,1857
-REQ-SONNY-2694-MATCH-SET-DELETE,WriteBehindAggregate,QueryDelete,TESTED,,,engine,2026-09-27,src/execution/crud_operations.zig,5030
+REQ-SONNY-2694-MATCH-SET-DELETE,WriteBehindAggregate,QueryDelete,TESTED,,,engine,2026-09-27,src/execution/crud_operations.zig,5051
 REQ-SONNY-2694-PATTERN-BINDINGS,WriteBehindAggregate,PatternBindings,TESTED,,,engine,2026-09-27,src/execution/match_operations.zig,8273
 REQ-SONNY-2694-RETURN-BEFORE-DELETE,WriteBehindAggregate,ReturnOwnedBeforeDelete,TESTED,,,engine,2026-09-27,src/execution/match_operations.zig,9059
 REQ-SONNY-2694-STABLE-BINDINGS,WriteBehindAggregate,StableBindings,TESTED,,,engine,2026-09-27,src/execution/match_operations.zig,8897
