@@ -53,6 +53,7 @@ fn onlyNodeOf(label: []const u8) !u64 {
 }
 
 /// Does the vector index `name` hold an entry for `id`?
+/// `name` is the runtime key, `<graph>\x1f<index>` (SONNY-6703).
 fn vectorIndexHolds(name: []const u8, id: u64) !bool {
     const manager = index_manager.getGlobalIndexManager() orelse return error.NoIndexManager;
     const io = std.Io.Threaded.global_single_threaded.io();
@@ -94,7 +95,7 @@ test "SONNY-6421 item 1: REMOVE n:L takes the node out of L's full-text and vect
     try runs(ga, s, "CREATE (:LV6421:W6421 {k: 3, emb6421: vectorf32([0.0, 1.0, 0.0])})");
     try expectRows(ga, s, "seeded", "CALL geode.fts.search('l6421', 'walnut')", 1);
     const vid = try onlyNodeOf("W6421");
-    try testing.expect(try vectorIndexHolds("lv6421", vid));
+    try testing.expect(try vectorIndexHolds("default\x1flv6421", vid));
 
     try runs(ga, s, "MATCH (n:L6421) WHERE n.k = 1 REMOVE n:L6421");
     try expectRows(ga, s, "REMOVE n:L, fulltext", "CALL geode.fts.search('l6421', 'walnut')", 0);
@@ -104,7 +105,7 @@ test "SONNY-6421 item 1: REMOVE n:L takes the node out of L's full-text and vect
     try expectRows(ga, s, "REMOVE n:L RETURN, fulltext", "CALL geode.fts.search('l6421', 'hazel')", 0);
 
     try runs(ga, s, "MATCH (n:W6421) REMOVE n:LV6421");
-    try testing.expect(!try vectorIndexHolds("lv6421", vid));
+    try testing.expect(!try vectorIndexHolds("default\x1flv6421", vid));
 
     // The label given back: found again.
     try runs(ga, s, "MATCH (n:K6421) SET n:L6421");
@@ -189,7 +190,7 @@ const Swap = struct {
     }
 
     fn hook(index_name: []const u8) void {
-        if (!std.mem.eql(u8, index_name, "r6421")) return;
+        if (!std.mem.eql(u8, index_name, "default\x1fr6421")) return;
         if (fired.fetchAdd(1, .acq_rel) != 0) return;
         const t = std.Thread.spawn(.{ .stack_size = 16 * 1024 * 1024 }, rollbackOnThread, .{}) catch |e| {
             err = e;
@@ -226,7 +227,7 @@ test "SONNY-6421 item 4: a vector-index undo repair is not overwritten by a back
     defer index_manager.test_vector_rebuild_before_swap = null;
 
     const manager = index_manager.getGlobalIndexManager() orelse return error.NoIndexManager;
-    _ = try manager.rebuildAdvancedVectorIndexNonBlocking(testing.allocator, graph_store.DEFAULT_GRAPH_NAME, "r6421");
+    _ = try manager.rebuildAdvancedVectorIndexNonBlocking(testing.allocator, graph_store.DEFAULT_GRAPH_NAME, "default\x1fr6421");
     index_manager.test_vector_rebuild_before_swap = null;
 
     if (Swap.err) |e| return e;

@@ -269,6 +269,8 @@ const PendingRebuilds = struct {
     }
 };
 
+/// `name` is the runtime key, `<graph>\x1f<index>` (SONNY-6703: each graph
+/// holds its own vector index), not the bare DDL name.
 fn indexContains(name: []const u8, id: u64) !bool {
     const wrapper = mgr().advanced_vector_indexes.get(name) orelse return error.IndexNotFound;
     return wrapper.contains(id);
@@ -312,7 +314,7 @@ test "geode#875 RC-1b: a CREATE still takes the incremental path with the transp
         return error.WireWriteQueuedFullIndexRebuild;
     }
     try testing.expectEqual(@as(u64, 0), delta);
-    try testing.expect(try indexContains("incw_idx", @intCast(written)));
+    try testing.expect(try indexContains("inc_wire\x1fincw_idx", @intCast(written)));
 
     // The incrementally inserted vector is really searchable.
     const res = try h.exec("RETURN knn('emb', vectorf32([10.0, 0.0]), 1, 'l2') AS ids");
@@ -352,7 +354,7 @@ test "geode#875 RC-1b: a SET of the vector property takes the incremental path w
         return error.WireSetQueuedFullIndexRebuild;
     }
     try testing.expectEqual(@as(u64, 0), delta);
-    try testing.expect(try indexContains("incws_idx", @intCast(target)));
+    try testing.expect(try indexContains("inc_wire_set\x1fincws_idx", @intCast(target)));
 }
 
 // The narrowed guard must NOT break the case it was written for: a statement
@@ -375,7 +377,7 @@ test "geode#875 RC-1b: CREATE INDEX still defers its own backfill onto the pendi
     try h.run("CREATE INDEX incwd_idx ON IncV (emb) USING vector WITH (metric = 'l2')");
 
     try testing.expectEqual(@as(usize, 1), pending.map.count());
-    try testing.expect(pending.map.contains("incwd_idx"));
+    try testing.expect(pending.map.contains("inc_wire_ddl\x1fincwd_idx"));
 }
 
 // ===========================================================================
@@ -439,7 +441,7 @@ test "geode#875 RC-5: the backfill reports the number of nodes it indexed" {
         // RED (pre-seam): does not compile-exist; GREEN: a fresh backfill of the
         // 12-node index reports exactly 12 indexed entities, so a call site can
         // no longer swallow a zero-indexed backfill as success.
-        const indexed = try mgr().rebuildAdvancedIndexCounted(store, "bc_idx");
+        const indexed = try mgr().rebuildAdvancedIndexCounted(store, "backfill_count\x1fbc_idx");
         if (indexed != 12) {
             std.debug.print(
                 "\n[geode#875 RC-5] backfill reported {d} indexed nodes, expected 12\n",
