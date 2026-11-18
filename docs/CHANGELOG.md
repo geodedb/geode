@@ -110,6 +110,17 @@
   RETURN is then evaluated once over those rows, as a plain FOR's is. Test:
   `zig build test-sonny6717-for-write-return-stages`.
 
+- **A writing FOR's rows no longer read a node a later element moved
+  (SONNY-6740).** A FOR body that creates and returns a node
+  (`FOR x IN l CREATE (u:U {v: x}) RETURN u.v ...`) kept each element's row,
+  and the row held the store's own node: the next element's CREATE grew the
+  shard that node lives in and moved it, so the SONNY-6717 staged RETURN
+  read freed memory (an intermittent abort of
+  `test-sonny6717-for-write-return-stages`, 3 of 16 runs; every run with 64
+  elements). Each element's rows now own copies of their nodes and
+  relationships (`ownGraphEntities`), and the accumulator links a tracker it
+  cannot absorb. Test: the 64-element case of the same step.
+
 ### Security
 
 - **quic v0.1.55: another local user can no longer take over the QUIC

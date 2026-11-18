@@ -537,18 +537,14 @@ const ForBodyAccumulator = struct {
         result.flags = .empty;
 
         if (result.owned_graph_entities) |entities| {
-            if (self.entities) |acc_entities| {
-                // SONNY-2463: the merged nodes are freed with the
-                // accumulator's `destroy_node`, so both trackers must free
-                // their nodes the same way. Every executor tracker has the
-                // default (struct only); only a node-scan page frees in full.
-                // SONNY-6613: `absorb` moves the path arrays it keeps too
-                // (they were freed here, under the rows that hold them), and
-                // frees the tracker (SONNY-2394).
-                try acc_entities.absorb(entities);
-            } else {
-                self.entities = entities;
-            }
+            // SONNY-2463: the merged nodes are freed with the accumulator's
+            // `destroy_node`, so both trackers must free their nodes the same
+            // way: `adopt` absorbs a tracker that does (it moves the path
+            // arrays it keeps too, SONNY-6613, and frees the tracker,
+            // SONNY-2394) and keeps one that does not (SONNY-6740: an
+            // element's copies free in full, a body without a RETURN's nodes
+            // do not) alive with it.
+            try execution.OwnedGraphEntities.adopt(&self.entities, entities);
             result.owned_graph_entities = null;
         }
 
@@ -686,6 +682,11 @@ fn runForBodyInto(
 
         var iter_result = try execution.executeQueryWithContext(allocator, body.*, iter_ctx);
         errdefer iter_result.deinit(allocator);
+        // SONNY-6740: the rows are read after the later elements have run (a
+        // staged RETURN, the whole result). A node or relationship a row holds
+        // is the store's own, which a later element's CREATE moves when it
+        // grows the shard: each element's rows own copies of theirs.
+        try value_utilities.ownGraphEntities(allocator, &iter_result);
         try acc.absorb(allocator, &iter_result);
     }
 }

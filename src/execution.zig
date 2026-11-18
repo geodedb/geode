@@ -1018,7 +1018,18 @@ pub const OwnedGraphEntities = struct {
     /// `allocator` (a pass-through wrapper's inner allocator).
     pub fn setAllocator(self: *OwnedGraphEntities, allocator: std.mem.Allocator) void {
         var cur: ?*OwnedGraphEntities = self;
-        while (cur) |t| : (cur = t.next) t.allocator = allocator;
+        while (cur) |t| : (cur = t.next) {
+            t.allocator = allocator;
+            // SONNY-6740: an entity this tracker owns in full (`destroy_node` /
+            // `destroy_edge`, `value_utilities.ownGraphEntities`) keeps the
+            // allocator its property map was made with: the map frees through it.
+            if (t.destroy_node != null) for (t.nodes.items) |node| {
+                node.properties.allocator = allocator;
+            };
+            if (t.destroy_edge != null) for (t.edges.items) |edge| {
+                edge.properties.allocator = allocator;
+            };
+        }
     }
 
     pub fn trackNode(self: *OwnedGraphEntities, node: *graph_store.Node) !void {
