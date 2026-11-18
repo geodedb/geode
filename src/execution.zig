@@ -421,6 +421,7 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
     defer if (data_dir_owned) |owned| allocator.free(owned);
 
     const instance = try catalog_mod.Catalog.init(catalog_singleton_allocator, data_dir);
+    pruneRowsOfMissingGraphs(allocator, instance);
     // SONNY-2846: the graphs the loaded UNIQUE rows apply in are closed to
     // the server's bulk fast paths (`graph_store.uniqueFenced`). Fail
     // closed: a catalog whose fences cannot be recorded is not used.
@@ -435,6 +436,60 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
     @atomicStore(?*catalog_mod.Catalog, &global_catalog_instance, instance, .release);
     reportIndexesOverEncryptedFields(allocator, instance);
     return instance;
+}
+
+// CANARY: REQ=REQ-SONNY-6720-DROP-GRAPH-CATALOG; FEATURE="SchemaCatalog"; ASPECT=LoadRemovesOrphanRows; STATUS=TESTED; TEST=tests/test_sonny6720_drop_graph_catalog.zig; OWNER=catalog; UPDATED=2026-11-17
+/// SONNY-6720: a catalog file written by a binary whose DROP GRAPH left the
+/// graph's rows holds rows of graphs that no longer exist. On load they are
+/// removed (one save) and logged. A graph exists when the store's registry
+/// lists it (hydrated or not) or the catalog's graph list does; the default
+/// graph always does; engine-wide rows belong to no graph. Only with a
+/// persisted store: with no registry to ask nothing is known, so nothing is
+/// removed. A failure is logged and the rows stay (the next load tries again).
+fn pruneRowsOfMissingGraphs(allocator: std.mem.Allocator, instance: *catalog_mod.Catalog) void {
+    if (!instance.isPersisted()) return;
+    if (graph_store.getGlobalAdapter() == null) return;
+    const store = graph_store.getGlobalStore(allocator);
+    const listed = store.listGraphNames(allocator) catch return;
+    defer {
+        for (listed) |n| allocator.free(n);
+        allocator.free(listed);
+    }
+    var existing: std.ArrayList([]const u8) = .empty;
+    defer existing.deinit(allocator);
+    existing.appendSlice(allocator, listed) catch return;
+    existing.append(allocator, graph_store.DEFAULT_GRAPH_NAME) catch return;
+    const cat_graphs = instance.listGraphs(allocator) catch return;
+    defer {
+        for (cat_graphs) |n| allocator.free(n);
+        allocator.free(cat_graphs);
+    }
+    existing.appendSlice(allocator, cat_graphs) catch return;
+
+    const gone = instance.removeRowsOfMissingGraphs(allocator, existing.items) catch |err| {
+        log.warn("catalog load: rows of graphs that no longer exist could not be removed", &.{
+            Attr.string("error", @errorName(err)),
+        });
+        return;
+    };
+    defer allocator.free(gone.indexes);
+    defer allocator.free(gone.constraints);
+    for (gone.indexes) |kv| {
+        log.warn("catalog load: removed an index row of a graph that no longer exists (SONNY-6720)", &.{
+            Attr.string("index", kv.value.name),
+            Attr.string("graph", kv.value.graph),
+        });
+        instance.allocator.free(kv.key);
+        instance.freeIndexInfo(kv.value);
+    }
+    for (gone.constraints) |kv| {
+        log.warn("catalog load: removed a constraint row of a graph that no longer exists (SONNY-6720)", &.{
+            Attr.string("constraint", kv.value.name),
+            Attr.string("graph", kv.value.graph),
+        });
+        instance.allocator.free(kv.key);
+        instance.freeConstraintInfo(kv.value);
+    }
 }
 
 /// SONNY-6335: the process catalog if one exists (never creates it).

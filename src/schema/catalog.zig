@@ -1224,6 +1224,53 @@ pub const Catalog = struct {
         return .{ .indexes = idx_out, .constraints = con_out };
     }
 
+    /// SONNY-6720: catalog load: remove every index and constraint row whose
+    /// graph is not in `existing` (the graphs the store knows, hydrated or
+    /// not, plus the catalog's own graph list): the leftovers of a DROP GRAPH
+    /// by a binary that did not remove them. An engine-wide row belongs to no
+    /// graph and stays. One save; if it fails every row is put back and the
+    /// error returned. The caller owns the rows, as for `removeGraphRows`.
+    pub fn removeRowsOfMissingGraphs(self: *Catalog, allocator: std.mem.Allocator, existing: []const []const u8) !GraphRows {
+        self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        var index_keys: std.ArrayList([]const u8) = .empty;
+        defer index_keys.deinit(allocator);
+        var constraint_keys: std.ArrayList([]const u8) = .empty;
+        defer constraint_keys.deinit(allocator);
+        var it = self.indexes.iterator();
+        while (it.next()) |e| {
+            if (!graphIsListed(e.value_ptr.graph, existing)) try index_keys.append(allocator, e.key_ptr.*);
+        }
+        var cit = self.constraints.iterator();
+        while (cit.next()) |e| {
+            if (!graphIsListed(e.value_ptr.graph, existing)) try constraint_keys.append(allocator, e.key_ptr.*);
+        }
+
+        const idx_out = try allocator.alloc(std.StringHashMap(IndexInfo).KV, index_keys.items.len);
+        errdefer allocator.free(idx_out);
+        const con_out = try allocator.alloc(std.StringHashMap(ConstraintInfo).KV, constraint_keys.items.len);
+        errdefer allocator.free(con_out);
+        if (idx_out.len == 0 and con_out.len == 0) return .{ .indexes = idx_out, .constraints = con_out };
+
+        for (index_keys.items, idx_out) |key, *slot| slot.* = self.indexes.fetchRemove(key).?;
+        for (constraint_keys.items, con_out) |key, *slot| slot.* = self.constraints.fetchRemove(key).?;
+        self.save() catch |err| {
+            for (idx_out) |kv| self.indexes.putAssumeCapacityNoClobber(kv.key, kv.value);
+            for (con_out) |kv| self.constraints.putAssumeCapacityNoClobber(kv.key, kv.value);
+            return err;
+        };
+        return .{ .indexes = idx_out, .constraints = con_out };
+    }
+
+    fn graphIsListed(graph: []const u8, existing: []const []const u8) bool {
+        if (graph.len == 0) return true; // engine-wide
+        for (existing) |name| {
+            if (std.mem.eql(u8, name, graph)) return true;
+        }
+        return false;
+    }
+
     /// Get index metadata of the default graph's catalog by label and name.
     pub fn getIndex(self: *Catalog, label: []const u8, index_name: []const u8) !?IndexInfo {
         return self.getIndexInGraph(graph_store.DEFAULT_GRAPH_NAME, label, index_name);

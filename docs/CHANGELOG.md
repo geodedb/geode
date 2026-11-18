@@ -3264,7 +3264,12 @@
   index of a name-keyed row. Rows of other graphs and engine-wide rows stay.
   FLE field metadata is not graph-scoped (it is keyed by label and field), so
   there is none to remove. Rows an older binary left behind for a graph it
-  dropped stay until they are dropped by name. Regression:
+  dropped are removed when the catalog loads: every index and constraint row
+  whose graph is in neither the store's graph registry (hydrated or not) nor
+  the catalog's graph list is dropped with one save and logged (`catalog
+  load: removed ... row of a graph that no longer exists`); engine-wide rows
+  and the default graph's are never touched, and an in-memory deployment,
+  which has no registry to ask, removes nothing. Regression:
   `zig build test-sonny6720-drop-graph-catalog`.
 
 - **A vector (HNSW) index is the graph's own; `knn()` never answers
