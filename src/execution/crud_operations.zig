@@ -2202,7 +2202,7 @@ fn readFootprint(a: std.mem.Allocator, pattern: ast.GraphPattern, has_where: boo
 /// Map an evaluated GQL Value to a scalar PropertyValue the single-node-create
 /// replication codec supports, or null when the type is outside that slice (so
 /// the caller fails closed rather than writing leader-local).
-fn clusterPropValue(v: Value) ?graph_store.PropertyValue {
+fn clusterPropValue(allocator: std.mem.Allocator, v: Value) ?graph_store.PropertyValue {
     return switch (v) {
         .Null => .Null,
         .Int => |i| .{ .Int = i },
@@ -2213,7 +2213,15 @@ fn clusterPropValue(v: Value) ?graph_store.PropertyValue {
         .Real => |f| .{ .Float = @as(f64, f) },
         .Str => |s| .{ .String = s },
         .Text => |s| .{ .String = s },
-        else => null,
+        // SONNY-6718: an exact numeric literal (`3.5`) is a DECIMAL; the codec
+        // carries its coefficient and scale, so a follower stores the same
+        // value (the literal's original spelling is not stored locally either).
+        .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
+        // SONNY-6718: lists, dates and times and the other extended values
+        // travel in their property-store encoding, exactly what the leader's
+        // own store takes (`allocator` is the statement's scratch arena).
+        // A value the store cannot hold (a node, a map, ...) is not replicable.
+        else => property_codec.valueToPropertyValue(allocator, v) catch null,
     };
 }
 
@@ -2269,8 +2277,21 @@ fn clusterReplicateNodeCreate(
 ) !ExecutionResult {
     const coord = cluster_mod.getGlobalClusterCoordinator() orelse return error.ClusterWriteNotReplicable;
 
-    // Only a single chain is replicable in this slice.
-    if (pattern.chains.len != 1) return error.ClusterWriteNotReplicable;
+    if (pattern.chains.len == 0) return error.ClusterWriteNotReplicable;
+    // SONNY-6718: `CREATE (a:A), (b:B), (a)-[:R]->(b)`: several chains replicate
+    // as one deterministic GNC2 multi-create (the nodes and edges of every chain
+    // in one entry; a variable a later chain names is the node an earlier one made).
+    if (pattern.chains.len > 1) {
+        return clusterReplicateEdgeCreate(
+            allocator,
+            coord,
+            pattern.chains,
+            return_clause,
+            param_names,
+            param_values,
+            current_graph,
+        );
+    }
     const chain = pattern.chains[0];
 
     // Slice A: a single-chain CREATE WITH relationship hops
@@ -2282,7 +2303,7 @@ fn clusterReplicateNodeCreate(
         return clusterReplicateEdgeCreate(
             allocator,
             coord,
-            chain,
+            pattern.chains[0..1],
             return_clause,
             param_names,
             param_values,
@@ -2320,7 +2341,7 @@ fn clusterReplicateNodeCreate(
         for (plist) |p| {
             const val = eval.evalExpr(allocator, p.value.*, env) catch
                 return error.ClusterWriteNotReplicable;
-            const pv = clusterPropValue(val) orelse return error.ClusterWriteNotReplicable;
+            const pv = clusterPropValue(allocator, val) orelse return error.ClusterWriteNotReplicable;
             try props.append(allocator, .{ .key = p.key, .value = pv });
         }
     }
@@ -2371,6 +2392,20 @@ pub fn buildEdgeCreateSpecs(
     node_specs: *std.ArrayList(cluster_replication.NodeSpec),
     edge_specs: *std.ArrayList(cluster_replication.EdgeSpec),
 ) !void {
+    return buildCreateSpecs(allocator, &.{chain}, env, node_specs, edge_specs);
+}
+
+/// SONNY-6718: the node and edge specs of every chain of a CREATE / INSERT
+/// pattern, in order, sharing one variable -> position map: a variable named
+/// again by a later chain (`CREATE (a:A), (b:B), (a)-[:R]->(b)`) is the node
+/// the first mention made. A chain with no hop is its head node.
+pub fn buildCreateSpecs(
+    allocator: std.mem.Allocator,
+    chains: []const ast.Chain,
+    env: Env,
+    node_specs: *std.ArrayList(cluster_replication.NodeSpec),
+    edge_specs: *std.ArrayList(cluster_replication.EdgeSpec),
+) !void {
     // Map a node variable name -> its assigned position in node_specs.
     var name_to_pos = std.StringHashMap(u32).init(allocator);
     defer name_to_pos.deinit();
@@ -2385,7 +2420,7 @@ pub fn buildEdgeCreateSpecs(
             var out = try a.alloc(cluster_replication.Prop, plist.len);
             for (plist, 0..) |p, i| {
                 const val = eval.evalExpr(a, p.value.*, e) catch return error.ClusterWriteNotReplicable;
-                const pv = clusterPropValue(val) orelse return error.ClusterWriteNotReplicable;
+                const pv = clusterPropValue(a, val) orelse return error.ClusterWriteNotReplicable;
                 out[i] = .{ .key = p.key, .value = pv };
             }
             return out;
@@ -2419,36 +2454,45 @@ pub fn buildEdgeCreateSpecs(
     // SONNY-3245 / SONNY-6295: consecutive hops share the node between them
     // (see executeCreate); an anonymous node between two hops got two
     // positions (two nodes on every replica).
-    var prev_right_pos: ?u32 = null;
-    for (chain.hops) |hop| {
-        // Variable-length / quantified hops are not replicable in this slice.
-        if (hop.rel.min_len != null or hop.rel.max_len != null)
-            return error.ClusterWriteNotReplicable;
+    for (chains) |chain| {
+        if (chain.hops.len == 0) {
+            const head = chain.head orelse return error.ClusterWriteNotReplicable;
+            _ = try Register.run(allocator, env, head, node_specs, &name_to_pos);
+            if (node_specs.items.len > cluster_replication.MAX_MULTI_NODES)
+                return error.ClusterWriteNotReplicable;
+            continue;
+        }
+        var prev_right_pos: ?u32 = null;
+        for (chain.hops) |hop| {
+            // Variable-length / quantified hops are not replicable in this slice.
+            if (hop.rel.min_len != null or hop.rel.max_len != null)
+                return error.ClusterWriteNotReplicable;
 
-        const left_pos = prev_right_pos orelse try Register.run(allocator, env, hop.left, node_specs, &name_to_pos);
-        const right_pos = try Register.run(allocator, env, hop.right, node_specs, &name_to_pos);
-        prev_right_pos = right_pos;
+            const left_pos = prev_right_pos orelse try Register.run(allocator, env, hop.left, node_specs, &name_to_pos);
+            const right_pos = try Register.run(allocator, env, hop.right, node_specs, &name_to_pos);
+            prev_right_pos = right_pos;
 
-        if (node_specs.items.len > cluster_replication.MAX_MULTI_NODES)
-            return error.ClusterWriteNotReplicable;
+            if (node_specs.items.len > cluster_replication.MAX_MULTI_NODES)
+                return error.ClusterWriteNotReplicable;
 
-        // Direction: store edges are directed left->right. `.left` reverses the
-        // endpoints; `.undirected` is stored left->right (matching treats it as
-        // a directionless adjacency).
-        const from_pos = if (hop.rel.dir == .left) right_pos else left_pos;
-        const to_pos = if (hop.rel.dir == .left) left_pos else right_pos;
+            // Direction: store edges are directed left->right. `.left` reverses the
+            // endpoints; `.undirected` is stored left->right (matching treats it as
+            // a directionless adjacency).
+            const from_pos = if (hop.rel.dir == .left) right_pos else left_pos;
+            const to_pos = if (hop.rel.dir == .left) left_pos else right_pos;
 
-        const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATES_TO";
-        const eprops = try Helper.evalProps(allocator, env, hop.rel.props);
+            const rel_type = if (hop.rel.types.len > 0) hop.rel.types[0] else "RELATES_TO";
+            const eprops = try Helper.evalProps(allocator, env, hop.rel.props);
 
-        try edge_specs.append(allocator, .{
-            .from = .{ .position = from_pos },
-            .to = .{ .position = to_pos },
-            .edge_type = rel_type,
-            .props = eprops,
-        });
-        if (edge_specs.items.len > cluster_replication.MAX_MULTI_EDGES)
-            return error.ClusterWriteNotReplicable;
+            try edge_specs.append(allocator, .{
+                .from = .{ .position = from_pos },
+                .to = .{ .position = to_pos },
+                .edge_type = rel_type,
+                .props = eprops,
+            });
+            if (edge_specs.items.len > cluster_replication.MAX_MULTI_EDGES)
+                return error.ClusterWriteNotReplicable;
+        }
     }
 }
 
@@ -2466,7 +2510,7 @@ pub fn buildEdgeCreateSpecs(
 fn clusterReplicateEdgeCreate(
     allocator: std.mem.Allocator,
     coord: *cluster_mod.ClusterCoordinator,
-    chain: ast.Chain,
+    chains: []const ast.Chain,
     return_clause: ?ast.ReturnClause,
     param_names: []const []const u8,
     param_values: []const Value,
@@ -2498,7 +2542,7 @@ fn clusterReplicateEdgeCreate(
     var edge_specs = std.ArrayList(cluster_replication.EdgeSpec).empty;
     defer edge_specs.deinit(allocator);
 
-    try buildEdgeCreateSpecs(allocator, chain, env, &node_specs, &edge_specs);
+    try buildCreateSpecs(allocator, chains, env, &node_specs, &edge_specs);
 
     const graph = current_graph orelse "default";
     // RC-3 (2026-06-12): carry an idempotency key so a retried edge-CREATE dedups
@@ -2981,13 +3025,20 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
 
 // CANARY: REQ=REQ-MULTI-GRAPH-019; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteInsert; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
-    // Cluster write routing: INSERT is not in the Raft-replicable slice yet, so
-    // in cluster mode it must fail closed rather than be written to a single
-    // node's local store (follower => ClusterNotLeader; leader => not
-    // replicable). See tests/cluster/netns_cluster_replication_test.sh.
+    // Cluster write routing: INSERT is a CREATE with the ISO keyword, so the
+    // leader replicates it the way it replicates CREATE (SONNY-6718; a
+    // follower answers ClusterNotLeader, a shape the CREATE slice does not
+    // replicate fails closed). See tests/cluster/netns_cluster_replication_test.sh.
     switch (try clusterWriteRole()) {
         .standalone => {},
-        .leader => return error.ClusterWriteNotReplicable,
+        .leader => return clusterReplicateNodeCreate(
+            allocator,
+            ins.pattern,
+            ins.return_clause,
+            context.query_param_names,
+            context.query_param_values,
+            current_graph,
+        ),
     }
 
     const store = graph_store.getGlobalStore(allocator);
@@ -3289,7 +3340,7 @@ fn resolveMergeSetProps(
             // follower fail half-way through applying it.
             // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=ClusterMergePrePass; STATUS=IMPL; OWNER=engine; UPDATED=2026-08-25
             try write_precheck.checkPropertyWritable(allocator, &.{}, prop.target.property, value);
-            const pv = clusterPropValue(value) orelse return error.ClusterWriteNotReplicable;
+            const pv = clusterPropValue(allocator, value) orelse return error.ClusterWriteNotReplicable;
             try out.append(allocator, .{ .key = prop.target.property, .value = pv });
             try node.properties.put(prop.target.property, property_codec.valueToPropertyValue(allocator, value) catch return error.ClusterWriteNotReplicable);
         }
@@ -3407,7 +3458,7 @@ fn clusterReplicateMerge(
             for (plist) |p| {
                 const val = eval.evalExpr(allocator, p.value.*, env) catch
                     return error.ClusterWriteNotReplicable;
-                const pv = clusterPropValue(val) orelse return error.ClusterWriteNotReplicable;
+                const pv = clusterPropValue(allocator, val) orelse return error.ClusterWriteNotReplicable;
                 try key_props.append(allocator, .{ .key = p.key, .value = pv });
             }
         }
@@ -3430,8 +3481,11 @@ fn clusterReplicateMerge(
 
         // MATCHED + ON MATCH SET: resolve to concrete props and ship a GMRG
         // payload applied idempotently by the leader-resolved stable id.
+        // SONNY-6718: the list is the statement arena's (`resolveMergeSetProps`
+        // grows it with that allocator). It was freed with `allocator`, which
+        // is another allocator's pointer: libc aborted the leader ("free():
+        // invalid pointer") on a MERGE that matched and had a SET.
         var set_props = std.ArrayList(cluster_replication.Prop).empty;
-        defer set_props.deinit(allocator);
         const matched_node = (try read_store.getNodePtrForScan(node_id)) orelse return error.NodeNotFound;
         const overlay = try clusterMergeOverlay(prop_arena.allocator(), matched_node, node_pattern.labels, null);
         try resolveMergeSetProps(prop_arena.allocator(), m.on_match, m.on_match_ends, node_pattern.name, overlay, context, &set_props);
@@ -3452,15 +3506,17 @@ fn clusterReplicateMerge(
 
     // NOT MATCHED → create. Reuse the GNC1 node-create codec: merge pattern props
     // PLUS ON CREATE SET, both resolved to concrete scalars on the leader.
+    // SONNY-6718: one allocator owns the list (the statement arena): it is
+    // grown by `resolveMergeSetProps` with the arena and was freed with
+    // `allocator`.
     var props = std.ArrayList(cluster_replication.Prop).empty;
-    defer props.deinit(allocator);
     if (node_pattern.props) |plist| {
         const env = envFromContext(allocator, context);
         for (plist) |p| {
             const val = eval.evalExpr(allocator, p.value.*, env) catch
                 return error.ClusterWriteNotReplicable;
-            const pv = clusterPropValue(val) orelse return error.ClusterWriteNotReplicable;
-            try props.append(allocator, .{ .key = p.key, .value = pv });
+            const pv = clusterPropValue(allocator, val) orelse return error.ClusterWriteNotReplicable;
+            try props.append(prop_arena.allocator(), .{ .key = p.key, .value = pv });
         }
     }
     const created_overlay = try clusterMergeOverlay(prop_arena.allocator(), null, node_pattern.labels, evaluated_props);
@@ -4489,7 +4545,7 @@ fn clusterReplicateMatchSet(
                         // Statement-atomicity pre-pass: refuse before PROPOSING.
                         // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=ClusterSetPrePass; STATUS=IMPL; OWNER=engine; UPDATED=2026-08-25
                         try write_precheck.checkPropertyWritable(allocator, &.{}, prop.target.property, val);
-                        const pv = clusterPropValue(val) orelse return error.ClusterWriteNotReplicable;
+                        const pv = clusterPropValue(allocator, val) orelse return error.ClusterWriteNotReplicable;
                         try set_props.append(allocator, .{ .key = prop.target.property, .value = pv });
                         try overlay.properties.put(prop.target.property, property_codec.valueToPropertyValue(match_prop_arena.allocator(), val) catch return error.ClusterWriteNotReplicable);
                     },
@@ -4764,7 +4820,7 @@ fn clusterReplicateMatchCreate(
                 for (plist, 0..) |p, i| {
                     const val = eval.evalExpr(allocator, p.value.*, env) catch
                         return error.ClusterWriteNotReplicable;
-                    const pv = clusterPropValue(val) orelse return error.ClusterWriteNotReplicable;
+                    const pv = clusterPropValue(allocator, val) orelse return error.ClusterWriteNotReplicable;
                     out[i] = .{ .key = p.key, .value = pv };
                 }
                 eprops = out;
