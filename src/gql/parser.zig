@@ -5173,6 +5173,19 @@ pub const Parser = struct {
                 if (identifier_words.isRefusedBindingName(tkn.lexeme) and !self.reservedWordStartsExpression(tkn)) {
                     return self.refuseReservedName(tkn, "a variable");
                 }
+                // SONNY-6727: CURRENT_GRAPH and CURRENT_PROPERTY_GRAPH (ISO/IEC
+                // 39075:2024 7.1, 20.x) are value expressions naming the
+                // session's graph, never variable references. A delimited
+                // `CURRENT_GRAPH` is a plain identifier (quoted_identifier).
+                if (self.peekKind() != .l_paren and
+                    (std.ascii.eqlIgnoreCase(tkn.lexeme, "CURRENT_GRAPH") or std.ascii.eqlIgnoreCase(tkn.lexeme, "CURRENT_PROPERTY_GRAPH")))
+                {
+                    self.advance();
+                    const a = self.arena.allocator();
+                    const callee = try a.create(ast.Expr);
+                    callee.* = .{ .Ident = .{ .orig = ast.session_graph_value_fn, .cnf = "__CURRENT_GRAPH" } };
+                    break :blk .{ .Call = .{ .callee = callee, .args = &.{} } };
+                }
                 self.advance();
                 // Create CNF representation for identifiers
                 const unicode = @import("../unicode/unicode_tables.zig");

@@ -107,3 +107,17 @@ test "SONNY-6727: CURRENT_GRAPH is usable after MATCH and as a USE GRAPH target"
     _ = try h.exec("USE GRAPH CURRENT_GRAPH");
     try testing.expectEqualStrings("sonny6727_c", try h.scalar("RETURN CURRENT_PROPERTY_GRAPH AS g"));
 }
+
+test "SONNY-6727: a delimited `CURRENT_GRAPH` is still a plain variable" {
+    var h = try Harness.init();
+    defer h.deinit();
+    try testing.expectEqualStrings("mine", try h.scalar("WITH 'mine' AS `CURRENT_GRAPH` RETURN `CURRENT_GRAPH` AS g"));
+}
+
+test "SONNY-6727: CURRENT_GRAPH answers without an alias" {
+    var h = try Harness.init();
+    defer h.deinit();
+    _ = try h.exec("CREATE GRAPH sonny6727_d");
+    _ = try h.exec("USE GRAPH sonny6727_d");
+    try testing.expectEqualStrings("sonny6727_d", try h.scalar("RETURN CURRENT_PROPERTY_GRAPH"));
+}

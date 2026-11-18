@@ -3781,6 +3781,18 @@ fn evalShortestPathBetween(allocator: std.mem.Allocator, args: []*ast.Expr, env:
 fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, args: []*ast.Expr, env: Env) !?Value {
     const evaluator_functions = @import("types/evaluator_functions.zig");
 
+    // SONNY-6727: CURRENT_GRAPH / CURRENT_PROPERTY_GRAPH value expressions
+    // (ISO/IEC 39075:2024): the session's graph name, read from the active
+    // execution context (the default graph with none).
+    if (std.mem.eql(u8, function_name, ast.session_graph_value_fn)) {
+        if (args.len != 0) return error.WrongArgumentCount;
+        const execution = @import("execution.zig");
+        const session_graph = @import("execution/session_graph.zig");
+        const name = if (execution.getActiveContext()) |ctx| session_graph.current(ctx.*) else @import("graph_store.zig").DEFAULT_GRAPH_NAME;
+        // A copy: the session frees its own name when the graph changes.
+        return Value{ .Str = try allocator.dupe(u8, name) };
+    }
+
     // Handle current_user() function - returns the current authenticated user
     if (std.ascii.eqlIgnoreCase(function_name, "current_user")) {
         if (args.len != 0) return error.WrongArgumentCount;

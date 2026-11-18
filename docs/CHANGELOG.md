@@ -4,6 +4,17 @@
 
 ### Fixed
 
+- **`RETURN CURRENT_GRAPH` and `CURRENT_PROPERTY_GRAPH` name the session's
+  graph (SONNY-6727).** Both worked as a `USE GRAPH` / `SESSION SET GRAPH`
+  target but were a 42000 "Variable not in scope" as a value expression, though
+  docs/SESSION_MANAGEMENT.md and ISO/IEC 39075:2024 define them. The parser now
+  reads an undelimited `CURRENT_GRAPH` / `CURRENT_PROPERTY_GRAPH` (any case, no
+  parenthesis) as a value that the evaluator answers with the session's graph
+  name: the default graph until `USE GRAPH` or `SESSION SET GRAPH` moves it,
+  then that graph, and the default again after `SESSION RESET GRAPH`. A
+  delimited `` `CURRENT_GRAPH` `` is still a plain variable. Test:
+  `zig build test-sonny6727-current-graph-value`.
+
 - **`SESSION RESET TIME ZONE` parses (SONNY-6726).** TIME lexes as the TIME
   keyword, and the reset parser matched only an identifier named TIME, so
   the statement (ISO/IEC 39075:2024 7.1 `<session reset arguments>`,
