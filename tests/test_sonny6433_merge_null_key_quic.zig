@@ -15,6 +15,7 @@
 // CANARY: REQ=REQ-SONNY-6433-MERGE-KEYS; FEATURE="MergeStatement"; ASPECT=BulkNullKeyRefused; STATUS=TESTED; TEST=tests/test_sonny6433_merge_null_key_quic.zig; OWNER=transport; UPDATED=2026-11-12
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
@@ -59,6 +60,8 @@ fn rowsOf(aa: std.mem.Allocator, client: *util.QuicProtoClient, query: []const u
 }
 
 test "SONNY-6433: the QUIC bulk MERGE fast paths refuse a null key with 22004 and write nothing" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();

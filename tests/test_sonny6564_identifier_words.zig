@@ -22,6 +22,7 @@
 //!    `-[:R]->{1,2}`, `{n}`, `{m,}`, `{,n}`, `+` and `*` read into the same
 //!    length bounds as `-[:R*1..2]->`, and run on the same expansion.
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const geode_test_bin = @import("geode_test_bin");
@@ -395,6 +396,8 @@ fn expectInts(want: []const ?i64, got: []const ?i64) !void {
 }
 
 test "SONNY-6564: over QUIC and gRPC, non-reserved-word variables write and read, reserved ones are 42000, ISO quantifiers expand like *m..n" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     var s = try Server.start(a);
     defer s.stop(a);

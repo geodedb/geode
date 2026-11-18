@@ -17,6 +17,7 @@
 // CANARY: REQ=REQ-SONNY-6613-LEADING-UNWIND; FEATURE="Unwind"; ASPECT=StatementLeadingWrite; STATUS=TESTED; TEST=tests/test_sonny6613_leading_unwind_write.zig; OWNER=engine; UPDATED=2026-11-15
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const h = @import("sonny738_write_harness.zig");
@@ -101,6 +102,8 @@ test "SONNY-6613 task 1: a leading UNWIND parses to the very FOR statement" {
 }
 
 test "SONNY-6613 task 1: a leading UNWIND that writes writes what its FOR writes, in every session" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var cases: [pairs.len * 2]Case = undefined;
     for (pairs, 0..) |p, i| {
         cases[2 * i] = .{ .write = p.unwind, .want = p.want, .refused = p.refused, .checks = p.checks };
@@ -110,6 +113,8 @@ test "SONNY-6613 task 1: a leading UNWIND that writes writes what its FOR writes
 }
 
 test "SONNY-6613 task 1: a leading UNWIND past the write budget answers 53200 and writes nothing, as its FOR" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();

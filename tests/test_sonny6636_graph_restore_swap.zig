@@ -208,14 +208,20 @@ fn runAllStops(shape: Shape, key: ?[32]u8) !void {
 const tde_key = [_]u8{0x36} ** 32;
 
 test "SONNY-6636 (1): a graph restored under a uuid new here, completed or stopped at every step, reopens on exactly the old or the restored graph" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try runAllStops(.new_uuid, null);
 }
 
 test "SONNY-6636 (1): a graph restored again under its own uuid, completed or stopped at every step, reopens on exactly the old or the restored graph" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try runAllStops(.own_uuid, null);
 }
 
 test "SONNY-6636 (1): under at-rest encryption, both restore shapes stopped at every step reopen on exactly the old or the restored graph" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try runAllStops(.new_uuid, tde_key);
     try runAllStops(.own_uuid, tde_key);
 }

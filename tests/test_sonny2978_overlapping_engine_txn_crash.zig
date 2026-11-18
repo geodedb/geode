@@ -30,6 +30,7 @@
 // CANARY: REQ=REQ-SONNY-2978-OVERLAPPING-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2978_overlapping_engine_txn_crash.zig; OWNER=storage; UPDATED=2026-11-13
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -166,6 +167,8 @@ fn program(allocator: std.mem.Allocator, c: Case) ![]u8 {
 }
 
 test "SONNY-2978: a change that commits its own engine transaction inside a Geode transaction survives a kill" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const io_fs = std.Io.Threaded.global_single_threaded.io();
     var dir_buf: [96]u8 = undefined;
@@ -241,6 +244,8 @@ const MidRequest = struct {
 };
 
 test "SONNY-6472: a request's REMOVE, DELETE and relationship-property REMOVE on the session engine transaction's shard are lost together by a kill before its end" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const io_fs = std.Io.Threaded.global_single_threaded.io();
     var dir_buf: [96]u8 = undefined;

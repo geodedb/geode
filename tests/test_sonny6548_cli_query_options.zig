@@ -18,6 +18,7 @@
 //!
 //! Spawns this build's geode (server and CLI).
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const proto = @import("proto_test_util.zig");
@@ -38,6 +39,8 @@ fn free(a: std.mem.Allocator, res: cli_test_util.CliResult) void {
 }
 
 test "SONNY-6548: geode query refuses an output format it does not render (usage error, exit 2)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = std.testing.allocator;
     var server = try proto.spawnServerRandom(a, proto.TestEnv.standard());
     defer server.deinit();
@@ -57,6 +60,8 @@ test "SONNY-6548: geode query refuses an output format it does not render (usage
 }
 
 test "SONNY-6548: geode query refuses an unknown option (usage error, exit 2)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = std.testing.allocator;
     var server = try proto.spawnServerRandom(a, proto.TestEnv.standard());
     defer server.deinit();
@@ -70,6 +75,8 @@ test "SONNY-6548: geode query refuses an unknown option (usage error, exit 2)" {
 }
 
 test "SONNY-6548: geode query --begin --rollback does not commit the write it documents rolling back" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = std.testing.allocator;
     var server = try proto.spawnServerRandom(a, proto.TestEnv.standard());
     defer server.deinit();

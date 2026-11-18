@@ -47,6 +47,7 @@
 // CANARY: REQ=REQ-SONNY-6659-SINGLE-WRITER; FEATURE="TransactionManagement"; ASPECT=OpenWritersOnOneShard; STATUS=TESTED; TEST=tests/test_sonny6659_open_writers.zig; OWNER=storage; UPDATED=2026-11-16
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 const gs = @import("graph_storage");
 const geode_test_bin = @import("geode_test_bin");
@@ -389,6 +390,8 @@ fn sessionCounts(c: *util.QuicProtoClient, allocator: std.mem.Allocator, s: u32)
 }
 
 test "SONNY-6659: explicit transactions of several sessions at once and two sessions updating one node answer no 40001; a kill keeps only what committed" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var dir_buf: [96]u8 = undefined;
     const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-sonny6659ow-{d}", .{try util.getRandomPort()});
@@ -527,6 +530,8 @@ fn undoneChanges(p: *std.ArrayList(u8), allocator: std.mem.Allocator, first: u32
 }
 
 test "SONNY-6659: a ROLLBACK with the session's engine transaction open undoes every change without a conflict, also across a kill" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var dir_buf: [96]u8 = undefined;
     const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-sonny6659rb-{d}", .{try util.getRandomPort()});

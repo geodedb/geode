@@ -279,6 +279,8 @@ test "SONNY-6554 (5): geode query refuses a DSN parameter it cannot honour and n
 }
 
 test "SONNY-6569 (5): the MCP endpoint parses strictly, with the CLI's rules" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     var failures: usize = 0;
     for (bad_params) |c| {

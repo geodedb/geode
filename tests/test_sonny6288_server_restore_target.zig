@@ -394,14 +394,20 @@ fn restoreContract(config: Config) !void {
 }
 
 test "SONNY-6288 QUIC restore on a server started with --data-dir and no GEODE_DATA_DIR restores beside its data directory, never ./data" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try restoreContract(.flag);
 }
 
 test "SONNY-6288 QUIC restore on a server whose data directory comes from GEODE_DATA_DIR never writes over the live store" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try restoreContract(.env);
 }
 
 test "SONNY-6288 QUIC restore with --data-dir and a different GEODE_DATA_DIR restores beside --data-dir and leaves GEODE_DATA_DIR alone" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try restoreContract(.both);
 }
 

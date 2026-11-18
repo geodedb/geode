@@ -34,6 +34,7 @@
 // CANARY: REQ=REQ-SONNY-6659-SINGLE-WRITER; FEATURE="TransactionManagement"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6659_geode_single_writer.zig; OWNER=storage; UPDATED=2026-11-16
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
@@ -298,6 +299,8 @@ fn counts(client: *util.QuicProtoClient, allocator: std.mem.Allocator, k: u32) !
 }
 
 test "SONNY-6659: cross-shard relationships and a node batch in an explicit transaction commit, roll back and vanish at a kill with it" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var dir_buf: [96]u8 = undefined;
     const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-sonny6659-{d}", .{try util.getRandomPort()});

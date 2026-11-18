@@ -28,6 +28,7 @@
 //! One server listens on both transports; every query runs on each, and the
 //! protobuf value kinds it sends are checked against the declared types.
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode_test_bin = @import("geode_test_bin");
 const geode = @import("geode");
@@ -352,6 +353,8 @@ const type_cases = [_]TypeCase{
 };
 
 test "SONNY-6562: every declared column type is the combined type of the column's values (QUIC and gRPC)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     var s = try Server.start(a, &.{});
     defer s.stop(a);
@@ -374,6 +377,8 @@ test "SONNY-6562: every declared column type is the combined type of the column'
 }
 
 test "SONNY-6562: a streamed node scan longer than its schema sample does not declare a type its later rows contradict" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     var s = try Server.start(a, &.{});
     defer s.stop(a);
@@ -490,6 +495,8 @@ fn orderFailures(c: OrderCase, t: Transport, r: *const Raw) usize {
 }
 
 test "SONNY-6562: ordered and order_keys are set exactly when the result's statement ends in an ORDER BY (QUIC and gRPC)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     var s = try Server.start(a, &.{});
     defer s.stop(a);
@@ -535,6 +542,8 @@ const profile_queries = [_][]const u8{
 };
 
 test "SONNY-6562: PROFILE reports no spill (the executor never spills) under a spill threshold (QUIC and gRPC)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     var s = try Server.start(a, &.{"GEODE_SPILL_THRESHOLD_BYTES=1"});
     defer s.stop(a);

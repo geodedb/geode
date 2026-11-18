@@ -50,6 +50,7 @@
 // CANARY: REQ=REQ-SONNY-6492-STALE-FREE-STORE; FEATURE="CrashRecovery"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6492_checkpoint_free_store_crash.zig; OWNER=storage; UPDATED=2026-11-13
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -382,10 +383,14 @@ fn oldReleaseCrash(allocator: std.mem.Allocator, tde: bool) !void {
 }
 
 test "SONNY-6492 (1): a store an old release crashed in its checkpoint window keeps every node (no TDE)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try oldReleaseCrash(testing.allocator, false);
 }
 
 test "SONNY-6492 (1): a store an old release crashed in its checkpoint window keeps every node (TDE)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try oldReleaseCrash(testing.allocator, true);
 }
 
@@ -443,14 +448,20 @@ fn failedSave(allocator: std.mem.Allocator, tde: bool) !void {
 }
 
 test "SONNY-6492 (1): a failed free.store save fails the checkpoint before its manifest; WAL replay keeps every node (no TDE)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try failedSave(testing.allocator, false);
 }
 
 test "SONNY-6492 (1): a failed free.store save fails the checkpoint before its manifest; WAL replay keeps every node (TDE)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try failedSave(testing.allocator, true);
 }
 
 test "SONNY-6492 (1): a restart after a completed checkpoint rebuilds no page bitmaps" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var e = try Env.init(allocator, false, "clean");
     defer e.deinit();

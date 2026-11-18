@@ -274,6 +274,8 @@ test "SONNY-6688 (1): a migration stopped after a batch, as a crash would stop i
 }
 
 test "SONNY-6688 (1): a crash between a value's removal and its encrypted write is repaired from the journal at the next start" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var e: Env = undefined;
     try e.init();
     defer e.deinit();

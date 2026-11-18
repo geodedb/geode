@@ -269,6 +269,8 @@ test "perf_gate: the self-test hook forces a holding claim to count as violated"
 }
 
 test "perf_gate: robust statistics are the median and quartiles, not moved by one outlier" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var xs = [_]f64{ 10, 11, 9, 10, 12, 10, 9, 11, 10, 10_000 };
     const r = robust(&xs);
     try std.testing.expectApproxEqAbs(@as(f64, 10), r.median, 1e-9);
@@ -306,6 +308,8 @@ test "perf_gate: batches and interleaving run every operation and alternate the 
 }
 
 test "perf_gate: the robust envelope fails when enforced and only reports by default" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const wide: Robust = .{ .median = 10, .q1 = 5, .q3 = 20, .p95 = 90, .rel_iqr = 1.5, .p95_over_median = 9 };
     try std.testing.expectError(error.PerfClaimViolated, robustEnvelopeIn(.enforced, false, "synthetic", wide, 0.30, 2.55));
     try robustEnvelopeIn(.reported, false, "synthetic", wide, 0.30, 2.55);

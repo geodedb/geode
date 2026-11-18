@@ -125,6 +125,8 @@ const Probe = struct {
 };
 
 test "SONNY-6352: every user_management writer callback runs without user_store_mutex held, under auth_ddl_lock" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     user_mgmt.deinitUserStore();
     try user_mgmt.initUserStore(testing.allocator);
     defer user_mgmt.deinitUserStore();
@@ -326,6 +328,8 @@ fn bobCanLogIn() bool {
 }
 
 test "SONNY-6352: DROP USER whose node delete fails answers 58030; the user stays stored, is locked out, its sessions are stale, the chain verifies; the retry drops it" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var w: World = undefined;
     try w.init();
     defer w.deinit();

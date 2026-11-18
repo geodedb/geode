@@ -33,6 +33,7 @@
 // CANARY: REQ=REQ-SONNY-6327-FLE-READ-POLICY; FEATURE="FieldLevelEncryption"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
@@ -767,10 +768,14 @@ fn fastPathsKeepPlaintextOffDisk(env: []const []const u8) !void {
 }
 
 test "SONNY-6327 (5): over QUIC the write fast paths never store an encrypted field's plaintext (group commit on)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try fastPathsKeepPlaintextOffDisk(&.{"GEODE_MASTER_KEY=" ++ key_a});
 }
 
 test "SONNY-6327 (5): over QUIC the write fast paths never store an encrypted field's plaintext (group commit off, GEODE_BULK_INGEST=1)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try fastPathsKeepPlaintextOffDisk(&.{ "GEODE_MASTER_KEY=" ++ key_a, "GEODE_GROUP_COMMIT=0", "GEODE_BULK_INGEST=1" });
 }
 

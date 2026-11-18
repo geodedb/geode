@@ -25,6 +25,7 @@
 // CANARY: REQ=REQ-SONNY-6425-WHERE-TRUTHINESS; FEATURE="SearchConditionTruth"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6425_where_truthiness.zig; OWNER=execution; UPDATED=2026-11-12
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const h = @import("rls_session_harness.zig");
@@ -100,6 +101,8 @@ const leader_statements = [_][]const u8{
 };
 
 test "SONNY-6425 items 1-2: a cluster leader's MATCH ... SET keeps the same rows and answers the same errors as a single node" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     h.silenceEngineLogs();
     var f: h.Failures = .{};
     var ga = std.heap.ArenaAllocator.init(testing.allocator);

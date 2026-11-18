@@ -37,6 +37,7 @@
 // CANARY: REQ=REQ-SONNY-6591-FTS-WRITE-PATHS; FEATURE="FullText"; ASPECT=WirePathMatrix; STATUS=TESTED; TEST=tests/test_sonny6591_fts_write_paths.zig; OWNER=fts; UPDATED=2026-11-15
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -386,6 +387,8 @@ fn runConfig(allocator: std.mem.Allocator, cfg: Config) !usize {
 }
 
 test "SONNY-6591: every node write path keeps a fulltext index current over QUIC and gRPC, with and without TDE, before and after restarts" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var failed: usize = 0;
     for ([_]Config{
         .{ .transport = .quic, .tde = false },

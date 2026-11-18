@@ -29,6 +29,7 @@
 // CANARY: REQ=REQ-SONNY-6491-ORDERBY-LABEL-INTERN; FEATURE="CrashRecovery"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6491_orderby_label_intern.zig; OWNER=storage; UPDATED=2026-11-13
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -194,10 +195,14 @@ fn singleLabel(how: Restart) !void {
 }
 
 test "SONNY-6491: ORDER BY on an unseen label, CREATE, SIGKILL: the label survives" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try singleLabel(.kill);
 }
 
 test "SONNY-6491: ORDER BY on an unseen label, CREATE, clean shutdown: the label survives" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try singleLabel(.clean);
 }
 
@@ -285,6 +290,8 @@ fn shardDictDisagreements(allocator: std.mem.Allocator, data_dir: []const u8, pr
 }
 
 test "SONNY-6491: ORDER BY on an unseen label, then new labels on other shards: every node keeps its own label" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const io_fs = std.Io.Threaded.global_single_threaded.io();
     var dir_buf: [96]u8 = undefined;

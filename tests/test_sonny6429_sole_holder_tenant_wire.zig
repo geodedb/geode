@@ -47,6 +47,7 @@
 // CANARY: REQ=REQ-SONNY-6429-SOLE-HOLDER-TENANT; FEATURE="WriteFastPathParity"; ASPECT=SoleHolderTenantRegression; STATUS=TESTED; TEST=tests/test_sonny6429_sole_holder_tenant_wire.zig; OWNER=storage; UPDATED=2026-11-12
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const geode_test_bin = @import("geode_test_bin");
@@ -730,17 +731,25 @@ fn exerciseWire(env: []const []const u8, mode_name: []const u8) !void {
 }
 
 test "SONNY-6429: over QUIC the edge statements answer and write what the executor does, per tenant (group commit on)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try exerciseWire(util.TestEnv.standard(), "group commit on");
 }
 
 test "SONNY-6429: over QUIC the edge statements answer and write what the executor does, per tenant (group commit off, GEODE_BULK_INGEST=1)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try exerciseWire(&.{ "GEODE_GROUP_COMMIT=0", "GEODE_BULK_INGEST=1" }, "group commit off");
 }
 
 test "SONNY-6429: over QUIC the edge statements answer and write what the executor does, per tenant (group commit off, default fast paths)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try exerciseWire(&.{"GEODE_GROUP_COMMIT=0"}, "group commit off, default fast paths");
 }
 
 test "SONNY-6429: over QUIC the edge statements answer and write what the executor does, per tenant (lean indexing)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try exerciseWire(&.{"GEODE_INDEX_MERGE_KEYS_ONLY=1"}, "lean indexing");
 }

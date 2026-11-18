@@ -31,6 +31,7 @@
 // CANARY: REQ=REQ-SONNY-6471-EDGE-PROP-CRASH; FEATURE="TransactionManagement"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6471_edge_prop_crash.zig; OWNER=storage; UPDATED=2026-11-13
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -311,9 +312,13 @@ fn matrix(allocator: std.mem.Allocator, tde: bool) !usize {
 }
 
 test "SONNY-6471: every relationship property write survives a kill (no TDE)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     if (try matrix(testing.allocator, false) > 0) return error.RelationshipPropertyLostByTheKill;
 }
 
 test "SONNY-6471: every relationship property write survives a kill (TDE)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     if (try matrix(testing.allocator, true) > 0) return error.RelationshipPropertyLostByTheKill;
 }

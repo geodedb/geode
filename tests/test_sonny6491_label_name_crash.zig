@@ -22,6 +22,7 @@
 // CANARY: REQ=REQ-SONNY-6491-LABEL-NAME-CRASH; FEATURE="CrashRecovery"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6491_label_name_crash.zig; OWNER=storage; UPDATED=2026-11-13
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -208,6 +209,8 @@ fn observe(client: *util.QuicProtoClient, allocator: std.mem.Allocator) !Observe
 }
 
 test "SONNY-6491: label names assigned since the last checkpoint survive a kill" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const io_fs = std.Io.Threaded.global_single_threaded.io();
     var dir_buf: [96]u8 = undefined;

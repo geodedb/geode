@@ -85,6 +85,8 @@ fn bobSees(allocator: std.mem.Allocator, addr: []const u8) ![2]usize {
 }
 
 test "SONNY-3034: geode.rls deny and attribute policies, and their removal, survive a server restart" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     const allocator = testing.allocator;
     const io = std.Io.Threaded.global_single_threaded.io();

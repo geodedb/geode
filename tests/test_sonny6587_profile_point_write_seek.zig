@@ -16,6 +16,7 @@
 //! CANARY: REQ=REQ-SONNY-6587-PROFILE-POINT-WRITE-SEEK; FEATURE="PROFILE"; ASPECT=PointWriteIndexName; STATUS=TESTED; TEST=tests/test_sonny6587_profile_point_write_seek.zig; OWNER=engine; UPDATED=2026-11-15
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode_test_bin = @import("geode_test_bin");
 const geode = @import("geode");
@@ -72,6 +73,8 @@ fn grpcProfile(a: std.mem.Allocator, grpc_addr: []const u8, q: []const u8) ![]u8
 }
 
 test "SONNY-6587: a PROFILE'd point write names the catalog index its seek used (QUIC and gRPC)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     const quic_port = try util.getRandomPort();
     var grpc_port = try util.getRandomTcpPort();

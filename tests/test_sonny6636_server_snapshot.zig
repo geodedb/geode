@@ -391,9 +391,13 @@ fn runCluster(store_node: usize) !void {
 }
 
 test "SONNY-6636: the leader snapshots its durable store past the threshold, off inner_mutex, its log stays bounded, a lagging follower installs its snapshot, and no heartbeat waits a quarter election timeout" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try runCluster(0);
 }
 
 test "SONNY-6636: a follower snapshots its durable store past the threshold, off inner_mutex, its log stays bounded, and no heartbeat waits a quarter election timeout" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try runCluster(1);
 }

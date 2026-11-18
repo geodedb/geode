@@ -19,6 +19,7 @@
 // CANARY: REQ=REQ-SONNY-3241-FAST-PATH-PARITY; FEATURE="WriteFastPathParity"; ASPECT=WireRegression; STATUS=TESTED; TEST=tests/test_sonny3241_fast_path_parity_wire.zig; OWNER=transport; UPDATED=2026-11-12
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -142,9 +143,13 @@ fn exercise(env: []const []const u8) !void {
 }
 
 test "SONNY-3241: over QUIC the write fast paths match the executor (group commit on)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try exercise(util.TestEnv.standard());
 }
 
 test "SONNY-3241: over QUIC the write fast paths match the executor (group commit off, GEODE_BULK_INGEST=1)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try exercise(&.{ "GEODE_GROUP_COMMIT=0", "GEODE_BULK_INGEST=1" });
 }

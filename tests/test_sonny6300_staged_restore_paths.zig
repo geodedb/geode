@@ -102,6 +102,8 @@ fn freeSnapshot(allocator: std.mem.Allocator, map: *std.StringHashMap([]u8)) voi
 // ===========================================================================
 
 test "SONNY-6300 (1) BackupManager has no in-place restore: its restore writes only a new or empty directory and refuses the live data directory" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var root = try test_scratch.ScratchDir.create("sonny6300-inplace");
     defer root.remove();

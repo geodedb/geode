@@ -36,6 +36,7 @@
 // CANARY: REQ=REQ-SONNY-6547-TRANSPORT-PARITY; FEATURE="StorageIntegrity"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6547_transport_parity.zig; OWNER=transport; UPDATED=2026-11-14
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
@@ -528,6 +529,8 @@ fn inProcessAnswersOf(allocator: std.mem.Allocator, pristine: []const u8, work: 
 }
 
 test "SONNY-6547 (1): a quarantined or label-dictionary-diverged graph answers every shape alike over QUIC and gRPC" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const port = try util.getRandomPort();
     const base = try std.fmt.allocPrint(allocator, "/tmp/geode-sonny6547-tp-{d}", .{port});

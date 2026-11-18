@@ -23,6 +23,7 @@
 // and Atomicity").
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -88,6 +89,8 @@ fn quicCount(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query:
 }
 
 test "SONNY-2979: nothing of a transaction open at a kill survives the restart" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const io_fs = std.Io.Threaded.global_single_threaded.io();
     var dir_buf: [96]u8 = undefined;

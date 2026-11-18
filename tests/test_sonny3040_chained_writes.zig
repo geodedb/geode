@@ -21,6 +21,7 @@
 // CANARY: REQ=REQ-SONNY-3040-CHAINED-WRITES; FEATURE="WriteStep"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny3040_chained_writes.zig; OWNER=engine; UPDATED=2026-09-27
 
 const std = @import("std");
+const builtin = @import("builtin");
 const h = @import("sonny738_write_harness.zig");
 
 const Case = h.Case;
@@ -115,6 +116,8 @@ const for_cases = [_]Case{
 };
 
 test "SONNY-6613: a FOR after MATCH ... WITH writes for every row and element" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try h.runCases("chained FOR write", &for_cases);
 }
 

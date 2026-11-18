@@ -17,6 +17,7 @@
 // CANARY: REQ=REQ-SONNY-6447-QUIC-RETRY-CONNECT-STOPS; FEATURE="ChunkedExecution"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6447_quic_retry_connect_stops.zig; OWNER=cli; UPDATED=2026-11-12
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode_test_bin = @import("geode_test_bin");
 const util = @import("proto_test_util.zig");
@@ -139,6 +140,8 @@ fn buildFile(aa: std.mem.Allocator) ![]const u8 {
 }
 
 test "SONNY-6447 item 7: when the QUIC retry of a rejected chunk cannot connect, the run stops with the summary; no later chunk is sent" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();

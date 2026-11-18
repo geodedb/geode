@@ -18,6 +18,7 @@
 // CANARY: REQ=REQ-SONNY-6466-FOR-ATOMICITY; FEATURE="ForStatement"; ASPECT=StatementAtomicityOnElementFailure; STATUS=TESTED; TEST=tests/test_sonny6466_for_statement_atomicity.zig; OWNER=engine; UPDATED=2026-11-13
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -72,6 +73,8 @@ const Server = struct {
 };
 
 test "SONNY-6466: a FOR whose body fails at an element leaves nothing of the earlier elements, durably" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();

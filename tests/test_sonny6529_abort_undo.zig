@@ -28,6 +28,7 @@
 // CANARY: REQ=REQ-SONNY-6529-ABORT-UNDO; FEATURE="TransactionManagement"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6529_abort_undo.zig; OWNER=storage; UPDATED=2026-11-15
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -444,9 +445,13 @@ fn matrix(allocator: std.mem.Allocator, end: End) !usize {
 }
 
 test "SONNY-6529: rolled-back and failed writes leave nothing, in memory and after a clean restart" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     if (try matrix(testing.allocator, .checkpoint) > 0) return error.AbortedWritesLeftResidue;
 }
 
 test "SONNY-6529: rolled-back and failed writes leave nothing after a SIGKILL restart" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     if (try matrix(testing.allocator, .sigkill) > 0) return error.AbortedWritesLeftResidue;
 }

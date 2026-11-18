@@ -840,6 +840,8 @@ fn expectGraph(server: *Server, aa: std.mem.Allocator, g: []const u8, n: Needles
 }
 
 test "SONNY-6590: a data directory written under TDE before SONNY-6590 (plaintext side files, format_version 4, plaintext time-series) is upgraded by a real server and keeps nothing in plaintext" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
@@ -889,6 +891,8 @@ test "SONNY-6590: a data directory written under TDE before SONNY-6590 (plaintex
 }
 
 test "SONNY-6590: a real server refuses a graph whose labels.dict fails authentication or is plaintext, and keeps serving its other graph" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
@@ -954,6 +958,8 @@ test "SONNY-6590: a real server refuses a graph whose labels.dict fails authenti
 }
 
 test "SONNY-6590: a server-wide time-series store written in plaintext with data stops startup under GEODE_TDE_KEY, keeps the data, and reads with GEODE_TS_TDE=0" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();

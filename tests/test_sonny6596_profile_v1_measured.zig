@@ -18,6 +18,7 @@
 //! CANARY: REQ=REQ-SONNY-6596-PROFILE-V1-MEASURED; FEATURE="PROFILE"; ASPECT=NoSyntheticOperators; STATUS=TESTED; TEST=tests/test_sonny6596_profile_v1_measured.zig; OWNER=engine; UPDATED=2026-11-15
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode_test_bin = @import("geode_test_bin");
 const geode = @import("geode");
@@ -101,6 +102,8 @@ fn failuresOf(c: Case, transport: []const u8, json: []const u8) !usize {
 }
 
 test "SONNY-6596: a version-1 PROFILE reports the measured execution, no invented operators or figures (QUIC and gRPC)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     const quic_port = try util.getRandomPort();
     var grpc_port = try util.getRandomTcpPort();

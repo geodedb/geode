@@ -11,6 +11,7 @@
 // CANARY: REQ=REQ-SONNY-3383-COMMIT-REFUSED-WIRE; FEATURE="TransactionManagement"; ASPECT=RefusedCommitOnQuicWire; STATUS=TESTED; TEST=tests/test_sonny3383_commit_refused_wire.zig; OWNER=transport; UPDATED=2026-11-13
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -46,6 +47,8 @@ fn count(client: *util.QuicProtoClient, query: []const u8) !i64 {
 }
 
 test "SONNY-3383: a refused COMMIT answers success=false with SQLSTATE 40000 on the QUIC wire and keeps nothing; an accepted one answers success=true" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();

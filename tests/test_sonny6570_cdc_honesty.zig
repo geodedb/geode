@@ -592,6 +592,8 @@ fn checkTruthful(a: std.mem.Allocator, srv: *const Server, t: Transport) !void {
 }
 
 test "SONNY-6570: every CALL cdc.* answers from the CDC engine or is refused 0A000, over QUIC and gRPC" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     var srv = try Server.start(a, &.{}, &.{});
     defer srv.deinit();
@@ -603,6 +605,8 @@ test "SONNY-6570: every CALL cdc.* answers from the CDC engine or is refused 0A0
 // ---------------------------------------------------------------------------
 
 test "SONNY-6570: every CDC procedure and frame is Admin only on QUIC and gRPC (42501 for readwrite, readonly and user; 28000 unauthenticated)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     var srv = try Server.start(a, &.{}, &.{});
     defer srv.deinit();
@@ -868,6 +872,8 @@ test "SONNY-6570: CDC changes and refusals write audit records, on both transpor
 // ---------------------------------------------------------------------------
 
 test "SONNY-6570: the server serves the CDC RPCs src/proto/geode.proto declares (GetCdcDiagnostics, ControlCdc)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // SONNY-6593: the undeclared /CdcDiag and /CdcCtrl aliases are no longer
     // served (tests/test_sonny6593_grpc_service_contract.zig).
     const a = testing.allocator;
@@ -901,6 +907,8 @@ test "SONNY-6570: the server serves the CDC RPCs src/proto/geode.proto declares 
 // ---------------------------------------------------------------------------
 
 test "SONNY-6570: cdc_enhanced.startCDC frees the engine when start() fails" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // std.testing.FailingAllocator fails allocation `fail_index` and every
     // one after it. 0: the engine itself. 1: start()'s worker pool (SONNY-6593:
     // the lifecycle record now comes after it), so start() fails and

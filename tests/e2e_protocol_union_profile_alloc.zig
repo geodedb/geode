@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 
@@ -16,6 +17,8 @@ fn contains(h: []const u8, n: []const u8) bool {
 // fields are present and 0 (they were a fixed 64 bytes per invented
 // operator: UnionLeft, UnionTails, SetOpUnion).
 test "protocol: PROFILE UNION allocation fields present and unmeasured" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x UNION RETURN 1 AS x" });
     defer std.testing.allocator.free(res.out);

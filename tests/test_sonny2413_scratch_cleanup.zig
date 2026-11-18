@@ -132,6 +132,8 @@ fn writeReport(text: []const u8) !void {
 
 // Child half: does nothing unless this binary was re-executed by a test below.
 test "SONNY-2413 child entry (no-op unless re-executed as a child)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const mode = childMode() orelse return;
     const gpa = std.heap.smp_allocator;
     if (std.mem.eql(u8, mode, "default-data-dir")) {

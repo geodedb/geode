@@ -185,6 +185,8 @@ fn runGeode(argv: []const []const u8, cwd: []const u8, data_dir: ?[]const u8) !R
 // ---------------------------------------------------------------------------
 
 test "SONNY-6321 (1): fle_commands.migrateEncrypt refuses as unsupported instead of reporting a migration it did not perform" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var f = try Fixture.init("sonny6321-migrate", "Sonny6321M");
     defer f.deinit();
     const result = fle_commands.migrateEncrypt(testing.allocator, .{ .tenant_id = "default", .schema_name = "Sonny6321M", .field_name = "ssn" });
@@ -223,6 +225,8 @@ test "SONNY-6321 (1): geode fle migrate-encrypt with no server to reach exits no
 // ---------------------------------------------------------------------------
 
 test "SONNY-6321 (2): fle_commands.executeCommand grants and revokes plaintext access in the persisted catalog and reports it" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var f = try Fixture.init("sonny6321-admin", "Sonny6321A");
     defer f.deinit();
     const a = testing.allocator;

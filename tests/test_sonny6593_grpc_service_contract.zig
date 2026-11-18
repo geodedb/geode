@@ -173,6 +173,8 @@ test "SONNY-6593 (2): geode serve answers exactly the gRPC RPCs geode.proto decl
 }
 
 test "SONNY-6593 (2): the paths the gRPC server registers are geode.proto's RPCs" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // `GeodeGrpcServer.registerHandlers` registers
     // `grpc_service_methods.paths` and nothing else, so this list is what
     // the server serves; the probe above checks it against a running one.

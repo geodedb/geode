@@ -10,6 +10,7 @@
 // engine (src/storage/backup.zig BackupManager); no mocks.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const backup = @import("storage/backup");
@@ -172,9 +173,13 @@ fn roundTrip(compression: backup.CompressionType) !void {
 }
 
 test "SONNY-6277 backup restore round-trips nodes, edges and typed properties cold (uncompressed)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try roundTrip(.none);
 }
 
 test "SONNY-6277 backup restore round-trips nodes, edges and typed properties cold (gzip)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try roundTrip(.gzip);
 }

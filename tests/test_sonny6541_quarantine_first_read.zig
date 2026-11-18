@@ -22,6 +22,7 @@
 // CANARY: REQ=REQ-SONNY-6541-FIRST-READ-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6541_quarantine_first_read.zig; OWNER=storage; UPDATED=2026-11-14
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
@@ -437,6 +438,8 @@ fn copyOf(pristine: []const u8, work: []const u8) !void {
 }
 
 test "SONNY-6541 (3): the first read of a never-hydrated damaged graph fails closed over the wire" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const port = try util.getRandomPort();
     const base = try std.fmt.allocPrint(allocator, "/tmp/geode-sonny6541-fr-{d}", .{port});

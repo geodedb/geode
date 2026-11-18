@@ -42,6 +42,7 @@
 //   * every node written survives every restart.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -289,6 +290,8 @@ fn runConfig(allocator: std.mem.Allocator, tde: bool) !void {
 }
 
 test "SONNY-6595 item 5: after a crash restart the WAL holds exactly the tail until a statement opens the graph, which drains it, and a clean shutdown leaves none, with and without TDE" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var failed: usize = 0;
     for ([_]bool{ false, true }) |tde| {
         runConfig(testing.allocator, tde) catch |err| {

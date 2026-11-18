@@ -14,11 +14,14 @@
 // CANARY: REQ=REQ-SONNY-6384-GRPC-CHUNK-SUMMARY; FEATURE="ChunkedExecution"; ASPECT=GrpcSummaryOnUnknownOutcome; STATUS=TESTED; TEST=tests/test_sonny6384_grpc_chunk_summary.zig; OWNER=cli; UPDATED=2026-11-12
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 const h = @import("test_sonny6377_query_no_resend.zig");
 
 test "SONNY-6384 item 6: a gRPC chunk whose connection fails after it was sent stops the run and prints the chunked summary" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try h.skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

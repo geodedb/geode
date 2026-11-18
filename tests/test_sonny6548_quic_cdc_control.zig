@@ -12,6 +12,7 @@
 //!
 //! Replaces tests/e2e_protocol_cdc_control{,_unsupported,_malformed}.zig.
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -27,6 +28,8 @@ fn connectWithCdc(a: std.mem.Allocator, server: *util.ServerHandle) !util.QuicPr
 }
 
 test "SONNY-6548: QUIC CDC_CONTROL RESET_GUARDRAILS resets the running engine's guardrails (it answers NO_ENGINE)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     var server = try util.spawnServerRandom(a, util.TestEnv.standard());
     defer server.deinit();
@@ -47,6 +50,8 @@ test "SONNY-6548: QUIC CDC_CONTROL RESET_GUARDRAILS resets the running engine's 
 }
 
 test "SONNY-6548: QUIC CDC_CONTROL answers UNSUPPORTED for an unknown or empty action while CDC runs (it answers NO_ENGINE)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     var server = try util.spawnServerRandom(a, util.TestEnv.standard());
     defer server.deinit();

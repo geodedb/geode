@@ -11,10 +11,13 @@
 //! CANARY: REQ=REQ-SONNY-6613-PROFILE-CPU-TIME; FEATURE="PROFILE"; ASPECT=NoCopiedCpuTime; STATUS=TESTED; TEST=tests/test_sonny6613_profile_cpu_time.zig; OWNER=engine; UPDATED=2026-11-15
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const profile_util = @import("profile_test_util.zig");
 
 test "SONNY-6613: a version-2 PROFILE does not copy wall time into cpu_time_ns" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     const json = try profile_util.runProfile(a, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1", null);
     defer a.free(json);

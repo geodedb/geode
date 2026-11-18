@@ -23,6 +23,7 @@
 // CANARY: REQ=REQ-SONNY-6541-QUARANTINE-SESSION-SWITCH; FEATURE="StorageIntegrity"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6541_quarantine_use_graph.zig; OWNER=storage; UPDATED=2026-11-14
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
@@ -281,6 +282,8 @@ fn askExecutor(allocator: std.mem.Allocator, session: *execution.SessionState, q
 }
 
 test "SONNY-6541 (7): a session on a quarantined graph switches off it over QUIC, gRPC and in process" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const port = try util.getRandomPort();
     const base = try std.fmt.allocPrint(allocator, "/tmp/geode-sonny6541-ug-{d}", .{port});

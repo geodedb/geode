@@ -12,11 +12,14 @@
 //! CANARY: REQ=REQ-SONNY-6596-GRPC-HELPER-STREAMS; FEATURE="TestInfrastructure"; ASPECT=GrpcClientStreamReuse; STATUS=TESTED; TEST=tests/test_sonny6596_grpc_client_reuse.zig; OWNER=transport; UPDATED=2026-11-15
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode_test_bin = @import("geode_test_bin");
 const util = @import("proto_test_util.zig");
 
 test "SONNY-6596: GrpcProtoClient runs several queries on one connection" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     const quic_port = try util.getRandomPort();
     var grpc_port = try util.getRandomTcpPort();

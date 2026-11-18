@@ -68,6 +68,8 @@ fn nowMs() i64 {
 // ===========================================================================
 
 test "SONNY-6346 (1) a tenant registry whose <data dir>/tenants cannot be created is an error, not an in-memory registry" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var root = try test_scratch.ScratchDir.create("sonny6346-registry");
     defer root.remove();
@@ -191,6 +193,8 @@ test "SONNY-6346 (1) a server whose tenant registry directory cannot be created 
 // ===========================================================================
 
 test "SONNY-6346 (2) an audit record with more than 32 detail keys is written with every key" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var root = try test_scratch.ScratchDir.create("sonny6346-details");
     defer root.remove();

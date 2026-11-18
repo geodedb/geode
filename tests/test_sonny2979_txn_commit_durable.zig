@@ -14,6 +14,7 @@
 //     after the kill.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -101,6 +102,8 @@ const DataDir = struct {
 };
 
 test "SONNY-2979: a committed transaction, over several requests or in one, survives a kill whole" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var dd: DataDir = .{};
     const data_dir = try dd.init("commit");
@@ -163,6 +166,8 @@ test "SONNY-2979: a committed transaction, over several requests or in one, surv
 }
 
 test "SONNY-2979: a rolled-back transaction is not undone again after a kill" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var dd: DataDir = .{};
     const data_dir = try dd.init("rollback");
@@ -202,6 +207,8 @@ test "SONNY-2979: a rolled-back transaction is not undone again after a kill" {
 }
 
 test "SONNY-2979: under at-rest encryption the undo log is sealed and an open transaction is undone after a kill" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var dd: DataDir = .{};
     const data_dir = try dd.init("tde");

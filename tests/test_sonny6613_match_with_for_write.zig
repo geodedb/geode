@@ -17,6 +17,7 @@
 //
 // CANARY: REQ=REQ-SONNY-6613-MATCH-WITH-FOR-WRITE; FEATURE="ForStatement"; ASPECT=WriteBodyAfterMatchWith; STATUS=TESTED; TEST=tests/test_sonny6613_match_with_for_write.zig; OWNER=engine; UPDATED=2026-11-15
 
+const builtin = @import("builtin");
 const h = @import("sonny738_write_harness.zig");
 
 const Case = h.Case;
@@ -92,5 +93,7 @@ const cases = [_]Case{
 };
 
 test "SONNY-6613 item 3b: MATCH ... WITH ... FOR x IN <list> <write> writes for every row and element, in every session" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try h.runCases("MATCH WITH FOR write", &cases);
 }

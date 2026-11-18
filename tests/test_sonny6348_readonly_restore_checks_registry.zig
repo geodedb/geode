@@ -78,6 +78,8 @@ const good_a = "{\"tenant_id\":\"acme\",\"parent\":null,\"created_at_ms\":1,\"ac
 const good_b = "{\"tenant_id\":\"acme-eu\",\"parent\":\"acme\",\"created_at_ms\":2,\"active\":true,\"has_quota\":false}";
 
 test "SONNY-6348 (2) a tenant registry line that cannot become a tenant fails hydrate instead of dropping the tenant" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var root = try test_scratch.ScratchDir.create("sonny6348-registry");
     defer root.remove();

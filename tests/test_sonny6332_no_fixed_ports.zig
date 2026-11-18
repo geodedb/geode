@@ -98,6 +98,8 @@ fn fixedPortReason(line: []const u8, spawns_geode: bool) ?[]const u8 {
 }
 
 test "SONNY-6332 (1) the fixed-port detector flags binds and leaves argv parsing and port 0 alone" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try testing.expect(fixedPortReason("    try server.startWithOptions(8876, tls.startOptions());", false) != null);
     try testing.expect(fixedPortReason("    try server.start(44555);", false) != null);
     try testing.expect(fixedPortReason("    const port: u16 = 13051;", false) != null);

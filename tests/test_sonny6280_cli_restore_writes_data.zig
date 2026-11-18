@@ -330,10 +330,14 @@ fn restoreRoundTrip(compress: bool) !void {
 }
 
 test "SONNY-6280 CLI restore writes every node, edge and typed property into --data-dir (uncompressed)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try restoreRoundTrip(false);
 }
 
 test "SONNY-6280 CLI restore writes every node, edge and typed property into --data-dir (gzip)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try restoreRoundTrip(true);
 }
 

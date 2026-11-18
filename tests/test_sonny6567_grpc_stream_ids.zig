@@ -21,6 +21,7 @@
 // CANARY: REQ=REQ-SONNY-6567-GRPC-STREAM-IDS; FEATURE="GrpcTransport"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6567_grpc_stream_ids.zig; OWNER=transport; UPDATED=2026-11-14
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
@@ -84,6 +85,8 @@ fn execute(client: *util.GrpcProtoClient, allocator: std.mem.Allocator, what: []
 }
 
 test "SONNY-6567 (1): N Execute RPCs and a large response on one gRPC connection" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -160,6 +163,8 @@ test "SONNY-6567 (1): N Execute RPCs and a large response on one gRPC connection
 }
 
 test "SONNY-6567 (1): a multi-statement --file runs over gRPC" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

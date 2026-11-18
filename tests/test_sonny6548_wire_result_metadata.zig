@@ -25,6 +25,7 @@
 //!    docs/BINARY_PROTOCOL.md: `spill_reason` is "present only if any spill
 //!    counter > 0".
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode_test_bin = @import("geode_test_bin");
 const util = @import("proto_test_util.zig");
@@ -39,6 +40,8 @@ fn connect(a: std.mem.Allocator, server: *util.ServerHandle) !util.QuicProtoClie
 }
 
 test "SONNY-6548: an exact numeric column is typed as an exact numeric, also when a UNION mixes it with an integer" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     var server = try util.spawnServerRandom(a, util.TestEnv.standard());
     defer server.deinit();
@@ -58,6 +61,8 @@ test "SONNY-6548: an exact numeric column is typed as an exact numeric, also whe
 }
 
 test "SONNY-6548: ORDER BY after FOR reports the result ordered by its keys" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     var server = try util.spawnServerRandom(a, util.TestEnv.standard());
     defer server.deinit();
@@ -79,6 +84,8 @@ test "SONNY-6548: ORDER BY after FOR reports the result ordered by its keys" {
 }
 
 test "SONNY-6548: PROFILE reports spill_reason only when a spill counter is nonzero" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     // A data change takes the version-1 payload; its synthetic peak (64 bytes
     // per operator) exceeds a 1-byte threshold.

@@ -17,11 +17,14 @@
 // CANARY: REQ=REQ-SONNY-6425-GRPC-RETRY-SUMMARY; FEATURE="ChunkedExecution"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6425_grpc_retry_summary.zig; OWNER=cli; UPDATED=2026-11-12
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 const h = @import("test_sonny6377_query_no_resend.zig");
 
 test "SONNY-6425 item 6: a retried statement whose gRPC connection fails after it was sent stops the run and prints the summary" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try h.skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

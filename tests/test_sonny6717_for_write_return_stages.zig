@@ -10,6 +10,7 @@
 // CANARY: REQ=REQ-SONNY-6717-FOR-WRITE-RETURN-STAGES; FEATURE="ForStatement"; ASPECT=WriteBodyReturnStages; STATUS=TESTED; TEST=tests/test_sonny6717_for_write_return_stages.zig; OWNER=engine; UPDATED=2026-11-17
 
 const std = @import("std");
+const builtin = @import("builtin");
 const h = @import("sonny738_write_harness.zig");
 
 const Case = h.Case;
@@ -75,5 +76,7 @@ const cases = [_]Case{
 };
 
 test "SONNY-6717: a writing FOR body's RETURN stages run over the whole working table" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try h.runCases("FOR write return stages", &cases);
 }

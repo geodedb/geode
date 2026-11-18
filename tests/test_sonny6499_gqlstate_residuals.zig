@@ -30,6 +30,7 @@
 // CANARY: REQ=REQ-SONNY-6499-GQLSTATE-RESIDUALS; FEATURE="ErrorMapping"; ASPECT=DataExceptionGqlstatusResiduals; STATUS=TESTED; TEST=tests/test_sonny6499_gqlstate_residuals.zig; OWNER=engine; UPDATED=2026-11-13
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
@@ -126,6 +127,8 @@ test "SONNY-6499: over gRPC a data error answers its Table 8 code, not 58000" {
 }
 
 test "SONNY-6499: over QUIC a data error answers its Table 8 code, not 58000" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const port = try util.getRandomPort();
     const io_fs = std.Io.Threaded.global_single_threaded.io();

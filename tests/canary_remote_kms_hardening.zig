@@ -134,6 +134,8 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_ExpiredAttestation" {
 // another hash, another nonce or another channel binding do not.
 // CANARY: REQ=REQ-GQL-TDE-ATTEST-001; FEATURE="RemoteKmsAttestation"; ASPECT=SignatureVerifyTamperDetect; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect; OWNER=security; UPDATED=2026-11-12
 test "TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try withServer("tok-attest", struct {
         pub fn f(s: *kms.RemoteKmsServer, port: u16) !void {
             std.mem.doNotOptimizeAway(s);

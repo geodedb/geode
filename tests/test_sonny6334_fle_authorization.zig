@@ -27,6 +27,7 @@
 // CANARY: REQ=REQ-SONNY-6334-FLE-AUTHZ; FEATURE="FieldLevelEncryption"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6334_fle_authorization.zig; OWNER=security; UPDATED=2026-11-11
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
@@ -532,6 +533,8 @@ fn quicStr(client: *util.QuicProtoClient, query: []const u8) ![]u8 {
 }
 
 test "SONNY-6334 (1)(2)(3): over QUIC a ReadWrite user naming the listed FLE role reads no plaintext and cannot grant itself; Admin reads it" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const port = try util.getRandomPort();
     const addr = try util.formatAddr(allocator, port);

@@ -150,6 +150,8 @@ fn fleDecrypt(allocator: std.mem.Allocator, ciphertext: []const u8) ![]const u8 
 }
 
 test "SONNY-6430 (2) a field encrypted under a legacy 64-hex GEODE_MASTER_KEY stays readable, and the hex reading is a different key that is never applied silently" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     clearKeyEnv();
     defer clearKeyEnv();
     const allocator = testing.allocator;

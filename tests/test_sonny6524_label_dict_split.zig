@@ -36,6 +36,7 @@
 // CANARY: REQ=REQ-SONNY-6524-LABEL-DICT-SPLIT; FEATURE="CrashRecovery"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6524_label_dict_split.zig; OWNER=storage; UPDATED=2026-11-13
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const gs = @import("graph_storage");
@@ -513,6 +514,8 @@ fn countOn(client: *util.QuicProtoClient, allocator: std.mem.Allocator, g: []con
 }
 
 test "SONNY-6524: a real server serves its other graphs while a diverged graph is refused" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var dir_buf: [96]u8 = undefined;
     const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-sonny6524-{d}", .{try util.getRandomPort()});

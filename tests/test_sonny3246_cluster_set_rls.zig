@@ -18,6 +18,7 @@
 // CANARY: REQ=REQ-SONNY-3246-CLUSTER-SET-RLS; FEATURE="DistributedCluster"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny3246_cluster_set_rls.zig; OWNER=distributed; UPDATED=2026-11-12
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const h = @import("rls_session_harness.zig");
@@ -82,6 +83,8 @@ test "SONNY-3246: a single node's MATCH ... SET under an RLS policy (the referen
 }
 
 test "SONNY-3246: a cluster leader's MATCH ... SET under an RLS policy updates the same rows as a single node" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var s = try h.Session.init(.expr_policy);
     defer s.deinit();
     try seed(&s);

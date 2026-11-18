@@ -13,6 +13,7 @@
 // CANARY: REQ=REQ-SONNY-6735-NAME-LIMIT; FEATURE="WriteShapeAllowlist"; ASPECT=NameLimit; STATUS=TESTED; TEST=tests/test_sonny6734_6735_write_shape_subquery_names.zig; OWNER=engine; UPDATED=2026-11-17
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const h = @import("sonny738_write_harness.zig");
 
@@ -93,16 +94,22 @@ const refused_cases = [_]Case{
 };
 
 test "SONNY-6734: a COUNT or EXISTS subquery that only reads is accepted in a value" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     h.execution.initEvaluator();
     try h.runCases("SONNY-6734 accepted", &value_cases);
 }
 
 test "SONNY-6734: a subquery reads the values a FOR, an initial WITH or an UNWIND binds" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     h.execution.initEvaluator();
     try h.runCases("SONNY-6734 bound values", &bound_value_cases);
 }
 
 test "SONNY-6734: a subquery in a WHERE, one that writes or names an unbound variable stays refused" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try h.runCases("SONNY-6734 refused", &refused_cases);
 }
 
@@ -121,6 +128,8 @@ fn manyNames(allocator: std.mem.Allocator, count: usize) ![]u8 {
 }
 
 test "SONNY-6735: a CREATE with 100 and 1000 named variables writes every node, in every session" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     for (h.all_modes) |mode| {
         for ([_]usize{ 65, 100, 1000 }) |count| {
             var s = try h.Session.init(mode);
@@ -139,6 +148,8 @@ test "SONNY-6735: a CREATE with 100 and 1000 named variables writes every node, 
 }
 
 test "SONNY-6735: a MATCH ... CREATE naming 100 variables reads them in a SET value" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var s = try h.Session.init(.in_memory);
     defer s.deinit();
     try s.seed();
@@ -159,6 +170,8 @@ test "SONNY-6735: a MATCH ... CREATE naming 100 variables reads them in a SET va
 }
 
 test "SONNY-6735: past 4096 distinct variables the refusal names the limit and nothing is written" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var s = try h.Session.init(.in_memory);
     defer s.deinit();
     try s.seed();

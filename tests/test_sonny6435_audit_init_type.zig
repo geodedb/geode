@@ -4,6 +4,7 @@
 // as "no audit logger" again. The contract: the type has no optional, and a
 // real call on a fresh graph directory returns the logger.
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const logging = @import("logging");
@@ -19,6 +20,8 @@ test "SONNY-6435 (4) initAuditForGraph returns an audit logger, never an optiona
 }
 
 test "SONNY-6435 (4) initAuditForGraph opens the security graph's audit log" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     logging.init(.{ .level = .fatal });
     logging.setLevel(.fatal);
     const allocator = testing.allocator;

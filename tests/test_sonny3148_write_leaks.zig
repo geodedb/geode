@@ -33,6 +33,7 @@
 // CANARY: REQ=REQ-SONNY-3148-WRITE-LEAKS; FEATURE="WriteStatementOwnership"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny3148_write_leaks.zig; OWNER=engine; UPDATED=2026-09-27
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const h = @import("sonny738_write_harness.zig");
@@ -263,6 +264,8 @@ test "SONNY-3148: a WITH stage before a write frees the items it computed, and a
 // one, a path DELETE) is not an allowlisted write shape (SONNY-3146), so
 // only reads reach these arrays.
 test "SONNY-3148: a single-hop path variable frees its node and edge arrays, with the result when a row returns the path" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try runShapes("single-hop path", &.{
         .{ .query = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i >= 5 RETURN length(p) AS len", .want = &.{ "1", "1", "1", "1", "1" } },
         .{ .query = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 RETURN x.j AS j, length(p) AS len", .want = &.{"5|1"} },
@@ -302,6 +305,8 @@ test "SONNY-3148: a variable-length relationship variable frees its edge list, r
 // `map.put`, and what the earlier value's expression allocated was lost.
 
 test "SONNY-3148: a + concatenation of strings or lists and a map literal's repeated key are freed" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try runShapes("+ concatenation and repeated map keys", &.{
         // An initial WITH (query_execution `executeWithInitialWith`).
         .{ .query = "WITH 'k' + '1' AS tag MATCH (n:G) WHERE n.i = 5 SET n.x = 1 RETURN tag AS t", .want = &.{"k1"}, .checks = &gx(&.{"5"}) },

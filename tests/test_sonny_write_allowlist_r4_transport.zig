@@ -37,6 +37,7 @@
 // CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=TransportProfile; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-28
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
@@ -595,6 +596,8 @@ test "round 4a over gRPC: PROFILE repros refused, C3, I2, I11 and I8" {
 
 // CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=ReadBudgetOverGrpc; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-28
 test "round 4b-1b over gRPC: LIMIT 1 over two 1,499-pair chains answers under a 64 MiB read budget; the whole product answers 53200 (SONNY-3368)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
@@ -725,6 +728,8 @@ const GrpcBoundJob = struct {
 
 // CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=MemoryOverGrpc; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-29
 test "round 4b-1c over gRPC: a WHERE that keeps nothing over two 1,499-pair chains holds flat memory; LIMIT 1 answers at once (SONNY-3368)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();

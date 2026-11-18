@@ -24,6 +24,7 @@
 //! Each RESET_GUARDRAILS is compared as the epoch increment it caused (the two
 //! transports reset the same engine, one after the other).
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode_test_bin = @import("geode_test_bin");
 const schema = @import("schema");
@@ -404,6 +405,8 @@ fn compareState(a: std.mem.Allocator, srv: *const Server, state: []const u8, tal
 }
 
 test "SONNY-6561: the CDC surface answers the same over QUIC and gRPC, CDC off, on and disabled again" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     var srv = try Server.start(a);
     defer srv.deinit();
@@ -445,6 +448,8 @@ test "SONNY-6561: the CDC surface answers the same over QUIC and gRPC, CDC off, 
 }
 
 test "SONNY-6561: with CDC running, RESET_GUARDRAILS resets the running engine on both transports and refusals are SQLSTATEs" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     var srv = try Server.start(a);
     defer srv.deinit();
@@ -494,6 +499,8 @@ test "SONNY-6561: with CDC running, RESET_GUARDRAILS resets the running engine o
 }
 
 test "SONNY-6561: GEODE_CDC_ENABLE=1 starts the CDC engine at startup, as CALL cdc.enable() does" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;
     const quic_port = try util.getRandomPort();
     var grpc_port = try util.getRandomTcpPort();

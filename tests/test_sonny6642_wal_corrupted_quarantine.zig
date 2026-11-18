@@ -19,6 +19,7 @@
 // CANARY: REQ=REQ-SONNY-6642-WAL-CORRUPTED-QUARANTINE; FEATURE="StorageIntegrity"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6642_wal_corrupted_quarantine.zig; OWNER=storage; UPDATED=2026-11-15
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
@@ -165,6 +166,8 @@ test "SONNY-6642: WalCorrupted answers 58000 with its own operator message" {
 }
 
 test "SONNY-6642: a graph whose WAL is damaged mid-log is refused as WalCorrupted after a crash, other graphs serve" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var dir_buf: [96]u8 = undefined;
     const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-sonny6642-{d}", .{try util.getRandomPort()});

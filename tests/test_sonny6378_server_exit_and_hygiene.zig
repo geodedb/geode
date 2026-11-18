@@ -386,6 +386,8 @@ fn pinsOtherZig(line: []const u8, want: []const u8) ?[]const u8 {
 }
 
 test "SONNY-6378 (7) the Zig pin parser" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try testing.expectEqualStrings("0.15.2", pinsOtherZig("ARG ZIG_VERSION=0.15.2", "0.16.0").?);
     try testing.expectEqualStrings("0.15.1", pinsOtherZig("COPY docker/zig/zig-x86_64-linux-0.15.1.tar.xz /tmp/zig.tar.xz", "0.16.0").?);
     try testing.expectEqualStrings("0.15.2", pinsOtherZig("        ZIG_VERSION: \"0.15.2\"", "0.16.0").?);
@@ -395,6 +397,8 @@ test "SONNY-6378 (7) the Zig pin parser" {
 }
 
 test "SONNY-6378 (7) no Dockerfile, compose file or install script pins a Zig other than build.zig.zon's minimum" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const zon = try readRepoFile(allocator, "build.zig.zon");
     defer allocator.free(zon);

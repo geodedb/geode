@@ -15,6 +15,7 @@
 // CANARY: REQ=REQ-SONNY-6601-QUIC-INLINE-ROLLBACK; FEATURE="TransactionManagement"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6601_quic_inline_rollback.zig; OWNER=transport; UPDATED=2026-11-15
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
@@ -58,6 +59,8 @@ const cases = [_]Case{
 };
 
 test "SONNY-6601 (6): QUIC runs START TRANSACTION ... ROLLBACK with mutations in one message and undoes them" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var dir_buf: [96]u8 = undefined;
     const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-sonny6601-{d}", .{try util.getRandomPort()});

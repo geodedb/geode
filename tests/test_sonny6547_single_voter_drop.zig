@@ -154,6 +154,8 @@ test "SONNY-6547 (3): a one-voter cluster applies a drop proposed under the grap
 }
 
 test "SONNY-6547 (3): a drop_graph apply refused because its thread holds the graph's read lock fails instead of reporting the graph dropped" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var f: fx.Fixture = undefined;
     try f.init();
     defer f.deinit();
