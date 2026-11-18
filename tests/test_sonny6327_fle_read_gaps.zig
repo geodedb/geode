@@ -755,7 +755,7 @@ fn fastPathsKeepPlaintextOffDisk(env: []const []const u8) !void {
     }
     // The server is stopped; its data files are read as they are on disk.
     try testing.expect(try dirContains(allocator, data_dir, "CONTROLPLAIN6327N"));
-    const markers = [_][]const u8{ "PLAINSECRET6327A", "PLAINSECRET6327B", "PLAINSECRET6327C", "PLAINSECRET6327D", "PLAINSECRET6327E", "PLAINSECRET6327F" };
+    const markers = [_][]const u8{ "PLAINSECRET6327A", "PLAINSECRET6327B", "PLAINSECRET6327C", "PLAINSECRET6327D", "PLAINSECRET6327E", "PLAINSECRET6327F" }; // gitleaks:allow
     var leaked = false;
     for (markers) |m| {
         if (try dirContains(allocator, data_dir, m)) {

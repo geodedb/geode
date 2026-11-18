@@ -330,7 +330,7 @@ test "SONNY-6422 (2) loadMasterKeyFromEnv refuses a GEODE_MASTER_KEY shorter tha
     try setEnv("GEODE_MASTER_KEY", "");
     try testing.expectError(error.MasterKeyRequired, fle_key_manager.loadMasterKeyFromEnv(allocator));
     // 32 bytes is the minimum; the first 32 bytes are the key.
-    try setEnv("GEODE_MASTER_KEY", "0123456789abcdef0123456789abcdef");
+    try setEnv("GEODE_MASTER_KEY", "0123456789abcdef0123456789abcdef"); // gitleaks:allow
     const k = try fle_key_manager.loadMasterKeyFromEnv(allocator);
     try testing.expectEqualSlices(u8, "0123456789abcdef0123456789abcdef", &k);
 }

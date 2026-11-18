@@ -140,7 +140,7 @@ const Refusal = struct {
 const refusals = [_]Refusal{
     .{ .argv = &.{ "session", "invalidate-all", "--user", "alice" }, .claim = "have been invalidated" },
     .{ .argv = &.{ "session", "rotate" }, .claim = "rotated successfully" },
-    .{ .argv = &.{ "session", "validate", "--token", "0123456789abcdef0123456789abcdef" }, .claim = "Session is valid" },
+    .{ .argv = &.{ "session", "validate", "--token", "0123456789abcdef0123456789abcdef" }, .claim = "Session is valid" }, // gitleaks:allow
     .{ .argv = &.{ "session", "check-idle" }, .claim = "Session is active" },
     .{ .argv = &.{ "auth", "validate", "--token", "garbage" }, .claim = "Session token valid" },
     .{ .argv = &.{ "auth", "validate", "garbage" }, .claim = "Session token valid" },

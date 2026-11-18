@@ -585,7 +585,7 @@ test "SONNY-6622: a damaged Raft log refuses startup with a named error and is l
     defer env.deinit();
     try env.put("PATH", "/usr/bin:/bin");
     try env.put("GEODE_LSP_PORT", "0");
-    try env.put("GEODE_CLUSTER_TOKEN", "tok-sonny6622-raft-damaged-log");
+    try env.put("GEODE_CLUSTER_TOKEN", "tok-sonny6622-raft-damaged-log"); // gitleaks:allow
     try env.put("GEODE_NODE_ID", "1");
     try env.put("GEODE_CLUSTER_PORT", "14262");
     var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
