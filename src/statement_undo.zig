@@ -540,6 +540,10 @@ fn replay() bool {
     const store = t_own.store orelse return true;
     suspendCapture();
     defer resumeCapture();
+    // SONNY-6716: the failed statement may have filled the buffer pool; its undo
+    // pins pages too and may use the frames the pool keeps back for it.
+    graph_store.enterStatementUndo();
+    defer graph_store.leaveStatementUndo();
     _ = replayed_statements_total.fetchAdd(1, .monotonic);
     // SONNY-3381: the full-text and vector indexes the executor keeps beside
     // the store are rebuilt for what the replay reverted, once it is done.

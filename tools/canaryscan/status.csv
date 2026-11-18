@@ -5301,6 +5301,7 @@ REQ-SONNY-6705-SET-ALL-FROM-ELEMENT,SetClauseSemantics,SetAllFromElement,TESTED,
 REQ-SONNY-6708-INTERRUPTED-FIRST-BOOT,AuthGraphManager Bootstrap,CrashSafeFirstBoot,TESTED,src/security/auth_graph_manager.zig,tests/test_sonny6708_interrupted_first_boot.zig,,security,2026-11-17
 REQ-SONNY-6708-INTERRUPTED-FIRST-BOOT,AuthGraphManager Bootstrap,CrashSafeFirstBoot,TESTED,tests/test_sonny6708_interrupted_first_boot.zig,,,security,2026-11-17
 REQ-SONNY-6708-INTERRUPTED-FIRST-BOOT,AuthGraphManager Bootstrap,RealServerRecoversInterruptedFirstBoot,TESTED,tests/test_sonny6708_real_server_restart.zig,tests/test_sonny6708_real_server_restart.zig,,security,2026-11-17
+REQ-SONNY-6716-POOL-EXHAUSTION,BufferPool,SmallPoolFloorAndCleanOversizedStatement,TESTED,tests/test_sonny6716_pool_exhaustion.zig,tests/test_sonny6716_pool_exhaustion.zig,,storage,2026-11-17
 REQ-SONNY-6717-FOR-WRITE-RETURN-STAGES,ForStatement,WriteBodyReturnStages,TESTED,src/execution/write_shape.zig,tests/test_sonny6717_for_write_return_stages.zig,,engine,2026-11-17
 REQ-SONNY-6717-FOR-WRITE-RETURN-STAGES,ForStatement,WriteBodyReturnStages,TESTED,tests/test_sonny6717_for_write_return_stages.zig,,,engine,2026-11-17
 REQ-SONNY-6720-DROP-GRAPH-CATALOG,SchemaCatalog,LoadRemovesOrphanRows,TESTED,src/execution.zig,tests/test_sonny6720_drop_graph_catalog.zig,,catalog,2026-11-17

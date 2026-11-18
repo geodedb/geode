@@ -4895,7 +4895,26 @@ pub const StorageAdapter = struct {
     /// invariant exercised by tests/test_admin_bootstrap_env_and_reset.zig
     /// because the actual sharded data lives at `{data_dir}/<graph_uuid>/...`,
     /// leaving the placeholder as a competing empty `graphs/` root.
-    pub fn init(allocator: Allocator, data_dir: []const u8, config: gs.GraphConfig) !*StorageAdapter {
+    /// SONNY-6716: frames per shard below which one statement cannot finish.
+    /// graph-storage divides the pool across its shards; no-steal keeps every
+    /// page an open transaction dirtied in its shard's frames, and a statement
+    /// that creates two nodes and a relationship dirties about eight pages of
+    /// one shard. A probe of the engine fails at 4 frames and passes at 8; 16
+    /// leaves room for indexes and wider statements.
+    pub const MIN_POOL_PAGES_PER_SHARD: u32 = 16;
+
+    /// The pool size the adapter actually uses for a configured `requested`.
+    pub fn effectiveBufferPoolPages(requested: u32) u32 {
+        return @max(requested, MIN_POOL_PAGES_PER_SHARD * @as(u32, @intCast(gs.sharded_engine.SHARD_COUNT)));
+    }
+
+    pub fn init(allocator: Allocator, data_dir: []const u8, config_in: gs.GraphConfig) !*StorageAdapter {
+        var config = config_in;
+        const pool_pages = effectiveBufferPoolPages(config.buffer_pool_pages);
+        if (pool_pages != config.buffer_pool_pages) {
+            log.warn("GEODE_BUFFER_POOL_PAGES={d} is too small to finish one statement ({d} frames per shard of {d}): using {d} pages (SONNY-6716)", .{ config.buffer_pool_pages, config.buffer_pool_pages / gs.sharded_engine.SHARD_COUNT, gs.sharded_engine.SHARD_COUNT, pool_pages });
+            config.buffer_pool_pages = pool_pages;
+        }
         const owned_dir = try allocator.dupe(u8, data_dir);
         errdefer allocator.free(owned_dir);
 
@@ -16077,4 +16096,13 @@ pub fn readRegistryOffline(allocator: std.mem.Allocator, registry: *gs.registry.
     // SONNY-6689: as `StorageAdapter.init` checks it.
     if (encryption_key) |k| try DataDirSealMarker.check(try DataDirSealMarker.load(allocator, data_dir, k), identity);
     _ = try loadDataDirRegistry(allocator, registry, data_dir, registry_path, encryption_key, identity);
+}
+
+test "SONNY-6716: a configured pool below 16 frames per shard is raised, a larger one is kept" {
+    const floor = StorageAdapter.MIN_POOL_PAGES_PER_SHARD * @as(u32, @intCast(gs.sharded_engine.SHARD_COUNT));
+    try std.testing.expectEqual(floor, StorageAdapter.effectiveBufferPoolPages(96));
+    try std.testing.expectEqual(floor, StorageAdapter.effectiveBufferPoolPages(0));
+    try std.testing.expectEqual(floor, StorageAdapter.effectiveBufferPoolPages(floor));
+    try std.testing.expectEqual(floor + 1, StorageAdapter.effectiveBufferPoolPages(floor + 1));
+    try std.testing.expectEqual(@as(u32, 1024), StorageAdapter.effectiveBufferPoolPages(1024));
 }

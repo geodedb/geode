@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-18T02:10:26.305777378Z",
+  "generated_at": "2026-11-18T02:10:32.48060273Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83788,6 +83788,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6716-POOL-EXHAUSTION",
+      "features": [
+        {
+          "feature": "BufferPool",
+          "aspect": "SmallPoolFloorAndCleanOversizedStatement",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6716_pool_exhaustion.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6716_pool_exhaustion.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6717-FOR-WRITE-RETURN-STAGES",
       "features": [
         {
@@ -88947,7 +88966,7 @@
       "EXEMPT": 209,
       "IMPL": 563,
       "STUB": 18,
-      "TESTED": 4409
+      "TESTED": 4410
     },
     "by_aspect": {
       "2PC": 3,
@@ -92302,6 +92321,7 @@
       "SliceReqCrosscheckGuard": 1,
       "Slicing": 1,
       "SlowPollWarning": 1,
+      "SmallPoolFloorAndCleanOversizedStatement": 1,
       "SmallestPostingPreselect": 1,
       "SmartKernelLoader": 1,
       "SnapshotAdaptivePolicyLatencyVarianceEnvelope": 1,

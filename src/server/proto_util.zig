@@ -782,6 +782,10 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // was answered as a syntax error) is SQLSTATE 53200 out_of_memory
         // (class 53, insufficient resources), as the read and write budgets
         // are; it fell through to 58000.
+        // SONNY-6716: no-steal keeps every page a statement dirtied in the buffer
+        // pool until it ends; a statement that dirties more pages than the pool
+        // holds fails (class 53) and is undone, instead of falling through to 58000.
+        error.BufferPoolFull => .{ .code = "53200", .message = "BufferPoolFull: this statement changes more data than the buffer pool can hold (GEODE_BUFFER_POOL_PAGES). Nothing was applied; split the statement into smaller ones or raise GEODE_BUFFER_POOL_PAGES" },
         error.OutOfMemory => .{ .code = "53200", .message = "OutOfMemory: the server could not allocate the memory this request needs. Retry, or narrow the request" },
         // CANARY: REQ=REQ-SONNY-6528-CORRUPTION-MESSAGES; FEATURE="StorageIntegrity"; ASPECT=OperatorMessage; STATUS=TESTED; TEST=tests/test_sonny6528_corruption_messages.zig; OWNER=storage; UPDATED=2026-11-14
         // SONNY-6528 (5): the storage corruption errors (a read that found

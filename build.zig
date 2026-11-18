@@ -18518,6 +18518,21 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6700_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6700-storage-scrub", "Run SONNY-6700 regression (CALL geode.storage.scrub(), Admin only and audited, overwrites every graph's dead space -- freed var-store slab runs, allocated pages no live record owns, superseded values -- so none is in any file of the data directory; the live data reads back)").dependOn(&run_sonny6700_tests.step);
 
+    // SONNY-6716: a small GEODE_BUFFER_POOL_PAGES is raised to a working size.
+    const sonny6716_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6716_pool_exhaustion.zig"), .target = target, .optimize = optimize });
+    sonny6716_test_mod.addImport("geode", root_mod);
+    sonny6716_test_mod.addImport("graph_storage", graph_storage_mod);
+    sonny6716_test_mod.addImport("schema", schema_mod);
+    sonny6716_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6716_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6716_test_mod.addImport("logging", logging_mod);
+    sonny6716_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6716_tests = b.addTest(.{ .root_module = sonny6716_test_mod });
+    const run_sonny6716_tests = b.addRunArtifact(sonny6716_tests);
+    spawnsBuiltGeode(sonny6716_tests);
+    shardDep(test_step, &run_sonny6716_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6716-pool-exhaustion", "Run SONNY-6716 regression (a GEODE_BUFFER_POOL_PAGES below 16 frames per shard is raised, so 750 two-node-and-edge statements never fail with BufferPoolFull; a statement larger than the pool fails with 53200 and applies nothing)").dependOn(&run_sonny6716_tests.step);
+
     // SONNY-6688: geode.fle.migrateEncrypt / geode fle migrate-encrypt.
     const sonny6688_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6688_fle_migrate_encrypt.zig"), .target = target, .optimize = optimize });
     sonny6688_test_mod.link_libc = true; // setenv/unsetenv

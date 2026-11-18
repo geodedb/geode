@@ -508,7 +508,7 @@
             // v0.1.16, uri v0.1.17, uuid v0.1.10, gql v0.1.22, metrics v0.1.10,
             // otel v0.1.29). No API change.
             // Pinned to the release commit on MR !51 until v0.3.20 is tagged.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=release/sonny-6630-v0.3.20#210e15415d113bac8c0d0d17ca1d8e392c0968eb",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.20#9ca52063f32b3d4679f5bdab76d272dd63ff9b44",
             .hash = "geode_client_zig-0.3.20-8ysbV3vvDQD0Zeyr6QPVgCJDxs7ep4NRwt1VRQ7GmOEI",
         },
 
@@ -788,8 +788,8 @@
             // `orphan_pages_freed`. Same dependencies as v0.4.27. Pinned to
             // the v0.4.28 tag on 024e7be (MR !37,
             // fix/sonny-6700-scrub-var-slab-orphans).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.28#024e7be921c6e31356d83386f189a6bf9764bd90",
-            .hash = "graph_storage-0.4.28-9UyJSw_0NwATiWWl8SrEt2R6vuUqKhDC4khuVDHbV7ho",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.29#a07cd8a273312f22ca9980a1509f57afca542a7c",
+            .hash = "graph_storage-0.4.29-9UyJS_AOOAAtJNsS0DHC4Iup4t1dl5n6RqNX3S5n9ST6",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting

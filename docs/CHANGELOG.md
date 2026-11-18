@@ -3304,6 +3304,23 @@
   which has no registry to ask, removes nothing. Regression:
   `zig build test-sonny6720-drop-graph-catalog`.
 
+- **A small `GEODE_BUFFER_POOL_PAGES` no longer fails writes with
+  `BufferPoolFull` (SONNY-6716).** With `GEODE_BUFFER_POOL_PAGES=96` and
+  auto-sizing off, auto-commit writes failed once the data outgrew the pool
+  (surfacing as 40003, "changes could not all be undone", with part of the
+  statement applied). It was not a leak: graph-storage splits the pool across
+  its 16 shards (96 pages are 6 frames per shard) and no-steal keeps every page
+  an open statement dirtied in its shard until it ends; a statement that
+  creates two nodes and a relationship dirties about eight pages of one shard.
+  The adapter now raises a configured pool below 16 frames per shard (256
+  pages) and logs a warning. A statement that on its own dirties more pages
+  than the pool holds fails with 53200 (`BufferPoolFull`, naming
+  `GEODE_BUFFER_POOL_PAGES`) and applies nothing: the undo of the failed
+  statement runs inside the frames graph-storage 0.4.29 keeps back from it
+  (`buffer_pool.enterUndoReplay`; a no-op on 0.4.28, where the statement can
+  still end 40003). Regressions: `zig build test-sonny6716-pool-exhaustion`,
+  harness specs `sonny6716_small_pool_floor.yml` and
+  `sonny6716_oversized_statement_clean.yml`.
 - **A vector (HNSW) index is the graph's own; `knn()` never answers
   unvalidated (SONNY-6703, supersedes the SONNY-1223 refusal).** The runtime
   index was one process-wide object per index NAME. knn() used it only when
