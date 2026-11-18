@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- **A remote backup or restore gives up on a dead server after 30 s, not
+  the whole `--timeout` (SONNY-6769).** SONNY-6606 bounded the QUIC handshake
+  of `geode backup create --server` and `geode restore --server` by
+  `--timeout`, the budget of the whole backup (default 300 s), so a server
+  that never answered, or whose certificate did not name the dialled address,
+  held the command for up to 5 minutes. The handshake now waits at most
+  30 s (the client's former fixed bound), or `--timeout` when that is
+  shorter; the rest of the backup keeps the full `--timeout`.
 - **A startup refusal closes the transaction undo log (SONNY-6767).**
   `geode serve` opens `txn_undo.wal` early in startup (SONNY-2979); a refusal
   after it (FLE migration recovery, a missing or unusable HMAC key, an

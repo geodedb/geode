@@ -86,9 +86,10 @@ A server restore (`geode restore --server <addr>`) writes into a new
 directory beside the server's data directory and the server is restarted on
 it; geode cannot restore into a running server's live store. The CLI waits
 up to 300 s for the server's answer to a backup or a server restore; set
-`--timeout <seconds>` for larger stores. The QUIC handshake counts against
-`--timeout` too, up to an hour (SONNY-6606; it took a fixed 30 s however
-short the timeout).
+`--timeout <seconds>` for larger stores. The QUIC handshake waits at most
+30 s, or `--timeout` when that is shorter (SONNY-6606, SONNY-6769), so a
+server that does not answer is reported after 30 s, not after the whole
+`--timeout`.
 
 ### CDC
 

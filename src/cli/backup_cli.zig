@@ -2144,10 +2144,24 @@ fn cmdMigrateSign(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
 /// hour) bounds the handshake itself. A handshake that times out is
 /// reported and the command exits (`what`: "Backup" or "Restore"; `server`:
 /// --server, named as dialled).
+///
+/// SONNY-6769: --timeout is the budget of the whole backup (default 300 s),
+/// and a server that never answers, or whose certificate does not name the
+/// dialled address, held the handshake for all of it. The handshake waits at
+/// most `max_handshake_ms` (the client's former fixed bound); a shorter
+/// --timeout still bounds it. The rest of the backup keeps the full --timeout.
+const max_handshake_ms: u32 = 30 * std.time.ms_per_s;
+
 fn connectWithin(client: *zig_client.GeodeClient, what: []const u8, server: []const u8) !void {
+    const budget_ms = client.timeout_ms;
+    const handshake_ms = @min(budget_ms, max_handshake_ms);
+    client.timeout_ms = handshake_ms;
+    defer client.timeout_ms = budget_ms;
     client.connect() catch |err| switch (err) {
         error.ConnectionTimeout => {
-            std.debug.print("Error: {s} from server {f} failed: no QUIC handshake within {d} s (--timeout). Nothing was changed.\n", .{ what, serverLabel(server), client.timeout_ms / std.time.ms_per_s });
+            // A backup changes nothing on the server; say what was not made.
+            const outcome = if (std.mem.eql(u8, what, "Backup")) "No backup was created." else "Nothing was changed.";
+            std.debug.print("Error: {s} from server {f} failed: no QUIC handshake within {d} s (--timeout, at most {d} s for the handshake). {s}\n", .{ what, serverLabel(server), handshake_ms / std.time.ms_per_s, max_handshake_ms / std.time.ms_per_s, outcome });
             std.process.exit(@intFromEnum(ExitCode.general_error));
         },
         else => return err,
