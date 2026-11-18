@@ -207,7 +207,7 @@ test "SONNY-6422 geode serve refuses a half-configured or mismatched audit key p
     const a = try auditPair([_]u8{0x22} ** 32);
     const b = try auditPair([_]u8{0x33} ** 32);
     const short_master = "sonny6422-short-master";
-    const wal_key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    const wal_key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"; // gitleaks:allow
     const cases = [_]Case{
         .{ .what = "only GEODE_AUDIT_PUB", .env = &.{.{ .name = "GEODE_AUDIT_PUB", .value = &a.pub_hex }}, .names = &.{ "GEODE_AUDIT_PUB", "GEODE_AUDIT_SEC" }, .secrets = &.{} },
         .{ .what = "only GEODE_AUDIT_SEC", .env = &.{.{ .name = "GEODE_AUDIT_SEC", .value = &a.sec }}, .names = &.{ "GEODE_AUDIT_PUB", "GEODE_AUDIT_SEC" }, .secrets = &.{&a.sec} },

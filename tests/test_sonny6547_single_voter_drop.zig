@@ -62,7 +62,7 @@ const OneVoter = struct {
             .peers = &.{},
             .listen_address = "127.0.0.1",
             .cluster_port = 22480,
-            .cluster_token = "test-sonny6547-one-voter",
+            .cluster_token = "test-sonny6547-one-voter", // gitleaks:allow
             .cluster_name = "test-cluster",
             .election_timeout_ms = 250,
         };

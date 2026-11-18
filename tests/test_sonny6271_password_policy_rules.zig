@@ -57,7 +57,7 @@ const cases = [_]Case{
     .{ .password = "Supercalifragilistic", .rule = too_few_words },
     .{ .password = "Supercalifragilistic Expialidocious", .rule = too_few_words },
     // The format `--generate-password` produces (32 lower-case hex digits).
-    .{ .password = "0123456789abcdef0123456789abcdef", .rule = no_upper },
+    .{ .password = "0123456789abcdef0123456789abcdef", .rule = no_upper }, // gitleaks:allow
     // Accepted: digits and symbols are allowed, not required.
     .{ .password = "Correct horse battery staple", .rule = null },
     .{ .password = "Correct Horse Battery Staple 42", .rule = null },

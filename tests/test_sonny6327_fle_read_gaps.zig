@@ -748,7 +748,7 @@ fn fastPathsKeepPlaintextOffDisk(env: []const []const u8) !void {
         try wireOk(&admin, "MERGE (n:Fp6327 {k: 2}) ON CREATE SET n.ssn = 'PLAINSECRET6327B'");
         try wireOk(&admin, "/*+BATCH*/MERGE (n:Fp6327 {k: 3}) ON CREATE SET n.ssn = 'PLAINSECRET6327C'; MERGE (n:Fp6327 {k: 4}) ON CREATE SET n.ssn = 'PLAINSECRET6327D'");
         try wireOk(&admin, "USE GRAPH default; MERGE (n:Fp6327 {k: 5}) ON CREATE SET n.ssn = 'PLAINSECRET6327E'");
-        try wireOk(&admin, "MATCH (a:Fp6327 {k: 1}), (b:Fp6327 {k: 2}) CREATE (a)-[:FpE6327 {secret: 'PLAINSECRET6327F'}]->(b)");
+        try wireOk(&admin, "MATCH (a:Fp6327 {k: 1}), (b:Fp6327 {k: 2}) CREATE (a)-[:FpE6327 {secret: 'PLAINSECRET6327F'}]->(b)"); // gitleaks:allow
         var r = try admin.executeAndCollect(allocator, "MATCH (n:Fp6327) RETURN count(n) AS c", util.emptyParams(), 1000);
         defer r.deinit(allocator);
         try testing.expectEqual(@as(i64, 6), r.rows[0][0].int);

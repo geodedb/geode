@@ -42,7 +42,7 @@ fn newCoordinator(a: std.mem.Allocator, port: u16) !*ClusterCoordinator {
         .peers = peers[0..],
         .listen_address = "127.0.0.14",
         .cluster_port = port,
-        .cluster_token = "test-sonny6451-health",
+        .cluster_token = "test-sonny6451-health", // gitleaks:allow
         .cluster_name = "test-sonny6451-health",
         .election_timeout_ms = 60_000,
     });

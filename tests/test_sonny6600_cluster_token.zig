@@ -252,7 +252,7 @@ test "SONNY-6600 (1): geode serve refuses to start with a GEODE_CLUSTER_TOKEN sh
 
     const cases = [_]struct { token: []const u8, previous: ?[]const u8, needle: []const u8 }{
         .{ .token = "t", .previous = null, .needle = "GEODE_CLUSTER_TOKEN is 1 bytes" },
-        .{ .token = "0123456789abcdef-primary", .previous = "old", .needle = "GEODE_CLUSTER_TOKEN_PREVIOUS is 3 bytes" },
+        .{ .token = "0123456789abcdef-primary", .previous = "old", .needle = "GEODE_CLUSTER_TOKEN_PREVIOUS is 3 bytes" }, // gitleaks:allow
     };
     for (cases) |c| {
         const r = try serveWithTokens(&root, c.token, c.previous);

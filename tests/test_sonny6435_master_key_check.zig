@@ -46,8 +46,8 @@ fn pathExists(path: []const u8) bool {
     return true;
 }
 
-const key_a = "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8";
-const key_b = "6b86b273ff34fce19c6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b";
+const key_a = "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8"; // gitleaks:allow
+const key_b = "6b86b273ff34fce19c6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"; // gitleaks:allow
 
 const Env = struct { name: []const u8, value: []const u8 };
 

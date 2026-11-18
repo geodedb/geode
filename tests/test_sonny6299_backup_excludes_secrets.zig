@@ -592,7 +592,7 @@ fn writeOldFormatBackup(allocator: std.mem.Allocator, base_path: []const u8, pat
     const extra = [_][2][]const u8{
         .{ ".geode_hmac_key", hmac_key },
         .{ ".geode.lock", "4242" },
-        .{ "server.key", "-----BEGIN PRIVATE KEY-----sonny6299-----END PRIVATE KEY-----" },
+        .{ "server.key", "-----BEGIN PRIVATE KEY-----sonny6299-----END PRIVATE KEY-----" }, // gitleaks:allow
         .{ ".geode_admin_password", "sonny6299-old-password" },
     };
     var archive: std.ArrayList(u8) = .empty;

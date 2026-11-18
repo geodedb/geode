@@ -473,7 +473,7 @@ test "SONNY-6325 (1) a key without its certificate is refused, never regenerated
     const crt = try join(allocator, dir, "server.crt");
     defer allocator.free(crt);
     // An attacker-known "key" already in place, owner-only.
-    try writeFile(key, "-----BEGIN PRIVATE KEY-----\nplanted\n-----END PRIVATE KEY-----\n", 0o600);
+    try writeFile(key, "-----BEGIN PRIVATE KEY-----\nplanted\n-----END PRIVATE KEY-----\n", 0o600); // gitleaks:allow
     const before = try sha256File(key);
     if (cert_gen.ensureCertificatesAtPath(allocator, crt, key)) |_| {
         std.debug.print("SONNY-6325: a key without a certificate was accepted (and a certificate made for it, or the key replaced)\n", .{});

@@ -23,7 +23,7 @@ const testing = std.testing;
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
 
-const test_master_key_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const test_master_key_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"; // gitleaks:allow
 
 test "TDE disabled returns FeatureDisabled" {
     runtime_flags.global().tde.disableForTests();
@@ -70,7 +70,7 @@ test "MFA enabled verifies the RFC 6238 SHA-1 test vector and refuses a wrong co
     const allocator = testing.allocator;
     // RFC 6238 appendix B: secret "12345678901234567890", T = 59 s, SHA-1,
     // 8-digit code 94287082 (6-digit: 287082).
-    const secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    const secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"; // gitleaks:allow
     try testing.expectEqual(@as(u32, 287082), try mfa.generateCodeFromBase32(allocator, secret, 59_000, 30, 6));
     try testing.expect(try mfa.verifyCode(allocator, secret, 59_000, 287082, 30, 6, 0));
     try testing.expect(!try mfa.verifyCode(allocator, secret, 59_000, 287083, 30, 6, 0));

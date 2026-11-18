@@ -197,7 +197,7 @@ test "SONNY-6631: a follower applies a batch entry writing another graph not hyd
         .peers = &peers,
         .listen_address = "127.0.0.1",
         .cluster_port = 22632,
-        .cluster_token = "test-sonny6631-follower",
+        .cluster_token = "test-sonny6631-follower", // gitleaks:allow
         .cluster_name = "test-cluster",
         .election_timeout_ms = ELECTION_TIMEOUT_MS,
     });

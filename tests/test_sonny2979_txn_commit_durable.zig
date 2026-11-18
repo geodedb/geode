@@ -206,8 +206,8 @@ test "SONNY-2979: under at-rest encryption the undo log is sealed and an open tr
     var dd: DataDir = .{};
     const data_dir = try dd.init("tde");
     defer dd.deinit();
-    const env = [_][]const u8{"GEODE_TDE_KEY=2979a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e"};
-    const secret = "plain-secret-2979";
+    const env = [_][]const u8{"GEODE_TDE_KEY=2979a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e"}; // gitleaks:allow
+    const secret = "plain-secret-2979"; // gitleaks:allow
 
     {
         var server = try QuicServer.start(allocator, data_dir, &env);
