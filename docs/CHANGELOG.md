@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- **A gRPC Handshake no longer leaks its response (SONNY-6757).**
+  `handleHandshake` built the `HelloResponse` from heap copies (the three
+  capability strings, the capability list, the session id and the bound
+  graph name) and freed none of them after encoding, so every gRPC
+  connection leaked them for the life of the server and a Debug server
+  reported them at shutdown. The response now borrows the literals, the
+  session store's id and the request's graph name, and the capability list
+  is freed on return. `zig build test-sonny6757-grpc-handshake-leak` is 1/1.
+
 - **SIGTERM cancels an in-flight gRPC statement (SONNY-6753).** A gRPC
   handler never installed a statement cancel source for the read and write
   executors (`read_budget.setStreamCancelSource`); only the QUIC handler did.

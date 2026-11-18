@@ -2476,10 +2476,13 @@ pub fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocat
         return encodeMessage(allocator, resp);
     };
 
+    // SONNY-6757: the response borrows everything it names (these literals,
+    // the store's session id, the request's graph name); `encodeMessage`
+    // copies the bytes, so only the list itself is freed here. The heap
+    // copies the response used to hold leaked on every Handshake.
     var caps = std.ArrayList([]const u8).initCapacity(allocator, 3) catch return error.OutOfMemory;
-    try caps.append(allocator, try allocator.dupe(u8, "GRPC"));
-    try caps.append(allocator, try allocator.dupe(u8, "PROTOBUF"));
-    try caps.append(allocator, try allocator.dupe(u8, "TLS1.3"));
+    defer caps.deinit(allocator);
+    caps.appendSliceAssumeCapacity(&.{ "GRPC", "PROTOBUF", "TLS1.3" });
 
     // S12: Use peer IP as rate limiter key (not attacker-controlled username).
     // This matches the QUIC handler which uses peer_ip at quic_connection_handler.zig:1301.
@@ -2526,7 +2529,7 @@ pub fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocat
         const session_id = store.createSessionAs(fed_principal, req.username, "", .ReadWrite, req.tenant_id, null, false, 0) catch |err| return helloSessionRefused(allocator, caps, err);
         const resp = schema.HelloResponse{
             .success = true,
-            .session_id = try allocator.dupe(u8, session_id),
+            .session_id = session_id,
             .error_message = "",
             .capabilities = caps,
         };
@@ -2734,11 +2737,11 @@ pub fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocat
         store.setSessionFleRole(session_id, req.role) catch |err| return helloSessionRefused(allocator, caps, err);
         const resp = schema.HelloResponse{
             .success = true,
-            .session_id = try allocator.dupe(u8, session_id),
+            .session_id = session_id,
             .error_message = "",
             .capabilities = caps,
             .password_reset_required = auth_result.password_reset_required,
-            .graph = if (resolved_graph) |g| try allocator.dupe(u8, g) else null,
+            .graph = resolved_graph,
         };
         return encodeMessage(allocator, resp);
     }
@@ -2836,10 +2839,10 @@ pub fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocat
     store.setSessionFleRole(session_id, req.role) catch |err| return helloSessionRefused(allocator, caps, err);
     const resp = schema.HelloResponse{
         .success = true,
-        .session_id = try allocator.dupe(u8, session_id),
+        .session_id = session_id,
         .error_message = "",
         .capabilities = caps,
-        .graph = if (noauth_resolved_graph) |g| try allocator.dupe(u8, g) else null,
+        .graph = noauth_resolved_graph,
     };
     return encodeMessage(allocator, resp);
 }
