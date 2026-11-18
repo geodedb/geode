@@ -1050,7 +1050,72 @@ fn allowWithFor(q: ast.Query, fr: ast.ForStatement, ctx: PartCtx, params: *const
     }
     const body = fr.body orelse return error.WriteClauseNotApplied;
     try allowForHeader(fr, &inner, params);
-    try allowQuery(body.*, inner, params);
+    var carrier_buf: [8192]u8 = undefined;
+    try allowQuery(try validationBody(body.*, &carrier_buf), inner, params);
+}
+
+/// SONNY-6717: a writing FOR body runs once per element and its results are
+/// concatenated, so a RETURN stage over the whole working table (DISTINCT,
+/// ORDER BY, SKIP / LIMIT, an aggregate, grouping) cannot be applied; such a
+/// body is refused whole instead of staging each element alone.
+/// `body` as the shape check sees it when its RETURN stages run over the
+/// whole working table (`stagedCarrierBody`): the same carrier body the
+/// executor runs per element. Its names live in `buf`.
+fn validationBody(body: ast.Query, buf: []u8) Error!ast.Query {
+    if (!returnStagesNeedWholeTable(body)) return body;
+    var fba = std.heap.FixedBufferAllocator.init(buf);
+    return stagedCarrierBody(fba.allocator(), body) catch error.WriteClauseNotApplied;
+}
+
+fn collectNames(e: ast.Expr, names: *Names, skip: *const Names) void {
+    var local = Names{};
+    var walk = ExprWalk{ .collect = &local };
+    walk.visit(&e);
+    for (local.items[0..local.len]) |n| if (!skip.has(n)) names.add(n);
+    if (local.overflow) names.overflow = true;
+}
+
+// CANARY: REQ=REQ-SONNY-6717-FOR-WRITE-RETURN-STAGES; FEATURE="ForStatement"; ASPECT=WriteBodyReturnStages; STATUS=TESTED; TEST=tests/test_sonny6717_for_write_return_stages.zig; OWNER=engine; UPDATED=2026-11-17
+/// SONNY-6717: `body` with its RETURN reduced to the variables the RETURN's
+/// stages read: one column per variable its items, GROUP BY, HAVING and ORDER BY
+/// name (a RETURN item's alias is not one), and a constant column, so a body
+/// that names none still has a row per element. The FOR evaluates the real
+/// RETURN over every element's rows together (`statement_handlers
+/// .stageForReturn`), ISO/IEC 39075:2024 14.8; the body's own RETURN stages
+/// (DISTINCT, ORDER BY, window, GROUP BY, HAVING) are dropped here.
+pub fn stagedCarrierBody(arena: std.mem.Allocator, body: ast.Query) !ast.Query {
+    var aliases = Names{};
+    for (body.ret.items) |item| if (item.alias) |a| aliases.add(a);
+    const none = Names{};
+    var names = Names{};
+    for (body.ret.items) |item| collectNames(item.expr, &names, &none);
+    if (body.group_by) |gb| for (gb.keys) |k| collectNames(k, &names, &aliases);
+    if (body.having) |h| collectNames(h, &names, &aliases);
+    if (body.order_by) |ob| for (ob.keys) |k| collectNames(k.expr, &names, &aliases);
+    if (names.overflow) return error.WriteClauseNotApplied;
+
+    const items = try arena.alloc(ast.ReturnItem, names.len + 1);
+    for (names.items[0..names.len], items[0..names.len]) |n, *out| {
+        out.* = .{ .expr = .{ .Ident = .{ .orig = n, .cnf = try std.ascii.allocUpperString(arena, n) } }, .alias = n };
+    }
+    items[names.len] = .{ .expr = .{ .Int = 1 }, .alias = "__one" };
+    var carrier = body;
+    carrier.ret = .{ .items = items, .distinct = false };
+    carrier.order_by = null;
+    carrier.limit = null;
+    carrier.offset = null;
+    carrier.limit_param = null;
+    carrier.offset_param = null;
+    carrier.group_by = null;
+    carrier.having = null;
+    return carrier;
+}
+
+pub fn returnStagesNeedWholeTable(body: ast.Query) bool {
+    if (body.ret.distinct or body.order_by != null or body.limit != null or body.offset != null or
+        body.limit_param != null or body.offset_param != null or body.group_by != null or body.having != null) return true;
+    for (body.ret.items) |item| if (return_and_sorting.isAggregationExpr(item.expr)) return true;
+    return false;
 }
 
 // CANARY: REQ=REQ-SONNY-6613-MATCH-WITH-FOR-WRITE; FEATURE="ForStatement"; ASPECT=WriteBodyAfterMatchWith; STATUS=TESTED; TEST=tests/test_sonny6613_match_with_for_write.zig; OWNER=engine; UPDATED=2026-11-15
@@ -1105,7 +1170,8 @@ fn allowMatchWithFor(q: ast.Query, fr: ast.ForStatement, ctx: PartCtx, params: *
     if (inner.outer.overflow) return error.WriteClauseNotApplied;
     const body = fr.body orelse return error.WriteClauseNotApplied;
     try allowForHeader(fr, &inner, params);
-    try allowQuery(body.*, inner, params);
+    var carrier_buf: [8192]u8 = undefined;
+    try allowQuery(try validationBody(body.*, &carrier_buf), inner, params);
 }
 
 /// CREATE and INSERT statements: new nodes and relationships (no
@@ -1612,6 +1678,8 @@ const ExprWalk = struct {
     scope: ?*const Names = null,
     /// Collect `$param` names.
     params: ?*Names = null,
+    /// Collect the variables `e` names (not a comprehension's own).
+    collect: ?*Names = null,
     /// Set `expr_subquery` / `expr_pattern`.
     facts: ?*Facts = null,
     ok: bool = true,
@@ -1623,12 +1691,14 @@ const ExprWalk = struct {
     const Pending = struct { e: *const ast.Expr, bound: ?*const Bound };
 
     fn name(self: *ExprWalk, bound: ?*const Bound, n: []const u8) void {
-        const scope = self.scope orelse return;
+        if (self.scope == null and self.collect == null) return;
         if (std.mem.eql(u8, n, "*")) return;
         var b = bound;
         while (b) |it| : (b = it.up) {
             if (std.mem.eql(u8, it.name, n)) return;
         }
+        if (self.collect) |names| names.add(n);
+        const scope = self.scope orelse return;
         if (!scope.has(n)) self.ok = false;
     }
 
@@ -2176,7 +2246,14 @@ const Via = enum {
 fn validateQuery(q: ast.Query, via: Via) Error!void {
     // The parts it holds run as parts of their own.
     if (q.initial_call_subquery) |sub| try validateQuery(sub.*, .dispatched);
-    if (q.for_statement) |fr| if (fr.body) |body| try validateQuery(body.*, .dispatched);
+    if (q.for_statement) |fr| if (fr.body) |body| {
+        // SONNY-6717: after a WITH the body's RETURN stages run over the
+        // FOR's whole table (`executeForWithBindings`); the body runs as its
+        // carrier. A leading FOR runs its body per element, as written.
+        var carrier_buf: [8192]u8 = undefined;
+        const staged = q.with_clause != null or via == .read_part;
+        try validateQuery(if (staged) try validationBody(body.*, &carrier_buf) else body.*, .dispatched);
+    };
     if (q.cte_list) |ctes| for (ctes.ctes) |cte| switch (cte.body) {
         .simple => |body| try validateQuery(body.*, .dispatched),
         .recursive => |rec| {

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-17T23:57:07.763509062Z",
+  "generated_at": "2026-11-18T00:15:40.333298161Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83788,6 +83788,26 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6717-FOR-WRITE-RETURN-STAGES",
+      "features": [
+        {
+          "feature": "ForStatement",
+          "aspect": "WriteBodyReturnStages",
+          "status": "TESTED",
+          "files": [
+            "src/execution/write_shape.zig",
+            "tests/test_sonny6717_for_write_return_stages.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6717_for_write_return_stages.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -88879,7 +88899,7 @@
       "EXEMPT": 209,
       "IMPL": 563,
       "STUB": 18,
-      "TESTED": 4405
+      "TESTED": 4406
     },
     "by_aspect": {
       "2PC": 3,
@@ -92782,6 +92802,7 @@
       "WriteBodyAfterMatchWith": 1,
       "WriteBodyAfterWith": 1,
       "WriteBodyComposition": 1,
+      "WriteBodyReturnStages": 1,
       "WriteChokepoint": 2,
       "WriteChokepointEveryLabel": 1,
       "WriteChokepointLabels": 1,

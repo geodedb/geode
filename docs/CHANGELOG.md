@@ -2,6 +2,21 @@
 
 ## [Unreleased] - Time-Series Audit and Gap Closure
 
+### Fixed
+
+- **A writing FOR applies its RETURN stages over the whole working table
+  (SONNY-6717).** After `MATCH ... WITH` or a WITH of values, a FOR body that
+  writes ran once per element and its RETURN's `ORDER BY`, `DISTINCT`,
+  `SKIP`/`LIMIT` and aggregates applied to each element alone (`... SET
+  o.seen = z.k RETURN o.k AS k ORDER BY k` answered `[2, 1]`; `count(*)` a
+  row of 1 per element). They now run over every element's rows together
+  (ISO/IEC 39075:2024 14.8): DISTINCT, ORDER BY, SKIP/LIMIT, aggregates,
+  aggregates inside larger expressions (`count(*) + 1`, `sum(x) * 2`,
+  evaluated after aggregation), GROUP BY and HAVING. The body runs per element
+  with a RETURN that carries only the variables the stages name; the real
+  RETURN is then evaluated once over those rows, as a plain FOR's is. Test:
+  `zig build test-sonny6717-for-write-return-stages`.
+
 ### Security
 
 - **An operator can overwrite every graph's dead space: `CALL
@@ -7361,6 +7376,16 @@
   `U:HeuristicIndexSelection`, sent with every query that had a WHERE or
   FILTER equality whether or not an index existed, is no longer sent.
   Regression: `zig build test-sonny6276-explain-access-path` (new).
+- **EXPLAIN and PROFILE name an index from the session graph only
+  (SONNY-6707).** The catalog lookup behind `IndexSeek` and a profile's
+  `index_name` (`planned_read_runtime.equalityIndexName`) read every row of
+  the index catalog by label and property and never compared the row's
+  graph, although SONNY-1319 made index rows graph-scoped: a graph with the
+  same label and property but no such index was explained and profiled as
+  seeking on another graph's index, and the profile named it. It now counts
+  only rows of the session graph (an engine-wide legacy row included).
+  Query results were never affected. Regression:
+  `zig build test-sonny6707-explain-index-graph-scope` (new).
 - **The deepest nesting the parser allows fits a gRPC connection thread
   again (SONNY-738).** Nine nested FOR bodies (`... FOR x IN [1] MATCH (n)
   WITH n FOR ...`), within the documented limit of 10, were refused with
