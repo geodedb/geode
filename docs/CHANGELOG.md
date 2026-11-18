@@ -4,6 +4,17 @@
 
 ### Fixed
 
+- **A DELETE of a node that still has edges answers GQLSTATUS G1001
+  (SONNY-6738).** `MATCH (a:A) DELETE a` (and `NODETACH DELETE a`) on a node
+  with an edge the statement does not delete failed with the generic 58000
+  (system error), because NodeHasEdges had no entry in
+  `proto_util.mapError`. ISO/IEC 39075:2024 13.5 GR 5 names the condition
+  "dependent object error - edges still exist" (G1001, 23.1 Table 8, class
+  G1); QUIC and gRPC now send G1001 with a message that says the node still
+  has edges and points to DETACH DELETE. BREAKING for a client that matched
+  58000 for this refusal. Test:
+  `zig build test-sonny6738-edges-still-exist-status`.
+
 - **A DELETE removes a node whose edges it deletes too (SONNY-6728).**
   `MATCH (a:A)-[r:R]->(b:B) DELETE r, a, b` was refused with NodeHasEdges
   because each node was checked against the store before any edge went.

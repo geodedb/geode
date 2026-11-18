@@ -428,6 +428,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // A value of the wrong type for an operation, a function or a CAST
         // (20.8 GR 7 d ii): invalid value type. Internal failures carry
         // errors of their own (TypeMismatch is the user-data one).
+        // SONNY-6738: ISO/IEC 39075:2024 13.5 GR 5, "dependent object error -
+        // edges still exist" (23.1 Table 8, class G1): a DELETE of a node
+        // that keeps an edge the statement does not delete. A caller's
+        // statement, not a server fault; it answered the generic 58000.
+        error.NodeHasEdges => .{ .code = "G1001", .message = "Dependent object error: the node still has edges (DELETE a node only when the statement deletes all its edges, or use DETACH DELETE)" },
         error.TypeMismatch => .{ .code = "22G03", .message = "Invalid value type: a value of a type the operation, function or CAST does not accept" },
         // No GQL number is NaN or infinite: numeric value out of range.
         error.FloatNaN => .{ .code = "22003", .message = "Numeric value out of range: NaN and infinite numbers are not values" },
