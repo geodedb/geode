@@ -164,13 +164,20 @@ test "SONNY-6453: the CLI client refuses an implicit unverified connection under
         defer client.deinit();
         try client.connect();
     }
-    // Debug build outside GEODE_ENV=production: the developer default still
-    // connects (and warns).
+    // Outside GEODE_ENV=production the build decides: a Debug build keeps the
+    // developer default (connects, and warns); a release build refuses, as
+    // production does (SONNY-6774: the ReleaseSafe CI shards run this test).
     {
         resetPostureEnv();
-        var client = try bridge.initClient(a, SERVER_IP, srv.port, .{}, null, null);
-        defer client.deinit();
-        try client.connect();
+        if (builtin.mode == .Debug) {
+            var client = try bridge.initClient(a, SERVER_IP, srv.port, .{}, null, null);
+            defer client.deinit();
+            try client.connect();
+        } else if (bridge.initClient(a, SERVER_IP, srv.port, .{}, null, null)) |client| {
+            var c = client;
+            c.deinit();
+            return error.ImplicitUnverifiedConnectionAllowed;
+        } else |err| try std.testing.expectEqual(error.ImplicitInsecureTlsRefused, err);
     }
 }
 
