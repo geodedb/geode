@@ -11509,6 +11509,22 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6757_grpc_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6757_grpc_step = b.step("test-sonny6757-grpc-handshake-leak", "Run SONNY-6757 regression (a real geode serve answers gRPC Handshakes, accepted and refused, then exits 0 on SIGTERM with no leak report from handleHandshake)");
     sonny6757_grpc_step.dependOn(&run_sonny6757_grpc_tests.step);
+    // SONNY-6758: a clean shutdown closes the transaction durable undo log
+    // (txn_undo.wal) opened at startup. Subprocess e2e: a real geode serve
+    // commits a transaction, is sent SIGTERM, reports no txn_durable_undo
+    // leak, and a restart reopens the log and reads the committed data.
+    const sonny6758_undo_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6758_txn_undo_log_close.zig"), .target = target, .optimize = optimize });
+    sonny6758_undo_test_mod.link_libc = true;
+    sonny6758_undo_test_mod.addImport("geode", root_mod);
+    sonny6758_undo_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6758_undo_test_mod.addImport("schema", schema_mod);
+    sonny6758_undo_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny6758_undo_tests = b.addTest(.{ .root_module = sonny6758_undo_test_mod });
+    const run_sonny6758_undo_tests = b.addRunArtifact(sonny6758_undo_tests);
+    spawnsBuiltGeode(sonny6758_undo_tests);
+    shardDep(test_step, &run_sonny6758_undo_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6758_undo_step = b.step("test-sonny6758-txn-undo-log-close", "Run SONNY-6758 regression (a real geode serve commits a transaction, exits 0 on SIGTERM with no leak report from txn_durable_undo.zig, and a restart reopens txn_undo.wal and reads the committed data)");
+    sonny6758_undo_step.dependOn(&run_sonny6758_undo_tests.step);
     // SONNY-6632: a rebuilt open-failed graph is readable, a relationship-type
     // count that cannot be allocated fails the hydration, and a checkpoint
     // reclaims the retired entries of a graph that is not being built.
