@@ -174,10 +174,9 @@ pub const IndexManager = struct {
         label: []const u8,
         property: []const u8,
         /// ENG-3922(a): the graph this pin is scoped to, for an entry in
-        /// `vector_dim_unindexed`. Null for an INDEXED pin, which is
-        /// process-wide because the HNSW index it guards is (see the field
-        /// comment on `vector_dim_unindexed`). Owned; read by
-        /// `dropUnindexedVectorDimsForGraph`.
+        /// `vector_dim_unindexed`. SONNY-6703: an INDEXED pin is scoped to
+        /// its index's graph too (the index is per graph); null only for an
+        /// engine-wide index, whose pin covers every graph. Owned.
         graph: ?[]const u8 = null,
         /// The established dimension, or 0 when no vector has been COMMITTED
         /// under this (label, property) yet.
@@ -209,10 +208,17 @@ pub const IndexManager = struct {
     };
 
     pub const AdvancedPropertyIndex = struct {
+        /// The runtime KEY of the index: `runtimeKey(graph, catalog name)` for
+        /// an index created in a graph, the bare catalog name for an
+        /// engine-wide one (SONNY-6703).
         name: []const u8,
         label: []const u8,
         property: []const u8,
         index_type: IndexType,
+        /// SONNY-6703: the graph the index serves; its rows are exactly that
+        /// graph's. Empty serves every graph, as an engine-wide catalog row
+        /// does. Owned when non-empty.
+        graph: []const u8 = "",
     };
 
     pub const PropertyIndex = struct {
@@ -473,6 +479,7 @@ pub const IndexManager = struct {
             self.allocator.free(entry.value_ptr.name);
             self.allocator.free(entry.value_ptr.label);
             self.allocator.free(entry.value_ptr.property);
+            if (entry.value_ptr.graph.len > 0) self.allocator.free(entry.value_ptr.graph);
         }
         self.advanced_property_indexes.deinit();
 
@@ -481,6 +488,7 @@ pub const IndexManager = struct {
             self.allocator.free(entry.key_ptr.*);
             self.allocator.free(entry.value_ptr.label);
             self.allocator.free(entry.value_ptr.property);
+            if (entry.value_ptr.graph) |g| self.allocator.free(g);
         }
         self.vector_dim_registry.deinit();
 
@@ -1481,16 +1489,40 @@ pub const IndexManager = struct {
         property: []const u8,
         index_type: IndexType,
     ) !void {
+        return self.registerAdvancedPropertyIndexInGraph(index_name, "", label, property, index_type);
+    }
+
+    /// SONNY-6703: `registerAdvancedPropertyIndex` for an index that serves ONE
+    /// graph (`graph` non-empty): the backfill, the rebuilds and the
+    /// incremental inserts of this index see that graph's rows only.
+    /// `index_name` is the runtime key (`runtimeKey`).
+    pub fn registerAdvancedPropertyIndexInGraph(
+        self: *IndexManager,
+        index_name: []const u8,
+        graph: []const u8,
+        label: []const u8,
+        property: []const u8,
+        index_type: IndexType,
+    ) !void {
         if (self.advanced_property_indexes.contains(index_name)) return;
 
         const owned_key = try self.allocator.dupe(u8, index_name);
         errdefer self.allocator.free(owned_key);
+        const owned_name = try self.allocator.dupe(u8, index_name);
+        errdefer self.allocator.free(owned_name);
+        const owned_label = try self.allocator.dupe(u8, label);
+        errdefer self.allocator.free(owned_label);
+        const owned_prop = try self.allocator.dupe(u8, property);
+        errdefer self.allocator.free(owned_prop);
+        const owned_graph = if (graph.len > 0) try self.allocator.dupe(u8, graph) else "";
+        errdefer if (owned_graph.len > 0) self.allocator.free(owned_graph);
 
         try self.advanced_property_indexes.put(owned_key, .{
-            .name = try self.allocator.dupe(u8, index_name),
-            .label = try self.allocator.dupe(u8, label),
-            .property = try self.allocator.dupe(u8, property),
+            .name = owned_name,
+            .label = owned_label,
+            .property = owned_prop,
             .index_type = index_type,
+            .graph = owned_graph,
         });
     }
 
@@ -1504,6 +1536,18 @@ pub const IndexManager = struct {
         label: []const u8,
         property: []const u8,
     ) !void {
+        return self.registerVectorDimValidationInGraph(index_name, "", label, property);
+    }
+
+    /// SONNY-6703: `registerVectorDimValidation` for an index of one graph
+    /// (`graph` non-empty): its pin applies to writes in that graph only.
+    pub fn registerVectorDimValidationInGraph(
+        self: *IndexManager,
+        index_name: []const u8,
+        graph: []const u8,
+        label: []const u8,
+        property: []const u8,
+    ) !void {
         if (self.vector_dim_registry.contains(index_name)) return;
         const owned_key = try self.allocator.dupe(u8, index_name);
         errdefer self.allocator.free(owned_key);
@@ -1511,9 +1555,12 @@ pub const IndexManager = struct {
         errdefer self.allocator.free(owned_label);
         const owned_prop = try self.allocator.dupe(u8, property);
         errdefer self.allocator.free(owned_prop);
+        const owned_graph: ?[]const u8 = if (graph.len > 0) try self.allocator.dupe(u8, graph) else null;
+        errdefer if (owned_graph) |g| self.allocator.free(g);
         try self.vector_dim_registry.put(owned_key, .{
             .label = owned_label,
             .property = owned_prop,
+            .graph = owned_graph,
             .dim = 0,
             .seed_attempted = false,
         });
@@ -1530,6 +1577,7 @@ pub const IndexManager = struct {
             self.allocator.free(entry.key_ptr.*);
             self.allocator.free(entry.value_ptr.label);
             self.allocator.free(entry.value_ptr.property);
+            if (entry.value_ptr.graph) |g| self.allocator.free(g);
         }
         self.vector_dim_registry.clearAndFree();
     }
@@ -1546,6 +1594,7 @@ pub const IndexManager = struct {
             self.allocator.free(kv.key);
             self.allocator.free(kv.value.label);
             self.allocator.free(kv.value.property);
+            if (kv.value.graph) |g| self.allocator.free(g);
         }
     }
 
@@ -1624,6 +1673,7 @@ pub const IndexManager = struct {
         while (iter.next()) |entry| {
             const meta = entry.value_ptr;
             if (!matchesLabelProperty(meta, labels, property)) continue;
+            if (!dimEntryServesGraph(meta, graph)) continue;
             indexed = true;
             if (meta.dim == 0 and !meta.seed_attempted) try self.seedVectorDim(meta);
             if (meta.dim == 0) continue;
@@ -1847,6 +1897,36 @@ pub const IndexManager = struct {
     /// graph's committed data, so when the graph is dropped the data — and the
     /// pin's justification — is gone; keeping it would refuse a perfectly valid
     /// write to a freshly re-created graph of the same name.
+    /// SONNY-6703: DROP GRAPH: tear down the vector indexes of `graph` (their
+    /// wrappers, property rows and dimension pins). An index of another graph,
+    /// or an engine-wide one, is not the graph's and stays.
+    pub fn dropVectorIndexesForGraph(self: *IndexManager, graph: []const u8) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var keys: std.ArrayList([]u8) = .empty;
+        defer {
+            for (keys.items) |k| self.allocator.free(k);
+            keys.deinit(self.allocator);
+        }
+        {
+            self.rebuild_mutex.lockUncancelable(io);
+            defer self.rebuild_mutex.unlock(io);
+            var it = self.advanced_property_indexes.iterator();
+            while (it.next()) |e| {
+                if (e.value_ptr.index_type != .vector_f32) continue;
+                if (!std.mem.eql(u8, e.value_ptr.graph, graph)) continue;
+                const copy = self.allocator.dupe(u8, e.key_ptr.*) catch return;
+                keys.append(self.allocator, copy) catch {
+                    self.allocator.free(copy);
+                    return;
+                };
+            }
+        }
+        for (keys.items) |k| {
+            _ = self.dropAdvancedIndex(k, .vector_f32) catch false;
+            self.unregisterVectorDimValidation(k);
+        }
+    }
+
     pub fn dropUnindexedVectorDimsForGraph(self: *IndexManager, graph: []const u8) void {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.vector_dim_mutex.lockUncancelable(io);
@@ -1903,6 +1983,7 @@ pub const IndexManager = struct {
         while (iter.next()) |entry| {
             const meta = entry.value_ptr;
             if (!matchesLabelProperty(meta, labels, property)) continue;
+            if (!dimEntryServesGraph(meta, graph)) continue;
             indexed = true;
             if (meta.dim == 0) {
                 meta.dim = dim;
@@ -1938,6 +2019,8 @@ pub const IndexManager = struct {
         // graph. The per-graph (unindexed) pins seed through
         // `scanCommittedVectorDim` instead, against their own graph only.
         for (graph_names) |graph_name| {
+            // SONNY-6703: an index of one graph pins from that graph only.
+            if (meta.graph) |own| if (!std.mem.eql(u8, own, graph_name)) continue;
             const ids = store.getNodesByLabel(graph_name, meta.label) orelse continue;
             for (ids) |node_id| {
                 const node = (try store.nodes.getOrHydratePtr(node_id)) orelse continue;
@@ -1983,13 +2066,25 @@ pub const IndexManager = struct {
         allocator: Allocator,
         property: []const u8,
     ) !?[]u8 {
+        return self.findAdvancedVectorIndexForPropertyInGraphAlloc(allocator, null, property);
+    }
+
+    /// SONNY-6703: the runtime key of the vector index that serves `graph`
+    /// for `property`, an `allocator`-owned duplicate. A null `graph` finds
+    /// an index of any graph.
+    pub fn findAdvancedVectorIndexForPropertyInGraphAlloc(
+        self: *IndexManager,
+        allocator: Allocator,
+        graph: ?[]const u8,
+        property: []const u8,
+    ) !?[]u8 {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.rebuild_mutex.lockUncancelable(io);
         defer self.rebuild_mutex.unlock(io);
         var iter = self.advanced_property_indexes.iterator();
         while (iter.next()) |entry| {
             const meta = entry.value_ptr.*;
-            if (meta.index_type == .vector_f32 and std.mem.eql(u8, meta.property, property)) {
+            if (meta.index_type == .vector_f32 and std.mem.eql(u8, meta.property, property) and metaServesGraph(meta, graph)) {
                 return try allocator.dupe(u8, meta.name);
             }
         }
@@ -2000,15 +2095,42 @@ pub const IndexManager = struct {
     /// registry mutex, so this is safe against a concurrent DROP INDEX where
     /// `findAdvancedVectorIndexForProperty(..) != null` is not.
     pub fn hasAdvancedVectorIndexForProperty(self: *IndexManager, property: []const u8) bool {
+        return self.hasAdvancedVectorIndexForPropertyInGraph(null, property);
+    }
+
+    /// SONNY-6703: the existence probe for the vector index that serves
+    /// `graph` (one of that graph, or an engine-wide one). A null `graph`
+    /// asks about any graph.
+    pub fn hasAdvancedVectorIndexForPropertyInGraph(self: *IndexManager, graph: ?[]const u8, property: []const u8) bool {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.rebuild_mutex.lockUncancelable(io);
         defer self.rebuild_mutex.unlock(io);
         var iter = self.advanced_property_indexes.iterator();
         while (iter.next()) |entry| {
             const meta = entry.value_ptr.*;
-            if (meta.index_type == .vector_f32 and std.mem.eql(u8, meta.property, property)) return true;
+            if (meta.index_type == .vector_f32 and std.mem.eql(u8, meta.property, property) and metaServesGraph(meta, graph)) return true;
         }
         return false;
+    }
+
+    /// SONNY-6703: the metric the vector index `index_name` was built with,
+    /// or null when the manager holds no such index.
+    pub fn vectorIndexMetric(self: *IndexManager, index_name: []const u8) ?advanced_types.VectorIndexWrapper.DistanceMetric {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.rebuild_mutex.lockUncancelable(io);
+        defer self.rebuild_mutex.unlock(io);
+        const w = self.advanced_vector_indexes.get(index_name) orelse return null;
+        return w.metric;
+    }
+
+    /// SONNY-6703: whether the advanced index `index_name` serves one graph
+    /// (false for an engine-wide index, or an unknown name).
+    pub fn advancedIndexIsGraphScoped(self: *IndexManager, index_name: []const u8) bool {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.rebuild_mutex.lockUncancelable(io);
+        defer self.rebuild_mutex.unlock(io);
+        const meta = self.advanced_property_indexes.get(index_name) orelse return false;
+        return meta.graph.len > 0;
     }
 
     /// The LABEL an advanced index is registered for, as an `allocator`-owned
@@ -2112,6 +2234,22 @@ pub const IndexManager = struct {
         entity_id: u64,
         prop: graph_store.PropertyValue,
     ) bool {
+        return self.tryIncrementalInsertForPropertyInGraph(null, label, property, entity_id, prop);
+    }
+
+    /// SONNY-6703: `tryIncrementalInsertForProperty` for an entity of `graph`:
+    /// only the indexes that serve that graph take it. A null `graph` (the
+    /// caller cannot name it) returns false when an index of one graph is
+    /// registered for the pair, so the caller's full rebuild, which selects by
+    /// graph, answers.
+    pub fn tryIncrementalInsertForPropertyInGraph(
+        self: *IndexManager,
+        graph: ?[]const u8,
+        label: []const u8,
+        property: []const u8,
+        entity_id: u64,
+        prop: graph_store.PropertyValue,
+    ) bool {
         self.rebuild_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rebuild_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
@@ -2120,6 +2258,8 @@ pub const IndexManager = struct {
         while (iter.next()) |entry| {
             const meta = entry.value_ptr.*;
             if (!std.mem.eql(u8, meta.label, label) or !std.mem.eql(u8, meta.property, property)) continue;
+            if (graph == null and meta.graph.len > 0) return false;
+            if (!metaServesGraph(meta, graph)) continue;
             if (meta.index_type != .vector_f32) return false;
             // geode#875 RC-2b: while this index is rebuilding into a SHADOW
             // wrapper, the live write is QUEUED into the rebuild window rather
@@ -2162,6 +2302,18 @@ pub const IndexManager = struct {
         label: []const u8,
         property: []const u8,
     ) ![][]u8 {
+        return self.advancedIndexNamesForPropertyInGraphAlloc(allocator, null, label, property);
+    }
+
+    /// SONNY-6703: the runtime keys of the advanced indexes of (label,
+    /// property) that serve `graph` (any graph when null).
+    pub fn advancedIndexNamesForPropertyInGraphAlloc(
+        self: *IndexManager,
+        allocator: std.mem.Allocator,
+        graph: ?[]const u8,
+        label: []const u8,
+        property: []const u8,
+    ) ![][]u8 {
         self.rebuild_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.rebuild_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         var names: std.ArrayListUnmanaged([]u8) = .empty;
@@ -2173,6 +2325,7 @@ pub const IndexManager = struct {
         while (iter.next()) |entry| {
             const meta = entry.value_ptr.*;
             if (!std.mem.eql(u8, meta.label, label) or !std.mem.eql(u8, meta.property, property)) continue;
+            if (!metaServesGraph(meta, graph)) continue;
             try names.ensureUnusedCapacity(allocator, 1);
             names.appendAssumeCapacity(try allocator.dupe(u8, meta.name));
         }
@@ -2321,6 +2474,10 @@ pub const IndexManager = struct {
         defer self.allocator.free(label_copy);
         const property_copy = try self.allocator.dupe(u8, meta.property);
         defer self.allocator.free(property_copy);
+        // SONNY-6703: the drop below frees `meta`; the graph is kept so the
+        // re-registered index still serves that graph only.
+        const graph_copy = try self.allocator.dupe(u8, meta.graph);
+        defer self.allocator.free(graph_copy);
         const index_type = meta.index_type;
 
         // `rebuild_mutex` is HELD for this whole sequence, so every drop below
@@ -2366,7 +2523,7 @@ pub const IndexManager = struct {
             else => return 0,
         }
 
-        try self.registerAdvancedPropertyIndex(index_name_copy, label_copy, property_copy, index_type);
+        try self.registerAdvancedPropertyIndexInGraph(index_name_copy, graph_copy, label_copy, property_copy, index_type);
         // SONNY-6594 (2): a backfill that fails (a body it cannot read) leaves
         // no index behind: registered, it answered without the rows it never
         // got. The catalog row stays; a vector index is rebuilt from it by the
@@ -2420,6 +2577,7 @@ pub const IndexManager = struct {
         // lock-free phases below run against copies.
         var label_copy: ?[]u8 = null;
         var property_copy: ?[]u8 = null;
+        var index_graph_copy: ?[]u8 = null; // SONNY-6703: "" serves every graph
         var dimension: u16 = 0;
         var metric: advanced_types.VectorIndexWrapper.DistanceMetric = .l2;
         var is_vector = false;
@@ -2434,6 +2592,7 @@ pub const IndexManager = struct {
                     label_copy = try self.allocator.dupe(u8, meta.label);
                     errdefer self.allocator.free(label_copy.?);
                     property_copy = try self.allocator.dupe(u8, meta.property);
+                    index_graph_copy = try self.allocator.dupe(u8, meta.graph);
                     if (self.advanced_vector_indexes.get(index_name)) |w| {
                         dimension = w.dimension;
                         metric = w.metric;
@@ -2444,6 +2603,7 @@ pub const IndexManager = struct {
         defer {
             if (label_copy) |l| self.allocator.free(l);
             if (property_copy) |p| self.allocator.free(p);
+            if (index_graph_copy) |g| self.allocator.free(g);
         }
         if (!exists) return 0;
 
@@ -2455,6 +2615,7 @@ pub const IndexManager = struct {
 
         const label = label_copy.?;
         const property = property_copy.?;
+        const index_graph = index_graph_copy.?;
 
         try self.beginRebuild(index_name);
         var window_armed = true;
@@ -2488,6 +2649,7 @@ pub const IndexManager = struct {
                 // SONNY-6594 (2): a body that cannot be read fails the build
                 // (it was skipped, and the index served without the row).
                 const node = (try store.getNodePtrHydratedChecked(nid)) orelse continue;
+                if (index_graph.len > 0 and !std.mem.eql(u8, node.graph_name, index_graph)) continue; // SONNY-6703
                 if (!nodeHasLabel(node.labels, label)) continue;
                 const prop = node.properties.get(property) orelse continue;
                 try self.snapshotVectorRow(allocator, prop, node.id, &dimension, &ids, &flat);
@@ -2497,6 +2659,7 @@ pub const IndexManager = struct {
             defer allocator.free(edge_ids);
             for (edge_ids) |eid| {
                 const edge = (try store.getEdgePtrHydratedChecked(eid)) orelse continue;
+                if (index_graph.len > 0 and !std.mem.eql(u8, edge.graph_name, index_graph)) continue; // SONNY-6703
                 if (!std.mem.eql(u8, edge.label, label)) continue;
                 const prop = edge.properties.get(property) orelse continue;
                 try self.snapshotVectorRow(allocator, prop, edge.id, &dimension, &ids, &flat);
@@ -2571,14 +2734,20 @@ pub const IndexManager = struct {
             defer graph_store.releaseGraphLock(lock);
             const store = graph_store.getGlobalStore(allocator);
             const prop = blk: {
-                if (try store.getNodePtrHydratedChecked(entity_id)) |node| break :blk node.properties.get(property);
-                if (try store.getEdgePtrHydratedChecked(entity_id)) |edge| break :blk edge.properties.get(property);
+                if (try store.getNodePtrHydratedChecked(entity_id)) |node| {
+                    if (index_graph.len > 0 and !std.mem.eql(u8, node.graph_name, index_graph)) break :blk null;
+                    break :blk node.properties.get(property);
+                }
+                if (try store.getEdgePtrHydratedChecked(entity_id)) |edge| {
+                    if (index_graph.len > 0 and !std.mem.eql(u8, edge.graph_name, index_graph)) break :blk null;
+                    break :blk edge.properties.get(property);
+                }
                 break :blk null;
             } orelse continue; // deleted inside the window — nothing to index
             // Skips ids the shadow build already carries (`wrapper.contains`),
             // so a write captured by the window AND visible to the snapshot is
             // never double-inserted.
-            _ = self.tryIncrementalInsertForProperty(label, property, entity_id, prop);
+            _ = self.tryIncrementalInsertForPropertyInGraph(if (index_graph.len > 0) index_graph else null, label, property, entity_id, prop);
         }
 
         // --- 6. SONNY-6421: an in-place rebuild (an undo repair, a REMOVE)
@@ -2745,6 +2914,7 @@ pub const IndexManager = struct {
         for (adv_node_ids) |__nid| {
             // SONNY-6594 (2): a body that cannot be read fails the backfill.
             const node = (try store.getNodePtrHydratedChecked(__nid)) orelse continue;
+            if (meta.graph.len > 0 and !std.mem.eql(u8, node.graph_name, meta.graph)) continue; // SONNY-6703
             if (!nodeHasLabel(node.labels, meta.label)) continue;
             const prop = node.properties.get(meta.property) orelse continue;
             if (try self.insertAdvancedPropertyValue(meta, node.id, prop)) indexed += 1;
@@ -2758,6 +2928,7 @@ pub const IndexManager = struct {
         defer self.allocator.free(adv_edge_ids);
         for (adv_edge_ids) |__eid| {
             const edge = (try store.getEdgePtrHydratedChecked(__eid)) orelse continue;
+            if (meta.graph.len > 0 and !std.mem.eql(u8, edge.graph_name, meta.graph)) continue; // SONNY-6703
             if (!std.mem.eql(u8, edge.label, meta.label)) continue;
             const prop = edge.properties.get(meta.property) orelse continue;
             if (try self.insertAdvancedPropertyValue(meta, edge.id, prop)) indexed += 1;
@@ -2841,6 +3012,7 @@ pub const IndexManager = struct {
             self.allocator.free(kv.value.name);
             self.allocator.free(kv.value.label);
             self.allocator.free(kv.value.property);
+            if (kv.value.graph.len > 0) self.allocator.free(kv.value.graph);
         }
     }
 };
@@ -2889,6 +3061,8 @@ pub fn rebuildVectorIndexesForRestoredGraph(graph_name: []const u8) void {
         var it = self.advanced_property_indexes.iterator();
         while (it.next()) |e| {
             if (e.value_ptr.index_type != .vector_f32) continue;
+            // SONNY-6703: an index of another graph did not change.
+            if (e.value_ptr.graph.len > 0 and !std.mem.eql(u8, e.value_ptr.graph, graph_name)) continue;
             const copy = allocator.dupe(u8, e.key_ptr.*) catch return;
             names.append(allocator, copy) catch {
                 allocator.free(copy);
@@ -3026,6 +3200,33 @@ fn vectorDimOfPropertyValue(prop: graph_store.PropertyValue) ?u16 {
         .List => |items| numericExtListDim(items),
         else => null,
     };
+}
+
+/// SONNY-6703: the runtime key of the advanced index `name` of `graph`:
+/// `graph`, 0x1F, `name`. Index names are unique per graph (SONNY-6294) and
+/// the graph is part of the key, so two graphs hold independent indexes of one
+/// name. An empty `graph` (an engine-wide index) keys by the bare name.
+/// Caller frees.
+pub fn runtimeKey(allocator: Allocator, graph: []const u8, name: []const u8) ![]u8 {
+    if (graph.len == 0) return allocator.dupe(u8, name);
+    return std.fmt.allocPrint(allocator, "{s}\x1f{s}", .{ graph, name });
+}
+
+/// SONNY-6703: whether the advanced index `meta` serves `graph`: it is of
+/// that graph, or engine-wide. A null `graph` matches every index.
+fn metaServesGraph(meta: IndexManager.AdvancedPropertyIndex, graph: ?[]const u8) bool {
+    if (meta.graph.len == 0) return true;
+    const g = graph orelse return true;
+    return std.mem.eql(u8, meta.graph, g);
+}
+
+/// SONNY-6703: whether the indexed dimension pin `meta` guards a write in
+/// `graph`. A pin of an engine-wide index, and a write whose graph is unknown,
+/// keep the old process-wide scope.
+fn dimEntryServesGraph(meta: *const IndexManager.VectorDimEntry, graph: ?[]const u8) bool {
+    const own = meta.graph orelse return true;
+    const g = graph orelse return true;
+    return std.mem.eql(u8, own, g);
 }
 
 fn matchesLabelProperty(

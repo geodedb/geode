@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-17T22:37:59.290134628Z",
+  "generated_at": "2026-11-18T01:01:36.43294287Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83696,6 +83696,25 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6703-PER-GRAPH-VECTOR-INDEX",
+      "features": [
+        {
+          "feature": "VectorIndex",
+          "aspect": "PerGraphIndex",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6703_per_graph_vector_index.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6703_per_graph_vector_index.zig"
+          ],
+          "benches": [],
+          "owner": "index",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-6704-SINGLE-HOP-REPEATED-VAR",
       "features": [
         {
@@ -83764,6 +83783,45 @@
           ],
           "benches": [],
           "owner": "security",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6716-POOL-EXHAUSTION",
+      "features": [
+        {
+          "feature": "BufferPool",
+          "aspect": "SmallPoolFloorAndCleanOversizedStatement",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6716_pool_exhaustion.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6716_pool_exhaustion.zig"
+          ],
+          "benches": [],
+          "owner": "storage",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6717-FOR-WRITE-RETURN-STAGES",
+      "features": [
+        {
+          "feature": "ForStatement",
+          "aspect": "WriteBodyReturnStages",
+          "status": "TESTED",
+          "files": [
+            "src/execution/write_shape.zig",
+            "tests/test_sonny6717_for_write_return_stages.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6717_for_write_return_stages.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
           "updated": "2026-11-17"
         }
       ]
@@ -88860,7 +88918,7 @@
       "EXEMPT": 209,
       "IMPL": 563,
       "STUB": 18,
-      "TESTED": 4404
+      "TESTED": 4407
     },
     "by_aspect": {
       "2PC": 3,
@@ -91320,6 +91378,7 @@
       "PerConnectionRxWake": 1,
       "PerConnectionTxCreditWake": 1,
       "PerDocumentCache": 1,
+      "PerGraphIndex": 1,
       "PerGroupAggregates": 1,
       "PerLabelBackfillFromPostings": 1,
       "PerMapHolders": 1,
@@ -92212,6 +92271,7 @@
       "SliceReqCrosscheckGuard": 1,
       "Slicing": 1,
       "SlowPollWarning": 1,
+      "SmallPoolFloorAndCleanOversizedStatement": 1,
       "SmallestPostingPreselect": 1,
       "SmartKernelLoader": 1,
       "SnapshotAdaptivePolicyLatencyVarianceEnvelope": 1,
@@ -92762,6 +92822,7 @@
       "WriteBodyAfterMatchWith": 1,
       "WriteBodyAfterWith": 1,
       "WriteBodyComposition": 1,
+      "WriteBodyReturnStages": 1,
       "WriteChokepoint": 2,
       "WriteChokepointEveryLabel": 1,
       "WriteChokepointLabels": 1,

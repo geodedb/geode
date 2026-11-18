@@ -1272,16 +1272,16 @@ pub fn build(b: *std.Build) void {
     // Graph Storage - Page-based graph storage engine
     const graph_storage_dep = b.dependency("graph_storage", .{ .target = target, .optimize = optimize });
     const graph_storage_mod = graph_storage_dep.module("graph_storage");
-    // SONNY-6622, SONNY-6628, SONNY-738: exactly one wal is compiled,
-    // geode's (v0.1.25, which graph-storage v0.4.20 pins). raft v0.2.5 pins
-    // v0.1.26 and timeseries-storage v0.2.22 v0.1.24. Two wal packages cannot share one
+    // SONNY-6622, SONNY-6628, SONNY-738, SONNY-6630: exactly one wal is
+    // compiled, geode's (v0.1.26, which raft v0.2.6 and timeseries-storage
+    // v0.2.24 pin). graph-storage v0.4.28 still pins v0.1.25, whose source is
+    // the same (v0.1.26 only moves otel). Two wal packages cannot share one
     // compilation (Zig 0.16: "file exists in modules 'build_optionsN' and
     // 'build_optionsM'"), so every library that imports "wal" (graph-storage
     // here, raft below, timeseries-storage further down) has that import
     // pointed at geode's module, as timeseries-storage does for thread_pool.
-    // Their own wal pins are then fetched but never compiled. v0.1.25 only
-    // adds a fail-closed truncateAfter to v0.1.24's API. Remove each line
-    // once that library pins geode's wal version.
+    // A different wal pin is then fetched but never compiled. Keep each line
+    // while any of the three can pin a wal other than geode's.
     graph_storage_mod.addImport("wal", wal_ext_mod);
 
     // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -1290,9 +1290,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const raft_ext_mod = raft_dep.module("raft");
-    // SONNY-6628: raft pins its own wal (v0.2.5: v0.1.26, which only moves
-    // otel), geode v0.1.25 (truncateAfter fails closed); one wal per
-    // compilation (see graph_storage_mod above).
+    // SONNY-6628: raft pins its own wal (v0.2.6: v0.1.26, geode's version);
+    // one wal per compilation (see graph_storage_mod above).
     // raft's root module is the only one of its modules that imports "wal".
     raft_ext_mod.addImport("wal", wal_ext_mod);
 
@@ -1332,11 +1331,9 @@ pub fn build(b: *std.Build) void {
     const timeseries_storage_ext_mod = timeseries_storage_dep.module("timeseries_storage");
     // SONNY-6479: geode hands its own *ThreadPool to the timeseries-storage
     // engine (src/timeseries/timeseries.zig), so both must compile against
-    // ONE thread_pool module. timeseries-storage v0.2.20 pins thread-pool
-    // v0.2.10 and geode pins v0.2.11 (same public API, wake-path internals
-    // only); point the library's "thread_pool" import at geode's module
-    // instead of a lockstep timeseries-storage re-release. Remove once
-    // timeseries-storage pins geode's thread-pool version.
+    // ONE thread_pool module. timeseries-storage v0.2.24 pins thread-pool
+    // v0.2.11, geode's version; the library's "thread_pool" import still
+    // points at geode's module so a later pin drift cannot split it.
     timeseries_storage_ext_mod.addImport("thread_pool", thread_pool_ext_mod);
     // SONNY-6622: and geode's wal (see graph_storage_mod above).
     timeseries_storage_ext_mod.addImport("wal", wal_ext_mod);
@@ -15180,6 +15177,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "test-sonny6613-leading-unwind-write", .path = "tests/test_sonny6613_leading_unwind_write.zig", .desc = "Run SONNY-6613 task 1 regression (a statement-leading UNWIND is parsed as the ISO/IEC 39075 14.8 FOR it stands for and writes what that FOR writes: one CREATE, MERGE or MATCH ... SET per element, no rows without a RETURN, nothing for an empty list, nothing when an element fails or the write budget trips (53200), a write the FOR body does not apply refused; in-memory, plain persisted, tenant-scoped and RLS-policy sessions)" },
         // SONNY-6613 item 3b: MATCH ... WITH ... FOR x IN <list> <write>.
         .{ .name = "test-sonny6613-match-with-for-write", .path = "tests/test_sonny6613_match_with_for_write.zig", .desc = "Run SONNY-6613 item 3b regression (ISO/IEC 39075 14.8: MATCH ... WITH ... FOR x IN <list> followed by CREATE or MATCH ... SET runs the body for every row of the WITH - its WHERE, DISTINCT, grouping, ORDER BY and LIMIT applied - and every element; a WITH node as a pattern endpoint, a dropped variable or a first part that writes is refused before anything is written; in-memory, plain persisted, tenant-scoped and RLS-policy sessions)" },
+        .{ .name = "test-sonny6717-for-write-return-stages", .path = "tests/test_sonny6717_for_write_return_stages.zig", .desc = "Run SONNY-6717 regression (a writing FOR after MATCH ... WITH or a WITH of values refuses a body RETURN with ORDER BY, DISTINCT, LIMIT or an aggregate instead of applying it per element; a plain RETURN still returns a row per element)" },
         .{ .name = "test-sonny-write-allowlist", .path = "tests/test_sonny_write_allowlist.zig", .desc = "Run the Task W round 3 write-shape allowlist regression (SONNY-3139, 3146, 3166, 3182, 3183, 3184, 3190): every allowlisted write shape writes and returns what it names in the in-memory, plain persisted, tenant-scoped and RLS-policy sessions; every other shape, and every refused case of the round-2 review, is refused with nothing written; a statement boundary needs a ';'; a write inside an expression is refused and classified as a write; a 50,000-clause statement is refused quickly" },
     };
     for (sonny738_steps) |spec| {
@@ -18041,6 +18039,17 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny1319_tests.step, 0, test_shard_loads, test_shard_index);
     const sonny1319_step = b.step("test-sonny1319-graph-scoped-catalog", "Run SONNY-1319 regression (index and constraint catalogs are graph-scoped: IF NOT EXISTS, DROP INDEX, SHOW, CREATE CONSTRAINT across two graphs; restart; legacy engine-global catalog loads losslessly)");
     sonny1319_step.dependOn(&run_sonny1319_tests.step);
+
+    // SONNY-6703: the vector (HNSW) index is the graph's own: two graphs hold
+    // independent indexes under one name, knn() validates the metric whether
+    // the index or a scan answers. See tests/test_sonny6703_per_graph_vector_index.zig.
+    const sonny6703_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6703_per_graph_vector_index.zig"), .target = target, .optimize = optimize });
+    sonny6703_test_mod.addImport("geode", root_mod);
+    const sonny6703_tests = b.addTest(.{ .root_module = sonny6703_test_mod });
+    const run_sonny6703_tests = b.addRunArtifact(sonny6703_tests);
+    shardDep(test_step, &run_sonny6703_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny6703_step = b.step("test-sonny6703-per-graph-vector-index", "Run SONNY-6703 regression (per-graph vector indexes: two graphs, one index name, independent metrics, dimensions and rows; knn validates the metric on every path; DROP INDEX, DROP GRAPH, restart)");
+    sonny6703_step.dependOn(&run_sonny6703_tests.step);
 
     const sonny2795_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2795_drop_index_catalog.zig"), .target = target, .optimize = optimize });
     sonny2795_test_mod.addImport("geode", root_mod);

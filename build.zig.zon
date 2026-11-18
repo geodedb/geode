@@ -13,14 +13,14 @@
 
         // URI/URL parsing - RFC 3986 compliant
         .uri = .{
-            .url = "git+https://gitlab.com/devnw/zig/uri.git?ref=v0.1.16#e5e784ca6defa4cf897e6b18d9f08ef7336b588d",
-            .hash = "uri-0.1.16-zVvOseGkAgDNDu5FLweN4VsghRQxNEDVC539D0_Dpgdi",
+            .url = "git+https://gitlab.com/devnw/zig/uri.git?ref=v0.1.17#5dcd7d203ad3b81de01a31c28e8c396f45c6b50e",
+            .hash = "uri-0.1.17-zVvOseOkAgC_LhhYsTrPtJvjRDPzhvL4hJLoEDA2XwdW",
         },
 
         // YAML 1.2.2 parser/emitter
         .yaml = .{
-            .url = "git+https://gitlab.com/devnw/zig/yaml.git?ref=v0.1.10#d2455fdbc2676858988c94b4116ff11df65565a4",
-            .hash = "yaml-0.1.10-lcW-hJ0sCAC3Ic7RLgYMLTI5r3HDCUT48ThG46wKCbGN",
+            .url = "git+https://gitlab.com/devnw/zig/yaml.git?ref=v0.1.11#080ce41549f85714e50c297676dcd5bdb276c188",
+            .hash = "yaml-0.1.11-lcW-hJ8sCABoerFNWFrCnSXOfs4QuKgOmp064Qu7yfsv",
         },
 
         // TOML v1.1.0 parser
@@ -29,8 +29,8 @@
             // changed Value.array to a raw ArrayList (dropped .items.len indirection).
             // config was bumped simultaneously (402bc274) to track the new API.
             // If reverting, revert both toml and config together.
-            .url = "git+https://gitlab.com/devnw/zig/toml.git?ref=v0.1.15#db5571d99e7beefbaf596f438dfc32df4082237e",
-            .hash = "toml-0.1.15-MHnSh2d3GQCA3jxCr0CnZGCAC-RpEx1ykQqfxLrJO3ST",
+            .url = "git+https://gitlab.com/devnw/zig/toml.git?ref=v0.1.16#204bdeec0e88caaeb23876ab9746b31a6f633711",
+            .hash = "toml-0.1.16-MHnShwN5GQBYxI1w_gSsmUnNFOSD01kD32H2auSV9yM0",
         },
 
         // Unicode string library with SIMD acceleration
@@ -57,8 +57,8 @@
 
         // JSON parser/encoder - RFC 8259 compliant with JSON Schema 2020-12
         .json = .{
-            .url = "git+https://gitlab.com/devnw/zig/json.git?ref=v0.1.20#22154db734abf5264a716086fc0669eb9d6c082a",
-            .hash = "json-0.1.20-tOue4YSW6ACsmrKTooK2625fgWaZHPTZbu2R_EWVY4aU",
+            .url = "git+https://gitlab.com/devnw/zig/json.git?ref=v0.1.21#a73791a1fe2365949db02ba7eb5a4fb91fdd7f69",
+            .hash = "json-0.1.21-tOue4YaW6ACrNXeY2rLSDiON1ZH5jRpB_riq5dqzbKyP",
         },
 
         // QUIC v1/v2 protocol implementation
@@ -225,8 +225,15 @@
             // retransmission fixes, and the failed-connect use-after-free.
             // Same tls v0.1.27. Lockstep with geode-client-zig v0.3.16 (one
             // quic module).
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.51#79cb4953a8e782547a8046060799281741bad786",
-            .hash = "quic-0.1.51-gBIqUWuERAAagBL8PeLquTGZ-RMwZiIl76ynriwU1huK",
+            // 2026-11-17: v0.1.55 (0f52e64, SONNY-6522, 6649, 6654, 6655, 6673) —
+            // key-update desync, handshake RTT sample and exclusive UDP binds
+            // (0.1.52); packet-number length, coalesced STREAM retransmission and
+            // no reused packet numbers (0.1.53/0.1.54); ACK ranges read from the
+            // decoded frame and writer/ACK lock fairness (0.1.55). tls v0.1.28,
+            // thread-pool v0.2.11; its lazy otel is still v0.1.28. Lockstep with
+            // geode-client-zig v0.3.20 (one quic module).
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.55#0f52e640334450dce222f0ab7a6cc2bc16f0fc3a",
+            .hash = "quic-0.1.55-gBIqUZM9RwBj6KPXyDPRBdtoGBILdscXslrfZyPmo1tq",
         },
 
         // =======================================================================
@@ -235,8 +242,8 @@
 
         // Structured logging - slog-style logging with multiple handlers
         .slog = .{
-            .url = "git+https://gitlab.com/devnw/zig/slog.git?ref=cc52d6604e3662eb189afe7b31a40af819656732#cc52d6604e3662eb189afe7b31a40af819656732",
-            .hash = "slog-0.1.15-SamED0_5BwDjEO-i_tcG2pY86JOX7NZ-IR6_KGYw4fay",
+            .url = "git+https://gitlab.com/devnw/zig/slog.git?ref=v0.1.16#b525a9e1784be2bc9d1c61da724deae84b514310",
+            .hash = "slog-0.1.16-SamED1H5BwCeK8xauLkBgS6gCBEgN6wWnhSLWW2tbPZy",
         },
 
         // OpenTelemetry client library - metrics, tracing, logs surface.
@@ -259,14 +266,17 @@
         // Pin to 9fa2e97 (or descendant) at the next ecosystem-wide otel
         // convergence. See docs/superpowers/plans/2026-05-29-otel-full-instrumentation-program.md.
         .otel = .{
-            .url = "git+https://gitlab.com/devnw/zig/otel.git?ref=v0.1.28#e56f1c1fe9385c8cc0d93ec118eb5538a23d2966",
-            .hash = "otel-0.1.28-B0v3lj-uNQAmn4BzC6lmEzihawdobgIFviswkb2hpfFN",
+            // 2026-11-17: v0.1.29 (3cdcb91, SONNY-6630) — slog, json, config, yaml,
+            // metrics and tls pins carry thread-pool v0.2.11; raft v0.2.6 and wal
+            // v0.1.26 pin it.
+            .url = "git+https://gitlab.com/devnw/zig/otel.git?ref=v0.1.29#3cdcb910623eeca1b77073a6fe508ec3fa6f5b6b",
+            .hash = "otel-0.1.29-B0v3lrGuNQCOn83lNntyyw52jyFfRPYIeOFfuO1GQeAI",
         },
 
         // Configuration management - XDG compliant, multi-format support
         .config = .{
-            .url = "git+https://gitlab.com/devnw/zig/config.git?ref=v0.1.18#cf328f6f9c9d115fcafb573d2fec82f0c51fc0e8",
-            .hash = "config-0.1.18-TiLumviyDABHAt1Am31WtoSYVORg1fPL0XagLW_YeNjK",
+            .url = "git+https://gitlab.com/devnw/zig/config.git?ref=v0.1.19#25a1eba6d04340ec2b9a6f8efd22bec9d488c6ef",
+            .hash = "config-0.1.19-TiLumvqyDABNujdbGvFqsIj3aAt7LdDphgGhqdU31Y3q",
         },
 
         // =======================================================================
@@ -493,8 +503,13 @@
             // the default for an out-of-range timeout or page_size; the HELLO
             // defaults send the library version and conformance "min". Same
             // dependencies as v0.3.18.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.19#3fe8dfc4284f85309ca6b8d7ceb932b78ca5c58b",
-            .hash = "geode_client_zig-0.3.19-8ysbVx_uDQBhIxfqzQWDAgBSrOa_6ltpacyOTD0scavF",
+            // 2026-11-17: v0.3.20 (210e154, SONNY-6630) — quic v0.1.55 and the
+            // cascade pins (tls v0.1.28, json v0.1.21, config v0.1.19, slog
+            // v0.1.16, uri v0.1.17, uuid v0.1.10, gql v0.1.22, metrics v0.1.10,
+            // otel v0.1.29). No API change.
+            // Pinned to the release commit on MR !51 until v0.3.20 is tagged.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.20#9ca52063f32b3d4679f5bdab76d272dd63ff9b44",
+            .hash = "geode_client_zig-0.3.20-8ysbV3vvDQD0Zeyr6QPVgCJDxs7ep4NRwt1VRQ7GmOEI",
         },
 
         // =======================================================================
@@ -503,8 +518,8 @@
 
         // UUID - RFC 9562 compliant (V1-V8), k-sortable V7, injectable generator
         .uuid = .{
-            .url = "git+https://gitlab.com/devnw/zig/uuid.git?ref=c8206cbf2f3abc756b62b9e099715c81a452a2aa#c8206cbf2f3abc756b62b9e099715c81a452a2aa",
-            .hash = "uuid-0.1.9-tL1iruPmHAAJ2ebApUBKroge9t-yDmrcPJ-2A2FEduNj",
+            .url = "git+https://gitlab.com/devnw/zig/uuid.git?ref=v0.1.10#5547a8a0d86c67315d292f81411f6237ee61cf5c",
+            .hash = "uuid-0.1.10-tL1iroznHACRKPV4rc3sSf8tJtvHw8VfF-Btd4F1giHh",
         },
 
         // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
@@ -519,8 +534,12 @@
         // wal (v0.1.25) is compiled; the v0.1.24 entries in their manifests
         // are a known diamond (detect-diamond-deps) until they re-pin.
         .wal = .{
-            .url = "git+https://gitlab.com/devnw/zig/wal.git?ref=v0.1.25#eca478cae4784f4dc311acab31659beaea065508",
-            .hash = "wal-0.1.25-EqPqpqU_CACws_QxxCu906MZjIvJFGLkRmXHvLAY_i4U",
+            // 2026-11-17: v0.1.26 (0c94adb, SONNY-6630) — only otel v0.1.29 (same
+            // source as v0.1.25). raft v0.2.6 and timeseries-storage v0.2.24 pin it;
+            // graph-storage v0.4.28 still pins v0.1.25. build.zig still points all
+            // three libraries' "wal" import at this module: one wal is compiled.
+            .url = "git+https://gitlab.com/devnw/zig/wal.git?ref=v0.1.26#0c94adb032b85de62cc0a22d40123f8c0211449c",
+            .hash = "wal-0.1.26-EqPqpqU_CAD6CHg4JLglN6xzhhoDxfIlhh9mM95NcQBl",
         },
 
         // Page-based graph storage engine
@@ -769,8 +788,8 @@
             // `orphan_pages_freed`. Same dependencies as v0.4.27. Pinned to
             // the v0.4.28 tag on 024e7be (MR !37,
             // fix/sonny-6700-scrub-var-slab-orphans).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.28#024e7be921c6e31356d83386f189a6bf9764bd90",
-            .hash = "graph_storage-0.4.28-9UyJSw_0NwATiWWl8SrEt2R6vuUqKhDC4khuVDHbV7ho",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.29#a07cd8a273312f22ca9980a1509f57afca542a7c",
+            .hash = "graph_storage-0.4.29-9UyJS_AOOAAtJNsS0DHC4Iup4t1dl5n6RqNX3S5n9ST6",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -895,8 +914,12 @@
             // errdefer does); the WAL refusals are returned as
             // WalEncryptionMismatch / WalAuthFailed / WalCorrupted with no
             // separate precheck. geode no longer closes it (SONNY-6615).
-            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=v0.2.22#e44380b7ab543905ae071e0f0556b5a1082200bf",
-            .hash = "timeseries_storage-0.2.22-5wzBJHPkFAD07UGtI2cLgnhoxtKIMXRWc81bXLX0pRGf",
+            // 2026-11-17: v0.2.24 (3c6d625, SONNY-6630) — wal v0.1.26 and uuid
+            // v0.1.10, geode's pins; v0.2.23 (SONNY-6634): the batch-mode WAL
+            // syncer skips the fdatasync when nothing was appended
+            // (WalManager.syncCount() added).
+            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=v0.2.24#3c6d6251885324f5edfa8defcb6da62de6df39ab",
+            .hash = "timeseries_storage-0.2.24-5wzBJOnzFABXQphFEMqg1DkGcscmHKTqK_XgV9cgjaa8",
         },
         // Full-text-search storage engine (inverted index + BM25, LSM, zero deps)
         .fts_storage = .{

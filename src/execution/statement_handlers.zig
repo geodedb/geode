@@ -731,6 +731,11 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
     // MATCH ... WITH (write_shape.allowMatchWithFor) here. The list
     // is the statement's (`lentAllocator`), as a header's in
     // `expandForTable` (SONNY-6449): it leaked on every run.
+    const staged = @import("write_shape.zig").returnStagesNeedWholeTable(body.*);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const carrier = if (staged) try @import("write_shape.zig").stagedCarrierBody(arena.allocator(), body.*) else null;
+    const run_body: *const ast.Query = if (carrier) |*c| c else body;
     var acc = ForBodyAccumulator{};
     errdefer acc.deinit(allocator);
     for (with_result.rows) |row| {
@@ -746,9 +751,56 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
         const collection_value = try eval.evalExpr(value_utilities.lentAllocator(allocator), for_stmt.collection, env);
         const items = try forElements(allocator, collection_value);
         defer if (items.owned) allocator.free(items.values);
-        try runForBodyInto(allocator, for_stmt, body, items.values, with_result.columns, row, context, &acc);
+        try runForBodyInto(allocator, for_stmt, run_body, items.values, with_result.columns, row, context, &acc);
     }
+    if (staged) return stageForReturn(allocator, body.*, &acc, context);
     return acc.finish(allocator);
+}
+
+/// SONNY-6717: the RETURN of a writing FOR body over the rows every element
+/// contributed (`acc`, `stagedCarrierBody`'s columns): its items projected and
+/// aggregated over all of them, then DISTINCT, ORDER BY, SKIP and LIMIT, as
+/// `executeForReturn` stages a FOR's RETURN.
+fn stageForReturn(allocator: std.mem.Allocator, body: ast.Query, acc: *ForBodyAccumulator, context: ExecutionContext) !ExecutionResult {
+    const return_clause = body.ret;
+    try execution.validateGroupBy(return_clause, body.group_by);
+    try execution.validateNoNestedAggregate(return_clause);
+    var input = try acc.finish(allocator);
+    defer {
+        // The projection below holds the values; free the arrays only.
+        input.owns_value_memory = false;
+        input.deinit(allocator);
+    }
+    const projection = ast.WithClause{ .items = return_clause.items };
+    var result = try execution.executeWithClauseWithGroupByAndParams(
+        allocator,
+        input,
+        projection,
+        body.group_by,
+        body.having,
+        context.query_param_names,
+        context.query_param_values,
+    );
+    errdefer result.deinit(allocator);
+    if (result.owned_graph_entities == null) {
+        result.owned_graph_entities = input.owned_graph_entities;
+        input.owned_graph_entities = null;
+    }
+
+    const columns = try result_utils.generateUniqueColumnNames(allocator, return_clause.items);
+    for (result.columns) |col| allocator.free(col);
+    allocator.free(result.columns);
+    result.columns = columns;
+
+    if (return_clause.distinct) try result_utils.applyDistinct(allocator, &result);
+    if (body.order_by) |order| try execution.sortRowsEx(allocator, &result, order, return_clause.items);
+
+    const start = try forWindowValue(body.offset, body.offset_param, context) orelse 0;
+    const limit = try forWindowValue(body.limit, body.limit_param, context);
+    var end = result.rows.len;
+    if (limit) |l| end = @min(end, std.math.add(usize, start, l) catch std.math.maxInt(usize));
+    if (start != 0 or end != result.rows.len) try execution.applyRowWindow(allocator, &result, start, end);
+    return result;
 }
 
 /// The elements a FOR iterates for its list's value: a list's elements; none

@@ -22,6 +22,7 @@ const pattern_helpers = @import("pattern_helpers.zig");
 // through the tenant-aware path. The common single-tenant case (null/"default"
 // scope) keeps the fast path with zero overhead.
 const tenancy = @import("tenancy.zig");
+const catalog_mod = @import("../schema/catalog.zig");
 // GAP-ENT-0044/0045 (T5): read-executor budget + cancel. Polled at every
 // row-materialization boundary (right before g_path_rows_materialized ticks),
 // so a runaway/abandoned planned read aborts within one row of the trip.
@@ -3683,16 +3684,19 @@ fn estimateScanRows(allocator: std.mem.Allocator, graph_name: []const u8, patter
 /// `label`.`prop`, duplicated into `allocator`, or null when there is none.
 /// Only a btree or hash index serves an equality (a fulltext, vector or
 /// spatial index on the same property does not). When several do, the
-/// smallest name, so the answer does not depend on hash map order. The
-/// catalog is process-wide (its rows carry no graph), so this is the index
-/// SHOW INDEXES lists for the label and property in every graph.
+/// smallest name, so the answer does not depend on hash map order. Only the
+/// session graph's rows count (SONNY-6707; SONNY-1319 made index rows
+/// graph-scoped): the index SHOW INDEXES lists for the label and property in
+/// that graph, an engine-wide legacy row included, never another graph's.
 pub fn equalityIndexName(allocator: std.mem.Allocator, context: ExecutionContext, label: []const u8, prop: []const u8) !?[]u8 {
     const cat = context.catalog;
+    const graph_name = resolveGraphName(context);
     cat.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer cat.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
     var best: ?[]const u8 = null;
     var iter = cat.indexes.valueIterator();
     while (iter.next()) |info| {
+        if (!catalog_mod.rowInGraph(info.graph, graph_name)) continue;
         if (!std.mem.eql(u8, info.table_name, label)) continue;
         if (info.columns.len == 0 or !std.mem.eql(u8, info.columns[0], prop)) continue;
         if (!std.mem.eql(u8, info.index_type, "btree") and !std.mem.eql(u8, info.index_type, "hash")) continue;

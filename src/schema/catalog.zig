@@ -60,16 +60,19 @@ pub fn rowInGraph(row_graph: []const u8, graph: []const u8) bool {
 }
 
 /// SONNY-1319: does an index of this catalog type have a runtime structure
-/// that is process-wide and keyed by index NAME alone (the HNSW vector index,
-/// its dimension guard, and the other advanced indexes — mirrors
+/// that is process-wide and keyed by index NAME alone (the spatial, network,
+/// signature, interval, JSONB and domain advanced indexes — mirrors
 /// `statement_dispatcher.runtimeAdvancedIndexTypeFromCatalog`)? Such a name
 /// cannot also be used in another graph: both rows would share one structure
 /// (SONNY-1223), and dropping either would drop it.
+///
+/// SONNY-6703: the HNSW vector index is NOT in the list. Its runtime structure
+/// is keyed by graph and name (`index_manager.runtimeKey`), so two graphs hold
+/// independent vector indexes of one name.
 pub fn indexHasNameKeyedRuntime(index_type: []const u8) bool {
     const names = [_][]const u8{
-        "vector",        "vector_f32",   "spatial_geographic", "network_cidr",  "signature_crypto",
-        "interval_tree", "IntervalTree", "jsonb_inverted",     "JsonbInverted", "domain_trie",
-        "DomainTrie",
+        "spatial_geographic", "network_cidr",  "signature_crypto", "interval_tree", "IntervalTree",
+        "jsonb_inverted",     "JsonbInverted", "domain_trie",      "DomainTrie",
     };
     for (names) |n| {
         if (std.mem.eql(u8, index_type, n)) return true;

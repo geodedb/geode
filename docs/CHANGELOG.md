@@ -2,8 +2,40 @@
 
 ## [Unreleased] - Time-Series Audit and Gap Closure
 
+### Fixed
+
+- **A writing FOR applies its RETURN stages over the whole working table
+  (SONNY-6717).** After `MATCH ... WITH` or a WITH of values, a FOR body that
+  writes ran once per element and its RETURN's `ORDER BY`, `DISTINCT`,
+  `SKIP`/`LIMIT` and aggregates applied to each element alone (`... SET
+  o.seen = z.k RETURN o.k AS k ORDER BY k` answered `[2, 1]`; `count(*)` a
+  row of 1 per element). They now run over every element's rows together
+  (ISO/IEC 39075:2024 14.8): DISTINCT, ORDER BY, SKIP/LIMIT, aggregates,
+  aggregates inside larger expressions (`count(*) + 1`, `sum(x) * 2`,
+  evaluated after aggregation), GROUP BY and HAVING. The body runs per element
+  with a RETURN that carries only the variables the stages name; the real
+  RETURN is then evaluated once over those rows, as a plain FOR's is. Test:
+  `zig build test-sonny6717-for-write-return-stages`.
+
 ### Security
 
+- **quic v0.1.55: another local user can no longer take over the QUIC
+  port, and no two packets share an AEAD nonce (SONNY-6630; quic
+  SONNY-6522, SONNY-4379, SONNY-6654).** The server's UDP socket was bound
+  with SO_REUSEADDR, so a process of any user that also set it could bind
+  `--listen`'s port and receive the server's datagrams; binds are now
+  exclusive and a port in use fails to bind. Some senders (PATH_RESPONSE,
+  CONNECTION_CLOSE, the HANDSHAKE_DONE packet, among others) numbered
+  packets without the connection lock, so a packet could reuse an
+  application packet's number, and so its nonce, and the peer dropped one
+  as a duplicate (lost response pages). The upgrade also keeps long
+  transfers alive across a key update after a burst loss, resends a request
+  lost right after the handshake in ~0.1 s instead of ~1 s, and reads ACK
+  ranges from the decoded frame (release builds read a dead stack frame).
+  Pinned with geode-client-zig v0.3.20, timeseries-storage v0.2.24 and the
+  thread-pool cascade (wal v0.1.26, otel v0.1.29, json v0.1.21, slog
+  v0.1.16, config v0.1.19, uri v0.1.17, yaml v0.1.11, toml v0.1.16, uuid
+  v0.1.10). No geode code change.
 - **An operator can overwrite every graph's dead space: `CALL
   geode.storage.scrub()` (SONNY-6700).** A value superseded by an update
   or a DELETE stayed in `props.store` / `var.store` and the WAL until its
@@ -3267,6 +3299,31 @@
   still end 40003). Regressions: `zig build test-sonny6716-pool-exhaustion`,
   harness specs `sonny6716_small_pool_floor.yml` and
   `sonny6716_oversized_statement_clean.yml`.
+- **A vector (HNSW) index is the graph's own; `knn()` never answers
+  unvalidated (SONNY-6703, supersedes the SONNY-1223 refusal).** The runtime
+  index was one process-wide object per index NAME. knn() used it only when
+  its label was the sole carrier of the property in the session's graph and
+  in every other graph, so a same-named vector property in another graph (or
+  a second label in the same graph) silently turned the answer into a scan
+  that never checked the query metric against the index's: `knn('emb', q, k,
+  'cosine')` on an `l2` index answered instead of 42704. Now the runtime
+  index is keyed by graph and name (`index_manager.runtimeKey`): CREATE INDEX,
+  its backfill, every rebuild, the incremental inserts of a write, the
+  dimension pin, DROP INDEX, DROP GRAPH and the lazy rebuild after a restart
+  all act on the graph's own index, so two graphs can hold a vector index
+  of one name with different metrics and dimensions (CREATE INDEX of such a
+  name in a second graph is accepted; it was 42P07), a carrier in another
+  graph does not revoke an index, and a knn answered by a scan (a second label
+  carries the property, or a tenant scope) still checks the query metric
+  against the index of the session's graph (`VectorMetricMismatch`, 42704).
+  Behaviour change: a vector dimension pin is the index's graph's (a graph
+  without the index pins its own data, ENG-3922); the other advanced index
+  types (spatial, network, signature, interval, JSONB, domain) are unchanged
+  and still refuse a same-named index in another graph. An engine-wide
+  catalog row (written before rows carried a graph) still serves every
+  graph. Regression: `zig build test-sonny6703-per-graph-vector-index`;
+  `test_sonny1319`, `test_eng3912` and the index tests that name a runtime
+  index now use its graph-qualified key.
 
 - **A first start killed before it finished no longer bricks the data
   directory (SONNY-6708).** `geode serve` on an empty data directory
@@ -7353,6 +7410,16 @@
   `U:HeuristicIndexSelection`, sent with every query that had a WHERE or
   FILTER equality whether or not an index existed, is no longer sent.
   Regression: `zig build test-sonny6276-explain-access-path` (new).
+- **EXPLAIN and PROFILE name an index from the session graph only
+  (SONNY-6707).** The catalog lookup behind `IndexSeek` and a profile's
+  `index_name` (`planned_read_runtime.equalityIndexName`) read every row of
+  the index catalog by label and property and never compared the row's
+  graph, although SONNY-1319 made index rows graph-scoped: a graph with the
+  same label and property but no such index was explained and profiled as
+  seeking on another graph's index, and the profile named it. It now counts
+  only rows of the session graph (an engine-wide legacy row included).
+  Query results were never affected. Regression:
+  `zig build test-sonny6707-explain-index-graph-scope` (new).
 - **The deepest nesting the parser allows fits a gRPC connection thread
   again (SONNY-738).** Nine nested FOR bodies (`... FOR x IN [1] MATCH (n)
   WITH n FOR ...`), within the documented limit of 10, were refused with
