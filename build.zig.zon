@@ -535,9 +535,8 @@
             // cascade tags (dns v0.1.29, strings v0.1.7, auth v0.1.23, gql v0.1.23,
             // otel v0.1.30); no API change. Pinned to the release commit on MR !53
             // until v0.3.21 is tagged.
-            // 2026-11-18: v0.3.21 head a0340ae (SONNY-6630) — quic v0.1.57; pinned
-            // to MR !53 until v0.3.21 is tagged.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=release/sonny-6630-v0.3.21#a0340ae3191458ce30beb87965d72f428208e0d2",
+            // 2026-11-18: v0.3.21 tagged (976673c, SONNY-6630) — quic v0.1.57.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.21#976673c9e8e30166e89d3e120eb1548ecabf193c",
             .hash = "geode_client_zig-0.3.21-8ysbV7jxDQDtk1WZ50pR2wQJIfKHKMsP5ij4xxMKZmgL",
         },
 
