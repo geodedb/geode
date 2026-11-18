@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **A runaway full-row read aborts with ReadQueryBudgetExceeded again
+  (SONNY-6744).** `MATCH (n:L) RETURN n` over fat nodes returned every row
+  regardless of `GEODE_READ_EXECUTOR_BUDGET_MB` (SQLSTATE 53200): the read
+  budget meters the allocator the row and Node struct use, but a materialized
+  node's labels, graph name, property keys and values are taken from the
+  statement's scratch arena, which the meter never saw (every statement runs
+  with one since SONNY-6449; a transport's pooled arena before). The planned-read
+  materializers now charge that interior to the read scope, so the next row
+  boundary poll aborts. `zig build test-gap0044-read-budget-cancel` is 7/7.
+
 - **A DELETE of a node that still has edges answers GQLSTATUS G1001
   (SONNY-6738).** `MATCH (a:A) DELETE a` (and `NODETACH DELETE a`) on a node
   with an edge the statement does not delete failed with the generic 58000

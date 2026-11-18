@@ -39,6 +39,33 @@ inline fn scratchOr(fallback: std.mem.Allocator) std.mem.Allocator {
     return query_arena.currentScratchAllocator() orelse fallback;
 }
 
+// CANARY: REQ=REQ-SONNY-6744-READ-BUDGET-SCRATCH; FEATURE="ReadExecutorBudget"; ASPECT=ScratchInteriorCharge; STATUS=TESTED; TEST=tests/test_gap0044_read_budget_cancel.zig; OWNER=execution; UPDATED=2026-11-18
+/// SONNY-6744: charge the interior bytes a materialized node or edge took from
+/// the statement's scratch arena to the read budget. The arena is NOT behind the
+/// read scope's `MeteredAllocator` (only the row and Node/Edge structs are), and
+/// every statement runs with one since SONNY-6449 (a transport's pooled arena
+/// before that), so a runaway full-row read held O(rows x row size) bytes the
+/// budget never saw and never aborted. With no arena installed the interior is
+/// on `allocator`, which the scope already meters: nothing to add. Coarse, like
+/// the write budget's detached-box estimate (a tripwire, not a ledger); the
+/// arena releases nothing until the statement ends, so nothing is credited.
+fn chargeScratchInterior(graph_name: []const u8, labels: []const []const u8, props: *const graph_store.CompactPropertyMap, label: ?[]const u8) void {
+    if (query_arena.currentScratchAllocator() == null) return;
+    var total: u64 = graph_name.len;
+    if (label) |l| total += l.len;
+    for (labels) |l| total += l.len + @sizeOf([]const u8);
+    var it = props.iterator();
+    while (it.next()) |entry| {
+        total += 64; // entry + key/value boxing overhead (coarse)
+        total += entry.key_ptr.len;
+        total += switch (entry.value_ptr.*) {
+            .String => |s| s.len,
+            else => @as(u64, 16),
+        };
+    }
+    read_budget.charge(total);
+}
+
 // GAP-ENT-0002: TDD observable gate. Counts path/node rows materialized by
 // materializePathRow + materializeNodeOnlyRow. Pre-fix, `MATCH ()-[r]->()
 // RETURN count(r)` increments once per edge; post-fix the count(r) fast path
@@ -3171,6 +3198,7 @@ fn materializeNodeProjected(
         try node.properties.put(owned_key, decoded);
     }
 
+    chargeScratchInterior(node.graph_name, node.labels, &node.properties, null);
     return node;
 }
 
@@ -3216,6 +3244,7 @@ pub fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slo
         try node.properties.put(key, value);
     }
 
+    chargeScratchInterior(node.graph_name, node.labels, &node.properties, null);
     return node;
 }
 
@@ -3259,6 +3288,7 @@ fn materializeEdge(allocator: std.mem.Allocator, graph_name: []const u8, edge_st
         try edge.properties.put(key, value);
     }
 
+    chargeScratchInterior(edge.graph_name, &.{}, &edge.properties, edge.label);
     return edge;
 }
 
