@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **A clean shutdown closes the transaction undo log (SONNY-6758).** The
+  durable undo log (`txn_undo.wal`) that `server_init.openTxnUndoLog` opens
+  and installs at startup was never uninstalled or closed, so every clean
+  shutdown left its file descriptor, path, cipher and open-transaction set
+  allocated and a Debug server reported the leak. The shutdown tail now
+  uninstalls and closes it right after the store is closed, under the same
+  "no gRPC handler still in flight" gate as the store free; a transaction
+  still open stays in the file and is undone at the next start.
+  `zig build test-sonny6758-txn-undo-log-close` is 1/1.
+
 - **A gRPC Handshake no longer leaks its response (SONNY-6757).**
   `handleHandshake` built the `HelloResponse` from heap copies (the three
   capability strings, the capability list, the session id and the bound

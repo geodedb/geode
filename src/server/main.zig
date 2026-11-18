@@ -2947,6 +2947,13 @@ pub fn main() !void {
             if (grpc_still_running == 0) {
                 const close_t0 = compat_milliTimestamp();
                 graph_store.deinitGlobalStore();
+                // SONNY-6758: close the durable undo log `openTxnUndoLog`
+                // installed at startup. Every request thread has stopped and
+                // the store is closed, so nothing logs or ends a transaction
+                // any more; a transaction still open stays in the file and is
+                // undone at the next start. Gated like the store free: a
+                // gRPC handler still in flight may still write to it.
+                if (geode.txn_durable_undo.uninstall()) |undo_log| undo_log.close();
                 // SONNY-6459: per-phase shutdown timing (the storage engines'
                 // close runs here: each shard's WAL writes its checkpoint file).
                 if (g_shutdown_started_ms.load(.acquire) != 0) {
