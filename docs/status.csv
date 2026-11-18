@@ -5656,6 +5656,7 @@ REQ-SONNY-6735-NAME-LIMIT,WriteShapeAllowlist,NameLimit,TESTED,,,engine,2026-11-
 REQ-SONNY-6738-G1001-EDGES-STILL-EXIST,ErrorMapping,DependentObjectError,TESTED,,,server,2026-11-18,tests/test_sonny6738_edges_still_exist_status.zig,12
 REQ-SONNY-6744-READ-BUDGET-SCRATCH,ReadExecutorBudget,ScratchInteriorCharge,TESTED,,,execution,2026-11-18,src/execution/planned_read_runtime.zig,42
 REQ-SONNY-6747-WRITE-NOT-READ-BUDGETED,ReadExecutorBudget,WriteExempt,TESTED,,,execution,2026-11-18,tests/test_sonny6747_write_not_read_budgeted.zig,13
+REQ-SONNY-6749-RESTORE-HYDRATION-RACE,Raft Snapshot Persistence,Regression,TESTED,,,storage,2026-11-18,tests/test_sonny6749_restore_hydration_race.zig,28
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,CreateQueryStatementTxn,TESTED,,,storage,2026-11-13,src/execution/crud_operations.zig,1522
 REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT,StatementTxnBatching,Regression,TESTED,,,storage,2026-11-13,tests/test_sonny738_create_query_one_commit.zig,20
 REQ-SONNY-738-EQUALITY-CONSISTENCY,ComparisonPredicate,EverySite,TESTED,,,eval,2026-11-13,tests/test_sonny738_equality_consistency.zig,38
