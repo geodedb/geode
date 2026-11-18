@@ -62,6 +62,19 @@ const value_cases = [_]Case{
     } },
 };
 
+// The values a FOR, an initial WITH or an UNWIND binds around the part.
+const bound_value_cases = [_]Case{
+    .{ .write = "UNWIND [1, 2] AS u MATCH (g:G) WHERE g.i = u SET g.d = COUNT { (g)-[:R]->(x:X) WHERE x.j = u }", .checks = &.{
+        .{ .query = "MATCH (g:G) WHERE g.d IS NOT NULL RETURN g.i, g.d", .want = &.{ "1|1", "2|1" } },
+    } },
+    .{ .write = "WITH 3 AS u MATCH (g:G) WHERE g.i = u SET g.d = COUNT { (g)-[:R]->(x:X) WHERE x.j = u }", .checks = &.{
+        .{ .query = "MATCH (g:G) WHERE g.d IS NOT NULL RETURN g.i, g.d", .want = &.{"3|1"} },
+    } },
+    .{ .write = "FOR u IN [4, 5] MATCH (g:G) WHERE g.i = u SET g.d = COUNT { (g)-[:R]->(x:X) WHERE x.j = u }", .checks = &.{
+        .{ .query = "MATCH (g:G) WHERE g.d IS NOT NULL RETURN g.i, g.d", .want = &.{ "4|1", "5|1" } },
+    } },
+};
+
 const refused_cases = [_]Case{
     // A WHERE keeps refusing it (SONNY-3184).
     .{ .write = "MATCH (g:G) WHERE EXISTS { (g)-[:R]->(:X) } SET g.d = 1", .refused = refused, .checks = &nothing_written },
@@ -73,12 +86,20 @@ const refused_cases = [_]Case{
     // A write inside the subquery (SONNY-3182): refused, and a write.
     .{ .write = "MATCH (q:Q) SET q.d = COUNT { (x:X) WHERE 1 IN (MATCH (w:Q) SET w.hit = 1 RETURN 1) }", .refused = refused, .checks = &nothing_written },
     .{ .write = "MATCH (q:Q) CREATE (:C {n: COUNT { (x:X) WHERE 1 IN (MATCH (w:Q) SET w.hit = 1 RETURN 1) }})", .refused = refused, .checks = &nothing_written },
+    // A client parameter nobody supplied, named inside the subquery.
+    .{ .write = "MATCH (q:Q) SET q.d = COUNT { (x:X) WHERE x.j = $nope }", .refused = error.MissingParameter, .checks = &nothing_written },
     // A name no clause binds.
     .{ .write = "MATCH (q:Q) SET q.d = COUNT { (x:X) WHERE nosuch.j = x.j }", .refused = error.VariableNotInScope, .checks = &nothing_written },
 };
 
 test "SONNY-6734: a COUNT or EXISTS subquery that only reads is accepted in a value" {
+    h.execution.initEvaluator();
     try h.runCases("SONNY-6734 accepted", &value_cases);
+}
+
+test "SONNY-6734: a subquery reads the values a FOR, an initial WITH or an UNWIND binds" {
+    h.execution.initEvaluator();
+    try h.runCases("SONNY-6734 bound values", &bound_value_cases);
 }
 
 test "SONNY-6734: a subquery in a WHERE, one that writes or names an unbound variable stays refused" {

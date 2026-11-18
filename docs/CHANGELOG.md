@@ -4,6 +4,30 @@
 
 ### Fixed
 
+- **A read-only `COUNT { }` or `EXISTS { }` is accepted in the values of a
+  statement that writes (SONNY-6734).** The write-shape allowlist refused any
+  subquery or pattern predicate in a writing statement with 0A000, so
+  `MATCH (a:A) CREATE (:C {n: COUNT { MATCH (x:A) }})` and the pagerank
+  update `MATCH (p)-[:KNOWS]->(n) WITH n, sum(p.pagerank / COUNT { (p)-[:KNOWS]->() })
+  AS r SET n.pagerank = 0.15 + 0.85 * r` could not run (ISO/IEC 39075:2024
+  allows a value expression subquery there). They are accepted in a SET
+  value, in a CREATE property value and in an item of the WITH between the
+  MATCH and the write: the pattern, its property maps and its WHERE may name
+  the statement's variables, the subquery's own variables and client
+  parameters (an unbound name or an unsupplied parameter is refused before
+  anything is written). Unchanged, and still refused: a subquery in a WHERE
+  or a MERGE key, a pattern comprehension and `shortestPath()` in a write, an
+  `IN (subquery)`, and any subquery that writes (SONNY-3182: it is a write for
+  the lock, the read-only floor and the cluster gate). Test: `zig build
+  test-sonny6734-6735-write-shape-subquery-names`.
+- **A statement that writes may name more than 64 variables (SONNY-6735).**
+  The allowlist's variable set held 64 names and a CREATE with more got the
+  generic 0A000, which named no limit (`CREATE (n1:K {i: 1}), ... (n100:K {i:
+  100})`). The set grows with the statement, up to 4096 distinct variables and
+  parameters; past that the statement is refused with 54000 `A statement that
+  writes may name at most 4096 distinct variables and parameters`, and
+  nothing is written. Same test step.
+
 - **A writing FOR applies its RETURN stages over the whole working table
   (SONNY-6717).** After `MATCH ... WITH` or a WITH of values, a FOR body that
   writes ran once per element and its RETURN's `ORDER BY`, `DISTINCT`,
