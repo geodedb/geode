@@ -18051,6 +18051,15 @@ pub fn build(b: *std.Build) void {
     const sonny6703_step = b.step("test-sonny6703-per-graph-vector-index", "Run SONNY-6703 regression (per-graph vector indexes: two graphs, one index name, independent metrics, dimensions and rows; knn validates the metric on every path; DROP INDEX, DROP GRAPH, restart)");
     sonny6703_step.dependOn(&run_sonny6703_tests.step);
 
+    // SONNY-6720: DROP GRAPH removes the graph's index and constraint rows.
+    const sonny6720_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6720_drop_graph_catalog.zig"), .target = target, .optimize = optimize });
+    sonny6720_test_mod.addImport("geode", root_mod);
+    const sonny6720_tests = b.addTest(.{ .root_module = sonny6720_test_mod });
+    const run_sonny6720_tests = b.addRunArtifact(sonny6720_tests);
+    shardDep(test_step, &run_sonny6720_tests.step, 0, test_shard_loads, test_shard_index);
+    const sonny6720_step = b.step("test-sonny6720-drop-graph-catalog", "Run SONNY-6720 regression (DROP GRAPH removes the graph's index and constraint rows, saved: a re-created graph starts empty, across a restart; other graphs' rows stay)");
+    sonny6720_step.dependOn(&run_sonny6720_tests.step);
+
     const sonny2795_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2795_drop_index_catalog.zig"), .target = target, .optimize = optimize });
     sonny2795_test_mod.addImport("geode", root_mod);
     const sonny2795_tests = b.addTest(.{ .root_module = sonny2795_test_mod });

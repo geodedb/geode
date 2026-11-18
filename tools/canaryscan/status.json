@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-18T00:15:45.614516856Z",
+  "generated_at": "2026-11-18T02:10:26.305777378Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83808,6 +83808,54 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6720-DROP-GRAPH-CATALOG",
+      "features": [
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "LoadRemovesOrphanRows",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6720_drop_graph_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-17"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "DropGraphRemovesRows",
+          "status": "TESTED",
+          "files": [
+            "src/execution.zig",
+            "src/schema/catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6720_drop_graph_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-17"
+        },
+        {
+          "feature": "SchemaCatalog",
+          "aspect": "Regression",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6720_drop_graph_catalog.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6720_drop_graph_catalog.zig"
+          ],
+          "benches": [],
+          "owner": "catalog",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -88899,7 +88947,7 @@
       "EXEMPT": 209,
       "IMPL": 563,
       "STUB": 18,
-      "TESTED": 4406
+      "TESTED": 4409
     },
     "by_aspect": {
       "2PC": 3,
@@ -89827,6 +89875,7 @@
       "DropDrainsWriters": 1,
       "DropFailsLoudlyRetryable": 1,
       "DropGraph": 1,
+      "DropGraphRemovesRows": 1,
       "DropGraphReset": 1,
       "DropInTransaction": 1,
       "DropIndexGraph": 1,
@@ -90781,6 +90830,7 @@
       "LoadFromFile": 1,
       "LoadGraphGrants": 2,
       "LoadOptimizedVarianceEnvelope": 1,
+      "LoadRemovesOrphanRows": 1,
       "LoaderFilter": 1,
       "LocalClustering": 1,
       "LocalDatetimeAndDurationFraction": 1,
@@ -91820,7 +91870,7 @@
       "RegistryInit": 1,
       "RegistryPreallocation": 1,
       "RegistrySwap": 1,
-      "Regression": 437,
+      "Regression": 438,
       "Regression+Stress": 1,
       "RegressionTest": 3,
       "RegressionTesting": 2,
