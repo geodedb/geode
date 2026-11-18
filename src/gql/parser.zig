@@ -1399,7 +1399,9 @@ pub const Parser = struct {
     fn parseStatementInto(self: *Parser, out: *ast.Statement) ParserError!void {
         // SONNY-3244: at most `max_statements_per_request` statements.
         try self.countStatement();
-        out.* = try @as(ParserError!ast.Statement, switch (self.cur.kind) {
+        // SONNY-6729: NODETACH DELETE, a plain DELETE (ISO/IEC 39075 13.5).
+        const at_nodetach = self.atNoDetachDelete();
+        out.* = try @as(ParserError!ast.Statement, if (at_nodetach) self.parseDeleteStatement() else switch (self.cur.kind) {
             .VALUES => self.parseValuesStatement(),
             .FOR => self.parseForStatement(),
             .LET => blk_let: {
@@ -1553,7 +1555,7 @@ pub const Parser = struct {
                 }
 
                 // Check if DELETE or DETACH DELETE follows
-                const is_delete = self.cur.kind == .DELETE or self.cur.kind == .DETACH;
+                const is_delete = self.cur.kind == .DELETE or self.cur.kind == .DETACH or self.atNoDetachDelete();
 
                 // Restore position
                 self.lx.* = saved_pos;
@@ -1570,11 +1572,8 @@ pub const Parser = struct {
                         where_clause = try self.parseOrExpr();
                     }
 
-                    // Handle optional DETACH
-                    const detach = if (self.cur.kind == .DETACH) blk: {
-                        self.advance();
-                        break :blk true;
-                    } else false;
+                    // Handle optional DETACH or NODETACH
+                    const detach = self.parseDetachMode();
 
                     _ = try self.expect(.DELETE);
 
@@ -3558,6 +3557,9 @@ pub const Parser = struct {
             self.advance();
             detach_delete = true;
             if (self.cur.kind != .DELETE) _ = try self.expect(.DELETE);
+        } else if (self.atNoDetachDelete()) {
+            // SONNY-6729: NODETACH DELETE is the plain DELETE.
+            self.advance();
         }
         if (self.cur.kind == .DELETE) {
             self.advance();
@@ -6100,12 +6102,30 @@ pub const Parser = struct {
         } };
     }
 
+    /// SONNY-6729: at the NODETACH of `NODETACH DELETE` (ISO/IEC 39075:2024
+    /// 13.5 <delete statement>). The lexer library has no NODETACH token, so
+    /// it lexes as an identifier; it counts only before DELETE.
+    fn atNoDetachDelete(self: *Parser) bool {
+        return self.cur.kind == .identifier and
+            std.ascii.eqlIgnoreCase(self.cur.lexeme, "NODETACH") and
+            self.peekKind() == .DELETE;
+    }
+
+    /// The optional `DETACH | NODETACH` before DELETE: consumes it and says
+    /// whether it was DETACH. NODETACH is the default (13.5 SR 6), so it
+    /// reads as a plain DELETE.
+    fn parseDetachMode(self: *Parser) bool {
+        if (self.cur.kind == .DETACH) {
+            self.advance();
+            return true;
+        }
+        if (self.atNoDetachDelete()) self.advance();
+        return false;
+    }
+
     // Parse DELETE statement
     fn parseDeleteStatement(self: *Parser) ParserError!ast.Statement {
-        const detach = if (self.cur.kind == .DETACH) blk: {
-            self.advance();
-            break :blk true;
-        } else false;
+        const detach = self.parseDetachMode();
 
         _ = try self.expect(.DELETE);
 

@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **`NODETACH DELETE` parses (SONNY-6729).** ISO/IEC 39075:2024 13.5 defines
+  `<delete statement>` as `[ DETACH | NODETACH ] DELETE <delete item list>`
+  (NODETACH is the default, SR 6), but `MATCH (a:A) NODETACH DELETE a` was a
+  parse error ("expected token 'RETURN', got 'identifier'"). The lexer library
+  has no NODETACH token, so the parser reads the identifier NODETACH before
+  DELETE, in a MATCH ... DELETE, a DELETE after a SET or REMOVE and a
+  statement-level DELETE, and the statement behaves as a plain DELETE (a node
+  with an edge left is refused with NodeHasEdges). Test:
+  `zig build test-sonny6729-nodetach-delete`.
+
 - **`RETURN CURRENT_GRAPH` and `CURRENT_PROPERTY_GRAPH` name the session's
   graph (SONNY-6727).** Both worked as a `USE GRAPH` / `SESSION SET GRAPH`
   target but were a 42000 "Variable not in scope" as a value expression, though
