@@ -12396,15 +12396,17 @@ pub fn build(b: *std.Build) void {
     // SONNY-6328: a deliberate data race built exactly like the TSan
     // companion steps (`test-*-tsan`), run by a checker that requires
     // ThreadSanitizer to report it. The companions passed while detecting
-    // nothing. Linux only: zig cannot build the libtsan runtime for
-    // macOS, so the fixture does not compile there.
-    if (target.result.os.tag == .linux) {
+    // nothing. zig cannot build the libtsan runtime for macOS, so off Linux
+    // the fixture builds without ThreadSanitizer and the checker skips
+    // (SONNY-6760). The step and both sources stay in the graph on every OS:
+    // SONNY-6542 fails configuration for a tests/ source no step compiles.
+    {
         const race_mod = b.createModule(.{
             .root_source_file = b.path("tests/sonny6328_tsan_race_fixture.zig"),
             .target = target,
             .optimize = .Debug,
             .link_libc = true,
-            .sanitize_thread = true,
+            .sanitize_thread = target.result.os.tag == .linux,
         });
         const race_fixture = tsanTest(b, race_mod);
         const opts = b.addOptions();
