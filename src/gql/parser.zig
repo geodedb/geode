@@ -8783,14 +8783,16 @@ pub const Parser = struct {
                 return .{ .SessionReset = .{
                     .arguments = .{ .Parameter = param_spec },
                 } };
-            } else if (std.ascii.eqlIgnoreCase(arg, "TIME")) {
-                // SESSION RESET TIME ZONE
-                self.advance(); // consume TIME
-                _ = try self.expect(.ZONE);
-                return .{ .SessionReset = .{
-                    .arguments = .TimeZone,
-                } };
             }
+        } else if (self.cur.kind == .TIME or self.cur.kind == .time_lit) {
+            // SONNY-6726: SESSION RESET TIME ZONE (ISO/IEC 39075:2024 7.1).
+            // TIME lexes as the .TIME keyword (or .time_lit), never as an
+            // identifier, so the branch matches on the keyword.
+            self.advance(); // consume TIME
+            _ = try self.expect(.ZONE);
+            return .{ .SessionReset = .{
+                .arguments = .TimeZone,
+            } };
         } else if (self.cur.kind == .SCHEMA) {
             self.advance();
             return .{ .SessionReset = .{
@@ -8809,13 +8811,6 @@ pub const Parser = struct {
 
             return .{ .SessionReset = .{
                 .arguments = .{ .Graph = property_graph },
-            } };
-        } else if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TIME")) {
-            // Handle TIME ZONE
-            self.advance(); // consume TIME
-            _ = try self.expect(.ZONE);
-            return .{ .SessionReset = .{
-                .arguments = .TimeZone,
             } };
         }
 

@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- **`SESSION RESET TIME ZONE` parses (SONNY-6726).** TIME lexes as the TIME
+  keyword, and the reset parser matched only an identifier named TIME, so
+  the statement (ISO/IEC 39075:2024 7.1 `<session reset arguments>`,
+  docs/SESSION_MANAGEMENT.md) was a 42000 parse error. It is accepted and
+  clears the session's time zone. Test:
+  `zig build test-sonny6726-session-reset-time-zone`.
+
 - **A writing FOR applies its RETURN stages over the whole working table
   (SONNY-6717).** After `MATCH ... WITH` or a WITH of values, a FOR body that
   writes ran once per element and its RETURN's `ORDER BY`, `DISTINCT`,
