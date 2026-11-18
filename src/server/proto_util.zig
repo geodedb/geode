@@ -428,6 +428,11 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // A value of the wrong type for an operation, a function or a CAST
         // (20.8 GR 7 d ii): invalid value type. Internal failures carry
         // errors of their own (TypeMismatch is the user-data one).
+        // SONNY-6738: ISO/IEC 39075:2024 13.5 GR 5, "dependent object error -
+        // edges still exist" (23.1 Table 8, class G1): a DELETE of a node
+        // that keeps an edge the statement does not delete. A caller's
+        // statement, not a server fault; it answered the generic 58000.
+        error.NodeHasEdges => .{ .code = "G1001", .message = "Dependent object error: the node still has edges (DELETE a node only when the statement deletes all its edges, or use DETACH DELETE)" },
         error.TypeMismatch => .{ .code = "22G03", .message = "Invalid value type: a value of a type the operation, function or CAST does not accept" },
         // No GQL number is NaN or infinite: numeric value out of range.
         error.FloatNaN => .{ .code = "22003", .message = "Numeric value out of range: NaN and infinite numbers are not values" },
@@ -545,6 +550,9 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // shape does not apply is refused, before anything is written, rather
         // than dropped.
         error.WriteClauseNotApplied => .{ .code = "0A000", .message = "This statement writes in a shape that is not supported: a statement that writes is accepted only in the allowlisted shapes (CREATE/INSERT; MERGE; MATCH ... [WHERE] SET/REMOVE/DELETE/CREATE/MERGE; MATCH ... WITH ... SET/REMOVE/DELETE, or one CREATE or MERGE; each after an optional WITH of values or an UNWIND, in a FOR body, under PROFILE, or in a UNION of MATCH ... SET parts), with every variable bound, and no write inside an expression. Split the statement" },
+        // SONNY-6735: the write-shape check's variable-name limit
+        // (`write_shape.Names.max`), named instead of the generic 0A000.
+        error.TooManyWriteVariables => .{ .code = "54000", .message = "A statement that writes may name at most 4096 distinct variables and parameters" },
         error.TooManyWriteClauses => .{ .code = "54000", .message = "A query part may carry at most 1024 SET, REMOVE, CREATE and MERGE clauses" },
         // SONNY-3244: the parser's limits (gql/parser.zig `max_*`).
         error.TooManyStatements => .{ .code = "54000", .message = "A request may carry at most 1024 statements" },

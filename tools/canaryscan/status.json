@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-18T06:13:14.359760477Z",
+  "generated_at": "2026-11-18T08:05:10.377807312Z",
   "requirements": [
     {
       "id": "GAP-0284",
@@ -83955,6 +83955,219 @@
       ]
     },
     {
+      "id": "REQ-SONNY-6726-SESSION-RESET-TIME-ZONE",
+      "features": [
+        {
+          "feature": "SessionManagement",
+          "aspect": "ResetTimeZone",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6726_session_reset_time_zone.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6726_session_reset_time_zone.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6727-CURRENT-GRAPH-VALUE",
+      "features": [
+        {
+          "feature": "SessionManagement",
+          "aspect": "CurrentGraphValue",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6727_current_graph_value.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6727_current_graph_value.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6728-DELETE-NODE-AND-EDGES",
+      "features": [
+        {
+          "feature": "DeleteStatement",
+          "aspect": "EdgesDeletedWithNode",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6728_delete_node_and_edges.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6728_delete_node_and_edges.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6729-NODETACH-DELETE",
+      "features": [
+        {
+          "feature": "DeleteStatement",
+          "aspect": "Nodetach",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6729_nodetach_delete.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6729_nodetach_delete.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6730-TYPE-FUNCTIONS",
+      "features": [
+        {
+          "feature": "BuiltinFunctions",
+          "aspect": "RealDoubleOfDecimal",
+          "status": "TESTED",
+          "files": [
+            "src/eval/call_handlers.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6730_type_function_constructors.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-17"
+        },
+        {
+          "feature": "BuiltinFunctions",
+          "aspect": "ByteaHexForms",
+          "status": "TESTED",
+          "files": [
+            "src/types/evaluator_functions.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6730_type_function_constructors.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-17"
+        },
+        {
+          "feature": "BuiltinFunctions",
+          "aspect": "JsonbGetTypeof",
+          "status": "TESTED",
+          "files": [
+            "src/types/evaluator_functions.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6730_type_function_constructors.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-17"
+        },
+        {
+          "feature": "BuiltinFunctions",
+          "aspect": "DocumentedTypeConstructors",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6730_type_function_constructors.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6730_type_function_constructors.zig"
+          ],
+          "benches": [],
+          "owner": "eval",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6734-VALUE-SUBQUERY",
+      "features": [
+        {
+          "feature": "WriteShapeAllowlist",
+          "aspect": "ValueSubquery",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6734_6735_write_shape_subquery_names.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6734_6735_write_shape_subquery_names.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6735-NAME-LIMIT",
+      "features": [
+        {
+          "feature": "WriteShapeAllowlist",
+          "aspect": "NameLimit",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6734_6735_write_shape_subquery_names.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6734_6735_write_shape_subquery_names.zig"
+          ],
+          "benches": [],
+          "owner": "engine",
+          "updated": "2026-11-17"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6738-G1001-EDGES-STILL-EXIST",
+      "features": [
+        {
+          "feature": "ErrorMapping",
+          "aspect": "DependentObjectError",
+          "status": "TESTED",
+          "files": [
+            "tests/test_sonny6738_edges_still_exist_status.zig"
+          ],
+          "tests": [
+            "tests/test_sonny6738_edges_still_exist_status.zig"
+          ],
+          "benches": [],
+          "owner": "server",
+          "updated": "2026-11-18"
+        }
+      ]
+    },
+    {
+      "id": "REQ-SONNY-6744-READ-BUDGET-SCRATCH",
+      "features": [
+        {
+          "feature": "ReadExecutorBudget",
+          "aspect": "ScratchInteriorCharge",
+          "status": "TESTED",
+          "files": [
+            "src/execution/planned_read_runtime.zig"
+          ],
+          "tests": [
+            "tests/test_gap0044_read_budget_cancel.zig"
+          ],
+          "benches": [],
+          "owner": "execution",
+          "updated": "2026-11-18"
+        }
+      ]
+    },
+    {
       "id": "REQ-SONNY-738-CREATE-QUERY-ONE-COMMIT",
       "features": [
         {
@@ -89046,7 +89259,7 @@
       "EXEMPT": 209,
       "IMPL": 563,
       "STUB": 18,
-      "TESTED": 4415
+      "TESTED": 4427
     },
     "by_aspect": {
       "2PC": 3,
@@ -89370,6 +89583,7 @@
       "BypassDetection": 1,
       "ByteBoundedEviction": 1,
       "ByteaHex": 1,
+      "ByteaHexForms": 1,
       "Bytecode": 1,
       "BytecodeVM": 1,
       "BytestringMaxLengthDeclaration": 1,
@@ -89771,6 +89985,7 @@
       "Crypto": 1,
       "CudaDynamicLoader": 1,
       "CurrentGraphEquality": 1,
+      "CurrentGraphValue": 1,
       "CurrentTenantEquality": 1,
       "CurrentTerm": 1,
       "CurrentUserEquality": 1,
@@ -89892,6 +90107,7 @@
       "DenyOverridesAllow": 1,
       "DependencyGraph": 1,
       "DependencyTracking": 1,
+      "DependentObjectError": 1,
       "DepthGuard": 1,
       "DeserializeGraphMutation": 1,
       "DetectFinalAgg": 1,
@@ -89958,6 +90174,7 @@
       "DocumentationCoverage": 1,
       "DocumentedCommandsExist": 1,
       "DocumentedNames": 1,
+      "DocumentedTypeConstructors": 1,
       "DocumentedUnreadRefused": 1,
       "Domain": 1,
       "DomainTriePersistence": 1,
@@ -90077,6 +90294,7 @@
       "EdgeTypeLookup": 2,
       "EdgeWithLabel": 1,
       "EdgeWithTypeField": 1,
+      "EdgesDeletedWithNode": 1,
       "EffectfulPreambleGate": 1,
       "Eigenvector": 1,
       "ElementIdUnadvertised": 1,
@@ -90792,6 +91010,7 @@
       "JsonNumbers": 1,
       "JsonStringEscape": 1,
       "JsonbCanonical": 1,
+      "JsonbGetTypeof": 1,
       "JsonbInvertedPersistence": 1,
       "KAT": 1,
       "KafkaSink": 1,
@@ -91148,6 +91367,7 @@
       "NaNForbidden": 1,
       "NameCollectionAllocFailure": 1,
       "NameIsOneObjectPerGraph": 1,
+      "NameLimit": 1,
       "NamedGraphLock": 1,
       "NamingConventions": 1,
       "NeedsRowFlag": 1,
@@ -91265,6 +91485,7 @@
       "NodesByGraph": 1,
       "NodesByGraphLeafLock": 1,
       "NodesIndexedAccuracy": 1,
+      "Nodetach": 1,
       "NonAggPath": 1,
       "NonListRightHandSide": 2,
       "NonNumericSumAvg": 1,
@@ -91916,6 +92137,7 @@
       "ReadWriteStrictTenancyRequiresGrant": 1,
       "ReaderErrors": 1,
       "ReaderHandleApi": 1,
+      "RealDoubleOfDecimal": 1,
       "RealFunctionality": 1,
       "RealImplementation": 3,
       "RealPlanGeneration": 1,
@@ -92045,6 +92267,7 @@
       "ReservedWords": 2,
       "ResetByAdminAudited": 1,
       "ResetGuardrails": 1,
+      "ResetTimeZone": 1,
       "ResidencyIndependentCounts": 1,
       "ResidentEdgesNested": 1,
       "ResidentPagesThroughPool": 1,
@@ -92195,6 +92418,7 @@
       "ScopedEdgeLookup": 1,
       "ScopedLockedClone": 1,
       "ScratchAllocator": 1,
+      "ScratchInteriorCharge": 1,
       "ScrubDeadSpaceThenCheckpoint": 1,
       "ScrubEveryGraph": 1,
       "SealRefusesUnsignedLegacy": 1,
@@ -92864,6 +93088,7 @@
       "ValueConverters": 1,
       "ValueEquality": 1,
       "ValueOrder": 2,
+      "ValueSubquery": 1,
       "ValueTags": 1,
       "ValueTypeReexport": 1,
       "ValueTypes": 1,

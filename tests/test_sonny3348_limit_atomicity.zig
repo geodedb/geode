@@ -184,11 +184,12 @@ test "SONNY-3348: CREATE, MATCH ... CREATE, MERGE and DETACH DELETE decided by a
     try expectFails(ga, s, "MATCH (x:X) WHERE " ++ count_limit ++ " = 0 DELETE x", error.ExpressionTooDeep, "54001");
     try testing.expectEqual(@as(usize, 2), try rowsOf(ga, s, "MATCH (x:X) RETURN x.k AS k"));
 
-    // An IN type error (22000) is the same. (A subquery that swallowed it is
-    // refused by the write-shape allowlist, 0A000, with nothing written.)
+    // An IN type error (22000) is the same, also inside a value subquery
+    // (SONNY-6734: the allowlist accepts a read-only EXISTS { } there, and
+    // the error fails the statement instead of reading as false).
     try expectFails(ga, s, "MATCH (n:C) SET n.i = (n.v IN 5)", error.ExpressionTooDeep, "22000");
     try testing.expectEqual(@as(usize, 0), try rowsOf(ga, s, "MATCH (n:C) WHERE n.i IS NOT NULL RETURN n.i AS i"));
-    try expectFails(ga, s, "MATCH (n:C) SET n.i = EXISTS { MATCH (m:C) WHERE m.v IN 5 }", error.ExpressionTooDeep, "0A000");
+    try expectFails(ga, s, "MATCH (n:C) SET n.i = EXISTS { MATCH (m:C) WHERE m.v IN 5 }", error.ExpressionTooDeep, "22000");
     try testing.expectEqual(@as(usize, 0), try rowsOf(ga, s, "MATCH (n:C) WHERE n.i IS NOT NULL RETURN n.i AS i"));
 }
 

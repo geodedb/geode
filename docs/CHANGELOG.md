@@ -4,6 +4,109 @@
 
 ### Fixed
 
+- **A runaway full-row read aborts with ReadQueryBudgetExceeded again
+  (SONNY-6744).** `MATCH (n:L) RETURN n` over fat nodes returned every row
+  regardless of `GEODE_READ_EXECUTOR_BUDGET_MB` (SQLSTATE 53200): the read
+  budget meters the allocator the row and Node struct use, but a materialized
+  node's labels, graph name, property keys and values are taken from the
+  statement's scratch arena, which the meter never saw (every statement runs
+  with one since SONNY-6449; a transport's pooled arena before). The planned-read
+  materializers now charge that interior to the read scope, so the next row
+  boundary poll aborts. `zig build test-gap0044-read-budget-cancel` is 7/7.
+
+- **A DELETE of a node that still has edges answers GQLSTATUS G1001
+  (SONNY-6738).** `MATCH (a:A) DELETE a` (and `NODETACH DELETE a`) on a node
+  with an edge the statement does not delete failed with the generic 58000
+  (system error), because NodeHasEdges had no entry in
+  `proto_util.mapError`. ISO/IEC 39075:2024 13.5 GR 5 names the condition
+  "dependent object error - edges still exist" (G1001, 23.1 Table 8, class
+  G1); QUIC and gRPC now send G1001 with a message that says the node still
+  has edges and points to DETACH DELETE. BREAKING for a client that matched
+  58000 for this refusal. Test:
+  `zig build test-sonny6738-edges-still-exist-status`.
+
+- **A DELETE removes a node whose edges it deletes too (SONNY-6728).**
+  `MATCH (a:A)-[r:R]->(b:B) DELETE r, a, b` was refused with NodeHasEdges
+  because each node was checked against the store before any edge went.
+  ISO/IEC 39075:2024 13.5 GR 4, 5 and 7 collect the nodes and edges over every
+  row of the statement, raise G1001 only for a node with a connected edge the
+  statement does not delete, then delete the edges and nodes. The check now
+  counts the statement's own edges (a node with an edge it leaves, or a DELETE
+  that names the nodes and not their edge, is still refused with nothing
+  deleted), and a DELETE without DETACH deletes its edges before its nodes. A
+  cluster leader applies the same rule before it proposes the delete. Test:
+  `zig build test-sonny6728-delete-node-and-edges`.
+
+- **`NODETACH DELETE` parses (SONNY-6729).** ISO/IEC 39075:2024 13.5 defines
+  `<delete statement>` as `[ DETACH | NODETACH ] DELETE <delete item list>`
+  (NODETACH is the default, SR 6), but `MATCH (a:A) NODETACH DELETE a` was a
+  parse error ("expected token 'RETURN', got 'identifier'"). The lexer library
+  has no NODETACH token, so the parser reads the identifier NODETACH before
+  DELETE, in a MATCH ... DELETE, a DELETE after a SET or REMOVE and a
+  statement-level DELETE, and the statement behaves as a plain DELETE (a node
+  with an edge left is refused with NodeHasEdges). Test:
+  `zig build test-sonny6729-nodetach-delete`.
+
+- **`RETURN CURRENT_GRAPH` and `CURRENT_PROPERTY_GRAPH` name the session's
+  graph (SONNY-6727).** Both worked as a `USE GRAPH` / `SESSION SET GRAPH`
+  target but were a 42000 "Variable not in scope" as a value expression, though
+  docs/SESSION_MANAGEMENT.md and ISO/IEC 39075:2024 define them. The parser now
+  reads an undelimited `CURRENT_GRAPH` / `CURRENT_PROPERTY_GRAPH` (any case, no
+  parenthesis) as a value that the evaluator answers with the session's graph
+  name: the default graph until `USE GRAPH` or `SESSION SET GRAPH` moves it,
+  then that graph, and the default again after `SESSION RESET GRAPH`. A
+  delimited `` `CURRENT_GRAPH` `` is still a plain variable. Test:
+  `zig build test-sonny6727-current-graph-value`.
+
+- **`SESSION RESET TIME ZONE` parses (SONNY-6726).** TIME lexes as the TIME
+  keyword, and the reset parser matched only an identifier named TIME, so
+  the statement (ISO/IEC 39075:2024 7.1 `<session reset arguments>`,
+  docs/SESSION_MANAGEMENT.md) was a 42000 parse error. It is accepted and
+  clears the session's time zone. Test:
+  `zig build test-sonny6726-session-reset-time-zone`.
+- **The documented type constructors and functions accept their documented
+  operands: `Bytea`/`from_hex`, `Real`/`Double`, `Array`/`array_length`,
+  `jsonb_typeof` (SONNY-6730, SONNY-6731, SONNY-6732, SONNY-6733).**
+  `Bytea('deadbeef')` and `from_hex('de')` were 22018 because only the
+  `\x`-prefixed form was read; both now take the hex digits with or without
+  the prefix, in either case (an odd digit count or a non-hex character is
+  still 22018, and the parser's unknown-escape rule means a single-backslash
+  GQL literal `'\xDEADBEEF'` reaches the function as `xDEADBEEF`: write
+  `'\\xDEADBEEF'`). `Real(3.14159)` / `Double(2.5)` were 22G03 because a
+  literal with a fraction is a decimal, which they did not take; they now
+  answer the nearest REAL (f32) / DOUBLE from the decimal's exact text (22003
+  past the type's range). `array_length([1, 2, 3])` was 22G03 for a list and
+  `Array(elem_list)` did not exist: `Array` builds an integer, boolean, text
+  or decimal array from a list of one element type (mixed types or a NULL
+  element are 22G03), and `array_length` takes an array or a list.
+  `jsonb_typeof(x)` is added (`object`, `array`, `string`, `number`,
+  `boolean`, `null`). `jsonb_get` returned a string as a slice of memory it
+  had freed and an object or array as NULL; it now returns a TEXT copy and a
+  JSONB. Test: `zig build test-sonny6730-type-functions`.
+- **A read-only `COUNT { }` or `EXISTS { }` is accepted in the values of a
+  statement that writes (SONNY-6734).** The write-shape allowlist refused any
+  subquery or pattern predicate in a writing statement with 0A000, so
+  `MATCH (a:A) CREATE (:C {n: COUNT { MATCH (x:A) }})` and the pagerank
+  update `MATCH (p)-[:KNOWS]->(n) WITH n, sum(p.pagerank / COUNT { (p)-[:KNOWS]->() })
+  AS r SET n.pagerank = 0.15 + 0.85 * r` could not run (ISO/IEC 39075:2024
+  allows a value expression subquery there). They are accepted in a SET
+  value, in a CREATE property value and in an item of the WITH between the
+  MATCH and the write: the pattern, its property maps and its WHERE may name
+  the statement's variables, the subquery's own variables and client
+  parameters (an unbound name or an unsupplied parameter is refused before
+  anything is written). Unchanged, and still refused: a subquery in a WHERE
+  or a MERGE key, a pattern comprehension and `shortestPath()` in a write, an
+  `IN (subquery)`, and any subquery that writes (SONNY-3182: it is a write for
+  the lock, the read-only floor and the cluster gate). Test: `zig build
+  test-sonny6734-6735-write-shape-subquery-names`.
+- **A statement that writes may name more than 64 variables (SONNY-6735).**
+  The allowlist's variable set held 64 names and a CREATE with more got the
+  generic 0A000, which named no limit (`CREATE (n1:K {i: 1}), ... (n100:K {i:
+  100})`). The set grows with the statement, up to 4096 distinct variables and
+  parameters; past that the statement is refused with 54000 `A statement that
+  writes may name at most 4096 distinct variables and parameters`, and
+  nothing is written. Same test step.
+
 - **A writing FOR applies its RETURN stages over the whole working table
   (SONNY-6717).** After `MATCH ... WITH` or a WITH of values, a FOR body that
   writes ran once per element and its RETURN's `ORDER BY`, `DISTINCT`,
@@ -16,6 +119,33 @@
   with a RETURN that carries only the variables the stages name; the real
   RETURN is then evaluated once over those rows, as a plain FOR's is. Test:
   `zig build test-sonny6717-for-write-return-stages`.
+
+- **A writing FOR's rows no longer read a node a later element moved
+  (SONNY-6740).** A FOR body that creates and returns a node
+  (`FOR x IN l CREATE (u:U {v: x}) RETURN u.v ...`) kept each element's row,
+  and the row held the store's own node: the next element's CREATE grew the
+  shard that node lives in and moved it, so the SONNY-6717 staged RETURN
+  read freed memory (an intermittent abort of
+  `test-sonny6717-for-write-return-stages`, 3 of 16 runs; every run with 64
+  elements). Each element's rows now own copies of their nodes and
+  relationships (`ownGraphEntities`), and the accumulator links a tracker it
+  cannot absorb. Test: the 64-element case of the same step.
+
+- **`latlon('lat,lon')` and `latlonalt('lat,lon,alt[,ref]')` are accepted
+  again (SONNY-6742).** The SONNY-6637 arity table gave `latlon` exactly two
+  arguments and `latlonalt` three or four, but both constructors, and the
+  parser, also take a single string. The table now says `latlon` 1..2 and
+  `latlonalt` 1..4, and marks both as literal-operand constructors like the
+  other type constructors. Test: `zig build test-sonny2739-float-narrowing`
+  (11/11); `test-sonny6637-function-arity` still holds.
+
+- **`test-advanced-property-ga` reads a vector index by its graph-scoped key
+  (SONNY-6743).** SONNY-6703 registers an advanced vector index under
+  `<graph>\x1f<name>`; the test still looked the index up by its bare name and
+  failed on `advanced_vector_indexes.contains("vec_idx")`. The test now takes
+  the key from `findAdvancedVectorIndexForPropertyAlloc("embedding")`, checks
+  that it ends with `\x1fvec_idx`, and uses it for the lookup and the query.
+  A test fix; no engine change.
 
 ### Security
 

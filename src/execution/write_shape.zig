@@ -64,7 +64,7 @@ const write_walk = @import("write_walk.zig");
 /// REMOVE on a variable-length relationship or a path keeps SONNY-2707's
 /// `error.VariableLengthPathWrite`, and a grouped RETURN SONNY-2683's
 /// `error.UnsupportedGroupedReturn`.
-pub const Error = error{ WriteClauseNotApplied, VariableLengthPathWrite, UnsupportedGroupedReturn };
+pub const Error = error{ WriteClauseNotApplied, VariableLengthPathWrite, UnsupportedGroupedReturn, TooManyWriteVariables };
 
 /// Where a statement runs.
 pub const Options = struct {
@@ -633,7 +633,7 @@ fn writesNameOptionalVariable(part: ast.Query) bool {
     if (part.create_pattern) |cp| addPatternNames(&written, cp);
     if (part.merge_statement) |m| addPatternNames(&written, m.pattern);
     if (mandatory.overflow or optional.overflow or written.overflow) return true;
-    for (written.items[0..written.len]) |n| {
+    for (written.slice()) |n| {
         if (optional.has(n) and !mandatory.has(n)) return true;
     }
     return false;
@@ -832,6 +832,17 @@ pub fn validateStatement(stmt: ast.Statement) Error!void {
 
 // CANARY: REQ=REQ-SONNY-3166-WRITE-ALLOWLIST; FEATURE="WriteShapeAllowlist"; ASPECT=Entry; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=engine; UPDATED=2026-09-27
 pub fn validateStatementIn(stmt: ast.Statement, opts: Options) Error!void {
+    enterScratch();
+    defer leaveScratch();
+    validateStatementBody(stmt, opts) catch |err| {
+        // SONNY-6735: a refusal because the statement names more variables
+        // than `Names.max` says so; it is still a refusal.
+        if (err == error.WriteClauseNotApplied and hit_name_limit) return error.TooManyWriteVariables;
+        return err;
+    };
+}
+
+fn validateStatementBody(stmt: ast.Statement, opts: Options) Error!void {
     // SONNY-3182: no write inside an expression, a subquery or a CTE body,
     // in any statement. EXPLAIN runs nothing.
     switch (stmt) {
@@ -1067,12 +1078,15 @@ fn validationBody(body: ast.Query, buf: []u8) Error!ast.Query {
     return stagedCarrierBody(fba.allocator(), body) catch error.WriteClauseNotApplied;
 }
 
-fn collectNames(e: ast.Expr, names: *Names, skip: *const Names) void {
+/// Whether `e` could be walked: false for an expression that holds an EXISTS
+/// { } or COUNT { }, whose outer variables a carrier column cannot name.
+fn collectNames(e: ast.Expr, names: *Names, skip: *const Names) bool {
     var local = Names{};
     var walk = ExprWalk{ .collect = &local };
     walk.visit(&e);
-    for (local.items[0..local.len]) |n| if (!skip.has(n)) names.add(n);
+    for (local.slice()) |n| if (!skip.has(n)) names.add(n);
     if (local.overflow) names.overflow = true;
+    return walk.ok;
 }
 
 // CANARY: REQ=REQ-SONNY-6717-FOR-WRITE-RETURN-STAGES; FEATURE="ForStatement"; ASPECT=WriteBodyReturnStages; STATUS=TESTED; TEST=tests/test_sonny6717_for_write_return_stages.zig; OWNER=engine; UPDATED=2026-11-17
@@ -1084,18 +1098,25 @@ fn collectNames(e: ast.Expr, names: *Names, skip: *const Names) void {
 /// .stageForReturn`), ISO/IEC 39075:2024 14.8; the body's own RETURN stages
 /// (DISTINCT, ORDER BY, window, GROUP BY, HAVING) are dropped here.
 pub fn stagedCarrierBody(arena: std.mem.Allocator, body: ast.Query) !ast.Query {
+    enterScratch();
+    defer leaveScratch();
     var aliases = Names{};
     for (body.ret.items) |item| if (item.alias) |a| aliases.add(a);
     const none = Names{};
     var names = Names{};
-    for (body.ret.items) |item| collectNames(item.expr, &names, &none);
-    if (body.group_by) |gb| for (gb.keys) |k| collectNames(k, &names, &aliases);
-    if (body.having) |h| collectNames(h, &names, &aliases);
-    if (body.order_by) |ob| for (ob.keys) |k| collectNames(k.expr, &names, &aliases);
-    if (names.overflow) return error.WriteClauseNotApplied;
+    var ok = true;
+    for (body.ret.items) |item| ok = collectNames(item.expr, &names, &none) and ok;
+    if (body.group_by) |gb| for (gb.keys) |k| {
+        ok = collectNames(k, &names, &aliases) and ok;
+    };
+    if (body.having) |h| ok = collectNames(h, &names, &aliases) and ok;
+    if (body.order_by) |ob| for (ob.keys) |k| {
+        ok = collectNames(k.expr, &names, &aliases) and ok;
+    };
+    if (names.overflow or !ok) return error.WriteClauseNotApplied;
 
     const items = try arena.alloc(ast.ReturnItem, names.len + 1);
-    for (names.items[0..names.len], items[0..names.len]) |n, *out| {
+    for (names.slice(), items[0..names.len]) |n, *out| {
         out.* = .{ .expr = .{ .Ident = .{ .orig = n, .cnf = try std.ascii.allocUpperString(arena, n) } }, .alias = n };
     }
     items[names.len] = .{ .expr = .{ .Int = 1 }, .alias = "__one" };
@@ -1544,25 +1565,45 @@ fn mergeFacts(facts: *Facts, m: ast.MergeStatement) void {
 /// SONNY-3184: EXISTS { MATCH ... WHERE <inner variable> } was always false).
 fn queryExprFacts(facts: *Facts, q: ast.Query) void {
     var it = QueryExprs{ .q = q };
-    while (it.next()) |e| exprFacts(facts, e);
+    while (it.next()) |e| exprFactsIn(facts, e, valuePosition(q, it.stage));
     patternExprFacts(facts, q.match);
-    if (q.create_pattern) |cp| patternExprFacts(facts, cp);
+    // SONNY-6734: a CREATE's property value is a value position.
+    if (q.create_pattern) |cp| patternExprFactsIn(facts, cp, true);
     if (q.merge_statement) |m| patternExprFacts(facts, m.pattern);
 }
 
+/// SONNY-6734: whether the expressions of `QueryExprs` stage `stage` are
+/// values the statement computes (a WITH item, a SET value), where an EXISTS
+/// { } or COUNT { } that only reads is accepted. A WHERE, FILTER, HAVING, a
+/// MERGE's keys, an initial WITH's items (bound as parameters, with no row
+/// to read) and the other stages keep refusing it.
+fn valuePosition(q: ast.Query, stage: usize) bool {
+    return switch (stage) {
+        // The WITH between the MATCH and the write (not an initial WITH).
+        9 => !q.is_initial_with and q.initial_with == null,
+        // SET values.
+        16 => true,
+        else => false,
+    };
+}
+
 fn patternExprFacts(facts: *Facts, pattern: ast.GraphPattern) void {
+    patternExprFactsIn(facts, pattern, false);
+}
+
+fn patternExprFactsIn(facts: *Facts, pattern: ast.GraphPattern, values: bool) void {
     for (pattern.chains) |chain| {
-        if (chain.head) |head| nodeExprFacts(facts, head);
+        if (chain.head) |head| nodeExprFacts(facts, head, values);
         for (chain.hops) |hop| {
-            nodeExprFacts(facts, hop.left);
-            nodeExprFacts(facts, hop.right);
-            if (hop.rel.props) |props| for (props) |p| exprFacts(facts, p.value.*);
+            nodeExprFacts(facts, hop.left, values);
+            nodeExprFacts(facts, hop.right, values);
+            if (hop.rel.props) |props| for (props) |p| exprFactsIn(facts, p.value.*, values);
         }
     }
 }
 
-fn nodeExprFacts(facts: *Facts, n: ast.NodePattern) void {
-    if (n.props) |props| for (props) |p| exprFacts(facts, p.value.*);
+fn nodeExprFacts(facts: *Facts, n: ast.NodePattern, values: bool) void {
+    if (n.props) |props| for (props) |p| exprFactsIn(facts, p.value.*, values);
 }
 
 fn setClauseExprFacts(facts: *Facts, sc: ast.SetClause) void {
@@ -1648,7 +1689,13 @@ fn setValue(sc: ast.SetClause) ?ast.Expr {
 
 /// A subquery or a pattern predicate anywhere in `e`.
 fn exprFacts(facts: *Facts, e: ast.Expr) void {
-    var walk = ExprWalk{ .facts = facts };
+    exprFactsIn(facts, e, false);
+}
+
+/// `exprFacts`; `values`: `e` is a value the statement computes, where an
+/// EXISTS { } or COUNT { } that only reads is no fact (SONNY-6734).
+fn exprFactsIn(facts: *Facts, e: ast.Expr, values: bool) void {
+    var walk = ExprWalk{ .facts = facts, .values = values };
     walk.visit(&e);
 }
 
@@ -1682,6 +1729,8 @@ const ExprWalk = struct {
     collect: ?*Names = null,
     /// Set `expr_subquery` / `expr_pattern`.
     facts: ?*Facts = null,
+    /// With `facts`: this is a value position (SONNY-6734).
+    values: bool = false,
     ok: bool = true,
 
     /// A list comprehension's variable, bound in its filter and map.
@@ -1706,6 +1755,49 @@ const ExprWalk = struct {
         if (self.facts) |set| set.insert(.expr_pattern);
         // A pattern binds variables of its own: not checked, and refused.
         if (self.scope != null) self.ok = false;
+    }
+
+    /// SONNY-6734: `EXISTS { pattern [WHERE w] }` and `COUNT { ... }`. Their
+    /// AST holds a graph pattern and one expression, and no clause, so they
+    /// cannot write; a write nested in their WHERE (an IN subquery) is the
+    /// write walk's, which runs first. The pattern binds variables of its own:
+    /// they, and the outer variables it names, are bound inside the property
+    /// maps and the WHERE, which are walked with the same modes. Left out of
+    /// every value position, a subquery is a fact no shape allows.
+    fn subquery(self: *ExprWalk, stack: *std.ArrayList(Pending), alloc: std.mem.Allocator, bound_alloc: std.mem.Allocator, b: ?*const Bound, gp: *const ast.GraphPattern, where: ?*ast.Expr) !void {
+        // A carrier column cannot name the outer variables the pattern reads.
+        if (self.collect != null) self.ok = false;
+        if (self.facts) |set| if (!self.values) set.insert(.expr_pattern);
+        var inner = b;
+        for (gp.chains) |chain| {
+            const names = [_]?[]const u8{ chain.name, if (chain.head) |head| head.name else null };
+            for (names) |maybe| inner = try bindName(bound_alloc, inner, maybe);
+            for (chain.hops) |hop| {
+                inner = try bindName(bound_alloc, inner, hop.left.name);
+                inner = try bindName(bound_alloc, inner, hop.rel.name);
+                inner = try bindName(bound_alloc, inner, hop.right.name);
+            }
+        }
+        if (where) |w| try stack.append(alloc, .{ .e = w, .bound = inner });
+        for (gp.chains) |chain| {
+            if (chain.head) |head| try self.nodeProps(stack, alloc, head, inner);
+            for (chain.hops) |hop| {
+                try self.nodeProps(stack, alloc, hop.left, inner);
+                try self.nodeProps(stack, alloc, hop.right, inner);
+                if (hop.rel.props) |props| for (props) |p| try stack.append(alloc, .{ .e = p.value, .bound = inner });
+            }
+        }
+    }
+
+    fn bindName(bound_alloc: std.mem.Allocator, up: ?*const Bound, name_: ?[]const u8) !?*const Bound {
+        const n = name_ orelse return up;
+        const node = try bound_alloc.create(Bound);
+        node.* = .{ .name = n, .up = up };
+        return node;
+    }
+
+    fn nodeProps(_: *ExprWalk, stack: *std.ArrayList(Pending), alloc: std.mem.Allocator, n: ast.NodePattern, inner: ?*const Bound) !void {
+        if (n.props) |props| for (props) |p| try stack.append(alloc, .{ .e = p.value, .bound = inner });
     }
 
     /// The stack could not grow: refuse.
@@ -1803,7 +1895,9 @@ const ExprWalk = struct {
                         stack.append(alloc, .{ .e = w.then_expr, .bound = b }) catch return self.fail();
                     }
                 },
-                .PatternComp, .Exists, .ShortestPath, .PatternCount => self.pattern(),
+                .PatternComp, .ShortestPath => self.pattern(),
+                .Exists => |x| self.subquery(&stack, alloc, bounds.allocator(), b, x.pattern, x.where) catch return self.fail(),
+                .PatternCount => |x| self.subquery(&stack, alloc, bounds.allocator(), b, x.pattern, x.where) catch return self.fail(),
                 .MapProjection => |mp| kids[0] = mp.source,
                 .ListComprehension => |lc| {
                     kids[0] = lc.source;
@@ -1830,16 +1924,32 @@ const ExprWalk = struct {
 // ---------------------------------------------------------------------------
 // Variable scope.
 
-/// A small set of names (the variables in scope, the parameters named).
+/// SONNY-6735: a set of names (the variables in scope, the parameters named)
+/// with no fixed size below `max` distinct names. A `Names` is a value: a
+/// copy is a snapshot, and adding to either copy never changes the other (the
+/// growable buffer is shared, and a view appends in place only while it is
+/// the buffer's newest, else it copies). The buffers live in the validation's
+/// scratch arena (`enterScratch`); a name beyond `max`, or an allocation that
+/// fails, sets `overflow` and every caller refuses.
 const Names = struct {
-    const max = 64;
-    items: [max][]const u8 = undefined,
+    /// Distinct names. A statement past it is refused with
+    /// `error.TooManyWriteVariables` (54000), not a generic 0A000.
+    const max = 4096;
+
+    const Buf = struct { used: usize, items: [][]const u8 };
+
+    buf: ?*Buf = null,
     len: usize = 0,
-    /// More names than `max`: the caller refuses.
+    /// More names than `max` (or no memory for them): the caller refuses.
     overflow: bool = false,
 
+    fn slice(self: *const Names) []const []const u8 {
+        const b = self.buf orelse return &.{};
+        return b.items[0..self.len];
+    }
+
     fn has(self: *const Names, n: []const u8) bool {
-        for (self.items[0..self.len]) |it| {
+        for (self.slice()) |it| {
             if (std.mem.eql(u8, it, n)) return true;
         }
         return false;
@@ -1847,19 +1957,67 @@ const Names = struct {
 
     fn add(self: *Names, n: []const u8) void {
         if (self.has(n)) return;
-        if (self.len == max) {
+        if (self.len >= max) {
+            hit_name_limit = true;
             self.overflow = true;
             return;
         }
-        self.items[self.len] = n;
+        const arena = scratchAllocator() orelse {
+            self.overflow = true;
+            return;
+        };
+        if (self.buf) |b| {
+            if (b.used == self.len and self.len < b.items.len) {
+                b.items[self.len] = n;
+                b.used += 1;
+                self.len += 1;
+                return;
+            }
+        }
+        const items = arena.alloc([]const u8, @min(max, @max(8, self.len * 2))) catch {
+            self.overflow = true;
+            return;
+        };
+        const nb = arena.create(Buf) catch {
+            self.overflow = true;
+            return;
+        };
+        @memcpy(items[0..self.len], self.slice());
+        items[self.len] = n;
+        nb.* = .{ .used = self.len + 1, .items = items };
+        self.buf = nb;
         self.len += 1;
     }
 
     fn addAll(self: *Names, other: *const Names) void {
-        for (other.items[0..other.len]) |n| self.add(n);
+        for (other.slice()) |n| self.add(n);
         if (other.overflow) self.overflow = true;
     }
 };
+
+/// The validation's scratch memory (a `Names`' buffers): one arena per
+/// thread, made by the outermost entry point and freed when it returns.
+threadlocal var scratch: std.heap.ArenaAllocator = undefined;
+threadlocal var scratch_depth: usize = 0;
+/// Set when a `Names` refused a name past `Names.max` in this validation.
+threadlocal var hit_name_limit: bool = false;
+
+fn enterScratch() void {
+    if (scratch_depth == 0) {
+        scratch = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+        hit_name_limit = false;
+    }
+    scratch_depth += 1;
+}
+
+fn leaveScratch() void {
+    scratch_depth -= 1;
+    if (scratch_depth == 0) scratch.deinit();
+}
+
+fn scratchAllocator() ?std.mem.Allocator {
+    return if (scratch_depth == 0) null else scratch.allocator();
+}
 
 fn itemName(item: ast.ReturnItem) ?[]const u8 {
     if (item.alias) |a| return a;
@@ -2009,7 +2167,7 @@ fn checkScope(q: ast.Query, part: ast.Query, ex: Executor, ctx: PartCtx, params:
     var created = Names{};
     if (part.create_pattern) |cp| addPatternNames(&created, cp);
     if (part.merge_statement) |m| addPatternNames(&created, m.pattern);
-    for (bound.items[0..bound.len]) |n| {
+    for (bound.slice()) |n| {
         if (pattern_names.has(n) or created.has(n)) return refuse;
     }
     // Before any WITH after the MATCH.
