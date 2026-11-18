@@ -14970,6 +14970,14 @@ pub fn build(b: *std.Build) void {
     const run_sonny6555_null_tests = b.addRunArtifact(sonny6555_null_tests);
     shardDep(test_step, &run_sonny6555_null_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6555-null-arguments", "Run SONNY-6555 item 4 regression (ISO/IEC 39075 20.22 GR 1 b, 3 b, 4 e: length(NULL) and size(NULL) are NULL, a character string's length counts characters, a value of no sized type is 22G03; every scalar function given NULL arguments answers NULL or raises, never a made-up value)").dependOn(&run_sonny6555_null_tests.step);
+    // SONNY-6730/6731/6732/6733: documented type constructors and functions. See tests/test_sonny6730_type_function_constructors.zig.
+    const sonny6730_tf_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6730_type_function_constructors.zig"), .target = target, .optimize = optimize });
+    sonny6730_tf_mod.addImport("geode", root_mod);
+    sonny6730_tf_mod.addImport("logging", logging_mod);
+    const sonny6730_tf_tests = b.addTest(.{ .root_module = sonny6730_tf_mod });
+    const run_sonny6730_tf_tests = b.addRunArtifact(sonny6730_tf_tests);
+    shardDep(test_step, &run_sonny6730_tf_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6730-type-functions", "Run SONNY-6730/6731/6732/6733 regression (docs/TYPES_AND_FUNCTIONS.md: Bytea(hex) and from_hex(str) take the hex digits with or without the \\x prefix, Real(3.14159) and Double(2.5) take a decimal literal, Array(elem_list) builds an array and array_length takes an array or a list, jsonb_typeof gives the JSON type name; in-memory and persisted sessions)").dependOn(&run_sonny6730_tf_tests.step);
     // SONNY-6555 item 3: a column the ordered index cannot serve is declined before its build starts. See tests/test_sonny6555_ordered_build_probe.zig.
     const sonny6555_obp_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6555_ordered_build_probe.zig"), .target = target, .optimize = optimize });
     sonny6555_obp_mod.addImport("geode", root_mod);

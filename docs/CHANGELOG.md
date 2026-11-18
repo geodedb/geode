@@ -54,6 +54,25 @@
   docs/SESSION_MANAGEMENT.md) was a 42000 parse error. It is accepted and
   clears the session's time zone. Test:
   `zig build test-sonny6726-session-reset-time-zone`.
+- **The documented type constructors and functions accept their documented
+  operands: `Bytea`/`from_hex`, `Real`/`Double`, `Array`/`array_length`,
+  `jsonb_typeof` (SONNY-6730, SONNY-6731, SONNY-6732, SONNY-6733).**
+  `Bytea('deadbeef')` and `from_hex('de')` were 22018 because only the
+  `\x`-prefixed form was read; both now take the hex digits with or without
+  the prefix, in either case (an odd digit count or a non-hex character is
+  still 22018, and the parser's unknown-escape rule means a single-backslash
+  GQL literal `'\xDEADBEEF'` reaches the function as `xDEADBEEF`: write
+  `'\\xDEADBEEF'`). `Real(3.14159)` / `Double(2.5)` were 22G03 because a
+  literal with a fraction is a decimal, which they did not take; they now
+  answer the nearest REAL (f32) / DOUBLE from the decimal's exact text (22003
+  past the type's range). `array_length([1, 2, 3])` was 22G03 for a list and
+  `Array(elem_list)` did not exist: `Array` builds an integer, boolean, text
+  or decimal array from a list of one element type (mixed types or a NULL
+  element are 22G03), and `array_length` takes an array or a list.
+  `jsonb_typeof(x)` is added (`object`, `array`, `string`, `number`,
+  `boolean`, `null`). `jsonb_get` returned a string as a slice of memory it
+  had freed and an object or array as NULL; it now returns a TEXT copy and a
+  JSONB. Test: `zig build test-sonny6730-type-functions`.
 
 - **A writing FOR applies its RETURN stages over the whole working table
   (SONNY-6717).** After `MATCH ... WITH` or a WITH of values, a FOR body that

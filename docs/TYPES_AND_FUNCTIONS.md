@@ -72,14 +72,16 @@
 - **Storage**: 1 byte tag + 4 bytes LE
 - **Tag**: `0x22`
 - **Constraints**: Forbids NaN/Inf (returns `ERR_FLOAT_NAN`)
-- **Constructor**: `Real(value)`
+- **Constructor**: `Real(value)` (an integer, a decimal literal such as
+  `3.14159`, or a DOUBLE; a value past the f32 range is 22003)
 
 #### Double (f64)
 
 - **Storage**: 1 byte tag + 8 bytes LE
 - **Tag**: `0x23`
 - **Constraints**: Forbids NaN/Inf (returns `ERR_FLOAT_NAN`)
-- **Constructor**: `Double(value)`
+- **Constructor**: `Double(value)` (an integer, a decimal literal such as
+  `2.5`, or a REAL)
 
 #### Decimal128
 
@@ -182,10 +184,14 @@
 - **Storage**: Tag + 4 bytes length + raw bytes
 - **Tag**: `0x2E`
 - **I/O Format**: `\xDEADBEEF` (hex)
-- **Constructor**: `Bytea(hex_string)`
+- **Constructor**: `Bytea(hex_string)` - the hex digits, in either case, with
+  or without the `\x` prefix (`Bytea('deadbeef')`, `Bytea('\\xDEADBEEF')`);
+  an odd digit count or a character that is not a hex digit is 22018. In a
+  GQL string literal the backslash is written `\\` (an unknown escape such as
+  `\x` drops its backslash)
 - **Functions**:
-  - `to_hex(bytea)` - Convert to hex string
-  - `from_hex(str)` - Parse hex string
+  - `to_hex(bytea)` - Convert to hex string (`\xDEADBEEF`)
+  - `from_hex(str)` - Parse hex string (same forms as `Bytea(hex_string)`)
 
 #### Json
 
@@ -201,9 +207,12 @@
 - **Features**: Keys sorted, duplicates removed, canonical form
 - **Constructor**: `Jsonb(text)`
 - **Functions**:
-  - `jsonb_get(obj, path)` - Extract value by path
+  - `jsonb_get(obj, path)` - Extract value by path (`$.a.b.0`): a number is a
+    DOUBLE, a string TEXT, a boolean BOOL, an object or array a JSONB; JSON
+    null, a missing path or a path without the `$.` prefix is NULL
   - `jsonb_exists(obj, key)` - Check key existence
-  - `jsonb_typeof()` - Get JSON type
+  - `jsonb_typeof(x)` - Get the JSON type name: `object`, `array`, `string`,
+    `number`, `boolean` or `null` (NULL for NULL)
   - `jsonb_set(obj, path, value)` - Update value
 
 #### XML
@@ -466,9 +475,11 @@
 - **Tag**: `0x36`
 - **Constraint**: Homogeneous element type
 - **NULL Handling**: NULL for entire array, not elements
-- **Constructor**: `Array(elem_list)`
+- **Constructor**: `Array(elem_list)` - a list of integers, booleans, strings
+  or decimals; an empty list is an empty array; mixed element types or a NULL
+  element are 22G03
 - **Functions**:
-  - `array_length(a)` - Get length
+  - `array_length(a)` - Get length (an array, or a list such as `[1, 2, 3]`)
   - `array_contains(a, x)` - Check membership
   - `array_get(a, i)` - Get element by index
 

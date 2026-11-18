@@ -32,7 +32,7 @@ Interval("P1Y2M3DT4H5M6S")             -- ISO duration  (Geode extension: both u
 MakeInterval(12, 30, 1000000)          -- 12 months, 30 days, 1M microseconds
 
 -- Binary/JSON Types
-Bytea("\\xDEADBEEF")                   -- Binary data as hex
+Bytea("\\xDEADBEEF")                   -- Binary data as hex (the \x prefix is optional: Bytea('deadbeef'))
 Json('{"key": "value"}')               -- JSON text
 Jsonb('{"key": "value"}')              -- Binary JSON (canonical)
 Xml('<root><child/></root>')           -- Well-formed XML
@@ -76,8 +76,8 @@ Vector([0.1, 0.2, 0.3, 0.4])         -- Float32 vector
 Every function shown here is dispatched; how many operands each takes is in
 `src/eval/function_arity.zig` (a call with another count is refused with
 42000). SONNY-6637 removed functions this page listed that no dispatch
-answered: `Enum()`, `Array()`, `length_chars()`, `now()`, `date_add()`,
-`ts_sub()`, `age()`, `jsonb_typeof()`, `jsonb_set()`, `array_get()`,
+answered: `Enum()`, `length_chars()`, `now()`, `date_add()`,
+`ts_sub()`, `age()`, `jsonb_set()`, `array_get()`,
 `bit_or()`, `bit_xor()`, `bit_get()`, `bit_set()` and `bounds()`.
 
 ### Numeric Operations
@@ -159,6 +159,7 @@ st_within(geom1, geom2)              -- Spatial within test
 ```text
 jsonb_get(doc, "$.path.to.value")    -- Extract by path
 jsonb_exists(doc, "key")             -- Check key existence
+jsonb_typeof(doc)                    -- JSON type name: object, array, string, number, boolean, null
 ```
 
 ### URL/Domain Functions
@@ -183,7 +184,8 @@ uuid_equal(uuid1, uuid2)             -- Bytewise comparison
 ### Array Functions
 
 ```text
-array_length(arr)                    -- Get array length
+Array([1, 2, 3])                     -- Construct an array from a list of one element type
+array_length(arr)                    -- Get array length (an array or a list)
 array_contains(arr, value)           -- Check membership
 ```
 

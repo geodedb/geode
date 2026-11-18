@@ -24,6 +24,7 @@ const type_promotion = @import("type_promotion.zig");
 const decimal128 = @import("../types/decimal128.zig");
 const narrowing = @import("../types/narrowing.zig");
 const decimal_text = @import("../types/decimal_text.zig");
+const array_functions = @import("array_functions.zig");
 
 pub const Value = value_types.Value;
 pub const EvalError = value_types.EvalError;
@@ -43,6 +44,20 @@ const eval = @import("../eval.zig");
 /// `toFloat('1e400')`) and turns NaN into a garbage coefficient.
 pub fn roundedScale6(f: f64) EvalError!i128 {
     return decimal128.checkedScaledCoeff(@round(f * 1_000_000), 1.0);
+}
+
+// CANARY: REQ=REQ-SONNY-6730-TYPE-FUNCTIONS; FEATURE="BuiltinFunctions"; ASPECT=RealDoubleOfDecimal; STATUS=TESTED; TEST=tests/test_sonny6730_type_function_constructors.zig; OWNER=eval; UPDATED=2026-11-17
+/// A decimal as the nearest REAL (f32) or DOUBLE (f64): its exact text read
+/// as the float type, so the rounding is the correct one, not a division of
+/// two rounded numbers. SONNY-6731: a numeric literal with a fraction
+/// (`3.14159`) is a decimal, which `Real(value)` / `Double(value)` did not
+/// take (22G03). A value no float of the type holds is 22003.
+fn decimalAsFloat(comptime T: type, allocator: std.mem.Allocator, coeff: i128, scale: u8) EvalError!T {
+    const text = try decimal_text.alloc(allocator, coeff, scale);
+    defer allocator.free(text);
+    const f = std.fmt.parseFloat(T, text) catch return EvalError.InvalidCast;
+    if (!std.math.isFinite(f)) return EvalError.IntegerOverflow;
+    return f;
 }
 
 pub fn mapEvaluatorError(err: evaluator_functions.EvaluatorError) EvalError {
@@ -1971,6 +1986,7 @@ pub fn evalAdvancedTypeFunction(
         // SONNY-6645 item 4: a NULL operand is NULL (ISO/IEC 39075:2024
         // 20.22 GR 1 b); it was 22G03.
         if (arg == .Null) return Value{ .Null = {} };
+        if (arg == .Decimal) return Value{ .Real = try decimalAsFloat(f32, allocator, arg.Decimal.coeff, arg.Decimal.scale) };
         const result = evaluator_functions.Real(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -1981,6 +1997,7 @@ pub fn evalAdvancedTypeFunction(
         // SONNY-6645 item 4: a NULL operand is NULL (ISO/IEC 39075:2024
         // 20.22 GR 1 b); it was 22G03.
         if (arg == .Null) return Value{ .Null = {} };
+        if (arg == .Decimal) return Value{ .Double = try decimalAsFloat(f64, allocator, arg.Decimal.coeff, arg.Decimal.scale) };
         const result = evaluator_functions.Double(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
@@ -2276,7 +2293,16 @@ pub fn evalAdvancedTypeFunction(
         const path = try eval.evalExpr(allocator, args[1].*, env);
         if (anyNull(&.{ doc, path })) return Value{ .Null = {} };
         const path_text = (try textArg(path)) orelse return Value{ .Null = {} };
-        const result = evaluator_functions.jsonb_get(evalValueToHeapValue(doc), path_text) catch |err| return mapEvaluatorError(err);
+        const result = evaluator_functions.jsonb_get(allocator, evalValueToHeapValue(doc), path_text) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "jsonb_typeof")) {
+        if (args.len != 1) return EvalError.WrongArgumentCount;
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        // A NULL operand is NULL (ISO/IEC 39075:2024 20.22 GR 1 b).
+        if (arg == .Null) return Value{ .Null = {} };
+        const result = evaluator_functions.jsonb_typeof(allocator, evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
@@ -2411,10 +2437,23 @@ pub fn evalAdvancedTypeFunction(
         return heapValueToEvalValue(result);
     }
 
+    if (std.mem.eql(u8, function_name, "array")) {
+        if (args.len != 1) return EvalError.WrongArgumentCount;
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        // The array is NULL as a whole, or not at all.
+        if (arg == .Null) return Value{ .Null = {} };
+        return switch (arg) {
+            .List => |items| try array_functions.arrayFromList(allocator, items),
+            else => EvalError.TypeMismatch,
+        };
+    }
+
     if (std.mem.eql(u8, function_name, "array_length")) {
         if (args.len != 1) return EvalError.WrongArgumentCount;
         const arg = try eval.evalExpr(allocator, args[0].*, env);
         if (anyNull(&.{arg})) return Value{ .Null = {} };
+        // SONNY-6732: an array, or the list a literal (`[1, 2, 3]`) is.
+        if (array_functions.lengthOf(arg)) |n| return Value{ .Int = @intCast(n) };
         const result = evaluator_functions.array_length(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
