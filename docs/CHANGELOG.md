@@ -4,6 +4,22 @@
 
 ### Fixed
 
+- **A gRPC client that disconnects or resets its stream cancels its
+  statement (SONNY-6759).** The QUIC handler cancels a statement whose
+  client closed its connection (SONNY-3390); a gRPC RPC's only cancel source
+  was the server-wide shutdown flag (SONNY-6753), so a statement whose client
+  closed its TCP connection or sent RST_STREAM ran on to completion, holding
+  a core and its working set for minutes. Each gRPC RPC now has its own
+  cancel flag, installed as the executor's cancel source, which a cancel
+  watcher (`src/transport/grpc_cancel_watch.zig`, one thread alive while any
+  RPC is in flight, 50 ms cadence) sets when the server shuts down, the peer
+  reset the RPC's stream (`Transport.isStreamReset`), or the socket reports a
+  read-side hangup, hangup or error. The vendored grpc_zig exposes the
+  peer's disconnect only as its private `peer_gone` flag, so the disconnect
+  is read from the socket (POLLRDHUP on Linux; elsewhere only an abortive
+  close is seen). A minutes-long comma join now stops within about 2 s of
+  either event. `zig build test-sonny6759-grpc-disconnect-cancel` is 1/1.
+
 - **A clean shutdown closes the transaction undo log (SONNY-6758).** The
   durable undo log (`txn_undo.wal`) that `server_init.openTxnUndoLog` opens
   and installs at startup was never uninstalled or closed, so every clean

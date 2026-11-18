@@ -90,6 +90,7 @@ const node_scan_stream = geode.node_scan_stream;
 const query_plan_cache = geode.query_plan_cache;
 const geode_auth = @import("geode_auth");
 const grpc_tls = @import("grpc_tls.zig");
+const grpc_cancel_watch = @import("grpc_cancel_watch.zig");
 // SONNY-6593: the RPCs served, exactly the ones geode.proto declares.
 const grpc_service_methods = geode.grpc_service_methods;
 // Issue #515: Backup types for new gRPC handlers
@@ -1401,9 +1402,27 @@ fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTrans
     // completion: the shutdown sat out the whole gRPC drain timeout, skipped
     // the store free, and reached the allocator leak check (or the teardown
     // watchdog) with the statement's working set still allocated.
+    //
+    // SONNY-6759: the cancel source is this RPC's own flag, which the cancel
+    // watcher also sets when the client closes its connection or resets the
+    // RPC's stream (RST_STREAM), as a QUIC client closing its connection
+    // cancels its statement. Should the watcher thread not start, the
+    // shutdown flag alone is the source, as before.
     const prev_cancel = read_budget.streamCancelSource();
-    read_budget.setStreamCancelSource(&g_grpc_shutting_down);
+    var cancel_watch = grpc_cancel_watch.Watch.init(trans, &g_grpc_shutting_down);
+    const watched = grpc_cancel_watch.register(&cancel_watch);
+    read_budget.setStreamCancelSource(if (watched) &cancel_watch.cancel else &g_grpc_shutting_down);
     defer read_budget.setStreamCancelSource(prev_cancel);
+    defer if (watched) {
+        grpc_cancel_watch.unregister(&cancel_watch);
+        switch (cancel_watch.cancelReason()) {
+            .stream_reset, .peer_closed => |why| log.info("gRPC statement cancelled: the client went away", &.{
+                Attr.string("method", method),
+                Attr.string("reason", @tagName(why)),
+            }),
+            .none, .shutdown => {},
+        }
+    };
 
     log.info("gRPC dispatch", &.{
         Attr.string("method", if (method.len > 0) method else "(empty)"),
