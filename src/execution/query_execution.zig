@@ -1556,8 +1556,12 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q_in: ast.Query, co
     const chain_writes = q.next_query != null and query_traits.isQueryMutating(&q);
     const write_carrying = q.set_clauses.len > 0 or q.remove_clauses.len > 0 or
         q.delete_items.len > 0 or q.create_pattern != null or q.merge_statement != null or chain_writes;
+    // SONNY-6747: a write query's nested queries (chained parts, CALL bodies)
+    // are part of the write: no read scope inside it (`beginWriteWindow`).
+    const write_window: ?read_budget.WriteWindow = if (write_carrying) read_budget.beginWriteWindow() else null;
+    defer if (write_window) |w| read_budget.endWriteWindow(w);
     var read_scope = read_budget.Scope.init();
-    const read_scope_active = !write_carrying and
+    const read_scope_active = !write_carrying and !read_budget.inWriteWindow() and
         (read_scope.budget_bytes != read_budget.unlimited or
             read_scope.cancel != null or read_scope.watchdog_cancel != null);
     if (read_scope_active) read_budget.beginScope(&read_scope);

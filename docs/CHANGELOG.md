@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- **A DELETE statement is no longer aborted by the read budget
+  (SONNY-6747).** With `GEODE_READ_EXECUTOR_BUDGET_MB=1` and about 2 MiB of fat
+  nodes, `MATCH (n:L) DETACH DELETE n RETURN count(n)` failed with SQLSTATE
+  53200 (ReadQueryBudgetExceeded) and deleted nothing. The read budget applies
+  only to non-write queries, but a DELETE statement resolves its targets with a
+  write-free `MATCH ... RETURN n` through the read entry point, which installed
+  the read scope over it, and the SONNY-6744 charge then tripped it. A write
+  statement now opens a write window (`read_budget.beginWriteWindow`) in which
+  no read scope is installed and any enclosing one is hidden; a write-carrying
+  query opens one for its nested queries too. A pure read still aborts with
+  53200. `zig build test-sonny6747-write-not-read-budgeted` is 3/3 and
+  `zig build test-gap0044-read-budget-cancel` is 7/7.
+
 - **A runaway full-row read aborts with ReadQueryBudgetExceeded again
   (SONNY-6744).** `MATCH (n:L) RETURN n` over fat nodes returned every row
   regardless of `GEODE_READ_EXECUTOR_BUDGET_MB` (SQLSTATE 53200): the read

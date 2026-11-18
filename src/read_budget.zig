@@ -153,6 +153,35 @@ pub fn activeScope() ?*Scope {
     return t_active;
 }
 
+/// SONNY-6747: depth of the write statements running on this thread.
+threadlocal var t_write_depth: u32 = 0;
+
+/// SONNY-6747: a write statement's exemption from the read budget. The read
+/// scope is gated per QUERY (`!write_carrying`), but a write statement can run
+/// a write-free query of its own: a DELETE statement resolves its targets with a
+/// synthesized `MATCH ... RETURN n` through the read entry point, which then saw
+/// a read, installed the read scope, and aborted the DELETE with 53200 (deleting
+/// nothing). While a window is open no read scope is installed (`inWriteWindow`)
+/// and any enclosing one is hidden, so `charge` / `check` never reach it: a write
+/// runs under the write budget only.
+pub const WriteWindow = struct { prev_active: ?*Scope };
+
+pub fn beginWriteWindow() WriteWindow {
+    const w: WriteWindow = .{ .prev_active = t_active };
+    t_active = null;
+    t_write_depth += 1;
+    return w;
+}
+
+pub fn endWriteWindow(w: WriteWindow) void {
+    t_write_depth -= 1;
+    t_active = w.prev_active;
+}
+
+pub fn inWriteWindow() bool {
+    return t_write_depth != 0;
+}
+
 /// Charge `n` live bytes to the active scope (no-op without one).
 pub fn charge(n: u64) void {
     const s = t_active orelse return;
@@ -401,6 +430,25 @@ test "budget trip takes precedence over cancel; no scope = no-op" {
     // No active scope: check() is a no-op even with the flag set.
     try check();
     try std.testing.expect(!exceeded());
+}
+
+test "write window hides the read scope and restores it (SONNY-6747)" {
+    var s = Scope{ .budget_bytes = 10 };
+    beginScope(&s);
+    defer endScope(&s);
+    try std.testing.expect(!inWriteWindow());
+    const w = beginWriteWindow();
+    try std.testing.expect(inWriteWindow());
+    try std.testing.expect(activeScope() == null);
+    charge(1000); // a write's allocations never reach the read scope
+    try check();
+    const inner = beginWriteWindow(); // nested write statement
+    endWriteWindow(inner);
+    try std.testing.expect(inWriteWindow());
+    endWriteWindow(w);
+    try std.testing.expect(!inWriteWindow());
+    try std.testing.expect(activeScope() == &s);
+    try std.testing.expectEqual(@as(u64, 0), s.live_bytes);
 }
 
 test "metered allocator charges net-live and backstops after trip" {

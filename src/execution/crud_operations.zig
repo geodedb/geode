@@ -4,6 +4,7 @@ const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const fle_integration = @import("../fle_integration.zig"); // SONNY-6362
 const property_codec = @import("../property_value_codec.zig");
+const read_budget = @import("../read_budget.zig"); // SONNY-6747
 const property_mutation = @import("property_mutation.zig");
 const write_precheck = @import("write_precheck.zig");
 const write_scope = @import("write_scope.zig");
@@ -5168,6 +5169,12 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
     // the match-set resolution through the match path, which applies both — but
     // the call is kept for its fail-closed rejection.
     _ = try tenantFilterFromContext(context);
+
+    // SONNY-6747: the target resolution below runs a write-free MATCH ...
+    // RETURN through the read entry point; it is this DELETE's own scan, so
+    // the read budget must not install over it (and abort the DELETE, 53200).
+    const write_window = read_budget.beginWriteWindow();
+    defer read_budget.endWriteWindow(write_window);
 
     // Track deleted node count
     var deleted_count: usize = 0;
