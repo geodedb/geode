@@ -241,8 +241,12 @@
             // 2026-11-18: v0.1.56 (54491db, SONNY-6630) — otel v0.1.30 (lazy), so
             // one otel/thread-pool tree; no transport change (test-only fixes since
             // v0.1.55). Lockstep with geode-client-zig v0.3.21 (one quic module).
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.56#54491db86e1aceec79b80053938a67c0ec1e772f",
-            .hash = "quic-0.1.56-gBIqUQlKRwAs1d-cRuoA3iM__-rxYczHsSkBSy3waYeZ",
+            // 2026-11-18: v0.1.57 (7bdc807, SONNY-6737) — after a partial sendBatch
+            // every paced datagram is sent exactly once (none freed unsent, none
+            // sent twice). Same otel v0.1.30 tree. Lockstep with geode-client-zig
+            // v0.3.21 (one quic module).
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.57#7bdc8073bde250d6371d1fdc3808cd1363647f7e",
+            .hash = "quic-0.1.57-gBIqUQ2LRwBumm60rOnTJEjPv06fMFO2EwpPw0MrnufD",
         },
 
         // =======================================================================
@@ -531,8 +535,10 @@
             // cascade tags (dns v0.1.29, strings v0.1.7, auth v0.1.23, gql v0.1.23,
             // otel v0.1.30); no API change. Pinned to the release commit on MR !53
             // until v0.3.21 is tagged.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=release/sonny-6630-v0.3.21#805e2ebb7906dac80859e1956d6315f58614b255",
-            .hash = "geode_client_zig-0.3.21-8ysbV8bwDQAsjTaviAFGaNIGeSaC2nuullOzNcBEr4Tb",
+            // 2026-11-18: v0.3.21 head a0340ae (SONNY-6630) — quic v0.1.57; pinned
+            // to MR !53 until v0.3.21 is tagged.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=release/sonny-6630-v0.3.21#a0340ae3191458ce30beb87965d72f428208e0d2",
+            .hash = "geode_client_zig-0.3.21-8ysbV7jxDQDtk1WZ50pR2wQJIfKHKMsP5ij4xxMKZmgL",
         },
 
         // =======================================================================

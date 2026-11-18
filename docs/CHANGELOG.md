@@ -19,9 +19,9 @@
 
 ### Security
 
-- **quic v0.1.56: another local user can no longer take over the QUIC
+- **quic v0.1.57: another local user can no longer take over the QUIC
   port, and no two packets share an AEAD nonce (SONNY-6630; quic
-  SONNY-6522, SONNY-4379, SONNY-6654).** The server's UDP socket was bound
+  SONNY-6522, SONNY-4379, SONNY-6654, SONNY-6737).** The server's UDP socket was bound
   with SO_REUSEADDR, so a process of any user that also set it could bind
   `--listen`'s port and receive the server's datagrams; binds are now
   exclusive and a port in use fails to bind. Some senders (PATH_RESPONSE,
@@ -32,6 +32,10 @@
   transfers alive across a key update after a burst loss, resends a request
   lost right after the handshake in ~0.1 s instead of ~1 s, and reads ACK
   ranges from the decoded frame (release builds read a dead stack frame).
+  When the socket accepts only part of a batched send, every paced
+  datagram is still sent exactly once (v0.1.57); before, the ones past the
+  accepted part were freed unsent and left to loss recovery, and the
+  per-datagram fallback re-sent ones that had gone out.
   Pinned with geode-client-zig v0.3.21 and the SONNY-6630 cascade, which
   leaves one version of every package in the build (`detect-diamond-deps`
   clean, 37 packages; it flagged 13 names before): otel v0.1.30 (grpc-zig
