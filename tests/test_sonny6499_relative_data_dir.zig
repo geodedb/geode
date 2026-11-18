@@ -97,6 +97,12 @@ fn serve(data_dir: []const u8, env_kv: []const [2][]const u8, cwd: []const u8, s
     var killed = false;
     var signalled = false;
     var waited_ms: i64 = 0;
+    // The server is still writing `out` while it is polled: read the bytes
+    // appended since the last poll, positionally. readFileAlloc on a growing
+    // file panics in std (File.Reader caches the size: `size - pos`
+    // overflows once the file grew mid-read).
+    var so_far: std.ArrayList(u8) = .empty;
+    defer so_far.deinit(testing.allocator);
     while (true) {
         const rc = linux.waitpid(pid, &status, linux.W.NOHANG);
         if (rc == @as(usize, @intCast(pid))) {
@@ -105,9 +111,13 @@ fn serve(data_dir: []const u8, env_kv: []const [2][]const u8, cwd: []const u8, s
         }
         if (!signalled) {
             if (stop_on) |needle| {
-                const so_far = std.Io.Dir.cwd().readFileAlloc(fsIo(), out_path, testing.allocator, .limited(8 << 20)) catch "";
-                defer if (so_far.len > 0) testing.allocator.free(so_far);
-                if (std.mem.indexOf(u8, so_far, needle) != null) {
+                var chunk: [64 * 1024]u8 = undefined;
+                while (so_far.items.len < 8 << 20) {
+                    const n = out.readPositional(fsIo(), &.{&chunk}, so_far.items.len) catch break;
+                    if (n == 0) break;
+                    try so_far.appendSlice(testing.allocator, chunk[0..n]);
+                }
+                if (std.mem.indexOf(u8, so_far.items, needle) != null) {
                     posix.kill(pid, .TERM) catch {};
                     signalled = true;
                 }
