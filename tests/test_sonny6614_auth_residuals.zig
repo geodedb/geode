@@ -15,6 +15,7 @@
 //!
 // CANARY: REQ=REQ-SONNY-6614-SM-RESIDUALS; FEATURE="MFA authentication"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6614_auth_residuals.zig; OWNER=security; UPDATED=2026-11-15
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const schema = @import("schema");
@@ -231,6 +232,8 @@ test "SONNY-6614 (1): the SecurityManager load frees everything under every allo
 }
 
 test "SONNY-6614 (2): DROP USER clears the user's MFA state from SecurityManager" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var w: World = undefined;
     try w.init();
     defer w.deinit();

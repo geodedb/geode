@@ -205,6 +205,8 @@ fn codeFor(aa: std.mem.Allocator, secret: []const u8) ![]const u8 {
 }
 
 test "SONNY-6608 (1)(2): offline mfa-setup stores the secret with MFA off and the recovery codes hashed; mfa enable needs a code" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -293,6 +295,8 @@ fn adminRow(aa: std.mem.Allocator, addr: []const u8, query: []const u8) ![]const
 }
 
 test "SONNY-6608 (4): an MFA enrollment made over QUIC survives a server restart" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

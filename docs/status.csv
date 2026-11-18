@@ -2452,7 +2452,7 @@ REQ-GQL-PROPERTY-001,PropertyPersistence,MemoryManagement,IMPL,,,engine,2026-11-
 REQ-GQL-PROPERTY-001,PropertyPersistence,MemoryManagement,IMPL,,,engine,2026-11-14,tests/test_property_persistence_regression.zig,70
 REQ-GQL-RAFT-APPLY,Raft Apply Callback,CommandRouting,TESTED,,,distributed,2026-04-10,src/distributed/raft_apply.zig,457
 REQ-GQL-RAFT-APPLY,Raft Apply Callback,IntegrationTest,TESTED,,,distributed,2026-04-09,tests/test_raft_apply.zig,11
-REQ-GQL-RAFT-PERSIST,Raft Consensus Persistence,HardStateDurabilityAcrossRestart,TESTED,,,distributed,2026-06-09,tests/test_raft_hardstate_durability.zig,49
+REQ-GQL-RAFT-PERSIST,Raft Consensus Persistence,HardStateDurabilityAcrossRestart,TESTED,,,distributed,2026-06-09,tests/test_raft_hardstate_durability.zig,50
 REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,SnapshotCreation,TESTED,,,distributed,2026-11-16,src/distributed/raft_snapshot_manager.zig,9
 REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,SnapshotInstallation,TESTED,,,distributed,2026-11-16,src/distributed/raft_snapshot_manager.zig,10
 REQ-GQL-REGEX-FIX-001,RegexMatching,OverflowPrevention,TESTED,,,eval,2026-01-09,src/eval/logic_helpers.zig,80
@@ -5281,7 +5281,7 @@ REQ-SONNY-6562-DECLARED-TYPE,ResultMetadata,ColumnTypeFromAllRows,TESTED,,,serve
 REQ-SONNY-6562-DECLARED-TYPE,ResultMetadata,StreamSchemaUnread,TESTED,,,engine,2026-11-15,src/server/node_scan_stream.zig,302
 REQ-SONNY-6562-DECLARED-TYPE,ResultMetadata,TypeCombination,TESTED,,,types,2026-11-15,src/eval/type_helpers.zig,115
 REQ-SONNY-6562-RESULT-ORDER,ResultMetadata,OrderedTruthful,TESTED,,,query,2026-11-15,src/query/query_traits.zig,186
-REQ-SONNY-6563-VOTE-DURABLE,Raft Consensus Persistence,VoteSurvivesRestart,TESTED,,,distributed,2026-11-14,tests/test_raft_hardstate_durability.zig,191
+REQ-SONNY-6563-VOTE-DURABLE,Raft Consensus Persistence,VoteSurvivesRestart,TESTED,,,distributed,2026-11-14,tests/test_raft_hardstate_durability.zig,192
 REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND,Raft Consensus Persistence,SentAfterAdvancePersist,TESTED,,,distributed,2026-11-15,src/distributed/raft_consensus.zig,3899
 REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND,Raft Consensus Persistence,VoteDurableBeforeReply,TESTED,,,distributed,2026-11-14,tests/test_sonny6563_vote_persist_before_send.zig,23
 REQ-SONNY-6564-BINDING-NAMES,GQLParser,ReservedWordRefusal,TESTED,,,parser,2026-11-15,src/gql/parser.zig,469

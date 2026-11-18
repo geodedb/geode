@@ -73,6 +73,8 @@ fn monoMs() u64 {
 }
 
 test "SONNY-3232: QUIC requests of 256 KiB, 1 MiB and 4 MiB are answered (SONNY-3351), one past the 16 MiB maximum is not, and the server serves on" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const port = try util.getRandomPort();
     const io_fs = std.Io.Threaded.global_single_threaded.io();

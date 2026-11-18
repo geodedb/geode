@@ -170,6 +170,8 @@ fn compiledTestSources(allocator: std.mem.Allocator, root: []const u8) !std.Arra
 }
 
 test "SONNY-6332 (1) no test the build compiles binds a literal port" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var files = try compiledTestSources(allocator, geode_test_bin.build_root);
     defer {

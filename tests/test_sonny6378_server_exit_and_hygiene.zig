@@ -225,6 +225,8 @@ test "SONNY-6378 (1)(2)(8) a debug server writes its startup log.info lines and 
 // ---------------------------------------------------------------------------
 
 test "SONNY-6378 (3) the never-compiled KeyRegistry.rotateWithRemoteKms and its never-built test are gone" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var bad: usize = 0;
     const src = try readRepoFile(allocator, "src/security/key_rotation.zig");

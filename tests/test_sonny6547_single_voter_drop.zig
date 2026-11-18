@@ -31,6 +31,7 @@
 // CANARY: REQ=REQ-SONNY-6547-REPLICATED-DROP-IN-USE; FEATURE="DistributedCluster"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6547_single_voter_drop.zig; OWNER=distributed; UPDATED=2026-11-14
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const fx = @import("sonny738_r12_grpc_fixture.zig");
@@ -108,6 +109,8 @@ const OneVoter = struct {
 };
 
 test "SONNY-6547 (3): a one-voter cluster applies a drop proposed under the graph's read lock on its tick thread, once the lock is released" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var f: fx.Fixture = undefined;
     try f.init();
     defer f.deinit();

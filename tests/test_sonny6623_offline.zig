@@ -194,6 +194,8 @@ fn enable(aa: std.mem.Allocator, dir: []const u8, user: []const u8, code: []cons
 }
 
 test "SONNY-6623 (3): malformed codes through offline mfa enable count toward the lockout" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

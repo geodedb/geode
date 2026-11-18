@@ -36,6 +36,7 @@
 // nonzero term.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 
 const raft_consensus = geode.distributed.raft_consensus;
@@ -190,6 +191,8 @@ fn requestVote(term: u64, candidate: u64) raft_lib.Message {
 
 // CANARY: REQ=REQ-SONNY-6563-VOTE-DURABLE; FEATURE="Raft Consensus Persistence"; ASPECT=VoteSurvivesRestart; STATUS=TESTED; TEST=tests/test_raft_hardstate_durability.zig; OWNER=distributed; UPDATED=2026-11-14
 test "SONNY-6563: a node that voted in term T keeps that vote across a restart and refuses another candidate in T" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = std.testing.allocator;
     const dir = try uniqueRaftDir(a, "vote");
     defer a.free(dir);

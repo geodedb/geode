@@ -35,6 +35,7 @@
 // CANARY: REQ=REQ-SONNY-6567-RAFT-APPLY-HYDRATION; FEATURE="DistributedCluster"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6567_raft_apply_hydration.zig; OWNER=distributed; UPDATED=2026-11-15
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 
@@ -105,6 +106,8 @@ fn countLabel(store: *graph_store.GraphStore, graph: []const u8, label: []const 
 }
 
 test "SONNY-6567 (6): a follower's / replay's apply hydration under inner_mutex, and a batch entry on another graph" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

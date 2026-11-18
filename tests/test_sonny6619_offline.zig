@@ -220,6 +220,8 @@ fn heldInside(aa: std.mem.Allocator, dir: []const u8) ![]const []const u8 {
 }
 
 test "SONNY-6619 (5): opening the store in process releases the data directory; offline writes need no --force" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -239,6 +241,8 @@ test "SONNY-6619 (5): opening the store in process releases the data directory; 
 }
 
 test "SONNY-6619 (1): offline mfa enable --code counts against the attempt limit, with mfa-verify" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -268,6 +272,8 @@ test "SONNY-6619 (1): offline mfa enable --code counts against the attempt limit
 }
 
 test "SONNY-6619 (1): a right code through mfa enable resets the count" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

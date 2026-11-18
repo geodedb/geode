@@ -123,6 +123,8 @@ test "SONNY-6480: among sockets on one address and port, the one this process ow
 }
 
 test "SONNY-6480: with the default threshold a wedge holding one datagram is restarted within the deadline, a draining acceptor never" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const cfg = aw.parseConfig(null, null, null);
     // One queued 1200-byte QUIC Initial: the kernel accounts ~2.3 KiB.
     const one_initial: u64 = 2304;

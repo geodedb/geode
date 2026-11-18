@@ -26,6 +26,7 @@
 //! step fails when enforced and passes when reported).
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub const Error = error{PerfClaimViolated};
 
@@ -278,6 +279,8 @@ test "perf_gate: robust statistics are the median and quartiles, not moved by on
 }
 
 test "perf_gate: batches and interleaving run every operation and alternate the arms" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const Ctx = struct {
         order: std.ArrayList(u8) = .empty,
         n: usize = 0,

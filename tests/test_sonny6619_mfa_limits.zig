@@ -19,6 +19,7 @@
 //!
 // CANARY: REQ=REQ-SONNY-6619-MFA-LIMITS; FEATURE="MFA authentication"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6619_mfa_limits.zig; OWNER=security; UPDATED=2026-11-15
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const schema = @import("schema");
@@ -201,6 +202,8 @@ fn restart(agm: *AuthGraphManager) !void {
 }
 
 test "SONNY-6619 (2): the server's MFA lockout is stored and survives a restart; a failure below the limit is not stored" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var w: World = undefined;
     try w.init();
     defer w.deinit();
@@ -251,6 +254,8 @@ fn buildSm(w: *World) !hydration.LoadedSecurityManager {
 }
 
 test "SONNY-6619 (3): SecurityManager follows mfa_setup, mfa_enable and mfa_disable" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var w: World = undefined;
     try w.init();
     defer w.deinit();

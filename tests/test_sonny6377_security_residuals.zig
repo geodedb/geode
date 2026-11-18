@@ -404,6 +404,8 @@ fn grpcExec(allocator: std.mem.Allocator, addr: []const u8, user: []const u8, pw
 }
 
 test "SONNY-6377 item 6: the login hash upgrade and the QUIC / gRPC ALTER USER intercepts are durable when they report success" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     const allocator = testing.allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);

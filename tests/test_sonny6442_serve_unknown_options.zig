@@ -13,6 +13,7 @@
 //   - the built `geode serve` with an unknown option exits 2, names the
 //     option, and never starts listening.
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const cli_args = @import("cli_args");
 const options = @import("sonny6442_serve_options");
@@ -179,6 +180,8 @@ fn runServe(extra: []const []const u8) !Run {
 }
 
 test "SONNY-6442 (4) geode serve with an unknown option exits 2 and names it" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const r = try runServe(&.{"--data-dri"});
     defer testing.allocator.free(r.text);
     if (r.code != 2) std.debug.print("SONNY-6442 (4): exit={?d} started={}\n{s}\n", .{ r.code, r.started, r.text });
@@ -189,6 +192,8 @@ test "SONNY-6442 (4) geode serve with an unknown option exits 2 and names it" {
 }
 
 test "SONNY-6442 (4) geode serve with an option missing its value exits 2" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const r = try runServe(&.{"--log-level"});
     defer testing.allocator.free(r.text);
     if (r.code != 2) std.debug.print("SONNY-6442 (4): exit={?d} started={}\n{s}\n", .{ r.code, r.started, r.text });

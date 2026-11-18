@@ -27,6 +27,7 @@
 //!
 // CANARY: REQ=REQ-SONNY-6602-MFA-HONESTY; FEATURE="MFA authentication"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6602_mfa.zig; OWNER=security; UPDATED=2026-11-15
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const schema = @import("schema");
@@ -182,6 +183,8 @@ fn expectWarnsNotEnforced(query: []const u8, a: Answer) !void {
 }
 
 test "SONNY-6602 (1): mfa_setup and mfa_enable say MFA is not enforced at login (SONNY-6604)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var w: World = undefined;
     try w.init();
     defer w.deinit();
@@ -255,6 +258,8 @@ fn currentCode(ga: std.mem.Allocator, user: []const u8) ![]const u8 {
 }
 
 test "SONNY-6602 (4): an MFA verification that cannot be counted toward the lockout is refused, and the code is not checked" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var w: World = undefined;
     try w.init();
     defer w.deinit();
@@ -293,6 +298,8 @@ test "SONNY-6602 (4): an MFA verification that cannot be counted toward the lock
 }
 
 test "SONNY-6602 (4): once a user has an attempt record, counting a failure needs no memory and still locks out" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var w: World = undefined;
     try w.init();
     defer w.deinit();

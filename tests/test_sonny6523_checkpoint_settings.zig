@@ -24,6 +24,7 @@
 // CANARY: REQ=REQ-SONNY-6523-CHECKPOINT-SETTINGS; FEATURE="CrashRecovery"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6523_checkpoint_settings.zig; OWNER=storage; UPDATED=2026-11-13
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 
 const graph_store = geode.graph_store;
@@ -80,6 +81,8 @@ fn obstructFreeStore(allocator: std.mem.Allocator, data_dir: []const u8, on: boo
 }
 
 test "SONNY-6523 (6): the deferred-mode interval counts from the adapter's open, not from boot" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

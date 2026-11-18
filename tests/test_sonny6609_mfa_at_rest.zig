@@ -20,6 +20,7 @@
 //!
 // CANARY: REQ=REQ-SONNY-6609-MFA-AT-REST; FEATURE="MFA authentication"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6609_mfa_at_rest.zig; OWNER=security; UPDATED=2026-11-15
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const schema = @import("schema");
@@ -195,6 +196,8 @@ fn openSecret(agm: *AuthGraphManager, uid: u64, buf: []u8) !?[]const u8 {
 }
 
 test "SONNY-6609 (1): mfa_setup stores the secret sealed, bound to the user; it opens to the issued secret" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var w: World = undefined;
     try w.init();
     defer w.deinit();
@@ -282,6 +285,8 @@ fn cheapPhc(buf: []u8, password: []const u8) ![]const u8 {
 }
 
 test "SONNY-6609 (3): SecurityManager is loaded with the stored secret and recovery codes; a stored code is redeemed once" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var w: World = undefined;
     try w.init();
     defer w.deinit();

@@ -20,6 +20,7 @@
 // CANARY: REQ=REQ-SONNY-3135-LOCKLESS-DROP-WAITS; FEATURE="MultiGraphIsolation"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny3135_lockless_drop_waits.zig; OWNER=storage; UPDATED=2026-11-12
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const fx = @import("sonny738_r12_grpc_fixture.zig");
@@ -51,6 +52,8 @@ fn expectDropWaitsFor(f: *fx.Fixture, graph: []const u8, write: bool) !void {
 }
 
 test "SONNY-3135 N7c: a drop with no lock of the graph waits for a holder of its write lock" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var f: fx.Fixture = undefined;
     try f.init();
     defer f.deinit();
@@ -58,6 +61,8 @@ test "SONNY-3135 N7c: a drop with no lock of the graph waits for a holder of its
 }
 
 test "SONNY-3135 N7c: a drop with no lock of the graph waits for a holder of its read lock" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var f: fx.Fixture = undefined;
     try f.init();
     defer f.deinit();
@@ -93,6 +98,8 @@ const SelfDrop = struct {
 };
 
 test "SONNY-3135 N7c: a thread that holds the graph's write lock drops it without waiting for itself" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var f: fx.Fixture = undefined;
     try f.init();
     defer f.deinit();

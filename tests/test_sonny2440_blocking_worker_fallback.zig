@@ -61,6 +61,8 @@ fn holdTask(ctx: *anyopaque) void {
 const fallback_bound_ns: u64 = 150 * std.time.ns_per_ms;
 
 test "SONNY-2440: with every default-lane worker busy, a default-lane task starts on the blocking worker promptly" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const workers: u32 = 8;
     const pool = try ThreadPool.init(testing.allocator, .{ .num_threads = workers, .queue_capacity = 64 });
     defer pool.deinit();

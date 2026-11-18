@@ -157,6 +157,8 @@ fn expectNotEnforcedWarning(what: []const u8, output: []const u8) !void {
 }
 
 test "SONNY-6602 (1): geode user mfa-setup / mfa enable and their help say MFA is not enforced at login" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

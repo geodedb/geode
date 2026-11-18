@@ -28,6 +28,7 @@
 // CANARY: REQ=REQ-SONNY-6352-WRITER-OUTSIDE-USER-STORE-MUTEX; FEATURE="GQL Auth DDL Persistence"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6352_auth_writer_and_removals.zig; OWNER=security; UPDATED=2026-11-12
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const grpc = @import("grpc_impl").impl;
@@ -367,6 +368,8 @@ fn rlsPolicyStored(mgr: *AuthGraphManager, name: []const u8) bool {
 }
 
 test "SONNY-6352: the offline user / role / policy removals report a failed node delete; the record stays stored and the chain verifies" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const io = std.Io.Threaded.global_single_threaded.io();
     var process = std.heap.ArenaAllocator.init(testing.allocator);
     defer process.deinit();

@@ -32,6 +32,7 @@
 // CANARY: REQ=REQ-SONNY-2724-QUIC-FAST-PATH-GATE; FEATURE="MergeRowVisibility"; ASPECT=QuicFastPathGateBehaviour; STATUS=TESTED; TEST=tests/test_sonny2724_quic_fast_path_gate.zig; OWNER=security; UPDATED=2026-09-26
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
@@ -327,6 +328,8 @@ fn expectRoute(aa: std.mem.Allocator, failures: *std.ArrayList([]const u8), clie
 }
 
 test "SONNY-2724: a tenant-scoped session's node MERGEs take the fast path and write only its own rows" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();
@@ -377,6 +380,8 @@ test "SONNY-2724: a tenant-scoped session's node MERGEs take the fast path and w
 }
 
 test "SONNY-2724: under strict tenancy a tenant-scoped session's node MERGE takes the fast path; an unscoped one is still refused" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const aa = arena.allocator();

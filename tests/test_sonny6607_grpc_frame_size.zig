@@ -14,6 +14,7 @@
 // CANARY: REQ=REQ-SONNY-6607-GRPC-FRAME-SIZE; FEATURE="GrpcTransport"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6607_grpc_frame_size.zig; OWNER=transport; UPDATED=2026-11-15
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const gq = geode.grpc_query_transport;
@@ -53,6 +54,8 @@ fn frameHeader(len: u24, ftype: u8, flags: u8, sid: u31) [9]u8 {
 }
 
 test "SONNY-6607 (5): a connection's max frame size is its own, not the thread's" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = try pair();
     defer for (a) |fd| {
         _ = linux.close(fd);

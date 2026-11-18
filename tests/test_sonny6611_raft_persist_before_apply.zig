@@ -22,6 +22,7 @@
 // CANARY: REQ=REQ-SONNY-6611-RAFT-PERSIST-BEFORE-APPLY; FEATURE="Raft Consensus Persistence"; ASPECT=EntriesDurableBeforeApplyAndReply; STATUS=TESTED; TEST=tests/test_sonny6611_raft_persist_before_apply.zig; OWNER=distributed; UPDATED=2026-11-15
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 
 const raft_consensus = geode.distributed.raft_consensus;
@@ -124,6 +125,8 @@ fn deliverCommittedEntry(node: *RaftNode) !void {
 }
 
 test "SONNY-6611 (7): a follower applies a committed entry only after it is in durable storage, and acknowledges it only then (SONNY-6592)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = std.testing.allocator;
     const dir = try uniqueDir(a);
     defer a.free(dir);
@@ -175,6 +178,8 @@ test "SONNY-6611 (7): a follower applies a committed entry only after it is in d
 }
 
 test "SONNY-6611 (7): with TDE Raft storage the entry is durable (sealed) before it is applied" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = std.testing.allocator;
     const dir = try uniqueDir(a);
     defer a.free(dir);

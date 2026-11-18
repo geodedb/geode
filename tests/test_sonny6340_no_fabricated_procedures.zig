@@ -112,6 +112,8 @@ fn freeResult(allocator: std.mem.Allocator, res: geode.execution.ExecutionResult
 }
 
 test "SONNY-6340 the diagnostic audit logger does not keep the query's allocator" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     _ = try sandbox();
     defer leaveSandbox();
     // A query's allocator: everything it hands out must be returned once the
@@ -185,6 +187,8 @@ const refused_tde_backup = [_][]const u8{
 };
 
 test "SONNY-6340 audit procedures that cannot do what they report are refused as unsupported, never answered with a made-up row" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     _ = try sandbox();
     defer leaveSandbox();
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
@@ -210,6 +214,8 @@ test "SONNY-6340 audit procedures that cannot do what they report are refused as
 }
 
 test "SONNY-6340 tde backup and restore procedures that never write or read a backup are refused, even with TDE on and a key loaded" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     _ = try sandbox();
     defer leaveSandbox();
     runtime_flags.global().tde.enableForTests();
@@ -241,6 +247,8 @@ test "SONNY-6340 tde backup and restore procedures that never write or read a ba
 }
 
 test "SONNY-6340 tde.test_encryption and tde.test_decryption report success=false when nothing was encrypted" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     _ = try sandbox();
     defer leaveSandbox();
     runtime_flags.global().tde.disableForTests();
@@ -294,6 +302,8 @@ fn merkleRoot(allocator: std.mem.Allocator, content: []const u8) !struct { root:
 }
 
 test "SONNY-6340 audit.get_merkle_digests hashes the server's audit log, and refuses when the server writes none" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const data_dir = try sandbox();
     defer leaveSandbox();
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);

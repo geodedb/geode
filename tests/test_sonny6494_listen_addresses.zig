@@ -150,6 +150,8 @@ test "SONNY-6494: a QUIC listen that cannot bind returns its error and leaves th
 }
 
 test "SONNY-6494: a port-only --listen-grpc is refused when the --listen address is not IPv4, never widened to 0.0.0.0" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     for ([_][]const u8{ "[::1]:3141", "[::]:3141", "geode.example:3141", "geode.example" }) |quic_listen| {
         try testing.expectError(error.GrpcPortOnlyListenNotIpv4, cli_args.resolveGrpcBind("50051", quic_listen));
         try testing.expectError(error.GrpcPortOnlyListenNotIpv4, cli_args.resolveGrpcBind(":50051", quic_listen));

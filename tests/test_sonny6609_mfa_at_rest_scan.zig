@@ -207,6 +207,8 @@ fn runOk(aa: std.mem.Allocator, args: []const []const u8) ![]const u8 {
 }
 
 test "SONNY-6609 (1)(4): no file of the data directory holds the TOTP secret; geode user show prints the MFA state" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

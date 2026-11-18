@@ -349,6 +349,8 @@ pub fn buildChunk(aa: std.mem.Allocator, label: []const u8) ![]const u8 {
 }
 
 test "SONNY-6377: geode query --file does not replay a chunk whose request was sent and timed out" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -592,6 +594,8 @@ pub const ResetProxy = struct {
 };
 
 test "SONNY-6377: geode query over gRPC does not resend a query whose connection failed after it was sent" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

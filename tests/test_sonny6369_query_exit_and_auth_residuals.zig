@@ -239,6 +239,8 @@ fn query(aa: std.mem.Allocator, addr: []const u8, q: []const u8) !Run {
 }
 
 test "SONNY-6369: geode query exits 1 when the server answers the query with an error, 0 when it succeeds" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -280,6 +282,8 @@ fn expectWireCode(allocator: std.mem.Allocator, client: *util.QuicProtoClient, q
 }
 
 test "SONNY-6369: giving a superuser a role other than admin is refused over the wire and offline, and changes nothing" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -613,6 +617,8 @@ fn legacyBlake2bHex(password: []const u8) [64]u8 {
 }
 
 test "SONNY-6369: a BLAKE2b-imported user's hash is replaced with Argon2id at its first successful login, without ending its sessions" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -681,6 +687,8 @@ test "SONNY-6369: a BLAKE2b-imported user's hash is replaced with Argon2id at it
 }
 
 test "SONNY-6369: checking a password against a legacy BLAKE2b hash takes as long as an Argon2id check" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const argon = try user_mgmt.hashPassword(testing.allocator, legacy_pw);
     defer testing.allocator.free(argon);
     const hex = legacyBlake2bHex(legacy_pw);

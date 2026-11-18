@@ -230,6 +230,8 @@ fn quicExec(allocator: std.mem.Allocator, addr: []const u8, user: []const u8, pw
 }
 
 test "SONNY-6384: security-graph writes after an offline user change survive a SIGKILL and the graph loads" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     const allocator = testing.allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);

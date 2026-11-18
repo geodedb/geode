@@ -27,6 +27,7 @@
 //!
 // CANARY: REQ=REQ-SONNY-6608-MFA-PERSIST; FEATURE="MFA authentication"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6608_mfa_persist.zig; OWNER=security; UPDATED=2026-11-15
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const schema = @import("schema");
@@ -204,6 +205,8 @@ fn expectStoredDigests(agm: *AuthGraphManager, user_id: u64, codes: []const []co
 }
 
 test "SONNY-6608 (3)(4): mfa_setup is stored (secret, recovery-code digests, MFA off), mfa_enable / mfa_disable change the stored flag, the chain verifies" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var w: World = undefined;
     try w.init();
     defer w.deinit();
@@ -256,6 +259,8 @@ test "SONNY-6608 (3)(4): mfa_setup is stored (secret, recovery-code digests, MFA
 }
 
 test "SONNY-6608 (4): a reload of the security graph loads the enrollments back; DROP USER drops the enrollment" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var w: World = undefined;
     try w.init();
     defer w.deinit();
@@ -330,6 +335,8 @@ fn execRaw(a: std.mem.Allocator, ga: std.mem.Allocator, session: []const u8, que
 }
 
 test "SONNY-6608 (5): mfa_setup / mfa_enable / mfa_disable over gRPC leak nothing" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var w: World = undefined;
     try w.init();
     defer w.deinit();

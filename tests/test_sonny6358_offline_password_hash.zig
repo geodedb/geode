@@ -214,6 +214,8 @@ fn skipWithoutBinary() !void {
 }
 
 test "SONNY-6358: offline user create / update --password store an Argon2id hash, the chain verifies, and the server logs the users in" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -240,6 +242,8 @@ test "SONNY-6358: offline user create / update --password store an Argon2id hash
 }
 
 test "SONNY-6358: offline user create on a store with no auth records seals the chain, and the server starts and logs the user in" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

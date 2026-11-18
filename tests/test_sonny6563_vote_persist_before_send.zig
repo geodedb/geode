@@ -23,6 +23,7 @@
 // CANARY: REQ=REQ-SONNY-6563-VOTE-PERSIST-BEFORE-SEND; FEATURE="Raft Consensus Persistence"; ASPECT=VoteDurableBeforeReply; STATUS=TESTED; TEST=tests/test_sonny6563_vote_persist_before_send.zig; OWNER=distributed; UPDATED=2026-11-14
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 
 const raft_consensus = geode.distributed.raft_consensus;
@@ -81,6 +82,8 @@ fn uniqueDir(allocator: std.mem.Allocator) ![]u8 {
 }
 
 test "SONNY-6563: the hard state recording a granted vote is on disk when the grant reaches the network" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = std.testing.allocator;
     const dir = try uniqueDir(a);
     defer a.free(dir);

@@ -19,6 +19,7 @@
 // CANARY: REQ=REQ-SONNY-6341-FLE-ROLE-BINDING; FEATURE="FieldLevelEncryption"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6341_fle_role_binding.zig; OWNER=security; UPDATED=2026-11-12
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
@@ -521,6 +522,8 @@ const Server = struct {
 };
 
 test "SONNY-6341: over QUIC and the CLI an Admin naming an FLE role it does not hold reads [REDACTED]; the documented grant makes the documented example true, and it survives a restart; a revoke does too" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var dir_buf: [64]u8 = undefined;
     const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-6341-{d}", .{std.os.linux.getpid()});

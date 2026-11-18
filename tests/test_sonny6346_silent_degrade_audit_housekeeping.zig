@@ -261,6 +261,8 @@ test "SONNY-6346 (2) an audit record with more than 32 detail keys is written wi
 // ===========================================================================
 
 test "SONNY-6346 (3) cleanupOldLogs deletes the log's own expired rotated files, never files in the working directory" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var root = try test_scratch.ScratchDir.create("sonny6346-cleanup");
     defer root.remove();

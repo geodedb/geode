@@ -37,6 +37,7 @@
 // CANARY: REQ=REQ-SONNY-6324-FLE-CATALOG-FAIL-CLOSED; FEATURE="FieldLevelEncryption"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6324_fle_catalog_fail_closed.zig; OWNER=security; UPDATED=2026-11-11
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 
@@ -220,6 +221,8 @@ fn skipIfRoot() !void {
 // ---------------------------------------------------------------------------
 
 test "SONNY-6324 (1): CALL geode.fle.configureField whose save fails is refused and leaves the field unconfigured, before and after a restart" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipIfRoot();
     var f = try Fixture.init();
     defer f.deinit();
@@ -266,6 +269,8 @@ test "SONNY-6324 (1): CALL geode.fle.configureField whose save fails is refused 
 }
 
 test "SONNY-6324 (1): CALL geode.fle.grantPlaintext whose save fails is refused and grants nothing, before and after a restart" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipIfRoot();
     var f = try Fixture.init();
     defer f.deinit();
@@ -294,6 +299,8 @@ test "SONNY-6324 (1): CALL geode.fle.grantPlaintext whose save fails is refused 
 }
 
 test "SONNY-6324 (1): a revoke whose save fails is reported and stays applied in memory (fail closed); a retry saves it" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipIfRoot();
     var f = try Fixture.init();
     defer f.deinit();
@@ -338,6 +345,8 @@ test "SONNY-6324 (1): a revoke whose save fails is reported and stays applied in
 }
 
 test "SONNY-6324 (1): a revoke that failed to save is saved by the next successful change of the catalog" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipIfRoot();
     var f = try Fixture.init();
     defer f.deinit();
@@ -364,6 +373,8 @@ test "SONNY-6324 (1): a revoke that failed to save is saved by the next successf
 }
 
 test "SONNY-6324 (1): a pending revoke rides on the next saved change" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipIfRoot();
     var f = try Fixture.init();
     defer f.deinit();

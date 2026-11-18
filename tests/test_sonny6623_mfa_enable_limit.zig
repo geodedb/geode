@@ -12,6 +12,7 @@
 //!
 // CANARY: REQ=REQ-SONNY-6623-MFA-ENABLE-LIMIT; FEATURE="MFA authentication"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6623_mfa_enable_limit.zig; OWNER=security; UPDATED=2026-11-15
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const schema = @import("schema");
@@ -186,6 +187,8 @@ fn restart(agm: *AuthGraphManager) !void {
 }
 
 test "SONNY-6623 (1): mfa_enable shares mfa_verify's attempt count, lockout and stored lockout" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var w: World = undefined;
     try w.init();
     defer w.deinit();
@@ -224,6 +227,8 @@ test "SONNY-6623 (1): mfa_enable shares mfa_verify's attempt count, lockout and 
 }
 
 test "SONNY-6623 (1): a malformed mfa_enable code from an enrolled user counts (still 22023)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var w: World = undefined;
     try w.init();
     defer w.deinit();

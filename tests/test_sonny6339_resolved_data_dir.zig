@@ -415,14 +415,20 @@ fn persistenceCase(mode: Mode) !void {
 }
 
 test "SONNY-6339 (a) --data-dir: users, roles, grants and policies survive a restart, the HMAC key is in the data directory, the chain verifies" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try persistenceCase(.flag);
 }
 
 test "SONNY-6339 (b) GEODE_DATA_DIR only: users, roles, grants and policies survive a restart, the HMAC key is in the data directory, the chain verifies" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try persistenceCase(.env);
 }
 
 test "SONNY-6339 (c) the per-user default data directory: users, roles, grants and policies survive a restart, the HMAC key is there, the chain verifies" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try persistenceCase(.default);
 }
 
@@ -466,14 +472,20 @@ fn refusalCase(mode: Mode, key_bytes: []const u8, extra: []const [2][]const u8, 
 }
 
 test "SONNY-6339 a malformed .geode_hmac_key refuses startup (it ran with the auth graph disabled) and the file is left as it was" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try refusalCase(.flag, "0123456789abcdef-not-a-key", &.{}, "a malformed .geode_hmac_key");
 }
 
 test "SONNY-6339 a malformed .geode_hmac_key in the GEODE_DATA_DIR directory refuses startup too" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try refusalCase(.env, "0123456789abcdef-not-a-key", &.{}, "a malformed .geode_hmac_key");
 }
 
 test "SONNY-6339 a GEODE_AUTH_HMAC_KEY that is set but not 64 hex characters refuses startup and writes no key" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try refusalCase(.default, "", &.{.{ "GEODE_AUTH_HMAC_KEY", "zz" ++ "0" ** 62 }}, "an invalid GEODE_AUTH_HMAC_KEY");
 }
 

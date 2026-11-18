@@ -224,6 +224,8 @@ fn expectContains(output: []const u8, needle: []const u8) !void {
 // ---------------------------------------------------------------------------
 
 test "SONNY-6367: offline user create / update --role and assign-role give the user the built-in role; a custom or unknown role is refused and changes nothing" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -260,6 +262,8 @@ test "SONNY-6367: offline user create / update --role and assign-role give the u
 }
 
 test "SONNY-6367: offline user list / show print the stored role, show and enable / disable of a missing user fail" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -302,6 +306,8 @@ fn legacyBlake2bHex(password: []const u8) [64]u8 {
 }
 
 test "SONNY-6367: a user imported with --algorithm blake2b logs in over QUIC with its password, and a wrong password is refused" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

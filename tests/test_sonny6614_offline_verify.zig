@@ -199,6 +199,8 @@ fn verify(aa: std.mem.Allocator, dir: []const u8, user: []const u8, token: []con
 }
 
 test "SONNY-6614 (3): offline mfa-verify locks out after five failures, across runs; the lockout refuses a right code" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -226,6 +228,8 @@ test "SONNY-6614 (3): offline mfa-verify locks out after five failures, across r
 }
 
 test "SONNY-6614 (3): offline mfa-verify counts failures and a right code resets the count" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -243,6 +247,8 @@ test "SONNY-6614 (3): offline mfa-verify counts failures and a right code resets
 }
 
 test "SONNY-6614 (4): ServerHandle.stopGracefully lets the server shut itself down" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     if (comptime !@hasDecl(util.ServerHandle, "stopGracefully")) {
         std.debug.print("SONNY-6614 (4): proto_test_util.ServerHandle can only SIGKILL\n", .{});

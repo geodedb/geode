@@ -39,6 +39,7 @@
 // CANARY: REQ=REQ-SONNY-6631-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6631_apply_hydration_off_mutex.zig; OWNER=distributed; UPDATED=2026-11-15
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 
@@ -170,6 +171,8 @@ fn openSeededStore(allocator: std.mem.Allocator, data_dir: []const u8, graphs: [
 }
 
 test "SONNY-6631: a follower applies a batch entry writing another graph not hydrated yet without hydrating it under inner_mutex" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -334,6 +337,8 @@ const OneVoter = struct {
 };
 
 test "SONNY-6631: a node replaying its committed log after a restart does not hydrate the entries' graphs under inner_mutex" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

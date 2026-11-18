@@ -62,6 +62,8 @@ fn holdTask(ctx: *anyopaque) void {
 const start_bound_ns: u64 = 150 * std.time.ns_per_ms;
 
 test "SONNY-2440: every default-lane task submitted to an idle pool starts without waiting for a park timeout" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const workers: u32 = 8;
     const default_workers: u32 = workers - 1; // one blocking-lane worker by default
     const pool = try ThreadPool.init(testing.allocator, .{ .num_threads = workers, .queue_capacity = 64 });

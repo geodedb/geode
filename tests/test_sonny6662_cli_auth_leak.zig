@@ -156,6 +156,8 @@ fn expectAuthRefused(what: []const u8, r: Run, want_code: u8) !void {
 }
 
 test "SONNY-6662: geode query with wrong credentials reports the auth error and leaks nothing (single, --file, --batch)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -192,6 +194,8 @@ test "SONNY-6662: geode query with wrong credentials reports the auth error and 
 }
 
 test "SONNY-6662: geode query --batch that cannot connect reports the failure and leaks nothing" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

@@ -14,6 +14,7 @@
 // CANARY: REQ=REQ-SONNY-6607-TENANT-ORPHAN-STARTUP; FEATURE="TenantLifecycle"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6607_tenant_orphan_startup.zig; OWNER=security; UPDATED=2026-11-15
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode_test_bin = @import("geode_test_bin");
 const test_scratch = @import("test_scratch.zig");
@@ -85,6 +86,8 @@ fn runGeode(argv: []const []const u8, cwd: []const u8, timeout_s: i64) !Run {
 }
 
 test "SONNY-6607 (4): a tenant registry with an orphan parent refuses startup, naming the tenant" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const root = try test_scratch.processRoot();
     var rnd: [8]u8 = undefined;
     _ = linux.getrandom(&rnd, rnd.len, 0);
