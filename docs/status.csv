@@ -112,7 +112,7 @@ REQ-ABAC-WIRE-010,ABAC Enforcement,ServerStartup,IMPL,,,security,2026-11-12,src/
 REQ-ABAC-WIRE-012,ABAC Enforcement,QUICImport,IMPL,,,security,2026-11-12,src/server/quic_connection_handler.zig,98
 REQ-ABAC-WIRE-013,ABAC Enforcement,QUICHandler,IMPL,,,security,2026-11-12,src/server/quic_connection_handler.zig,5832
 REQ-ABAC-WIRE-014,ABAC Enforcement,QUICState,IMPL,,,security,2026-11-12,src/server/quic_connection_handler.zig,5946
-REQ-ABAC-WIRE-016,ABAC Enforcement,QUICLoop,IMPL,,,security,2026-11-12,src/server/main.zig,3939
+REQ-ABAC-WIRE-016,ABAC Enforcement,QUICLoop,IMPL,,,security,2026-11-12,src/server/main.zig,3942
 REQ-ABAC-WIRE-017,ABAC Enforcement,AsyncConnection,TESTED,,,server,2026-06-11,src/server/main.zig,181
 REQ-ADDITIONAL-001,AdditionalCoverage,ComplexQueries,IMPL,,,engine,2026-11-14,tests/test_gap_0193_remaining_categories.zig,354
 REQ-ADDITIONAL-002,AdditionalCoverage,Aggregations,IMPL,,,engine,2026-11-14,tests/test_gap_0193_remaining_categories.zig,366
@@ -1222,7 +1222,7 @@ REQ-GAP-0926-NESTED-AGGREGATE,Aggregation,Regression,TESTED,,,execution,2026-07-
 REQ-GAP-0926-POSITIONAL-PARAM-OOR,ParameterBinding,OutOfRangePositional,TESTED,,,eval,2026-07-10,src/eval.zig,1532
 REQ-GAP-0927-IDLE-TIMEOUT-REAP-WIRING,ConnectionPool,DiagTestRoot,TESTED,,,transport,2026-07-10,src/conn_pool_diag_test_root.zig,7
 REQ-GAP-0927-IDLE-TIMEOUT-REAP-WIRING,ConnectionPool,IdleReapDeadline,TESTED,,,transport,2026-11-12,src/server/quic_connection_handler.zig,2249
-REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC,ConnectionPool,AdmissionDiagnostic,TESTED,,,transport,2026-11-12,src/server/main.zig,3868
+REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC,ConnectionPool,AdmissionDiagnostic,TESTED,,,transport,2026-11-12,src/server/main.zig,3871
 REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC,ConnectionPool,RateLimitPredicate,TESTED,,,transport,2026-11-12,src/server/main.zig,16
 REQ-GAP-0929-GEODE-PORT-ENV,Config,PortEnvVar,TESTED,,,config,2026-07-10,src/server/cli_args.zig,706
 REQ-GAP-0929-GEODE-PORT-ENV,Config,Regression,TESTED,,,config,2026-07-10,tests/test_gap0929_geode_port.zig,1
@@ -1444,7 +1444,7 @@ REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026
 REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig,257
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTType,TESTED,,,security,2026-05-21,src/gql/ast.zig,973
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ASTVariant,TESTED,,,security,2026-05-21,src/gql/ast.zig,60
-REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,20376
+REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,BuildStep,TESTED,,,security,2026-05-21,build.zig,20390
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,CreateClassifiedAsCreate,TESTED,,,security,2026-05-21,tests/test_gps_explain_policy.zig,200
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,DispatchArm,TESTED,,,security,2026-05-21,src/execution.zig,2722
 REQ-GPS-EXPLAIN-001,GPS EXPLAIN POLICY,ExecutorFunction,TESTED,,,security,2026-05-21,src/execution/statement_handlers.zig,1547
@@ -1591,7 +1591,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,secu
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig,168
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig,125
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig,106
-REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,20385
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig,20399
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,TESTED,,,security,2026-06-11,src/cli/main.zig,1482
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,TESTED,,,security,2026-06-11,src/cli/main.zig,1638
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,TESTED,,,security,2026-06-11,src/cli/main.zig,841
@@ -1603,7 +1603,7 @@ REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,QueryOptions,IMPL,,,security,2026
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,2026-05-21,tests/test_gps_mcp_wire.zig,27
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,TESTED,,,security,2026-06-10,src/server/quic_connection_handler.zig,7728
 REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,166
-REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,20397
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig,20411
 REQ-GPS-WIRE-002,GPS Distributed Wire,PolicyVersionMismatch,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,107
 REQ-GPS-WIRE-002,GPS Distributed Wire,QueryOptionsField,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,25
 REQ-GPS-WIRE-002,GPS Distributed Wire,WorkerRoundTrip,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig,50
@@ -3133,21 +3133,22 @@ REQ-OTEL-LEGACY-DEPRECATED-002,OTel Instrumentation,Migration,EXEMPT,,,monitorin
 REQ-OTEL-METRICS-002,OTel Instrumentation,ServerInit,TESTED,,,monitoring,2026-04-28,src/server/main.zig,2174
 REQ-OTEL-METRICS-003,OTel Instrumentation,ServerLifecycle,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,1038
 REQ-OTEL-METRICS-004,OTel Instrumentation,Transport,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,1180
-REQ-OTEL-METRICS-005,OTel Instrumentation,QueryLifecycle,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,1446
-REQ-OTEL-METRICS-006,OTel Instrumentation,TransactionLifecycle,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,1640
+REQ-OTEL-METRICS-005,OTel Instrumentation,QueryLifecycle,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,1465
+REQ-OTEL-METRICS-006,OTel Instrumentation,TransactionLifecycle,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,1659
 REQ-OTEL-METRICS-006,OTel Instrumentation,TransactionLifecycle,TESTED,,,monitoring,2026-04-28,src/transactions/manager.zig,4
-REQ-OTEL-METRICS-007,OTel Instrumentation,StorageWAL,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,1809
-REQ-OTEL-METRICS-008,OTel Instrumentation,GraphDataModel,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,2080
-REQ-OTEL-METRICS-009,OTel Instrumentation,IndexVector,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,2227
-REQ-OTEL-METRICS-010,OTel Instrumentation,SecurityRLSAuditTDE,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,2364
-REQ-OTEL-METRICS-011,OTel Instrumentation,DistributedCluster,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,2653
-REQ-OTEL-METRICS-012,OTel Instrumentation,CdcAnalytics,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,2840
-REQ-OTEL-METRICS-013,OTel Instrumentation,Backup,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,3058
-REQ-OTEL-METRICS-014,OTel Instrumentation,ProcessMetrics,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,3199
+REQ-OTEL-METRICS-007,OTel Instrumentation,StorageWAL,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,1828
+REQ-OTEL-METRICS-008,OTel Instrumentation,GraphDataModel,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,2099
+REQ-OTEL-METRICS-009,OTel Instrumentation,IndexVector,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,2246
+REQ-OTEL-METRICS-010,OTel Instrumentation,SecurityRLSAuditTDE,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,2383
+REQ-OTEL-METRICS-011,OTel Instrumentation,DistributedCluster,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,2672
+REQ-OTEL-METRICS-012,OTel Instrumentation,CdcAnalytics,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,2859
+REQ-OTEL-METRICS-013,OTel Instrumentation,Backup,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,3077
+REQ-OTEL-METRICS-014,OTel Instrumentation,ProcessMetrics,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,3218
 REQ-OTEL-METRICS-014,OTel Instrumentation,ProcessMetrics,TESTED,,,monitoring,2026-06-11,src/server/main.zig,2393
 REQ-OTEL-METRICS-014,OTel Instrumentation,ProcessMetrics+DbClient,TESTED,,,monitoring,2026-04-28,tests/test_otel_facade_smoke.zig,478
 REQ-OTEL-METRICS-RUNTIME-BRIDGE-001,OTel Instrumentation,RuntimeCounterBridge,TESTED,,,monitoring,2026-05-29,src/monitoring/otel_metrics.zig,1358
 REQ-OTEL-METRICS-RUNTIME-BRIDGE-001,OTel Instrumentation,RuntimeCounterBridge,TESTED,,,monitoring,2026-05-29,tests/test_otel_runtime_bridge.zig,1
+REQ-OTEL-METRICS-RUNTIME-BRIDGE-SHUTDOWN-001,OTel Instrumentation,BridgeDetachBeforeSourcesFreed,TESTED,,,monitoring,2026-11-19,tests/test_sonny6794_otel_bridge_shutdown.zig,13
 REQ-OTEL-METRICS-SUMS-001,Metric histogram sums,Regression,TESTED,,,monitoring,2026-06-10,tests/test_gap0874_metrics_sums.zig,10
 REQ-OTEL-OTLP-PUSH-001,OTel Instrumentation,OTLPPush,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig,2
 REQ-OTEL-OTLP-PUSH-001,OTel Instrumentation,OTLPPush,TESTED,,,monitoring,2026-04-28,tests/test_otel_facade_smoke.zig,502
@@ -3472,7 +3473,7 @@ REQ-QUALITY-GAP-413-016,OrphanedTestRemediation,FormatString,TESTED,,,quality,20
 REQ-QUERY-CHAIN-LIMIT-001,QueryChainingWithLimitFix,ChainLimit,TESTED,,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig,330
 REQ-QUIC-001,QUICProtocol,ConnectionHandling,IMPL,,,wire,2026-11-14,tests/test_gap_0193_final_batch.zig,426
 REQ-QUIC-ACCEPTOR-WEDGE-WATCHDOG,QUIC High-Concurrency Connection Admission,AcceptPathWedgeAutoRecovery,TESTED,,,transport,2026-06-05,src/server/acceptor_watchdog.zig,31
-REQ-QUIC-ACCEPTOR-WEDGE-WATCHDOG,QUIC High-Concurrency Connection Admission,AcceptPathWedgeAutoRecovery,TESTED,,,transport,2026-06-05,src/server/main.zig,3766
+REQ-QUIC-ACCEPTOR-WEDGE-WATCHDOG,QUIC High-Concurrency Connection Admission,AcceptPathWedgeAutoRecovery,TESTED,,,transport,2026-06-05,src/server/main.zig,3769
 REQ-QUIC-CATALOG-003,CatalogDataDirIsolation,ServerInit,TESTED,,,engine,2026-06-11,src/server/server_init.zig,610
 REQ-QUIC-CLIENT-READLINE-001,QuicClientReadLine,RetryLogic,TESTED,,,transport,2026-06-11,src/transport/quic.zig,2780
 REQ-QUIC-CLIENT-READLINE-002,QuicClientReadLine,RegressionTests,IMPL,,,transport,2026-11-14,tests/test_quic_transport.zig,238
@@ -3496,7 +3497,7 @@ REQ-QUIC-HC-006,QUIC High-Concurrency Mutations,DefaultSimpleCreateFastPath,TEST
 REQ-QUIC-HC-007,SessionAuthEpoch,HotPathValidation,TESTED,,,security,2026-05-25,src/security/user_management.zig,428
 REQ-QUIC-HC-008,QUIC High-Concurrency Reads,CountReadSnapshotBypass,TESTED,,,transport,2026-05-25,src/server/quic_connection_handler.zig,8108
 REQ-QUIC-HC-009,High-Concurrency Allocator,ServerAllocator,TESTED,,,transport,2026-06-11,src/server/main.zig,228
-REQ-QUIC-HC-010,High-Concurrency Connection Admission,MetricsPoolIsolation,TESTED,,,transport,2026-06-11,src/server/main.zig,3798
+REQ-QUIC-HC-010,High-Concurrency Connection Admission,MetricsPoolIsolation,TESTED,,,transport,2026-06-11,src/server/main.zig,3801
 REQ-QUIC-HC-011,DetachedFirstStream,ConnectionAdmission,TESTED,,,transport,2026-06-10,src/server/quic_connection_handler.zig,5808
 REQ-QUIC-HC-012,DetachedConnectionAdmission,HelloFanout,TESTED,,,transport,2026-06-11,src/server/main.zig,382
 REQ-QUIC-HC-013,CoordinatorMicroBatch,ShardWorkerCoalescing,IMPL,,,storage,2026-05-26,src/storage/group_commit.zig,749
@@ -3529,7 +3530,7 @@ REQ-QUIC-HC-034,QUIC High-Concurrency Requests,EndpointSideSetDestroyCleanup,TES
 REQ-QUIC-HC-036,QUIC High-Concurrency Requests,BoundedPollWakeFanout,TESTED,,,transport,2026-06-10,src/transport/quic.zig,170
 REQ-QUIC-HC-037,QUIC High-Concurrency Requests,PerConnectionRxWake,TESTED,,,transport,2026-06-10,src/transport/quic.zig,1720
 REQ-QUIC-HC-037,QUIC High-Concurrency Requests,PerConnectionRxWake,TESTED,,,transport,2026-06-10,src/transport/quic.zig,1911
-REQ-QUIC-HC-039,QUIC High-Concurrency Requests,QueryMetricThreadSafety,IMPL,,,monitoring,2026-05-26,src/monitoring/otel_metrics.zig,1462
+REQ-QUIC-HC-039,QUIC High-Concurrency Requests,QueryMetricThreadSafety,IMPL,,,monitoring,2026-05-26,src/monitoring/otel_metrics.zig,1481
 REQ-QUIC-HC-039,QUIC High-Concurrency Requests,QueryMetricThreadSafety,TESTED,,,monitoring,2026-05-26,tests/test_otel_facade_smoke.zig,149
 REQ-QUIC-HC-041,QUIC High-Concurrency Client,PostWriteFlush,IMPL,,,transport,2026-05-26,tests/proto_test_util.zig,900
 REQ-QUIC-HC-042,QUIC High-Concurrency Requests,RequestBurstShaping,TESTED,,,transport,2026-06-11,tests/e2e_quic_high_concurrency.zig,1207
@@ -5092,7 +5093,7 @@ REQ-SONNY-6476-SHELL-LONG-LINE,ShellPlainMode,LineLongerThan4095Bytes,TESTED,,,c
 REQ-SONNY-6480-READLINE-NO-ALLOC,QuicClient,ReadLineAllocatesOnlyForALine,TESTED,,,transport,2026-11-13,src/transport/quic.zig,2792
 REQ-SONNY-6480-READLINE-NO-ALLOC,QuicClient,ReadLineAllocatesOnlyForALine,TESTED,,,transport,2026-11-13,tests/test_sonny6480_readline_alloc.zig,11
 REQ-SONNY-6480-WATCHDOG-LISTENER,QUIC High-Concurrency Connection Admission,WatchesBoundListener,TESTED,,,transport,2026-11-13,src/server/acceptor_watchdog.zig,92
-REQ-SONNY-6480-WATCHDOG-LISTENER,QUIC High-Concurrency Connection Admission,WatchesBoundListener,TESTED,,,transport,2026-11-13,src/server/main.zig,3588
+REQ-SONNY-6480-WATCHDOG-LISTENER,QUIC High-Concurrency Connection Admission,WatchesBoundListener,TESTED,,,transport,2026-11-13,src/server/main.zig,3591
 REQ-SONNY-6480-WATCHDOG-LISTENER,QUIC High-Concurrency Connection Admission,WatchesBoundListener,TESTED,,,transport,2026-11-13,tests/test_sonny6480_acceptor_watchdog.zig,23
 REQ-SONNY-6483-QUERY-RESIDUALS,QueryChain,AggregateWithoutMatch,TESTED,,,engine,2026-11-13,src/execution/query_execution.zig,2314
 REQ-SONNY-6483-QUERY-RESIDUALS,QueryChain,ChainingReturnOverWithStage,TESTED,,,engine,2026-11-13,src/execution/match_operations.zig,8218

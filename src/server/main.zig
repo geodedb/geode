@@ -3352,6 +3352,9 @@ pub fn main() !void {
         quic_metrics_ctx.* = .{ .transport = &transport };
 
         defer {
+            // SONNY-6794: OTel's shutdown (an outer defer) collects once more;
+            // its geode.runtime.* bridges must not read these sources then.
+            otel_metrics_facade.detachRuntimeMetricsOtel();
             metrics_server.setRuntimeSnapshotCallback(null, null);
             runtime_metrics_mod.setGlobalRegistry(null);
             metrics_registry.deinit();

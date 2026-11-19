@@ -17068,6 +17068,20 @@ pub fn build(b: *std.Build) void {
     const otel_runtime_bridge_step = b.step("test-otel-runtime-bridge", "Run Phase C1 runtime-metrics OTLP bridge unit test");
     otel_runtime_bridge_step.dependOn(&run_otel_runtime_bridge_tests.step);
 
+    // SONNY-6794: the bridges are detached before the runtime registry's
+    // sources are freed, so OTel's final collect at shutdown reads none of them.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6794_otel_bridge_shutdown.zig"), .target = target, .optimize = optimize });
+        mod.addImport("otel", otel_mod);
+        mod.addImport("otel_metrics", otel_metrics_mod);
+        mod.addImport("runtime_metrics", runtime_metrics_module);
+        mod.link_libc = true; // std.c.getenv in tryWireOtlpReader
+        const tests = b.addTest(.{ .root_module = mod });
+        const run = b.addRunArtifact(tests);
+        shardDep(test_step, &run.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6794-otel-bridge-shutdown", "Run SONNY-6794 regression (the geode.runtime.* OTel bridges are detached before the runtime registry's sources are freed, so OTel's final collect at shutdown reads none of them)").dependOn(&run.step);
+    }
+
     // OTLP/HTTP transport delivery regression: guards that the real
     // std.http.Client transport is compiled IN (i.e. the otel
     // `use_devnw_tls` build flag is forwarded from geode's build.zig to
