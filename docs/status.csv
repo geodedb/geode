@@ -821,7 +821,7 @@ REQ-DIST-CLUSTER-COMMIT-AWARE-WAIT,DistributedCluster,CommitAwarePostProposeWait
 REQ-DIST-CLUSTER-COMMIT-AWARE-WAIT,DistributedCluster,CommittedIndexAccessor,TESTED,,,distributed,2026-06-12,src/distributed/cluster.zig,2635
 REQ-DIST-CLUSTER-COMMIT-AWARE-WAIT,DistributedCluster,CommittedIndexAccessor,TESTED,,,distributed,2026-06-12,src/distributed/raft_consensus.zig,3387
 REQ-DIST-CLUSTER-CONFIG-001,DistributedClusterCoordinator,ConfigBootstrap,TESTED,,,distributed,2026-05-25,tests/test_cluster_coordinator_config.zig,1
-REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED,DistributedCluster,E2EFailClosed,TESTED,,,distributed,2026-08-28,tests/test_cluster_replicable_mutations.zig,996
+REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED,DistributedCluster,E2EFailClosed,TESTED,,,distributed,2026-08-28,tests/test_cluster_replicable_mutations.zig,1005
 REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED,DistributedCluster,GateAuthDDL,TESTED,,,distributed,2026-06-10,src/execution/admin_ddl.zig,66
 REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED,DistributedCluster,GateAuthProcedures,TESTED,,,distributed,2026-06-10,src/execution/auth_dispatch.zig,472
 REQ-DIST-CLUSTER-FAILCLOSED-UNREPLICATED,DistributedCluster,GateConstraintDDL,TESTED,,,distributed,2026-06-10,src/execution.zig,2297
@@ -879,8 +879,8 @@ REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,ApplyAbsoluteIdEdge,T
 REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,DispatchRouteMatchCreate,TESTED,,,distributed,2026-06-10,src/execution/query_execution.zig,2080
 REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,ExecutorRouteMatchCreate,TESTED,,,distributed,2026-06-10,src/execution/crud_operations.zig,4657
 REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,LeaderProposeMatchCreate,TESTED,,,distributed,2026-06-10,src/execution/crud_operations.zig,4451
-REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,MatchCreateFollowerFailClosed,TESTED,,,distributed,2026-06-10,tests/test_cluster_replicable_mutations.zig,915
-REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,ReplicateMatchCreateEdge,TESTED,,,distributed,2026-06-10,tests/test_cluster_replicable_mutations.zig,867
+REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,MatchCreateFollowerFailClosed,TESTED,,,distributed,2026-06-10,tests/test_cluster_replicable_mutations.zig,924
+REQ-DIST-CLUSTER-REPLICATE-MATCH-CREATE,DistributedCluster,ReplicateMatchCreateEdge,TESTED,,,distributed,2026-06-10,tests/test_cluster_replicable_mutations.zig,876
 REQ-DIST-CLUSTER-REPLICATE-MATCH-SET,DistributedCluster,ApplyUpdate,TESTED,,,distributed,2026-06-09,src/distributed/raft_apply.zig,594
 REQ-DIST-CLUSTER-REPLICATE-MATCH-SET,DistributedCluster,DispatchRouteUpdate,TESTED,,,distributed,2026-06-09,src/execution/query_execution.zig,2262
 REQ-DIST-CLUSTER-REPLICATE-MATCH-SET,DistributedCluster,ExecutorRouteUpdate,TESTED,,,distributed,2026-06-09,src/execution/crud_operations.zig,4407
@@ -891,12 +891,12 @@ REQ-DIST-CLUSTER-REPLICATE-MERGE,DistributedCluster,ApplyMergeIntegration,TESTED
 REQ-DIST-CLUSTER-REPLICATE-MERGE,DistributedCluster,ExecutorProposeMerge,TESTED,,,distributed,2026-06-09,src/execution/crud_operations.zig,3808
 REQ-DIST-CLUSTER-REPLICATE-MERGE,DistributedCluster,LeaderProposeMerge,TESTED,,,distributed,2026-06-09,src/execution/crud_operations.zig,3260
 REQ-DIST-CLUSTER-REPLICATE-MERGE,DistributedCluster,MergeCodec,TESTED,,,distributed,2026-06-09,src/distributed/cluster_replication.zig,735
-REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,LostAcknowledgement,TESTED,,,distributed,2026-10-30,tests/test_cluster_replicable_mutations.zig,1147
+REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,LostAcknowledgement,TESTED,,,distributed,2026-10-30,tests/test_cluster_replicable_mutations.zig,1156
 REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateDelete,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,617
 REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateEdgeCreate,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,573
 REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateEdgeDeleteMergeSet,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,1
-REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateMatchSet,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,811
-REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateMerge,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,769
+REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateMatchSet,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,820
+REQ-DIST-CLUSTER-REPLICATE-MUTATIONS,DistributedCluster,ReplicateMerge,TESTED,,,distributed,2026-06-09,tests/test_cluster_replicable_mutations.zig,778
 REQ-DIST-CLUSTER-ROLE,ClusterCoordinator Public Propose,Role,TESTED,,,distributed,2026-05-26,src/distributed/cluster.zig,2681
 REQ-DIST-CLUSTER-STEADY-STATE-TLS,DistributedCluster,SteadyStateLeaderHoldDistinctIpTls,TESTED,,,distributed,2026-10-27,tests/test_cluster_3node_steady_state.zig,1
 REQ-DIST-CLUSTER-TERM,ClusterCoordinator Public Propose,CurrentTerm,TESTED,,,distributed,2026-05-26,src/distributed/cluster.zig,2689

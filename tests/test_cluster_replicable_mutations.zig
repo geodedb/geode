@@ -734,7 +734,15 @@ test "cluster: a lost DELETE response does not replay a committed mutation" {
         var calls: usize = 0;
 
         fn query(c: *Cluster, ip: []const u8, text: []const u8) ![]u8 {
-            const out = try c.query(ip, text);
+            // A real client timeout (a loaded CI runner exceeds the CLI's 15s
+            // budget) is already a lost response with an unknown outcome:
+            // count it as the one attempt and let it propagate. A replay
+            // would show up as a second call.
+            const out = c.query(ip, text) catch |err| {
+                calls += 1;
+                if (err == error.Timeout) std.debug.print("[repl] 'LostDelRet' DELETE client timed out; checking it is not replayed\n", .{});
+                return err;
+            };
             if (std.mem.indexOf(u8, out, "ClusterNotLeader") != null) return out;
             calls += 1;
             // Execute against the real cluster, then lose its first successful
@@ -756,8 +764,9 @@ test "cluster: a lost DELETE response does not replay a committed mutation" {
         defer gpa.free(out);
         std.debug.print("[repl] an ambiguous DELETE was replayed {d} time(s): {s}\n", .{ LostResponse.calls - 1, out });
         return error.AmbiguousMutationReplayed;
-    } else |err| {
-        try std.testing.expectEqual(error.TestLostResponse, err);
+    } else |err| switch (err) {
+        error.TestLostResponse, error.Timeout => {},
+        else => return err,
     }
     try std.testing.expectEqual(@as(usize, 1), LostResponse.calls);
     try assertMutationReplicates(&cluster, "LostDelRet-deleted", "RETURN 1", "MATCH (n:LostDelRet) RETURN count(n) AS c", "\"c\":0");
