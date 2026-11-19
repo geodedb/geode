@@ -26,6 +26,7 @@
 const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
+const tmpfs_room = @import("tmpfs_room.zig");
 const graph_store = geode.graph_store;
 const execution = geode.execution;
 const adapter_mod = geode.graph_storage_adapter;
@@ -68,7 +69,7 @@ const ShmPath = struct {
 };
 
 /// The tmpfs data directory of scratch directory `sub_path`, or null when
-/// the host has no /dev/shm.
+/// the host has no /dev/shm (`tmpDataDir` also needs `tmpfs_room.shmUsable`).
 fn shmPath(sub_path: []const u8) ?ShmPath {
     if (comptime @import("builtin").os.tag != .linux) return null;
     std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), "/dev/shm", .{}) catch return null;
@@ -79,10 +80,12 @@ fn shmPath(sub_path: []const u8) ?ShmPath {
 }
 
 fn tmpDataDir(allocator: std.mem.Allocator, sub_path: []const u8) ![]u8 {
-    if (shmPath(sub_path)) |path| {
+    // SONNY-6801: on tmpfs only when it has room; `cleanup` removes the
+    // tmpfs path either way.
+    if (tmpfs_room.shmUsable()) if (shmPath(sub_path)) |path| {
         std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), path.slice()) catch return error.ShmDirCreateFailed;
         return allocator.dupe(u8, path.slice());
-    }
+    };
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
     const cwd_len = std.process.currentPath(std.Io.Threaded.global_single_threaded.io(), &cwd_buf) catch return error.GetCwdFailed;
     var actual_len = cwd_len;

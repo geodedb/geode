@@ -13,6 +13,7 @@
 //! after a checkpoint and a reload from the engine.
 
 const std = @import("std");
+const tmpfs_room = @import("tmpfs_room.zig");
 const testing = std.testing;
 const geode = @import("geode");
 const rls_types = @import("rls_types");
@@ -43,11 +44,15 @@ pub const tenant_b = "tenant_b";
 
 var shm_counter = std.atomic.Value(u32).init(0);
 
-/// A fresh directory on tmpfs (/dev/shm), or null when the host has none.
+/// SONNY-6801: /dev/shm has room for a persisted session's store.
+pub const shmUsable = tmpfs_room.shmUsable;
+
+/// A fresh directory on tmpfs (/dev/shm), or null when the host has none
+/// with room for a session (`shmUsable`).
 fn shmDataDir(allocator: std.mem.Allocator) !?[]u8 {
     if (comptime @import("builtin").os.tag != .linux) return null;
     const io = std.Io.Threaded.global_single_threaded.io();
-    std.Io.Dir.cwd().access(io, "/dev/shm", .{}) catch return null;
+    if (!shmUsable()) return null;
     const path = try std.fmt.allocPrint(allocator, "/dev/shm/geode-write-harness-{d}-{d}", .{ std.os.linux.getpid(), shm_counter.fetchAdd(1, .monotonic) });
     errdefer allocator.free(path);
     std.Io.Dir.cwd().deleteTree(io, path) catch {};
@@ -101,7 +106,8 @@ pub const Session = struct {
         // and on the shared ext4 disk of a loaded host the run spent its time
         // in fsync (the test thread sat in jbd2_log_wait_commit at ~14% of one
         // core). The storage code paths are the same; fsync on tmpfs returns
-        // at once.
+        // at once. SONNY-6801: only when it has room (`shmUsable`), else the
+        // session's store is in `tmp` on disk.
         if (persisted) shm_dir = try shmDataDir(allocator);
         data_dir = if (shm_dir) |d| try allocator.dupe(u8, d) else try harness.tmpDirRealpathAlloc(allocator, &tmp.?.sub_path);
         if (persisted) {

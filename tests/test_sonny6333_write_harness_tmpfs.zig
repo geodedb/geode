@@ -31,7 +31,8 @@ fn exists(path: []const u8) bool {
 }
 
 test "SONNY-6333 a persisted write-harness session keeps its store on tmpfs and removes it at the end" {
-    if (builtin.os.tag != .linux or !exists("/dev/shm")) return error.SkipZigTest;
+    // SONNY-6801: the harness uses /dev/shm only when it has room.
+    if (builtin.os.tag != .linux or !exists("/dev/shm") or !h.shmUsable()) return error.SkipZigTest;
     for ([_]h.Mode{ .persisted, .tenant_scoped, .rls_policy }) |mode| {
         var dir_copy: [std.fs.max_path_bytes]u8 = undefined;
         var dir_len: usize = 0;
