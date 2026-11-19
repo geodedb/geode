@@ -57,30 +57,34 @@ test "protocol: transport parity diagnostics (US001) QUIC vs gRPC (gated)" {
     };
     defer parity_run.server.deinit();
     defer parity_run.result.quic.deinit(allocator);
-    defer parity_run.result.grpc.deinit(allocator);
+    defer if (parity_run.result.grpc) |*g| g.deinit(allocator);
 
     const quic_res = parity_run.result.quic;
-    const grpc_res = parity_run.result.grpc;
 
     util.progress("Asserting US001 is not enforced on either transport...", .{});
     // No diagnostic: unordered pagination is legal.
     try testing.expect(quic_res.error_code == null);
-    try testing.expect(grpc_res.error_code == null);
     try testing.expectEqualStrings("00000", quic_res.status_class);
-    try testing.expectEqualStrings("00000", grpc_res.status_class);
     try testing.expectEqual(@as(usize, 0), quic_res.additional_statuses.len);
-    try testing.expectEqual(@as(usize, 0), grpc_res.additional_statuses.len);
+    // No US001 diagnostic is ever flagged.
+    for (quic_res.flagger_findings) |finding| try testing.expect(!contains(finding, "US001"));
 
-    util.progress("Comparing transport parity...", .{});
-    // Parity: identical observable result on both transports.
-    try testing.expectEqual(quic_res.ordered, grpc_res.ordered);
-    try testing.expectEqual(quic_res.rows.len, grpc_res.rows.len);
-    try testing.expectEqual(quic_res.columns.len, grpc_res.columns.len);
-    try testing.expectEqual(quic_res.flagger_findings.len, grpc_res.flagger_findings.len);
-    for (quic_res.flagger_findings, 0..) |finding, i| {
-        try testing.expectEqualStrings(finding, grpc_res.flagger_findings[i]);
-        // No US001 diagnostic is ever flagged.
-        try testing.expect(!contains(finding, "US001"));
+    // SONNY-6782: plaintext gRPC is served in Debug only; a release build
+    // checks the QUIC half and the CLI arm.
+    if (parity_run.result.grpc) |grpc_res| {
+        try testing.expect(grpc_res.error_code == null);
+        try testing.expectEqualStrings("00000", grpc_res.status_class);
+        try testing.expectEqual(@as(usize, 0), grpc_res.additional_statuses.len);
+
+        util.progress("Comparing transport parity...", .{});
+        // Parity: identical observable result on both transports.
+        try testing.expectEqual(quic_res.ordered, grpc_res.ordered);
+        try testing.expectEqual(quic_res.rows.len, grpc_res.rows.len);
+        try testing.expectEqual(quic_res.columns.len, grpc_res.columns.len);
+        try testing.expectEqual(quic_res.flagger_findings.len, grpc_res.flagger_findings.len);
+        for (quic_res.flagger_findings, 0..) |finding, i| {
+            try testing.expectEqualStrings(finding, grpc_res.flagger_findings[i]);
+        }
     }
 
     util.progress("Asserting CLI exit status (GAP-0272)...", .{});

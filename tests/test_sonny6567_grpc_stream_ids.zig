@@ -87,6 +87,8 @@ fn execute(client: *util.GrpcProtoClient, allocator: std.mem.Allocator, what: []
 test "SONNY-6567 (1): N Execute RPCs and a large response on one gRPC connection" {
     // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
     if (builtin.os.tag != .linux) return error.SkipZigTest;
+    // SONNY-6782: plaintext gRPC is served in Debug only.
+    if (!util.grpc_plaintext_served) return error.SkipZigTest;
     const allocator = testing.allocator;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -165,6 +167,8 @@ test "SONNY-6567 (1): N Execute RPCs and a large response on one gRPC connection
 test "SONNY-6567 (1): a multi-statement --file runs over gRPC" {
     // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
     if (builtin.os.tag != .linux) return error.SkipZigTest;
+    // SONNY-6782: plaintext gRPC is served in Debug only.
+    if (!util.grpc_plaintext_served) return error.SkipZigTest;
     const allocator = testing.allocator;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

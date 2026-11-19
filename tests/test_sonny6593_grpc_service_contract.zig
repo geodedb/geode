@@ -121,6 +121,8 @@ fn isDeclared(declared: []const []const u8, name: []const u8) bool {
 
 test "SONNY-6593 (2): geode serve answers exactly the gRPC RPCs geode.proto declares" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
+    // SONNY-6782: plaintext gRPC is served in Debug only.
+    if (!util.grpc_plaintext_served) return error.SkipZigTest;
     const a = testing.allocator;
 
     const proto = try readRepoFile(a, "src/proto/geode.proto");

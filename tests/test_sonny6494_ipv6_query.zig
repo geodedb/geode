@@ -77,6 +77,8 @@ fn runGeode(a: std.mem.Allocator, argv: []const []const u8, timeout_s: i64) !Run
     inline for (.{ "PATH", "HOME", "LD_LIBRARY_PATH" }) |name| {
         if (std.c.getenv(name)) |v| try env.put(name, std.mem.span(v));
     }
+    // SONNY-6782: a release build refuses --insecure without GEODE_ALLOW_INSECURE_TLS=1.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
     var dir = try test_scratch.ScratchDir.create("sonny6494-ipv6-query");
     defer dir.remove();
     const out_path = try std.fmt.allocPrint(a, "{s}/run.out", .{dir.path()});
@@ -164,6 +166,9 @@ test "SONNY-6494: geode query reaches a geode serve listening on [::1]" {
 
     // The MCP endpoint client, through a DSN.
     {
+        // SONNY-6782: the in-process MCP client's DSN sets insecure=true, refused in a release build without this.
+        util.setInsecureTlsAck(true);
+        defer util.setInsecureTlsAck(false);
         const mcp_dsn = try std.fmt.allocPrint(a, "quic://{s}:{s}@{s}?insecure=true", .{ util.defaultUsername(), "Geode%20Test%20Admin%20Passphrase", addr });
         defer a.free(mcp_dsn);
         try std.testing.expectEqualStrings("Geode Test Admin Passphrase", util.defaultPassword());

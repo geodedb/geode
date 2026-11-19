@@ -105,6 +105,8 @@ const Env = struct {
         try env.put("GEODE_DATA_DIR", data_dir);
         try env.put("GEODE_SERVER_ADDRESS", self.server.getAddr());
         try env.put("GEODE_LSP_PORT", "0");
+        // SONNY-6782: a release build refuses --insecure-tls-skip-verify without GEODE_ALLOW_INSECURE_TLS=1.
+        try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
 
         var full: std.ArrayList([]const u8) = .empty;
         defer full.deinit(a);

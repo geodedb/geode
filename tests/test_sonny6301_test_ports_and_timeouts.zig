@@ -209,6 +209,8 @@ test "SONNY-6301: a QUIC reply wait fails at once when the server has exited" {
 
 test "SONNY-6301: a gRPC reply from a live server slower than the old 5 s socket timeout is waited for" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
+    // SONNY-6782: plaintext gRPC is served in Debug only.
+    if (!util.grpc_plaintext_served) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var server = try Server.start(allocator, true, &.{});
     defer server.stop(allocator);

@@ -81,6 +81,8 @@ fn runGeode(home: []const u8, argv: []const []const u8) !Run {
     }
     try env.put("HOME", home);
     try env.put("GEODE_LSP_PORT", "0");
+    // SONNY-6782: a release build refuses --insecure-tls-skip-verify without GEODE_ALLOW_INSECURE_TLS=1.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
 
     var out_dir = try test_scratch.ScratchDir.create("sonny6554-out");
     defer out_dir.remove();

@@ -225,6 +225,8 @@ fn runCase(allocator: std.mem.Allocator, addr: []const u8, pid: std.posix.pid_t,
 
 test "SONNY-6759: a gRPC client that disconnects or resets its stream cancels its statement" {
     if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
+    // SONNY-6782: plaintext gRPC is served in Debug only.
+    if (!util.grpc_plaintext_served) return error.SkipZigTest;
     const allocator = testing.allocator;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

@@ -206,10 +206,14 @@ fn runOneQuery(alloc: std.mem.Allocator, listen: []const u8, query: []const u8) 
         "geode",                              "-P",
         "Geode Test Password Passphrase 123", query,
     };
-    _ = alloc;
+    // SONNY-6782: a release build refuses --insecure without GEODE_ALLOW_INSECURE_TLS=1.
+    var env = try std.Io.Threaded.global_single_threaded.environ.process_environ.createMap(alloc);
+    defer env.deinit();
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
     const io = testIo();
     var child = try std.process.spawn(io, .{
         .argv = &argv,
+        .environ_map = &env,
         .stdin = .ignore,
         .stdout = .ignore,
         .stderr = .ignore,

@@ -64,6 +64,8 @@ fn runGeode(cwd: []const u8, argv: []const []const u8, env: []const Env) !Run {
     inline for (.{ "PATH", "LD_LIBRARY_PATH", "USER" }) |name| {
         if (std.c.getenv(name)) |v| try map.put(name, std.mem.span(v));
     }
+    // SONNY-6782: a release build refuses --insecure-tls-skip-verify without GEODE_ALLOW_INSECURE_TLS=1.
+    try map.put("GEODE_ALLOW_INSECURE_TLS", "1");
     for (env) |e| try map.put(e.name, e.value);
 
     var out_dir = try test_scratch.ScratchDir.create("sonny6544-home-out");

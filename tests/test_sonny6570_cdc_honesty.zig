@@ -78,6 +78,9 @@ const Principal = enum {
 };
 
 const Transport = enum { quic, grpc };
+/// SONNY-6782: plaintext gRPC is served in Debug only, so a release build
+/// runs the QUIC half.
+const transports: []const Transport = if (util.grpc_plaintext_served) &.{ .quic, .grpc } else &.{.quic};
 
 /// Every `cdc.*` procedure the server dispatches (storage_dispatch
 /// `cdc_table`).
@@ -597,7 +600,7 @@ test "SONNY-6570: every CALL cdc.* answers from the CDC engine or is refused 0A0
     const a = testing.allocator;
     var srv = try Server.start(a, &.{}, &.{});
     defer srv.deinit();
-    for ([_]Transport{ .quic, .grpc }) |t| try checkTruthful(a, &srv, t);
+    for (transports) |t| try checkTruthful(a, &srv, t);
 }
 
 // ---------------------------------------------------------------------------
@@ -622,7 +625,7 @@ test "SONNY-6570: every CDC procedure and frame is Admin only on QUIC and gRPC (
         try testing.expect(r.error_code == null);
     }
     for ([_]Principal{ .admin, .readwrite, .readonly, .user, .anonymous }) |who| {
-        for ([_]Transport{ .quic, .grpc }) |t| {
+        for (transports) |t| {
             const want: []const u8 = switch (who) {
                 .admin => "allowed",
                 .anonymous => "28000",
@@ -790,7 +793,7 @@ test "SONNY-6570: CDC changes and refusals write audit records, on both transpor
         defer srv.deinit();
         try createUsers(a, &srv);
 
-        for ([_]Transport{ .quic, .grpc }) |t| {
+        for (transports) |t| {
             for ([_][]const u8{
                 "CALL cdc.enable()",
                 "CALL cdc.reset_guardrails()",
@@ -833,18 +836,18 @@ test "SONNY-6570: CDC changes and refusals write audit records, on both transpor
     defer a.free(log);
     const Expect = struct { action: []const u8, result: []const u8, min: usize };
     const expected = [_]Expect{
-        // One per transport.
-        .{ .action = "cdc.enable", .result = "success", .min = 2 },
-        .{ .action = "cdc.reset_guardrails", .result = "success", .min = 2 },
-        .{ .action = "cdc.stop", .result = "success", .min = 2 },
-        .{ .action = "cdc.start", .result = "success", .min = 2 },
-        .{ .action = "cdc.disable", .result = "success", .min = 2 },
+        // One per transport (SONNY-6782: QUIC only in a release build).
+        .{ .action = "cdc.enable", .result = "success", .min = transports.len },
+        .{ .action = "cdc.reset_guardrails", .result = "success", .min = transports.len },
+        .{ .action = "cdc.stop", .result = "success", .min = transports.len },
+        .{ .action = "cdc.start", .result = "success", .min = transports.len },
+        .{ .action = "cdc.disable", .result = "success", .min = transports.len },
         // A refused change attempt is a failure record.
-        .{ .action = "cdc.pause", .result = "failure", .min = 2 },
+        .{ .action = "cdc.pause", .result = "failure", .min = transports.len },
         // The readwrite user's refusals (access_denied).
-        .{ .action = "cdc.disable", .result = "failure", .min = 2 },
-        .{ .action = "CDC_CONTROL", .result = "success", .min = 2 },
-        .{ .action = "CDC_CONTROL", .result = "failure", .min = 2 },
+        .{ .action = "cdc.disable", .result = "failure", .min = transports.len },
+        .{ .action = "CDC_CONTROL", .result = "success", .min = transports.len },
+        .{ .action = "CDC_CONTROL", .result = "failure", .min = transports.len },
     };
     var missing: usize = 0;
     for (expected) |e| {
@@ -876,6 +879,8 @@ test "SONNY-6570: the server serves the CDC RPCs src/proto/geode.proto declares 
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     // SONNY-6593: the undeclared /CdcDiag and /CdcCtrl aliases are no longer
     // served (tests/test_sonny6593_grpc_service_contract.zig).
+    // SONNY-6782: plaintext gRPC is served in Debug only.
+    if (!util.grpc_plaintext_served) return error.SkipZigTest;
     const a = testing.allocator;
     var srv = try Server.start(a, &.{}, &.{});
     defer srv.deinit();

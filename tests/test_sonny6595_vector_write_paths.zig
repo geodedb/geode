@@ -55,6 +55,9 @@ fn io() std.Io {
 }
 
 const Transport = enum { quic, grpc };
+/// SONNY-6782: plaintext gRPC is served in Debug only, so a release build
+/// runs the QUIC half.
+const transports: []const Transport = if (util.grpc_plaintext_served) &.{ .quic, .grpc } else &.{.quic};
 
 const Server = struct {
     handle: util.ServerHandle,
@@ -446,6 +449,6 @@ test "SONNY-6595: every node write path keeps a vector index current and refuses
     // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     var failed: usize = 0;
-    for ([_]Transport{ .quic, .grpc }) |t| failed += try runTransport(testing.allocator, t);
+    for (transports) |t| failed += try runTransport(testing.allocator, t);
     try testing.expectEqual(@as(usize, 0), failed);
 }

@@ -232,12 +232,16 @@ fn expectListensOn(extra_args: []const []const u8, grpc_port: u16, want_ip: [4]u
     try testing.expectEqual(@as(usize, 1), n);
 
     // The listener answers geode's gRPC protocol at the address asked for.
-    var client = try proto_util.GrpcProtoClient.connect(testing.allocator, dial);
-    defer client.deinit();
-    var hello = try client.hello(testing.allocator, proto_util.defaultUsername(), proto_util.defaultPassword());
-    defer hello.deinit(testing.allocator);
-    if (!hello.success) server.dump(label);
-    try testing.expect(hello.success);
+    // SONNY-6782: plaintext gRPC is served in Debug only; a release build
+    // checks the bind and the banner.
+    if (proto_util.grpc_plaintext_served) {
+        var client = try proto_util.GrpcProtoClient.connect(testing.allocator, dial);
+        defer client.deinit();
+        var hello = try client.hello(testing.allocator, proto_util.defaultUsername(), proto_util.defaultPassword());
+        defer hello.deinit(testing.allocator);
+        if (!hello.success) server.dump(label);
+        try testing.expect(hello.success);
+    }
 
     // The startup banner names the address and port actually bound.
     var ip_buf: [16]u8 = undefined;

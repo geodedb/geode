@@ -20,6 +20,8 @@ const util = @import("proto_test_util.zig");
 const h = @import("test_sonny6377_query_no_resend.zig");
 
 test "SONNY-6384 item 6: a gRPC chunk whose connection fails after it was sent stops the run and prints the chunked summary" {
+    // SONNY-6782: plaintext gRPC is served in Debug only.
+    if (!util.grpc_plaintext_served) return error.SkipZigTest;
     // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     try h.skipWithoutBinary();

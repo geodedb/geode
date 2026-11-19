@@ -133,6 +133,8 @@ fn seed(allocator: std.mem.Allocator, addr: []const u8) !void {
 
 test "SONNY-6753: SIGTERM cancels an in-flight gRPC statement; prompt drain, no leak, no watchdog" {
     if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
+    // SONNY-6782: plaintext gRPC is served in Debug only.
+    if (!util.grpc_plaintext_served) return error.SkipZigTest;
     const allocator = testing.allocator;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

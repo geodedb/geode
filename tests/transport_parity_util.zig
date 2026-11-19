@@ -5,7 +5,9 @@ const util = @import("proto_test_util.zig");
 
 pub const ParityResult = struct {
     quic: util.ExecResult,
-    grpc: util.ExecResult,
+    /// SONNY-6782: null outside Debug, where plaintext gRPC is not served
+    /// (`util.grpc_plaintext_served`); the QUIC half still runs.
+    grpc: ?util.ExecResult,
 };
 
 pub const ParityServer = struct {
@@ -59,15 +61,19 @@ pub fn runParityRandom(
     var hello_q = try quic_client.hello(allocator, util.defaultUsername(), util.defaultPassword());
     hello_q.deinit(allocator);
 
-    util.progress("Connecting gRPC client...", .{});
-    var grpc_client = try util.GrpcProtoClient.connect(allocator, grpc_addr);
-    defer grpc_client.deinit();
-    var hello_g = try grpc_client.hello(allocator, util.defaultUsername(), util.defaultPassword());
-    hello_g.deinit(allocator);
+    // SONNY-6782: plaintext gRPC is served in Debug only.
+    var grpc_client: ?util.GrpcProtoClient = null;
+    defer if (grpc_client) |*c| c.deinit();
+    if (util.grpc_plaintext_served) {
+        util.progress("Connecting gRPC client...", .{});
+        grpc_client = try util.GrpcProtoClient.connect(allocator, grpc_addr);
+        var hello_g = try grpc_client.?.hello(allocator, util.defaultUsername(), util.defaultPassword());
+        hello_g.deinit(allocator);
+    }
 
     util.progress("Executing query on both transports...", .{});
     const quic_res = try quic_client.executeAndCollect(allocator, query, quic_params, page_size);
-    const grpc_res = try grpc_client.executeAndCollect(allocator, query, grpc_params, page_size);
+    const grpc_res: ?util.ExecResult = if (grpc_client) |*c| try c.executeAndCollect(allocator, query, grpc_params, page_size) else null;
 
     return .{
         .server = .{

@@ -174,6 +174,8 @@ fn startShell(shell: *Shell, pty: Pty, server: []const u8, home: ?[]const u8, cw
     if (home) |h| try env.put("HOME", h);
     try env.put("TERM", "xterm-256color");
     try env.put("LANG", "C.UTF-8");
+    // SONNY-6782: a release build refuses --insecure-tls-skip-verify without GEODE_ALLOW_INSECURE_TLS=1.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
 
     shell.threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
     errdefer shell.threaded.deinit();

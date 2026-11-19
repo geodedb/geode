@@ -76,22 +76,29 @@ test "protocol: transport parity diagnostics (IllegalOrderKey) QUIC vs gRPC (gat
     var quic = try util.QuicProtoClient.connect(allocator, addr);
     defer quic.deinit();
 
-    util.progress("Connecting gRPC client...", .{});
-    var grpc = try util.GrpcProtoClient.connect(allocator, grpc_addr);
-    defer grpc.deinit();
+    // SONNY-6782: plaintext gRPC is served in Debug only; a release build
+    // checks the QUIC half.
+    var grpc: ?util.GrpcProtoClient = null;
+    defer if (grpc) |*g| g.deinit();
+    if (util.grpc_plaintext_served) {
+        util.progress("Connecting gRPC client...", .{});
+        grpc = try util.GrpcProtoClient.connect(allocator, grpc_addr);
+    }
 
     util.progress("Authenticating both clients...", .{});
     var hello_q = try quic.hello(allocator, util.defaultUsername(), util.defaultPassword());
     hello_q.deinit(allocator);
-    var hello_g = try grpc.hello(allocator, util.defaultUsername(), util.defaultPassword());
-    hello_g.deinit(allocator);
+    if (grpc) |*g| {
+        var hello_g = try g.hello(allocator, util.defaultUsername(), util.defaultPassword());
+        hello_g.deinit(allocator);
+    }
 
     util.progress("Testing IllegalOrderKey parity...", .{});
     const q = "RETURN a ORDER BY f(a)";
     var qres = try execQuic(&quic, allocator, q);
     defer qres.deinit(allocator);
-    var gres = try execGrpc(&grpc, allocator, q);
-    defer gres.deinit(allocator);
+    var gres: ?util.ExecResult = if (grpc) |*g| try execGrpc(g, allocator, q) else null;
+    defer if (gres) |*r| r.deinit(allocator);
 
     // Both transports must reject, with the SAME status class and the SAME
     // message — that identity is what "transport parity" means here. The
@@ -102,12 +109,14 @@ test "protocol: transport parity diagnostics (IllegalOrderKey) QUIC vs gRPC (gat
     const expected_message = "function calls in ORDER BY are disabled";
 
     try testing.expect(qres.error_code != null);
-    try testing.expect(gres.error_code != null);
     try testing.expectEqualStrings("42000", qres.error_code.?);
-    try testing.expectEqualStrings("42000", gres.error_code.?);
     try testing.expectEqualStrings(expected_message, qres.error_message orelse "");
-    try testing.expectEqualStrings(expected_message, gres.error_message orelse "");
-    try testing.expectEqualStrings(qres.status_class, gres.status_class);
+    if (gres) |r| {
+        try testing.expect(r.error_code != null);
+        try testing.expectEqualStrings("42000", r.error_code.?);
+        try testing.expectEqualStrings(expected_message, r.error_message orelse "");
+        try testing.expectEqualStrings(qres.status_class, r.status_class);
+    }
 
     util.testPass();
 }

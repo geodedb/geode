@@ -168,6 +168,8 @@ fn runGeode(argv: []const []const u8, cwd: []const u8, data_dir: ?[]const u8) !R
     }
     try env.put("GEODE_MASTER_KEY", master_key);
     try env.put("GEODE_LSP_PORT", "0");
+    // SONNY-6782: a release build refuses --insecure without GEODE_ALLOW_INSECURE_TLS=1.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
     if (data_dir) |d| try env.put("GEODE_DATA_DIR", d);
     const r = try std.process.run(testing.allocator, threaded.io(), .{
         .argv = argv,

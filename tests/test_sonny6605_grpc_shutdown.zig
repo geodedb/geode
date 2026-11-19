@@ -62,6 +62,8 @@ fn waitExit(pid: std.posix.pid_t, deadline_ms: i64) ?u32 {
 
 test "SONNY-6605 (3): SIGTERM stops the gRPC accept loop; no pool join timeout, no watchdog exit" {
     if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
+    // SONNY-6782: plaintext gRPC is served in Debug only.
+    if (!util.grpc_plaintext_served) return error.SkipZigTest;
     const allocator = testing.allocator;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

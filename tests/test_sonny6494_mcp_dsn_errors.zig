@@ -145,6 +145,8 @@ fn runGeode(a: std.mem.Allocator, argv: []const []const u8, timeout_s: i64) !Run
     inline for (.{ "PATH", "HOME", "LD_LIBRARY_PATH" }) |name| {
         if (std.c.getenv(name)) |v| try env.put(name, std.mem.span(v));
     }
+    // SONNY-6782: a release build refuses --insecure-tls-skip-verify without GEODE_ALLOW_INSECURE_TLS=1.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
     var dir = try test_scratch.ScratchDir.create("sonny6494-mcp-dsn");
     defer dir.remove();
     const out_path = try std.fmt.allocPrint(a, "{s}/run.out", .{dir.path()});

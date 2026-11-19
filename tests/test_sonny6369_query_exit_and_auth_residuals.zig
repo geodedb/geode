@@ -83,6 +83,8 @@ fn runGeode(aa: std.mem.Allocator, args: []const []const u8) !Run {
     if (getenv("PATH")) |p| try env.put("PATH", p);
     if (getenv("HOME")) |p| try env.put("HOME", p);
     try env.put("GEODE_DATA_DIR_LOCK_TIMEOUT_MS", "0");
+    // SONNY-6782: a release build refuses --insecure without GEODE_ALLOW_INSECURE_TLS=1.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
     const child = try std.process.spawn(io, .{
         .argv = args,
         .environ_map = &env,

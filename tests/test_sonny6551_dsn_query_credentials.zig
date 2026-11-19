@@ -86,6 +86,8 @@ fn runGeode(argv: []const []const u8, stdin_text: []const u8, timeout_s: i64) !R
     }
     try env.put("HOME", dir.path());
     try env.put("GEODE_LSP_PORT", "0");
+    // SONNY-6782: a release build refuses --insecure-tls-skip-verify and a DSN insecure=true without GEODE_ALLOW_INSECURE_TLS=1.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
 
     const out_path = try std.fmt.allocPrint(a, "{s}/run.out", .{dir.path()});
     defer a.free(out_path);

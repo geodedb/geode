@@ -51,6 +51,8 @@ fn runGeode(aa: std.mem.Allocator, args: []const []const u8, stdin_bytes: ?[]con
     var env = std.process.Environ.Map.init(aa);
     if (getenv("PATH")) |p| try env.put("PATH", p);
     if (getenv("HOME")) |p| try env.put("HOME", p);
+    // SONNY-6782: a release build refuses --insecure-tls-skip-verify without GEODE_ALLOW_INSECURE_TLS=1.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
     const child = try std.process.spawn(io, .{
         .argv = args,
         .environ_map = &env,

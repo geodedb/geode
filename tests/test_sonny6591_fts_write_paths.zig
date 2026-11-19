@@ -395,6 +395,10 @@ test "SONNY-6591: every node write path keeps a fulltext index current over QUIC
         .{ .transport = .quic, .tde = true },
         .{ .transport = .grpc, .tde = false },
         .{ .transport = .grpc, .tde = true },
-    }) |cfg| failed += try runConfig(testing.allocator, cfg);
+    }) |cfg| {
+        // SONNY-6782: plaintext gRPC is served in Debug only, so a release build runs the QUIC half.
+        if (cfg.transport == .grpc and !util.grpc_plaintext_served) continue;
+        failed += try runConfig(testing.allocator, cfg);
+    }
     try testing.expectEqual(@as(usize, 0), failed);
 }

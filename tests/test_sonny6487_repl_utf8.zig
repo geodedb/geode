@@ -142,6 +142,8 @@ test "SONNY-6487: geode shell edits multi-byte text typed key by key and sends i
     try env.put("HOME", home.path());
     try env.put("TERM", "xterm-256color");
     try env.put("LANG", "C.UTF-8");
+    // SONNY-6782: a release build refuses --insecure-tls-skip-verify without GEODE_ALLOW_INSECURE_TLS=1.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
 
     var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
     defer threaded.deinit();
