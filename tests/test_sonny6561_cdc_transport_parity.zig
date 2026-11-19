@@ -332,12 +332,14 @@ const GrpcSession = struct {
 
 /// `GrpcProtoClient.executeAndCollect` runs Execute on a fixed stream id, so
 /// each statement gets its own connection.
-fn grpcCall(a: std.mem.Allocator, srv: *const Server, who: Principal, query: []const u8) ![]u8 {
+/// SONNY-6782: null when plaintext gRPC is not served (a release build).
+fn grpcCall(a: std.mem.Allocator, srv: *const Server, who: Principal, query: []const u8) !?[]u8 {
+    if (!util.grpc_plaintext_served) return null;
     var s = try GrpcSession.open(a, srv, who);
     defer s.deinit();
     var r = try s.client.executeAndCollect(a, query, util.emptyParams(), 100);
     defer r.deinit(a);
-    return fmtExec(a, &r);
+    return try fmtExec(a, &r);
 }
 
 // ---------------------------------------------------------------------------
@@ -348,8 +350,14 @@ const Tally = struct {
     mismatches: usize = 0,
     compared: usize = 0,
 
-    fn check(self: *Tally, a: std.mem.Allocator, state: []const u8, who: Principal, op: []const u8, quic: []u8, grpc: []u8) void {
+    fn check(self: *Tally, a: std.mem.Allocator, state: []const u8, who: Principal, op: []const u8, quic: []u8, grpc_answer: ?[]u8) void {
         defer a.free(quic);
+        // SONNY-6782: no gRPC answer in a release build (plaintext gRPC is
+        // Debug-only): the QUIC answer is still produced, nothing is compared.
+        const grpc = grpc_answer orelse {
+            std.debug.print("{s} | {s:<9} | {s:<34} | QUIC: {s}\n", .{ state, @tagName(who), op, quic });
+            return;
+        };
         defer a.free(grpc);
         self.compared += 1;
         const same = std.mem.eql(u8, quic, grpc);
@@ -382,18 +390,17 @@ fn compareState(a: std.mem.Allocator, srv: *const Server, state: []const u8, tal
     for ([_]Principal{ .admin, .readwrite, .readonly, .anonymous }) |who| {
         var qc = try quicConnect(a, srv, who);
         defer qc.deinit();
-        var gs = try GrpcSession.open(a, srv, who);
-        defer gs.deinit();
+        var gs: ?GrpcSession = if (util.grpc_plaintext_served) try GrpcSession.open(a, srv, who) else null;
+        defer if (gs) |*g| g.deinit();
 
-        tally.check(a, state, who, "CDC_DIAGNOSTICS", try quicDiag(a, &qc), try gs.diag(a));
+        tally.check(a, state, who, "CDC_DIAGNOSTICS", try quicDiag(a, &qc), if (gs) |*g| try g.diag(a) else null);
 
         for ([_][]const u8{ "RESET_GUARDRAILS", "UNKNOWN_ACTION", "" }) |action| {
             const op = try std.fmt.allocPrint(a, "CDC_CONTROL '{s}'", .{action});
             defer a.free(op);
             const before_q = try adminEpoch(a, srv);
             const q = try quicCtrl(a, &qc, action, before_q);
-            const before_g = try adminEpoch(a, srv);
-            const g = try gs.ctrl(a, action, before_g);
+            const g = if (gs) |*session| try session.ctrl(a, action, try adminEpoch(a, srv)) else null;
             tally.check(a, state, who, op, q, g);
         }
 
@@ -456,8 +463,9 @@ test "SONNY-6561: with CDC running, RESET_GUARDRAILS resets the running engine o
 
     var qc = try quicConnect(a, &srv, .admin);
     defer qc.deinit();
-    var gs = try GrpcSession.open(a, &srv, .admin);
-    defer gs.deinit();
+    // SONNY-6782: the gRPC half runs where plaintext gRPC is served (Debug).
+    var gs: ?GrpcSession = if (util.grpc_plaintext_served) try GrpcSession.open(a, &srv, .admin) else null;
+    defer if (gs) |*g| g.deinit();
     {
         var r = try qc.executeAndCollect(a, "CALL cdc.enable()", util.emptyParams(), 100);
         defer r.deinit(a);
@@ -467,35 +475,45 @@ test "SONNY-6561: with CDC running, RESET_GUARDRAILS resets the running engine o
     // The engine is running: diagnostics say so on both transports.
     const qd = try quicDiag(a, &qc);
     defer a.free(qd);
-    const gd = try gs.diag(a);
-    defer a.free(gd);
     try testing.expect(std.mem.startsWith(u8, qd, "diag enabled=true running=true"));
-    try testing.expectEqualStrings(gd, qd);
+    if (gs) |*session| {
+        const gd = try session.diag(a);
+        defer a.free(gd);
+        try testing.expectEqualStrings(gd, qd);
+    }
 
     // Each transport's RESET_GUARDRAILS advances the same engine's epoch by 1.
     const e0 = try adminEpoch(a, &srv);
     const q = try quicCtrl(a, &qc, "RESET_GUARDRAILS", e0);
     defer a.free(q);
     try testing.expectEqualStrings("ctrl success=true status=OK epoch_delta=1", q);
-    const g = try gs.ctrl(a, "RESET_GUARDRAILS", e0 + 1);
-    defer a.free(g);
-    try testing.expectEqualStrings("ctrl success=true status=OK epoch_delta=1", g);
-    try testing.expectEqual(e0 + 2, try adminEpoch(a, &srv));
+    var resets: u64 = 1;
+    if (gs) |*session| {
+        const g = try session.ctrl(a, "RESET_GUARDRAILS", e0 + 1);
+        defer a.free(g);
+        try testing.expectEqualStrings("ctrl success=true status=OK epoch_delta=1", g);
+        resets += 1;
+    }
+    try testing.expectEqual(e0 + resets, try adminEpoch(a, &srv));
 
     // An unauthenticated caller is refused 28000 on both transports.
     var anon_q = try quicConnect(a, &srv, .anonymous);
     defer anon_q.deinit();
-    var anon_g = try GrpcSession.open(a, &srv, .anonymous);
-    defer anon_g.deinit();
-    const answers = [_][]u8{
-        try quicDiag(a, &anon_q),
-        try anon_g.diag(a),
-        try quicCtrl(a, &anon_q, "RESET_GUARDRAILS", 0),
-        try anon_g.ctrl(a, "RESET_GUARDRAILS", 0),
-    };
-    defer for (answers) |answer| a.free(answer);
-    for (answers) |answer| try testing.expectEqualStrings("refused 28000", answer);
-    try testing.expectEqual(e0 + 2, try adminEpoch(a, &srv));
+    var answers: std.ArrayList([]u8) = .empty;
+    defer {
+        for (answers.items) |answer| a.free(answer);
+        answers.deinit(a);
+    }
+    try answers.append(a, try quicDiag(a, &anon_q));
+    try answers.append(a, try quicCtrl(a, &anon_q, "RESET_GUARDRAILS", 0));
+    if (util.grpc_plaintext_served) {
+        var anon_g = try GrpcSession.open(a, &srv, .anonymous);
+        defer anon_g.deinit();
+        try answers.append(a, try anon_g.diag(a));
+        try answers.append(a, try anon_g.ctrl(a, "RESET_GUARDRAILS", 0));
+    }
+    for (answers.items) |answer| try testing.expectEqualStrings("refused 28000", answer);
+    try testing.expectEqual(e0 + resets, try adminEpoch(a, &srv));
 }
 
 test "SONNY-6561: GEODE_CDC_ENABLE=1 starts the CDC engine at startup, as CALL cdc.enable() does" {
@@ -526,14 +544,17 @@ test "SONNY-6561: GEODE_CDC_ENABLE=1 starts the CDC engine at startup, as CALL c
 
     var qc = try quicConnect(a, &srv, .admin);
     defer qc.deinit();
-    var gs = try GrpcSession.open(a, &srv, .admin);
-    defer gs.deinit();
     const qd = try quicDiag(a, &qc);
     defer a.free(qd);
-    const gd = try gs.diag(a);
-    defer a.free(gd);
     try testing.expect(std.mem.startsWith(u8, qd, "diag enabled=true running=true"));
-    try testing.expectEqualStrings(qd, gd);
+    // SONNY-6782: the gRPC half runs where plaintext gRPC is served (Debug).
+    if (util.grpc_plaintext_served) {
+        var gs = try GrpcSession.open(a, &srv, .admin);
+        defer gs.deinit();
+        const gd = try gs.diag(a);
+        defer a.free(gd);
+        try testing.expectEqualStrings(qd, gd);
+    }
     const status = try quicCall(a, &srv, .admin, "CALL cdc.status()");
     defer a.free(status);
     // SONNY-6570: last_checkpoint (total_events again) is gone.

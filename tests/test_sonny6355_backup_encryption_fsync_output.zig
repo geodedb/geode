@@ -312,7 +312,8 @@ test "SONNY-6355 (6) backup create refuses a missing --output directory, local a
     }
     {
         // Nothing listens on this server; the directory is checked first.
-        const r = try runGeode(&.{ geode_binary, "backup", "create", "--server", "127.0.0.1:1", "--insecure-tls-skip-verify", "--output", out, "--timeout", "2" }, cwd, &.{});
+        // SONNY-6782: a release build refuses --insecure-tls-skip-verify without GEODE_ALLOW_INSECURE_TLS=1.
+        const r = try runGeode(&.{ geode_binary, "backup", "create", "--server", "127.0.0.1:1", "--insecure-tls-skip-verify", "--output", out, "--timeout", "2" }, cwd, &.{.{ "GEODE_ALLOW_INSECURE_TLS", "1" }});
         defer r.deinit();
         if (r.code == @as(?u8, 0) or exists(parent) or std.mem.indexOf(u8, r.stderr, "does not exist") == null) {
             bad += 1;

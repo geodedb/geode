@@ -23,6 +23,9 @@ const test_scratch = @import("test_scratch.zig");
 
 const linux = std.os.linux;
 
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
 fn fsIo() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
@@ -67,6 +70,8 @@ fn runGeode(a: std.mem.Allocator, argv: []const []const u8, input: []const u8) !
     }
     try env.put("HOME", dir.path());
     try env.put("GEODE_LSP_PORT", "0");
+    // SONNY-6782: the DSN sets insecure=true, refused in a release build without this.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
     const out_path = try std.fmt.allocPrint(a, "{s}/out", .{dir.path()});
     defer a.free(out_path);
     const out = try std.Io.Dir.cwd().createFile(fsIo(), out_path, .{ .read = true, .truncate = true });
@@ -129,6 +134,9 @@ test "SONNY-6617 (2): geode query and geode shell give up on a silent server aft
 
 test "SONNY-6617 (3): a geode mcp gRPC endpoint with TLS on says the gRPC client has no TLS" {
     const a = std.testing.allocator;
+    // SONNY-6782: the in-process MCP client's DSN sets insecure=true, refused in a release build without this.
+    _ = setenv("GEODE_ALLOW_INSECURE_TLS", "1", 1);
+    defer _ = unsetenv("GEODE_ALLOW_INSECURE_TLS");
     const server = try geode_mcp.GeodeMcpServer.init(a, .{ .auth_mode = .none, .geode_endpoint = "grpc://127.0.0.1:50051?insecure=true" });
     defer server.deinit();
     const init_resp = (try server.server.processMessage(

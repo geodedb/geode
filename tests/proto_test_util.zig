@@ -72,6 +72,24 @@ pub fn formatAddr(allocator: std.mem.Allocator, port: u16) ![]u8 {
 // Test Environment Configuration
 // ============================================================================
 
+/// SONNY-6782: true when the spawned geode (built with this test's optimize
+/// mode) serves plaintext gRPC under `TestEnv.grpcPlaintext()`.
+/// `grpc_server.shouldAllowGrpcPlaintextFallback` ignores the opt-in outside
+/// Debug, so the plaintext `GrpcProtoClient` and the CLI's plaintext gRPC
+/// client cannot reach a release server; gate gRPC lanes on this.
+pub const grpc_plaintext_served = builtin.mode == .Debug;
+
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+/// SONNY-6782: an in-process MCP client reads GEODE_ALLOW_INSECURE_TLS live
+/// (`zig_quic_bridge.liveInsecurePosture`), and a release test binary is
+/// production posture, so a DSN `insecure=true` needs this acknowledgement
+/// there. A no-op for posture in Debug. Pair `true` with a deferred `false`.
+pub fn setInsecureTlsAck(on: bool) void {
+    _ = if (on) setenv("GEODE_ALLOW_INSECURE_TLS", "1", 1) else unsetenv("GEODE_ALLOW_INSECURE_TLS");
+}
+
 /// Standard test environment variables
 pub const TestEnv = struct {
     /// Get standard test environment variables (empty by default).

@@ -106,7 +106,9 @@ test "SONNY-6587: a PROFILE'd point write names the catalog index its seek used 
         .{ .q = "PROFILE MATCH (n:PN6587) WHERE n.k = 'a' SET n.v = 1", .name = null, .rows = 0 },
     };
     for (wants) |w| {
-        for ([_][]const u8{ "quic", "grpc" }) |t| {
+        // SONNY-6782: plaintext gRPC is served in Debug only; a release build runs the QUIC half.
+        const transports: []const []const u8 = if (util.grpc_plaintext_served) &.{ "quic", "grpc" } else &.{"quic"};
+        for (transports) |t| {
             const json = if (std.mem.eql(u8, t, "quic")) try quic.executeProfileJson(a, w.q) else try grpcProfile(a, grpc_addr, w.q);
             defer a.free(json);
             const seek = try seekOf(a, json);

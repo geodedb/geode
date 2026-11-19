@@ -570,6 +570,8 @@ fn grpcRestore(allocator: std.mem.Allocator, addr: []const u8, user: []const u8,
 }
 
 test "SONNY-6288 gRPC restore on a server started with --data-dir restores beside its data directory and refuses a non-admin" {
+    // SONNY-6782: plaintext gRPC is served in Debug only.
+    if (!util.grpc_plaintext_served) return error.SkipZigTest;
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var lay = try Layout.init(allocator, "sonny6288-grpc");

@@ -76,6 +76,8 @@ fn runGeode(a: std.mem.Allocator, dir: []const u8, argv: []const []const u8, tim
     // A scratch HOME: no saved session or history from the developer's
     // account, and nothing written back into it.
     try env.put("HOME", dir);
+    // SONNY-6782: a release build refuses --insecure-tls-skip-verify without GEODE_ALLOW_INSECURE_TLS=1.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
     const out_path = try std.fmt.allocPrint(a, "{s}/run.out", .{dir});
     defer a.free(out_path);
     const out = try std.Io.Dir.cwd().createFile(fsIo(), out_path, .{ .read = true, .truncate = true });

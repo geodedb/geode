@@ -618,6 +618,9 @@ fn driveEveryListedPrompt(server: *GeodeMcpServer) !void {
 
 test "SONNY-6552: every MCP result has its 2025-11-25 shape through processMessage" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
+    // SONNY-6782: the in-process MCP client's DSN sets insecure=true, refused in a release build without this.
+    util.setInsecureTlsAck(true);
+    defer util.setInsecureTlsAck(false);
     // Nothing listens on the endpoint: the backend tools and resources take
     // their failure / offline paths.
     // SONNY-6589 (2): no timeout parameter: geode mcp refuses one (the
@@ -700,6 +703,8 @@ fn runMcpSession(endpoint: []const u8, input: []const u8, timeout_s: i64) !Sessi
     }
     try env.put("HOME", dir.path());
     try env.put("GEODE_LSP_PORT", "0");
+    // SONNY-6782: the endpoint DSN sets insecure=true, refused in a release build without this.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
 
     const out_path = try std.fmt.allocPrint(a, "{s}/stdout", .{dir.path()});
     defer a.free(out_path);

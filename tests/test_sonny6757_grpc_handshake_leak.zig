@@ -53,6 +53,8 @@ fn waitExit(pid: std.posix.pid_t, deadline_ms: i64) ?u32 {
 }
 
 test "SONNY-6757: gRPC Handshakes leak nothing at shutdown" {
+    // SONNY-6782: plaintext gRPC is served in Debug only.
+    if (!util.grpc_plaintext_served) return error.SkipZigTest;
     if (comptime builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var tmp = testing.tmpDir(.{});

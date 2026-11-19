@@ -15,6 +15,7 @@
 // CANARY: REQ=REQ-SEC-MCP-INSECURE-DSN-001; FEATURE="InsecureTlsFlagGate"; ASPECT=McpDsn; STATUS=TESTED; TEST=tests/test_sonny6453_mcp_insecure_dsn.zig; OWNER=security; UPDATED=2026-11-13
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode_mcp = @import("geode_mcp");
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
@@ -55,10 +56,17 @@ test "SONNY-6453: MCP allows a DSN insecure=true with the explicit override or i
         const client = try geode_mcp.client.GeodeClient.init(a, insecure_dsns[0]);
         client.deinit();
     }
+    // SONNY-6782: with no override only a Debug build is a dev posture; a
+    // release build is production posture and refuses.
     {
         resetPostureEnv();
-        const client = try geode_mcp.client.GeodeClient.init(a, insecure_dsns[0]);
-        client.deinit();
+        if (builtin.mode == .Debug) {
+            const client = try geode_mcp.client.GeodeClient.init(a, insecure_dsns[0]);
+            client.deinit();
+        } else if (geode_mcp.client.GeodeClient.init(a, insecure_dsns[0])) |client| {
+            client.deinit();
+            return error.InsecureDsnAccepted;
+        } else |err| try std.testing.expectEqual(error.InsecureTlsRefused, err);
     }
     // A verified DSN is not affected by production posture.
     {

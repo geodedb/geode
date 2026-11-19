@@ -370,6 +370,8 @@ const DeadPortFixture = struct {
         argv[1] = "-c";
         argv[2] = cmd;
         return spawnProc(self.gpa, self.aa(), self.io(), argv, &.{
+            // SONNY-6782: a release build refuses --insecure without this acknowledgement.
+            .{ .key = "GEODE_ALLOW_INSECURE_TLS", .value = "1" },
             .{ .key = "GEODE_LOG_LEVEL", .value = "warn" },
         });
     }
@@ -971,6 +973,8 @@ fn countFromJson(transcript: []const u8) ?u64 {
 //    silently re-submit the statement.
 // ---------------------------------------------------------------------
 test "geode query over gRPC reports a client timeout without re-submitting the statement" {
+    // SONNY-6782: the server serves plaintext gRPC (the CLI's only gRPC mode) in Debug only.
+    if (builtin.mode != .Debug) return error.SkipZigTest;
     const gpa = testing.allocator;
     var fx = (try setUpWithGrpc(gpa, "grpctmo", 23984, 23985)) orelse return error.SkipZigTest;
     defer fx.deinit();
@@ -1104,6 +1108,8 @@ test "geode query over gRPC reports a client timeout without re-submitting the s
 //    path, and a genuine statement error must not become a timeout.
 // ---------------------------------------------------------------------
 test "geode query over gRPC still exits 0 for a fast query and never claims a timeout" {
+    // SONNY-6782: the server serves plaintext gRPC (the CLI's only gRPC mode) in Debug only.
+    if (builtin.mode != .Debug) return error.SkipZigTest;
     const gpa = testing.allocator;
     var fx = (try setUpWithGrpc(gpa, "grpcok", 23986, 23987)) orelse return error.SkipZigTest;
     defer fx.deinit();

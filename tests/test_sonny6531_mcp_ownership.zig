@@ -287,6 +287,9 @@ test "SONNY-6531: backend tools and resources answer an undialable endpoint DSN 
 
 test "SONNY-6531: resources answer an unreachable server without leaking" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
+    // SONNY-6782: the in-process MCP client's DSN sets insecure=true, refused in a release build without this.
+    util.setInsecureTlsAck(true);
+    defer util.setInsecureTlsAck(false);
     // Nothing listens on the port: the client is built, the request fails,
     // and schema/stats answer a "Server unavailable" error document
     // (SONNY-6586; config is answered locally by the client).
@@ -345,6 +348,9 @@ fn startServer(server: *Server) !void {
 
 test "SONNY-6531: against a real geode serve, every tool and resource result is freed once" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
+    // SONNY-6782: the in-process MCP client's DSN sets insecure=true, refused in a release build without this.
+    util.setInsecureTlsAck(true);
+    defer util.setInsecureTlsAck(false);
     var backend: Server = .{ .handle = undefined, .data = undefined };
     try startServer(&backend);
     defer backend.stop();

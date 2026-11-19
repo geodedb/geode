@@ -89,6 +89,8 @@ fn runPlainShell(addr: []const u8, input: []const u8) !ShellRun {
     var env = try std.Io.Threaded.global_single_threaded.environ.process_environ.createMap(testing.allocator);
     defer env.deinit();
     try env.put("GEODE_LSP_PORT", "0");
+    // SONNY-6782: a release build refuses --insecure-tls-skip-verify without GEODE_ALLOW_INSECURE_TLS=1.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
 
     var child = try std.process.spawn(io, .{
         .argv = &.{
@@ -338,6 +340,8 @@ fn startShell(allocator: std.mem.Allocator, threaded: *std.Io.Threaded, pty: Pty
     try env.put("HOME", home);
     try env.put("TERM", "xterm-256color");
     try env.put("LANG", "C.UTF-8");
+    // SONNY-6782: a release build refuses --insecure-tls-skip-verify without GEODE_ALLOW_INSECURE_TLS=1.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
     const tty = std.Io.File{ .handle = pty.slave, .flags = .{ .nonblocking = false } };
     return std.process.spawn(threaded.io(), .{
         .argv = &.{

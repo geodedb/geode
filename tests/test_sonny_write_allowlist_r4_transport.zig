@@ -869,6 +869,8 @@ test "round 4b-1c over QUIC: flat server memory for a WHERE that keeps nothing, 
 
 // CANARY: REQ=REQ-SONNY-3385-GRPC-OWNED-ENTITIES; FEATURE="GrpcStreaming"; ASPECT=RealServer; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=transport; UPDATED=2026-09-29
 test "round 4b-1c over a real gRPC server: a node a chained part returns is pulled, and the server serves on (SONNY-3385)" {
+    // SONNY-6782: plaintext gRPC is served in Debug only.
+    if (!util.grpc_plaintext_served) return error.SkipZigTest;
     // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;

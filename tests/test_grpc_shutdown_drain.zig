@@ -444,6 +444,8 @@ test "control: SIGTERM with no in-flight work shuts down cleanly" {
 //    connectionThread.
 // ---------------------------------------------------------------------
 test "SIGTERM with an in-flight gRPC query does not use-after-free the store" {
+    // SONNY-6782: plaintext gRPC is served in Debug only (grpc_server.shouldAllowGrpcPlaintextFallback).
+    if (builtin.mode != .Debug) return error.SkipZigTest;
     const gpa = testing.allocator;
     var fx = (try setUp(gpa, "grpc", 24013, 24014)) orelse return error.SkipZigTest;
     defer fx.deinit();
@@ -504,6 +506,8 @@ test "SIGTERM with an in-flight gRPC query does not use-after-free the store" {
 //    for a statement that was abandoned mid-execution.
 // ---------------------------------------------------------------------
 test "an in-flight gRPC query interrupted by shutdown is not reported as an empty success" {
+    // SONNY-6782: plaintext gRPC is served in Debug only (grpc_server.shouldAllowGrpcPlaintextFallback).
+    if (builtin.mode != .Debug) return error.SkipZigTest;
     const gpa = testing.allocator;
     var fx = (try setUp(gpa, "false", 24015, 24016)) orelse return error.SkipZigTest;
     defer fx.deinit();

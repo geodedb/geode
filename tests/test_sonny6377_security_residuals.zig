@@ -421,8 +421,11 @@ test "SONNY-6377 item 6: the login hash upgrade and the QUIC / gRPC ALTER USER i
         // the QUIC intercept and the gRPC one (outside any statement).
         try quicExec(allocator, s.addr, admin_user, admin_pw, "CREATE USER carol6377 SET PASSWORD '" ++ first_pw ++ "' ROLE readwrite");
         try quicExec(allocator, s.addr, "carol6377", first_pw, "ALTER USER carol6377 SET PASSWORD '" ++ second_pw ++ "'");
-        try quicExec(allocator, s.addr, admin_user, admin_pw, "CREATE USER dave6377 SET PASSWORD '" ++ first_pw ++ "' ROLE readwrite");
-        try grpcExec(allocator, s.grpc_addr, "dave6377", first_pw, "ALTER USER dave6377 SET PASSWORD '" ++ third_pw ++ "'");
+        // SONNY-6782: the gRPC intercept is reachable in Debug only (plaintext gRPC).
+        if (util.grpc_plaintext_served) {
+            try quicExec(allocator, s.addr, admin_user, admin_pw, "CREATE USER dave6377 SET PASSWORD '" ++ first_pw ++ "' ROLE readwrite");
+            try grpcExec(allocator, s.grpc_addr, "dave6377", first_pw, "ALTER USER dave6377 SET PASSWORD '" ++ third_pw ++ "'");
+        }
         // A BLAKE2b-imported user (geode.auth.user_import, a statement); its
         // login replaces the legacy hash (outside any statement).
         const hex = legacyBlake2bHex(legacy_pw);
@@ -444,11 +447,13 @@ test "SONNY-6377 item 6: the login hash upgrade and the QUIC / gRPC ALTER USER i
         violations += 1;
     }
     if (try quicLogin(allocator, s.addr, "carol6377", first_pw)) violations += 1;
-    if (!try quicLogin(allocator, s.addr, "dave6377", third_pw)) {
-        std.debug.print("after a SIGKILL the gRPC ALTER USER password change is gone\n", .{});
-        violations += 1;
+    if (util.grpc_plaintext_served) {
+        if (!try quicLogin(allocator, s.addr, "dave6377", third_pw)) {
+            std.debug.print("after a SIGKILL the gRPC ALTER USER password change is gone\n", .{});
+            violations += 1;
+        }
+        if (try quicLogin(allocator, s.addr, "dave6377", first_pw)) violations += 1;
     }
-    if (try quicLogin(allocator, s.addr, "dave6377", first_pw)) violations += 1;
     if (!try quicLogin(allocator, s.addr, "legacy6377", legacy_pw)) violations += 1;
     if (violations > 0) return error.SecurityWriteNotDurable;
 }

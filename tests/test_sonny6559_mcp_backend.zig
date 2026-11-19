@@ -75,6 +75,8 @@ fn runGeode(home: []const u8, argv: []const []const u8, input: []const u8, timeo
     }
     try env.put("HOME", home);
     try env.put("GEODE_LSP_PORT", "0");
+    // SONNY-6782: the CLI seed and the MCP endpoint DSN skip TLS verification, refused in a release build without this.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
 
     var full: std.ArrayList([]const u8) = .empty;
     defer full.deinit(a);

@@ -38,6 +38,9 @@ const grpc_query_transport = geode.grpc_query_transport;
 const query_runner = geode.query_runner;
 
 const Transport = enum { quic, grpc };
+/// SONNY-6782: plaintext gRPC is served in Debug only, so a release build
+/// runs the QUIC half.
+const transports: []const Transport = if (util.grpc_plaintext_served) &.{ .quic, .grpc } else &.{.quic};
 
 /// The protobuf kind of a value as sent.
 const Kind = enum { null, int, double, decimal, string, bool, bytes, list, map, node, edge, path, ext };
@@ -366,7 +369,7 @@ test "SONNY-6562: every declared column type is the combined type of the column'
 
     var failures: usize = 0;
     for (type_cases) |c| {
-        for ([_]Transport{ .quic, .grpc }) |t| {
+        for (transports) |t| {
             var r = try s.raw(a, t, c.q, 100);
             defer r.deinit();
             failures += typeFailures(c.q, t, c.types, r.types.items);
@@ -394,7 +397,7 @@ test "SONNY-6562: a streamed node scan longer than its schema sample does not de
 
     var failures: usize = 0;
     const query = "MATCH (n:S6562Scan) RETURN n.v";
-    for ([_]Transport{ .quic, .grpc }) |t| {
+    for (transports) |t| {
         var r = try s.raw(a, t, query, 5);
         defer r.deinit();
         try testing.expectEqual(@as(usize, 13), r.rows.items.len);
@@ -405,7 +408,7 @@ test "SONNY-6562: a streamed node scan longer than its schema sample does not de
     try s.run(a, "CREATE (:S6562Small {v: 1})");
     try s.run(a, "CREATE (:S6562Small {v: 2.5})");
     const small = "MATCH (n:S6562Small) RETURN n.v";
-    for ([_]Transport{ .quic, .grpc }) |t| {
+    for (transports) |t| {
         var r = try s.raw(a, t, small, 5);
         defer r.deinit();
         failures += typeFailures(small, t, &.{"DECIMAL"}, r.types.items);
@@ -507,7 +510,7 @@ test "SONNY-6562: ordered and order_keys are set exactly when the result's state
 
     var failures: usize = 0;
     for (order_cases) |c| {
-        for ([_]Transport{ .quic, .grpc }) |t| {
+        for (transports) |t| {
             var r = try s.raw(a, t, c.q, 100);
             defer r.deinit();
             failures += orderFailures(c, t, &r);
@@ -554,6 +557,7 @@ test "SONNY-6562: PROFILE reports no spill (the executor never spills) under a s
         defer a.free(json);
         failures += try spillFailures(q, .quic, json);
 
+        if (!util.grpc_plaintext_served) continue; // SONNY-6782: Debug-only plaintext gRPC
         var grpc = try s.grpcClient(a);
         defer grpc.deinit();
         var adapter = grpc_query_transport.StreamingQueryAdapter{ .stream = grpc.stream };

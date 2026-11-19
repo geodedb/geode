@@ -18,6 +18,8 @@ const geode_test_bin = @import("geode_test_bin");
 const util = @import("proto_test_util.zig");
 
 test "SONNY-6596: GrpcProtoClient runs several queries on one connection" {
+    // SONNY-6782: plaintext gRPC is served in Debug only.
+    if (!util.grpc_plaintext_served) return error.SkipZigTest;
     // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = testing.allocator;

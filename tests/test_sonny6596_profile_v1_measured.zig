@@ -128,6 +128,7 @@ test "SONNY-6596: a version-1 PROFILE reports the measured execution, no invente
         defer a.free(json);
         failures += try failuresOf(c, "quic", json);
 
+        if (!util.grpc_plaintext_served) continue; // SONNY-6782: Debug-only plaintext gRPC
         var grpc = try util.GrpcProtoClient.connect(a, grpc_addr);
         defer grpc.deinit();
         var hg = try grpc.hello(a, util.defaultUsername(), util.defaultPassword());

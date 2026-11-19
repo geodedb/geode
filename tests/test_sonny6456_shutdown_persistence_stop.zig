@@ -146,7 +146,10 @@ fn runQuery(aa: std.mem.Allocator, port: u16, gql: []const u8) !void {
     var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
     defer threaded.deinit();
     const server = try std.fmt.allocPrint(aa, "127.0.0.1:{d}", .{port});
-    const result = try std.process.run(aa, threaded.io(), .{ .argv = &.{
+    // SONNY-6782: a release build refuses --insecure-tls-skip-verify without GEODE_ALLOW_INSECURE_TLS=1.
+    var env = try std.testing.environ.createMap(aa);
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
+    const result = try std.process.run(aa, threaded.io(), .{ .environ_map = &env, .argv = &.{
         BINARY_PATH,                  "query", "--server", server,
         "--insecure-tls-skip-verify", "-U",    "geode",    "-P",
         ADMIN_PASSWORD,               gql,

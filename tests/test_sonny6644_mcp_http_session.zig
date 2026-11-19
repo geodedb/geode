@@ -23,6 +23,15 @@ const test_scratch = @import("test_scratch.zig");
 
 const linux = std.os.linux;
 
+// SONNY-6782: a release geode refuses --no-auth on the HTTP transport, so a
+// release run serves with a bearer token (GEODE_MCP_TOKEN) and sends it.
+const release_token = "sonny6644-release-bearer-token";
+const auth_header = if (builtin.mode == .Debug) "" else "Authorization: Bearer " ++ release_token ++ "\r\n";
+const mcp_argv = if (builtin.mode == .Debug)
+    [_][]const u8{ geode_test_bin.geode_exe, "mcp", "--no-auth", "--port", "0" }
+else
+    [_][]const u8{ geode_test_bin.geode_exe, "mcp", "--port", "0" };
+
 fn fsIo() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
@@ -56,9 +65,10 @@ fn request(buf: []u8, port: u16, method: []const u8, session: ?[]const u8, body:
     if (linux.errno(linux.connect(fd, @ptrCast(&sa), @sizeOf(linux.sockaddr.in))) != .SUCCESS) return error.ConnectFailed;
 
     var head_buf: [512]u8 = undefined;
-    const head = try std.fmt.bufPrint(&head_buf, "{s} /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\nContent-Length: {d}\r\nConnection: close\r\n{s}{s}{s}\r\n", .{
+    const head = try std.fmt.bufPrint(&head_buf, "{s} /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nAccept: application/json, text/event-stream\r\nContent-Length: {d}\r\nConnection: close\r\n{s}{s}{s}{s}\r\n", .{
         method,
         body.len,
+        auth_header,
         if (session != null) "Mcp-Session-Id: " else "",
         session orelse "",
         if (session != null) "\r\n" else "",
@@ -114,12 +124,13 @@ test "SONNY-6644: geode mcp --port serves Streamable HTTP sessions until SIGTERM
         if (std.c.getenv(name)) |v| try env.put(name, std.mem.span(v));
     }
     try env.put("HOME", home.path());
+    if (builtin.mode != .Debug) try env.put("GEODE_MCP_TOKEN", release_token);
     const err_path = try std.fmt.allocPrint(a, "{s}/mcp.err", .{home.path()});
     defer a.free(err_path);
     const errf = try std.Io.Dir.cwd().createFile(fsIo(), err_path, .{ .read = true, .truncate = true });
     defer errf.close(fsIo());
     const child = try std.process.spawn(io, .{
-        .argv = &.{ geode_test_bin.geode_exe, "mcp", "--no-auth", "--port", "0" },
+        .argv = &mcp_argv,
         .environ_map = &env,
         .cwd = .{ .path = home.path() },
         .stdin = .ignore,

@@ -405,7 +405,9 @@ test "SONNY-6564: over QUIC and gRPC, non-reserved-word variables write and read
     // A chain 0 -> 1 -> 2 -> 3 of :R edges.
     try s.ok(a, "CREATE (:S6564Q {k: 0})-[:R]->(:S6564Q {k: 1})-[:R]->(:S6564Q {k: 2})-[:R]->(:S6564Q {k: 3})");
 
-    for ([_]Server.Transport{ .quic, .grpc }) |t| {
+    // SONNY-6782: plaintext gRPC is served in Debug only; a release build runs the QUIC half.
+    const transports: []const Server.Transport = if (util.grpc_plaintext_served) &.{ .quic, .grpc } else &.{.quic};
+    for (transports) |t| {
         // 1. Non-reserved words write and read (the ticket's SET/REMOVE).
         {
             var r = try s.exec(a, t, "MATCH (type:S6564T) SET type.x = 7 RETURN type.x AS x");

@@ -84,6 +84,8 @@ pub fn runGeode(aa: std.mem.Allocator, args: []const []const u8, deadline_ms: i6
     if (getenv("PATH")) |p| try env.put("PATH", p);
     if (getenv("HOME")) |p| try env.put("HOME", p);
     try env.put("GEODE_LOG_LEVEL", "warn");
+    // SONNY-6782: every caller passes --insecure, which a release build refuses without this.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
     const child = try std.process.spawn(io, .{
         .argv = args,
         .environ_map = &env,
@@ -594,6 +596,8 @@ pub const ResetProxy = struct {
 };
 
 test "SONNY-6377: geode query over gRPC does not resend a query whose connection failed after it was sent" {
+    // SONNY-6782: plaintext gRPC is served in Debug only.
+    if (!util.grpc_plaintext_served) return error.SkipZigTest;
     // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     try skipWithoutBinary();

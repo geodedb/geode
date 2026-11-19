@@ -206,7 +206,8 @@ test "SONNY-6559 (11) audit, login, logout, session, authn, mtls and tenant retu
         defer argv.deinit(a);
         try argv.appendSlice(a, &.{ "--audit-file", audit_file });
         try argv.appendSlice(a, c.argv);
-        const r = try runGeode(root.path(), argv.items, &.{});
+        // SONNY-6782: a release build refuses --insecure-tls-skip-verify without GEODE_ALLOW_INSECURE_TLS=1.
+        const r = try runGeode(root.path(), argv.items, &.{"GEODE_ALLOW_INSECURE_TLS=1"});
         defer r.deinit();
         const log = try readAuditLog(audit_file);
         defer a.free(log);

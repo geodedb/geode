@@ -406,6 +406,9 @@ fn attrValue(line: []const u8, name: []const u8) ?u64 {
 
 test "SONNY-6665: in a 3-process cluster a follower down past the leader's compaction installs its snapshot over QUIC, and a chunk lost on the way is re-sent from the follower's offset, not from 0" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
+    // SONNY-6782: the chunk-drop hook (GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS) is
+    // armed in a Debug geode only, so no chunk can be lost in a release build.
+    if (builtin.mode != .Debug) return error.SkipZigTest;
     if (posixGetenv("GEODE_SKIP_SUBPROC_CLUSTER") != null) return error.SkipZigTest;
     if (!binaryPresent()) {
         std.debug.print("geode binary missing at {s}; run `zig build` first\n", .{BINARY_PATH});

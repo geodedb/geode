@@ -97,6 +97,8 @@ fn runGeode(argv: []const []const u8, cwd: []const u8) !Run {
     inline for (.{ "PATH", "HOME", "LD_LIBRARY_PATH" }) |name| {
         if (std.c.getenv(name)) |v| try env.put(name, std.mem.span(v));
     }
+    // SONNY-6782: the backup passes --insecure-tls-skip-verify, which a release build refuses without this.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
     const result = try std.process.run(testing.allocator, threaded.io(), .{
         .argv = argv,
         .environ_map = &env,

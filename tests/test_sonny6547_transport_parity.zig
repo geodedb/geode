@@ -600,13 +600,16 @@ test "SONNY-6547 (1): a quarantined or label-dictionary-diverged graph answers e
         for (shapes) |s| {
             if (s.default_graph and store.graph() != null) continue;
             const q = try answersOf(allocator, pristine, work, log_path, store, s, .quic);
-            const g = try answersOf(allocator, pristine, work, log_path, store, s, .grpc);
+            // SONNY-6782: plaintext gRPC on the wire is served in Debug only; a
+            // release build compares QUIC with the in-process gRPC handlers.
+            const wire = util.grpc_plaintext_served;
+            const g: [2]Answer = if (wire) try answersOf(allocator, pristine, work, log_path, store, s, .grpc) else .{ .{}, .{} };
             const p = try inProcessAnswersOf(allocator, pristine, work, store, s);
             for ([_][]const u8{ "first touch", "again" }, q, g, p) |when, qa, ga, pa| {
-                const alike = qa.same(&ga) and qa.same(&pa);
+                const alike = (!wire or qa.same(&ga)) and qa.same(&pa);
                 std.debug.print("{s} | {s} | {s} | QUIC {s} {s} | gRPC {s} {s} | gRPC in process {s} {s}{s}\n", .{
                     @tagName(store),                    s.q,                                when,
-                    if (qa.ok) "OK" else qa.codeText(), qa.classText(),                     if (ga.ok) "OK" else ga.codeText(),
+                    if (qa.ok) "OK" else qa.codeText(), qa.classText(),                     if (!wire) "not served" else if (ga.ok) "OK" else ga.codeText(),
                     ga.classText(),                     if (pa.ok) "OK" else pa.codeText(), pa.classText(),
                     if (alike) "" else "  <-- DIFFERS",
                 });

@@ -85,6 +85,8 @@ fn runGeode(argv: []const []const u8, stdin_text: []const u8, timeout_s: i64) !R
     }
     try env.put("HOME", dir.path());
     try env.put("GEODE_LSP_PORT", "0");
+    // SONNY-6782: a release build refuses --insecure-tls-skip-verify without GEODE_ALLOW_INSECURE_TLS=1.
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
 
     const out_path = try std.fmt.allocPrint(a, "{s}/run.out", .{dir.path()});
     defer a.free(out_path);
@@ -141,8 +143,14 @@ fn shell(args: []const []const u8) !Run {
     return runGeode(argv.items, "RETURN 41 + 1 AS x;\n", 60);
 }
 
+// SONNY-6782: the result cell, not a bare "42", which a banner version hash
+// or a port can hold: the shell prints a table row, query a JSON value.
+fn hasAnswer(r: Run) bool {
+    return r.has("| 42 |") or r.has("\"x\":42") or r.has("\"x\": 42");
+}
+
 fn expectAnswered(r: Run, label: []const u8) !void {
-    if (r.code == null or r.code.? != 0 or !r.has("42")) {
+    if (r.code == null or r.code.? != 0 or !hasAnswer(r)) {
         r.dump(label);
         return error.TestUnexpectedResult;
     }
@@ -245,7 +253,9 @@ test "SONNY-6544: a wrong DSN password with '@' fails without printing any of it
     const r = try shell(&.{ "--dsn", dsn });
     defer r.deinit();
     try r.expectNoCredential("shell --dsn, wrong password");
-    try testing.expect(!r.has("42"));
+    // SONNY-6782: the answer's table cell, not a bare "42" (the banner's
+    // version hash or the port can hold one; reached now in a release build).
+    try testing.expect(!hasAnswer(r));
 
     // A --server with a userinfo part is shown without it.
     const server_arg = try std.fmt.allocPrint(a, "Bravo6544@{s}", .{server.addr()});
