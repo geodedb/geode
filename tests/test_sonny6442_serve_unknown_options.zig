@@ -36,7 +36,7 @@ fn parse(argv: []const []const u8) !void {
 test "SONNY-6442 (4) the serve parser refuses an unknown option, a positional argument and a value option without its value" {
     try testing.expectError(error.UnknownServeOption, parse(&.{ "geode", "serve", "--data-dri", "/tmp/x" }));
     try testing.expectError(error.UnknownServeOption, parse(&.{ "geode", "serve", "--gpu-acceleration" }));
-    try testing.expectError(error.UnknownServeOption, parse(&.{ "geode", "serve", "--listen", "127.0.0.1:1", "--insecure" }));
+    try testing.expectError(error.UnknownServeOption, parse(&.{ "geode", "serve", "--listen", "127.0.0.1:0", "--insecure" }));
     try testing.expectError(error.UnknownServeOption, parse(&.{ "geode", "serve", "stray" }));
     try testing.expectError(error.UnknownServeOption, parse(&.{ "geode", "--bogus" }));
     try testing.expectError(error.MissingArgument, parse(&.{ "geode", "serve", "--data-dir" }));
@@ -45,9 +45,11 @@ test "SONNY-6442 (4) the serve parser refuses an unknown option, a positional ar
 }
 
 /// Every option `geode serve --help` lists, with a value where it takes one.
+/// (SONNY-6836: listen ports are 0; only the parser sees them, and the
+/// SONNY-6332 check flags literal listen ports in a file that spawns geode.)
 const documented = [_]struct { flag: []const u8, argv: []const []const u8 }{
-    .{ .flag = "--listen", .argv = &.{ "--listen", "127.0.0.1:3141" } },
-    .{ .flag = "--listen-grpc", .argv = &.{ "--listen-grpc", "127.0.0.1:50051" } },
+    .{ .flag = "--listen", .argv = &.{ "--listen", "127.0.0.1:0" } },
+    .{ .flag = "--listen-grpc", .argv = &.{ "--listen-grpc", "127.0.0.1:0" } },
     .{ .flag = "--lsp-port", .argv = &.{"--lsp-port=0"} },
     .{ .flag = "--lsp-bind-all", .argv = &.{"--lsp-bind-all"} },
     .{ .flag = "--cert", .argv = &.{ "--cert", "/tls/tls.crt" } },

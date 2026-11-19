@@ -20,6 +20,7 @@ const builtin = @import("builtin");
 const quic = @import("transport/quic");
 const util = @import("proto_test_util.zig");
 const fixtures = @import("sonny6457_mtls_fixtures.zig");
+const test_ports = @import("test_ports.zig");
 
 const Outcome = enum { accepted, rejected };
 
@@ -75,7 +76,8 @@ test "SONNY-6457: QuicClient.connectEx refuses incomplete or unreadable client i
     defer fx.deinit();
     const missing = try fx.path("does-not-exist.pem");
     // Nothing listens on this port: every case must fail before dialling.
-    const port: u16 = 9;
+    // SONNY-6836: a free port, not a literal (SONNY-6332).
+    const port = try test_ports.freeUdpPort();
     const Case = struct { name: []const u8, cert: ?[]const u8, key: ?[]const u8, want: anyerror };
     const cases = [_]Case{
         .{ .name = "certificate without key", .cert = fx.pinned_cert, .key = null, .want = error.ClientCertificateKeyMismatch },

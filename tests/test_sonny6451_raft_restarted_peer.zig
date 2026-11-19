@@ -37,6 +37,7 @@ const geode = @import("geode");
 const ClusterCoordinator = geode.distributed.cluster.ClusterCoordinator;
 const raft = geode.distributed.raft_consensus;
 const quic = @import("transport/quic");
+const test_ports = @import("test_ports.zig");
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
 extern "c" fn unsetenv(name: [*:0]const u8) c_int;
@@ -161,7 +162,8 @@ test "SONNY-6451: a peer that restarts more times than the receiver has workers 
     if (setenv("GEODE_CLUSTER_INBOUND_IDLE_MS", "1000", 1) != 0) return error.SetEnvFailed;
     defer _ = unsetenv("GEODE_CLUSTER_INBOUND_IDLE_MS");
 
-    const port: u16 = 23140;
+    // SONNY-6836: a free port; a fixed one collides with another run (SONNY-6332).
+    const port = try test_ports.freeUdpPort();
     const coord = try startReceiver(a, port, cert_path, key_path);
     defer {
         coord.deinit();
