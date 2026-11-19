@@ -9079,6 +9079,16 @@ pub fn build(b: *std.Build) void {
     // data-directory backup and printing success; the local path runs only
     // with --local and an explicit data directory. Spawns the installed CLI
     // against a closed loopback port; no server.
+    const endpoint_host_mod = b.createModule(.{ .root_source_file = b.path("src/client/quic_endpoint_host.zig"), .target = target, .optimize = optimize });
+    const endpoint_host_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_5077_quic_endpoint_host.zig"), .target = target, .optimize = optimize });
+    endpoint_host_test_mod.link_libc = true;
+    endpoint_host_test_mod.addImport("quic_endpoint_host", endpoint_host_mod);
+    const endpoint_host_tests = b.addTest(.{ .root_module = endpoint_host_test_mod });
+    const run_endpoint_host_tests = b.addRunArtifact(endpoint_host_tests);
+    shardDep(test_step, &run_endpoint_host_tests.step, 1, test_shard_loads, test_shard_index);
+    const endpoint_host_step = b.step("test-5077-quic-endpoint-host", "Run QUIC endpoint hostname and IP literal resolution regressions");
+    endpoint_host_step.dependOn(&run_endpoint_host_tests.step);
+
     const backup_remote_failure_mod = b.createModule(.{ .root_source_file = b.path("tests/test_backup_create_remote_failure.zig"), .target = target, .optimize = optimize });
     backup_remote_failure_mod.link_libc = true;
     const backup_remote_failure_tests = b.addTest(.{ .root_module = backup_remote_failure_mod });
