@@ -207,8 +207,11 @@ governance-status-check:
     - diff docs/status.csv /tmp/status_check.csv
 ```
 
-`test-zig-unit` (8 Debug shards) is the blocking unit gate on MR and
-default-branch pipelines. A push to any other branch starts no pipeline: a
+`test-zig-unit` (16 Debug shards over four runner slots) is the blocking
+unit gate on MR and default-branch pipelines; `test-zig-release-safe` runs
+the same aggregate in 24 ReleaseSafe shards. The counts doubled when
+SONNY-2772 put every named step in the aggregate, so a shard's build cache
+stays within the 20Gi of a k8s pod. A push to any other branch starts no pipeline: a
 pipeline runs only for a merge request (created or updated), a push to the
 default branch, a tag, a schedule, or a manual web/API run
 (`scripts/ci/test_workflow_rules.py` pins this).
@@ -222,7 +225,7 @@ that runs only in a pipeline started by a schedule, the web UI or the API with
 ```bash
 # What one lane shard does (needs kcov on PATH and ptrace allowed):
 mkdir -p coverage/raw
-zig build test -Dtest-coverage=true -Dtest-shard-total=8 -Dtest-shard-index=0
+zig build test -Dtest-coverage=true -Dtest-shard-total=16 -Dtest-shard-index=0
 python3 scripts/ci/kcov_coverage.py shard --shard 0 --build-rc $?
 # After all shards: merge and publish only when every manifest entry has data
 python3 scripts/ci/kcov_coverage.py report --total 8
