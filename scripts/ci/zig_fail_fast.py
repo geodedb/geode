@@ -9,13 +9,12 @@ then preserve its diagnostics before terminating the build and its children.
 
 import argparse
 import os
-from pathlib import Path
 import re
 import signal
 import subprocess
 import sys
 import threading
-
+from pathlib import Path
 
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 STEP = re.compile(r"^[ |]*(?:\+-|\\-) ")
@@ -37,8 +36,12 @@ def run(command, log_path=None):
         path.parent.mkdir(parents=True, exist_ok=True)
         log = path.open("w")
     child = subprocess.Popen(
-        command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, errors="replace", start_new_session=True,
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+        start_new_session=True,
     )
     failed = False
     interrupted = 0
@@ -55,8 +58,7 @@ def run(command, log_path=None):
             # that we cannot stop must still report the permission failure.
             if child.poll() is None:
                 raise
-            print("Build exited; the OS denied final process-group cleanup.",
-                  file=sys.stderr, flush=True)
+            print("Build exited; the OS denied final process-group cleanup.", file=sys.stderr, flush=True)
 
     def stop(sig):
         nonlocal timer
@@ -71,8 +73,7 @@ def run(command, log_path=None):
         interrupted = sig
         stop(sig)
 
-    previous = {sig: signal.signal(sig, interrupted_by)
-                for sig in (signal.SIGTERM, signal.SIGINT)}
+    previous = {sig: signal.signal(sig, interrupted_by) for sig in (signal.SIGTERM, signal.SIGINT)}
     try:
         for line in child.stdout:
             sys.stdout.write(line)
