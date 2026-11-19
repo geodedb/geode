@@ -49,6 +49,14 @@ def run(command, log_path=None):
             os.killpg(child.pid, sig)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            # Darwin can return EPERM for a group after its leader has been
+            # reaped. Preserve the build's result in that case; a live build
+            # that we cannot stop must still report the permission failure.
+            if child.poll() is None:
+                raise
+            print("Build exited; the OS denied final process-group cleanup.",
+                  file=sys.stderr, flush=True)
 
     def stop(sig):
         nonlocal timer
@@ -84,15 +92,17 @@ def run(command, log_path=None):
         return rc if rc >= 0 else 128 - rc
     finally:
         # Also reap descendants that closed their output or ignored SIGTERM.
-        send(signal.SIGKILL)
-        child.wait()
-        child.stdout.close()
-        if timer:
-            timer.cancel()
-        if log:
-            log.close()
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+        try:
+            send(signal.SIGKILL)
+            child.wait()
+        finally:
+            child.stdout.close()
+            if timer:
+                timer.cancel()
+            if log:
+                log.close()
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
 
 
 def main():

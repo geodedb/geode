@@ -73,6 +73,9 @@ pub const KMSConfig = struct {
     /// Remote KMS: wall-clock bound on waiting for one response, in ms
     /// (null = RemoteKmsClient.default_response_timeout_ms, 30 s). SONNY-2394.
     remote_response_timeout_ms: ?u32 = null,
+    /// Remote KMS: wall-clock bound on QUIC/TLS connection establishment, in s
+    /// (null = RemoteKmsClient.default_handshake_timeout_secs, 30 s).
+    remote_handshake_timeout_secs: ?u32 = null,
 };
 
 pub const KMSProvider = struct {
@@ -295,13 +298,14 @@ pub const KMSProvider = struct {
     }
 
     /// The remote-KMS client, created on first use with the configured
-    /// response deadline (SONNY-2394: `KMSConfig.remote_response_timeout_ms`)
-    /// and auth token.
+    /// response and handshake deadlines (SONNY-2394) and auth token.
     fn remoteClient(self: *KMSProvider) *kms_remote.RemoteKmsClient {
         if (self.remote_client == null) {
             self.remote_client = kms_remote.RemoteKmsClient.initWithOptions(self.allocator, .{
                 .response_timeout_ms = self.config.remote_response_timeout_ms orelse
                     kms_remote.RemoteKmsClient.default_response_timeout_ms,
+                .handshake_timeout_secs = self.config.remote_handshake_timeout_secs orelse
+                    kms_remote.RemoteKmsClient.default_handshake_timeout_secs,
             });
             if (self.config.auth_token) |token| self.remote_client.?.setAuthToken(token);
         }

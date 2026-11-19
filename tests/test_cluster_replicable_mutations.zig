@@ -432,15 +432,23 @@ fn startCluster(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io) !Clus
 // Generic "run a mutation on the leader, poll the followers" assertion.
 // ---------------------------------------------------------------------------
 
-/// Run `mutate_q` against the CURRENT leader (retrying on a leadership move) and
-/// then poll every healthy follower until `read_q` returns a row containing
-/// `expect_substr`.  Fails (error.ReplicationIncomplete) if any healthy follower
-/// never converges within the poll budget.
-///
-/// `mutate_q` MUST NOT be retried blindly across leadership moves once it has
-/// succeeded once (it is idempotent in these tests: each phase uses a unique
-/// label and MERGE-style/SET-style single writes), so a retry on
-/// error.ClusterNotLeader is safe.
+/// Resolve a leader before submitting a write. Once handed to the CLI, a write
+/// must not be retried: a lost response or leadership change can follow commit,
+/// and the CLI does not supply a stable idempotency key across invocations.
+fn waitForLeader(cluster: *Cluster) !usize {
+    for (0..12) |_| {
+        drainAll(&cluster.captures, &cluster.children, cluster.gpa, cluster.io);
+        if (currentLeaderIdx(&cluster.captures)) |idx| return idx;
+        sleepMs(500);
+    }
+    return error.NoStableLeaderForWrite;
+}
+
+const MutationQuery = *const fn (std.mem.Allocator, std.Io, std.mem.Allocator, []const u8, []const u8) anyerror![]u8;
+
+/// Submit the mutation once, then require the exact existing expected result on
+/// every healthy follower. A client timeout is an unknown outcome, so observe
+/// replication without submitting a second potentially non-idempotent write.
 fn assertMutationReplicates(
     cluster: *Cluster,
     label_for_msg: []const u8,
@@ -448,47 +456,33 @@ fn assertMutationReplicates(
     read_q: []const u8,
     expect_substr: []const u8,
 ) !void {
+    return assertMutationReplicatesUsing(cluster, label_for_msg, mutate_q, read_q, expect_substr, runQuery);
+}
+
+fn assertMutationReplicatesUsing(
+    cluster: *Cluster,
+    label_for_msg: []const u8,
+    mutate_q: []const u8,
+    read_q: []const u8,
+    expect_substr: []const u8,
+    mutate: MutationQuery,
+) !void {
     const gpa = cluster.gpa;
     const aa = cluster.aa;
     const io = cluster.io;
-
-    // Send the mutation to the current leader. Retry on a leadership move
-    // (error.ClusterNotLeader). A returned error.ClusterWriteNotReplicable is the
-    // HEAD failure mode: it means the leader refused to replicate the write at
-    // all -> the followers can never converge, which the poll below catches. We
-    // surface it explicitly for a clearer red-phase diagnostic.
-    var attempt: usize = 0;
-    const li: usize = while (attempt < 12) : (attempt += 1) {
-        const leader_ip = cluster.leaderIp() orelse {
-            sleepMs(500);
-            continue;
-        };
-        const out = runQuery(gpa, io, aa, leader_ip, mutate_q) catch {
-            sleepMs(500);
-            continue;
-        };
-        defer gpa.free(out);
-        if (std.mem.indexOf(u8, out, "ClusterNotLeader") != null) {
-            sleepMs(700);
-            continue;
-        }
-        if (std.mem.indexOf(u8, out, "ClusterWriteNotReplicable") != null) {
-            std.debug.print(
-                "\n[repl] LEADER REFUSED to replicate '{s}': error.ClusterWriteNotReplicable\n" ++
-                    "       mutation '{s}' fails closed in cluster mode (HEAD gap).\n",
-                .{ label_for_msg, mutate_q },
-            );
-            return error.ClusterWriteNotReplicable;
-        }
-        // The write may legitimately return a Timeout under commit-latency-on-a-
-        // loaded-host (the write still replicates); we do NOT gate on the
-        // response, we poll the followers below.
-        const idx = currentLeaderIdx(&cluster.captures) orelse {
-            sleepMs(500);
-            continue;
-        };
-        break idx;
-    } else return error.NoStableLeaderForWrite;
+    const li = try waitForLeader(cluster);
+    const out: ?[]u8 = mutate(gpa, io, aa, NODE_IPS[li], mutate_q) catch |err| switch (err) {
+        error.Timeout => blk: {
+            std.debug.print("[repl] '{s}' client timed out; checking the original write without resubmitting\n", .{label_for_msg});
+            break :blk null;
+        },
+        else => return err,
+    };
+    if (out) |response| {
+        defer gpa.free(response);
+        if (std.mem.indexOf(u8, response, "ClusterNotLeader") != null) return error.ClusterNotLeader;
+        if (std.mem.indexOf(u8, response, "ClusterWriteNotReplicable") != null) return error.ClusterWriteNotReplicable;
+    }
 
     var expected: usize = 0;
     for (0..3) |i| {
@@ -496,6 +490,7 @@ fn assertMutationReplicates(
     }
     if (expected == 0) return error.NoHealthyFollower;
 
+    var last_out: [3][]const u8 = .{ "", "", "" };
     var poll: usize = 0;
     while (poll < 18) : (poll += 1) {
         sleepMs(1000);
@@ -503,8 +498,12 @@ fn assertMutationReplicates(
         var got: usize = 0;
         for (0..3) |fi| {
             if (fi == li or !isNodeHealthy(&cluster.captures, fi)) continue;
-            const read_out = runQuery(gpa, io, aa, NODE_IPS[fi], read_q) catch continue;
+            const read_out = runQuery(gpa, io, aa, NODE_IPS[fi], read_q) catch |err| {
+                last_out[fi] = @errorName(err);
+                continue;
+            };
             defer gpa.free(read_out);
+            last_out[fi] = try aa.dupe(u8, read_out[0..@min(read_out.len, 400)]);
             if (std.mem.indexOf(u8, read_out, expect_substr) != null) got += 1;
         }
         if (got >= expected) {
@@ -516,6 +515,7 @@ fn assertMutationReplicates(
         "\n[repl] '{s}' did NOT converge on all {d} healthy follower(s) (expected read '{s}')\n",
         .{ label_for_msg, expected, expect_substr },
     );
+    for (0..3) |i| std.debug.print("[repl] node {d} last read: {s}\n", .{ i + 1, last_out[i] });
     return error.ReplicationIncomplete;
 }
 
@@ -618,27 +618,11 @@ test "cluster: DETACH DELETE replicates to followers" {
     );
 }
 
-/// Run `q` against the current leader, retrying on a leadership move, and
-/// return its output (the caller frees it with `cluster.gpa`).
+/// Run once against the resolved leader. In particular, DELETE ... RETURN
+/// cannot be repeated after an unknown outcome without changing its result.
 fn runOnLeader(cluster: *Cluster, q: []const u8) ![]u8 {
-    var attempt: usize = 0;
-    while (attempt < 12) : (attempt += 1) {
-        const leader_ip = cluster.leaderIp() orelse {
-            sleepMs(500);
-            continue;
-        };
-        const out = runQuery(cluster.gpa, cluster.io, cluster.aa, leader_ip, q) catch {
-            sleepMs(500);
-            continue;
-        };
-        if (std.mem.indexOf(u8, out, "ClusterNotLeader") != null) {
-            cluster.gpa.free(out);
-            sleepMs(700);
-            continue;
-        }
-        return out;
-    }
-    return error.NoStableLeaderForWrite;
+    const li = try waitForLeader(cluster);
+    return runQuery(cluster.gpa, cluster.io, cluster.aa, NODE_IPS[li], q);
 }
 
 // ---------------------------------------------------------------------------
@@ -1044,4 +1028,35 @@ test "cluster: unreplicated write surfaces fail closed (no silent divergence)" {
         );
         return error.UnreplicatedSurfaceAcceptedWrite;
     }
+}
+
+/// Fault injection after a REAL successful CLI mutation: discard its response
+/// and report the same timeout outcome as a lost acknowledgement. No database
+/// response is fabricated; the regression reads all real follower stores.
+fn runQueryDiscardingAcknowledgement(gpa: std.mem.Allocator, io: std.Io, aa: std.mem.Allocator, ip: []const u8, q: []const u8) ![]u8 {
+    const out = try runQuery(gpa, io, aa, ip, q);
+    defer gpa.free(out);
+    if (std.mem.indexOf(u8, out, "\"status_class\":\"00000\"") == null) return error.MutationFailed;
+    return error.Timeout;
+}
+
+// CANARY: REQ=REQ-DIST-CLUSTER-REPLICATE-MUTATIONS; FEATURE="DistributedCluster"; ASPECT=LostAcknowledgement; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-10-30
+test "cluster: a lost mutation acknowledgement does not duplicate CREATE" {
+    if (skipPreflight()) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    var cluster = try startCluster(gpa, arena.allocator(), threaded.io());
+    defer cluster.deinit();
+
+    try assertMutationReplicatesUsing(
+        &cluster,
+        "LostAck",
+        "CREATE (:LostAck {i: 1})",
+        "MATCH (n:LostAck) RETURN count(n) AS c",
+        "\"c\":1}",
+        runQueryDiscardingAcknowledgement,
+    );
 }

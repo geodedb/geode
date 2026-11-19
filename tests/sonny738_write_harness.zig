@@ -58,18 +58,27 @@ pub const Session = struct {
         var tmp: ?std.testing.TmpDir = null;
         var data_dir: ?[]u8 = null;
         errdefer {
+            execution.cleanupCatalogInstance();
+            graph_store.deinitGlobalStore();
+            graph_store.setDataDirOverride(allocator, null);
             if (data_dir) |d| allocator.free(d);
             if (tmp) |*t| t.cleanup();
         }
+        // Even an in-memory graph persists its catalog on index DDL. Own
+        // that directory instead of inheriting /tmp/geode_catalog.dat from another
+        // test or runner account. Keep the graph's storage adapter disabled.
+        tmp = std.testing.tmpDir(.{});
+        data_dir = try harness.tmpDirRealpathAlloc(allocator, &tmp.?.sub_path);
         const persisted = mode != .in_memory;
         if (persisted) {
-            tmp = std.testing.tmpDir(.{});
-            data_dir = try harness.tmpDirRealpathAlloc(allocator, &tmp.?.sub_path);
             graph_store.setDataDirOverride(allocator, data_dir.?);
         }
         _ = graph_store.getGlobalStore(allocator);
         if (persisted != (graph_store.getGlobalAdapter() != null)) return error.WrongDeployment;
+        graph_store.setDataDirOverride(allocator, data_dir.?);
+        defer if (!persisted) graph_store.setDataDirOverride(allocator, null);
         const catalog = try execution.ensureCatalogInstance(allocator);
+        if (persisted != (graph_store.getGlobalAdapter() != null)) return error.WrongDeployment;
         return .{ .mode = mode, .arena = std.heap.ArenaAllocator.init(allocator), .tmp = tmp, .data_dir = data_dir, .ctx = .{ .catalog = catalog } };
     }
 

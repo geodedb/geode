@@ -456,6 +456,7 @@ governance-ci-yaml-lint:
       python3 scripts/lint_ci_yaml_docker_names.py
       python3 -m unittest discover -s scripts/ci -p test_prune_zig_cache.py
       python3 -m unittest discover -s scripts/ci -p test_zig_fail_fast.py
+      python3 -m unittest discover -s scripts/ci -p test_unit_capacity.py
       echo "✓ CI YAML lints passed"
 
 governance-zig-package-cache:
@@ -479,6 +480,8 @@ governance-match-ops-campaign:
       - stuck_or_timeout_failure
   script:
     - |
+      echo "=== Checking test shard allocation ==="
+      zig test build.zig
       echo "=== Running MATCH staged parity campaign ==="
       zig build test-match-parity --summary all
       echo "=== Running MATCH staged benchmark campaign ==="
@@ -599,7 +602,7 @@ governance-canary-lint:
 governance-canaryscan-verify:
   cache: []  # no Zig build here; see the zig-build-cache note at the top
   extends: .governance-base
-  image: golang:1.27.2-alpine
+  image: golang:1.27.3-alpine
   variables:
     # 2026-07-13: alpine go images pin GOTOOLCHAIN=local, so any renovate bump
     # of tools/canaryscan/go.mod's `go` directive past the image's toolchain
@@ -777,31 +780,29 @@ test-zig-unit:
   # proven survivable cap for the *unsharded* build; a single shard is
   # far lighter, so 6h is generous headroom for the index-7 cluster).
   #
-  # SONNY-1798: pipeline #1719 (tag v0.8.16) lost 14 jobs to
-  # `runner_system_failure` ("0/3 nodes are available: 3 Insufficient cpu")
-  # on the company k8s cluster — a tag pipeline's 8-way test-zig-unit +
-  # 8-way test-zig-release-safe matrices (16 pods) can run fully concurrently
-  # with the SAME 16 pods from an in-flight main-branch pipeline on the same
-  # 3-node pool. resource_group serializes a given shard index against its
-  # own twin in another concurrently-running pipeline (tag vs main, or two
-  # tags) without reducing intra-pipeline shard parallelism or reopening the
-  # shard-count/timeout history above — worst case concurrent k8s pods for
-  # this job drops from 8 (this pipeline) + 8 (a second pipeline) to 8 total.
-  resource_group: "test-zig-unit-shard-$TEST_SHARD_INDEX"
-  # 2026-10-28: unit shards stay on the Kubernetes pool, as on main. On
-  # the two-CPU AWS-spot lane with ZIG_BUILD_JOBS=1 (MR !64, pipeline
-  # 2998104013), the spawned-server and cluster timing tests flaked:
-  # cluster steady-state twice, SONNY-3032 gRPC and SONNY-2823 QUIC. These
-  # tests need CPU headroom. Kubernetes "Insufficient cpu" pod-scheduling
-  # failures are runner_system_failure and are retried below.
+  # SONNY-5074: eight per-shard locks still admitted eight Kubernetes
+  # pods at once. MRs !50 and !61 exhausted the infrastructure retry on
+  # "0/3 nodes ... Insufficient cpu" before checkout. Share two slots
+  # across all Debug shards and pipelines, so excess work queues in GitLab
+  # before requesting a pod. All eight shards and their required MR rules
+  # remain intact. ReleaseSafe uses its separate AWS runner pool.
+  resource_group: "test-zig-unit-slot-$TEST_SLOT"
+  # Keep Kubernetes routing and the shared two-slot capacity bound.
+  # This pool also limits each job to two CPUs; bound build concurrency below.
   tags: [company, k8s, linux]
   timeout: 6h
   parallel:
     matrix:
-      - TEST_SHARD_INDEX: ["0", "1", "2", "3", "4", "5", "6", "7"]
+      - TEST_SHARD_INDEX: ["0", "2", "4", "6"]
+        TEST_SLOT: "0"
+      - TEST_SHARD_INDEX: ["1", "3", "5", "7"]
+        TEST_SLOT: "1"
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
     TEST_SHARD_TOTAL: "8"
+    # One build step keeps compiler processes from starving network tests
+    # under the runner's two-CPU quota. Test deadlines remain unchanged.
+    ZIG_BUILD_JOBS: "1"
   retry:
     max: 1
     when:
@@ -814,7 +815,7 @@ test-zig-unit:
     # Zig keeps running independent steps after a test fails. Stop those
     # processes, preserve both output streams, and let workflow cancellation
     # release the other shards. Real failures are not automatically retried.
-    - python3 scripts/ci/zig_fail_fast.py --log reports/zig_test_shard_${TEST_SHARD_INDEX}.log -- zig build test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all --error-style verbose
+    - python3 scripts/ci/zig_fail_fast.py --log reports/zig_test_shard_${TEST_SHARD_INDEX}.log -- zig build -j${ZIG_BUILD_JOBS} test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all --error-style verbose
   rules:
     # SRE-187 (MR admission): merge_request_event pipelines have no
     # CI_COMMIT_BRANCH, so before this rule the MR pipeline -- the one that
@@ -1105,13 +1106,13 @@ test-macos-unit:
       echo "Pre-fetching protoc-osx-aarch_64 via zig fetch with retries (TMPDIR=$TMPDIR)..."
       fetched=""
       for i in 1 2 3 4 5; do
-        if zig fetch "$PROTOC_URL" >"${TMPDIR:-/tmp}/zig-fetch-protoc.log" 2>&1; then
-          echo "✓ protoc pre-fetch succeeded on attempt $i (hash=$(cat "${TMPDIR:-/tmp}/zig-fetch-protoc.log"))"
+        if zig fetch "$PROTOC_URL" >"$TMPDIR/zig-fetch-protoc.log" 2>&1; then
+          echo "✓ protoc pre-fetch succeeded on attempt $i (hash=$(cat "$TMPDIR/zig-fetch-protoc.log"))"
           fetched=1
           break
         fi
         echo "attempt $i failed:"
-        cat "${TMPDIR:-/tmp}/zig-fetch-protoc.log" || true
+        cat "$TMPDIR/zig-fetch-protoc.log" || true
         [ "$i" -lt 5 ] && { echo "retrying in 15s..."; sleep 15; }
       done
       if [ -z "$fetched" ]; then

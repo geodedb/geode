@@ -225,6 +225,35 @@ var g_test_coverage_manifest: std.ArrayList(u8) = .empty;
 // artifacts have no named step, so per-step sweeps cannot see them; a module
 // graph that breaks only there (a new named @import missing from one test
 // module) used to surface only in the full aggregate run.
+fn assignTestShard(loads: []usize, weight: usize) usize {
+    var min_idx: usize = 0;
+    for (loads, 0..) |load, i| {
+        if (load < loads[min_idx]) min_idx = i;
+    }
+    // Every registered test builds a separate artifact. A zero runtime
+    // estimate must still charge that compile, or consecutive zero-weight
+    // tests all land on the same shard (93 binaries in ReleaseSafe shard 5).
+    loads[min_idx] += @max(weight, 1);
+    return min_idx;
+}
+
+test "zero runtime weights still distribute separately compiled tests" {
+    var loads = [_]usize{0} ** 3;
+    var counts = [_]usize{0} ** 3;
+    for (0..12) |_| counts[assignTestShard(&loads, 0)] += 1;
+    try std.testing.expectEqualSlices(usize, &.{ 4, 4, 4 }, &counts);
+}
+
+test "heavy test weights keep their scheduling priority" {
+    var loads = [_]usize{0} ** 3;
+    const weights = [_]usize{ 10, 1, 1, 1, 1 };
+    const expected = [_]usize{ 0, 1, 2, 1, 2 };
+    for (weights, expected) |weight, shard| {
+        try std.testing.expectEqual(shard, assignTestShard(&loads, weight));
+    }
+    try std.testing.expectEqualSlices(usize, &.{ 10, 2, 2 }, &loads);
+}
+
 fn shardDep(
     test_step: *std.Build.Step,
     dep: *std.Build.Step,
@@ -260,11 +289,7 @@ fn shardDep(
         test_step.dependOn(dep);
         return;
     }
-    var min_idx: usize = 0;
-    for (loads, 0..) |l, i| {
-        if (l < loads[min_idx]) min_idx = i;
-    }
-    loads[min_idx] += weight;
+    const min_idx = assignTestShard(loads, weight);
     if (min_idx == index) {
         coverageWrap(run);
         test_step.dependOn(dep);
@@ -9052,6 +9077,16 @@ pub fn build(b: *std.Build) void {
     // data-directory backup and printing success; the local path runs only
     // with --local and an explicit data directory. Spawns the installed CLI
     // against a closed loopback port; no server.
+    const endpoint_host_mod = b.createModule(.{ .root_source_file = b.path("src/client/quic_endpoint_host.zig"), .target = target, .optimize = optimize });
+    const endpoint_host_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_5077_quic_endpoint_host.zig"), .target = target, .optimize = optimize });
+    endpoint_host_test_mod.link_libc = true;
+    endpoint_host_test_mod.addImport("quic_endpoint_host", endpoint_host_mod);
+    const endpoint_host_tests = b.addTest(.{ .root_module = endpoint_host_test_mod });
+    const run_endpoint_host_tests = b.addRunArtifact(endpoint_host_tests);
+    shardDep(test_step, &run_endpoint_host_tests.step, 1, test_shard_loads, test_shard_index);
+    const endpoint_host_step = b.step("test-5077-quic-endpoint-host", "Run QUIC endpoint hostname and IP literal resolution regressions");
+    endpoint_host_step.dependOn(&run_endpoint_host_tests.step);
+
     const backup_remote_failure_mod = b.createModule(.{ .root_source_file = b.path("tests/test_backup_create_remote_failure.zig"), .target = target, .optimize = optimize });
     backup_remote_failure_mod.link_libc = true;
     const backup_remote_failure_tests = b.addTest(.{ .root_module = backup_remote_failure_mod });

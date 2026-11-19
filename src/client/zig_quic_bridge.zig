@@ -1,5 +1,6 @@
 const std = @import("std");
 pub const zig_client = @import("geode_client_zig");
+const endpoint_host = @import("quic_endpoint_host.zig");
 
 pub const TlsConfig = struct {
     insecure: bool = false,
@@ -22,7 +23,9 @@ fn initClientWithInsecureSetting(
     password: ?[]const u8,
     insecure: bool,
 ) !zig_client.GeodeClient {
-    var cfg = zig_client.config.Config.initWithTransport(host, port, .quic);
+    const transport_host = try endpoint_host.resolveAlloc(allocator, host);
+    defer allocator.free(transport_host);
+    var cfg = zig_client.config.Config.initWithTransport(transport_host, port, .quic);
     defer cfg.deinit(allocator);
 
     cfg.insecure = insecure;

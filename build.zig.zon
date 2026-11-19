@@ -1,7 +1,7 @@
 .{
     // Geode Graph Database - ISO/IEC 39075:2024 GQL Implementation
     .name = .geode,
-    .version = "0.8.23",
+    .version = "0.8.25",
     .fingerprint = 0x9e0aec1832a82609,
     .minimum_zig_version = "0.16.0",
 
@@ -202,8 +202,8 @@
             // Native macOS transport and current-main paired UDP gate passed.
             // 2026-10-26: serialize FIN, RESET_STREAM and STOP_SENDING with
             // stream mutations. QUIC !51 and its main pipeline passed all checks.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=acda5aec8237051d1551dd523c694a500acea568#acda5aec8237051d1551dd523c694a500acea568",
-            .hash = "quic-0.1.47-gBIqUbCfQADygnvn39WCM54UTpNe-felK3pZHDOzAJHF",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.48#274109bd5a0a268b7e64cd00a406d00a61bd1de2",
+            .hash = "quic-0.1.48-gBIqUR_-QACpHwpcYcn4npRszy-RS-cTq-y3rH8KkknM",
         },
 
         // =======================================================================
@@ -400,8 +400,8 @@
             // geode's quic v0.1.46 bump (client Finished retransmit until
             // HANDSHAKE_DONE). Still no client tag on this quic, hence ref=main.
             // Includes main's be724ae transport/entropy pins, plus portable deadlines.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=57240957a2b5e690b83829d5de3a827a3004d6c8#57240957a2b5e690b83829d5de3a827a3004d6c8",
-            .hash = "geode_client_zig-0.3.8-8ysbV1WBCwDb9bKkda9TcgMGWmGNfxTxyumNnCQRyUyI",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.13#9966a5a91600fc84176139662b22cb63d4b8b19b",
+            .hash = "geode_client_zig-0.3.13-8ysbV6mQCwBgwep5P2LawnvZYDYxjvam-f789sjPAM69",
         },
 
         // =======================================================================
