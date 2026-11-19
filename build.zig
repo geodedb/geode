@@ -12161,6 +12161,7 @@ pub fn build(b: *std.Build) void {
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2441_kms_provider_paths.zig"), .target = target, .optimize = optimize });
         mod.link_libc = true;
         mod.addImport("security/kms", sonny2441_kms_mod);
+        mod.addImport("logging", logging_mod);
         mod.addImport("sonny2441_options", opts.createModule());
         const tests = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(tests);
@@ -12191,6 +12192,7 @@ pub fn build(b: *std.Build) void {
         const mod = b.createModule(.{ .root_source_file = t.path, .target = target, .optimize = optimize });
         mod.link_libc = true;
         mod.addImport("security/kms", sonny2441_kms_mod);
+        mod.addImport("logging", logging_mod);
         const tests = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);

@@ -24,6 +24,7 @@
 // CANARY: REQ=REQ-SONNY-2441-KMS-REMOTE-PATH; FEATURE="KMSProviderSystem"; ASPECT=NoDeadRemotePath; STATUS=TESTED; TEST=tests/test_sonny2441_kms_provider_paths.zig; OWNER=security; UPDATED=2026-11-12
 const std = @import("std");
 const kms = @import("security/kms");
+const logging = @import("logging");
 const options = @import("sonny2441_options");
 
 const testing = std.testing;
@@ -42,26 +43,42 @@ test "SONNY-2441 KMSProvider offers no remote_kms provider and the unused TDE-KM
 test "SONNY-2441 every provider type KMSProvider offers round-trips the caller's key or refuses" {
     const allocator = testing.allocator;
     const key = [_]u8{0x5A} ** 32;
+    // A release build logs each refusal at error level, which the test
+    // runner counts as a failure (SONNY-6775).
+    if (kms.is_production_build) {
+        logging.init(.{ .level = .fatal });
+        logging.setLevel(.fatal);
+    }
     inline for (std.meta.fields(kms.KMSProviderType)) |f| {
         const t: kms.KMSProviderType = @enumFromInt(f.value);
-        var provider = kms.KMSProvider.init(allocator, .{ .provider_type = t, .seed = 0xC0FFEE }) catch |err| {
-            // A release build refuses non-production providers at init.
+        // A release build refuses non-production providers at init. (A
+        // `continue` from this catch is comptime control flow inside a
+        // runtime block, which does not compile once init can fail: a
+        // release build, SONNY-6775.)
+        const maybe: ?kms.KMSProvider = kms.KMSProvider.init(allocator, .{ .provider_type = t, .seed = 0xC0FFEE }) catch |err| blk: {
             try testing.expectEqual(error.UnsafeKMSProvider, err);
-            continue;
+            break :blk null;
         };
+        if (maybe) |p| try roundTripsOrRefuses(allocator, p, &key, f.name);
+    }
+}
+
+fn roundTripsOrRefuses(allocator: std.mem.Allocator, initialized: kms.KMSProvider, key: *const [32]u8, name: []const u8) !void {
+    {
+        var provider = initialized;
         defer provider.deinit();
-        if (provider.wrapDataKey(&key)) |wrapped_const| {
+        if (provider.wrapDataKey(key)) |wrapped_const| {
             var wrapped = wrapped_const;
             defer wrapped.deinit(allocator);
             const back = try provider.unwrapDataKey(wrapped);
             defer allocator.free(back);
-            testing.expectEqualSlices(u8, &key, back) catch |e| {
-                std.debug.print("SONNY-2441: provider {s} does not round-trip the caller's key\n", .{f.name});
+            testing.expectEqualSlices(u8, key, back) catch |e| {
+                std.debug.print("SONNY-2441: provider {s} does not round-trip the caller's key\n", .{name});
                 return e;
             };
         } else |err| {
             testing.expectEqual(error.UnsupportedProvider, err) catch |e| {
-                std.debug.print("SONNY-2441: provider {s}: wrapDataKey failed with {s}\n", .{ f.name, @errorName(err) });
+                std.debug.print("SONNY-2441: provider {s}: wrapDataKey failed with {s}\n", .{ name, @errorName(err) });
                 return e;
             };
         }

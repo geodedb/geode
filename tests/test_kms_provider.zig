@@ -1,6 +1,15 @@
 const std = @import("std");
 const testing = std.testing;
 const kms = @import("security/kms");
+const logging = @import("logging");
+
+// SONNY-6775: a release build logs the refusal of a non-production provider at
+// error level; the test runner fails a test that logs an error, so a test that
+// expects the refusal raises the log level first.
+fn quietRefusalLog() void {
+    logging.init(.{ .level = .fatal });
+    logging.setLevel(.fatal);
+}
 
 // CANARY: REQ=REQ-GQL-SEC-KMS-001; FEATURE="KMSProviderSystem"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SEC_KMS_001_ComprehensiveKMSProvider; OWNER=security; UPDATED=2025-10-05
 
@@ -291,5 +300,6 @@ test "GAP-0066: default config is external_kms" {
 
 test "SONNY-6775: a release build refuses the non-production external_kms provider" {
     if (!kms.is_production_build) return error.SkipZigTest;
+    quietRefusalLog();
     try testing.expectError(error.UnsafeKMSProvider, kms.KMSProvider.init(testing.allocator, .{ .provider_type = .external_kms, .seed = 1 }));
 }
