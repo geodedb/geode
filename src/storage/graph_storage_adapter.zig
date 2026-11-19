@@ -2715,6 +2715,13 @@ pub const ManagedGraph = struct {
     /// exclusives never wedge each other — they just race `tryLock` normally.
     exclusive_waiting: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
+    /// SONNY-6783: bumped when the per-graph lock is let go while an exclusive
+    /// acquirer waits (`wakeExclusiveWaiter`). The contended slow path of
+    /// `acquireGraphWriteLockCancelable` waits on it, bounded by its nap, so a
+    /// release wakes it at once instead of leaving the lock idle until the nap
+    /// ends.
+    lock_release_seq: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
     /// Per-shard rwlocks covering the N partitions of
     /// `GraphStore.nodes` / `GraphStore.edges` / adjacency.  Writers
     /// take one of these in EXCLUSIVE mode for ops routed to a
@@ -13929,6 +13936,7 @@ pub const StorageAdapter = struct {
         }
         noteGraphLockReleased(mg); // SONNY-6375
         mg.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+        wakeExclusiveWaiter(mg); // SONNY-6783
     }
 
     /// Test helper: look up a `*ManagedGraph` by name without acquiring
@@ -14197,6 +14205,9 @@ pub const StorageAdapter = struct {
         _ = mg.exclusive_waiting.fetchAdd(1, .release);
         defer _ = mg.exclusive_waiting.fetchSub(1, .release);
 
+        // SONNY-6783: read before each probe, so a release between a failed
+        // probe and the wait below ends the wait at once.
+        var seen_release = mg.lock_release_seq.load(.acquire);
         // Fast path: uncontended acquire in one call.
         if (mg.rwlock.tryLock(io)) {
             _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
@@ -14239,13 +14250,17 @@ pub const StorageAdapter = struct {
             }
             const remaining = deadline_mono_ns - now;
             const nap_ns = @min(sleep_ns, remaining);
-            {
-                const req = std.os.linux.timespec{
-                    .sec = @intCast(nap_ns / std.time.ns_per_s),
-                    .nsec = @intCast(nap_ns % std.time.ns_per_s),
-                };
-                std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
-            }
+            // SONNY-6783: nap until the lock is let go or the nap ends. Napping
+            // without a wake left the lock idle while every waiter slept (16
+            // writers ran at half single-thread speed on macOS). The nap stays
+            // bounded, so a release site that does not wake costs at most the
+            // nap and a lost wake can never park a writer (HANG FIX above).
+            const nap: std.Io.Timeout = .{ .duration = .{
+                .raw = std.Io.Duration.fromNanoseconds(@intCast(nap_ns)),
+                .clock = .awake,
+            } };
+            io.futexWaitTimeout(u32, &mg.lock_release_seq.raw, seen_release, nap) catch {};
+            seen_release = mg.lock_release_seq.load(.acquire);
             if (mg.rwlock.tryLock(io)) {
                 _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
                 return lockedUnlessDropped(mg);
@@ -14254,10 +14269,20 @@ pub const StorageAdapter = struct {
         }
     }
 
+    /// SONNY-6783: wakes one writer waiting in the contended slow path of
+    /// `acquireGraphWriteLockCancelable` after the lock was let go. Free when
+    /// no exclusive acquirer waits. The caller still pins `mg`.
+    fn wakeExclusiveWaiter(mg: *ManagedGraph) void {
+        if (mg.exclusive_waiting.load(.seq_cst) == 0) return;
+        _ = mg.lock_release_seq.fetchAdd(1, .release);
+        std.Io.Threaded.global_single_threaded.io().futexWake(u32, &mg.lock_release_seq.raw, 1);
+    }
+
     pub fn releaseGraphWriteLock(self: *StorageAdapter, mg: *ManagedGraph) void {
         mg.write_holder.store(0, .release);
         noteGraphLockReleased(mg); // SONNY-6375
         mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+        wakeExclusiveWaiter(mg); // SONNY-6783
         unclaimWriteLock(mg);
         // SONNY-3028: and the pin the acquire took. A graph this thread
         // dropped while it held the lock is freed here, when no other thread
