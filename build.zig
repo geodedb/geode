@@ -12057,6 +12057,18 @@ pub fn build(b: *std.Build) void {
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6611-raft-persist-before-apply", "Run SONNY-6611 item 7 / SONNY-6592 item 3 regression (a cluster follower applies a committed Raft entry only after the entry is in its FileStorage, TDE-sealed or not, and sends the AppendEntries reply acknowledging it only then)").dependOn(&run_tests.step);
     }
+    // SONNY-6844: a deposed leader's write whose index a new leader's entry
+    // took is refused, not answered committed (in-process 3-node cluster).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6844_superseded_proposal.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        // Red until the fix: compiled by test-compile, not yet in the aggregate.
+        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        b.step("test-sonny6844-superseded-proposal", "Run SONNY-6844 regression (a leader deposed before its entry reached a quorum does not answer the write committed when the new leader's entry at that index commits)").dependOn(&run_tests.step);
+    }
     // SONNY-6617 (1): a failed Raft persist is retried; the node takes no
     // input until it succeeds.
     {
