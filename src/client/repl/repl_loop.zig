@@ -905,9 +905,16 @@ fn processInput(state: *ReplState) !void {
                 .vi => keymap_vi.handleKey(state, key_event),
             };
 
+            // SONNY-6862: the history search reads its keys itself. The
+            // keys after Ctrl+R in this read are its first input: give them
+            // to it (pending_input) instead of to the line after it ends.
+            const reads_own_input = action == .search;
+            if (reads_own_input) try state.pending_input.insertSlice(state.allocator, 0, buf[i..n]);
+
             // Process action
             processAction(state, action) catch break;
             last_action = action;
+            if (reads_own_input) break;
 
             // SONNY-6846: an action that ends the line is handled below,
             // after this loop, by looking at last_action. The keys after it
@@ -1522,8 +1529,12 @@ fn handleSearch(state: *ReplState) !void {
             break;
         }
 
+        // SONNY-6862: keys read with Ctrl+R (or left after an earlier
+        // line) come before the terminal.
+        const from_pending = state.pending_input.items.len > 0;
+
         // Use poll() with timeout to periodically check for SIGINT while waiting for input
-        if (builtin.os.tag != .windows) {
+        if (!from_pending and builtin.os.tag != .windows) {
             var fds = [_]std.posix.pollfd{
                 .{ .fd = stdin.handle, .events = std.posix.POLL.IN, .revents = 0 },
             };
@@ -1544,7 +1555,7 @@ fn handleSearch(state: *ReplState) !void {
             if ((fds[0].revents & std.posix.POLL.IN) == 0) continue;
         }
 
-        const n = stdin.readStreaming(replIo(), &.{&search_buf}) catch |err| {
+        const n = if (from_pending) takePendingInput(state, &search_buf) else stdin.readStreaming(replIo(), &.{&search_buf}) catch |err| {
             if (err == error.Interrupted) {
                 if (platform.checkAndClearSigint()) {
                     state.searching = false;
@@ -1562,6 +1573,7 @@ fn handleSearch(state: *ReplState) !void {
         var i: usize = 0;
         var should_exit = false;
         var should_cancel = false;
+        var term_changed = false;
 
         while (i < n) {
             // Check for bracketed paste start sequence: \x1b[200~
@@ -1591,27 +1603,35 @@ fn handleSearch(state: *ReplState) !void {
             if (in_paste) {
                 if ((c >= 0x20 and c < 0x7f) or c >= 0x80) {
                     try state.search_buffer.append(state.allocator, c);
+                    term_changed = true;
                 }
                 i += 1;
                 continue;
             }
 
-            // Normal mode handling
+            // Normal mode handling. SONNY-6862: the key that ends the
+            // search is consumed (all of an escape sequence), and the keys
+            // after it in this read are kept for the line (pending_input).
             if (c == 0x1b or c == '\r' or c == '\n') {
                 should_exit = true;
+                i += if (c == 0x1b) getKeyEventLength(search_buf[i..n]) else 1;
+                try state.pending_input.insertSlice(state.allocator, 0, search_buf[i..n]);
                 break;
             }
 
             if (c == 0x03) { // Ctrl+C
                 should_cancel = true;
+                try state.pending_input.insertSlice(state.allocator, 0, search_buf[i + 1 .. n]);
                 break;
             }
 
             if (c == 0x7f or c == 0x08) { // Backspace: one character, not one byte
                 const len = state.search_buffer.items.len;
                 state.search_buffer.items.len = line_text.prevBoundary(state.search_buffer.items, len);
+                term_changed = true;
             } else if ((c >= 0x20 and c < 0x7f) or c >= 0x80) { // SONNY-6487: UTF-8 text too
                 try state.search_buffer.append(state.allocator, c);
+                term_changed = true;
             }
 
             i += 1;
@@ -1624,12 +1644,13 @@ fn handleSearch(state: *ReplState) !void {
             break;
         }
 
-        if (should_exit) {
+        // Find in history. SONNY-6862: also when the key that ends the
+        // search came in the same read as (part of) the term: the term is
+        // searched before the search ends.
+        if (should_exit and !term_changed) {
             state.searching = false;
             break;
         }
-
-        // Find in history
         var found = false;
         var hist_idx: usize = state.history.entries.items.len;
         while (hist_idx > 0) : (hist_idx -= 1) {
@@ -1651,6 +1672,11 @@ fn handleSearch(state: *ReplState) !void {
         try stdout_file.writeStreamingAll(replIo(), state.search_buffer.items);
         try stdout_file.writeStreamingAll(replIo(), "': ");
         if (found) try stdout_file.writeStreamingAll(replIo(), state.buffer.items);
+
+        if (should_exit) {
+            state.searching = false;
+            break;
+        }
     }
 }
 
