@@ -426,6 +426,12 @@ pub const ReplState = struct {
     pending_input: std.ArrayList(u8) = .empty,
     // SONNY-6863: renderPrompt builds a redraw here and writes it at once.
     render_buf: std.ArrayList(u8) = .empty,
+    // SONNY-6861: the start of an escape sequence that ended a read. It is
+    // put before the next read's bytes; if nothing comes by
+    // esc_carry_deadline_ms (outside a paste) it is read as it is (a bare ESC).
+    esc_carry: [max_esc_carry]u8 = undefined,
+    esc_carry_len: usize = 0,
+    esc_carry_deadline_ms: i64 = 0,
     content_changed: bool = true, // Track if buffer content changed (need full re-render)
     last_buffer_len: usize = 0, // Track previous buffer length
     last_visual_lines: usize = 0, // Track previous render's visual line count
@@ -766,12 +772,16 @@ fn processInput(state: *ReplState) !void {
         // CANARY: REQ=REQ-SHELL-INTERRUPT-048; FEATURE="SourceInterrupt"; ASPECT=PollForInput; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
         // Use poll() with timeout to periodically check for SIGINT while waiting for input.
         // This prevents blocking indefinitely in read() when SIGINT is delivered.
+        // SONNY-6861: no more input by the deadline of a carried escape
+        // sequence start: read it as it is.
+        var flush_carry = false;
         if (!from_pending and builtin.os.tag != .windows) {
             var fds = [_]std.posix.pollfd{
                 .{ .fd = stdin.handle, .events = std.posix.POLL.IN, .revents = 0 },
             };
             // Poll with 100ms timeout to allow periodic SIGINT checking
-            const poll_result = std.posix.poll(&fds, 100) catch |err| {
+            // (SONNY-6861: less while an escape sequence start waits)
+            const poll_result = std.posix.poll(&fds, escPollTimeoutMs(state, state.in_bracketed_paste)) catch |err| {
                 if (err == error.Interrupted) {
                     // EINTR from signal - check SIGINT
                     if (platform.checkAndClearSigint()) {
@@ -797,25 +807,29 @@ fn processInput(state: *ReplState) !void {
                 return err;
             };
 
-            // Timeout - no input, check for SIGINT and continue waiting
             if (poll_result == 0) {
-                continue;
-            }
+                // Timeout - no input, check for SIGINT and continue waiting
+                if (!escapeWaitOver(state, state.in_bracketed_paste)) continue;
+                flush_carry = true;
+            } else {
+                // Error condition on fd
+                if ((fds[0].revents & std.posix.POLL.ERR) != 0 or
+                    (fds[0].revents & std.posix.POLL.HUP) != 0)
+                {
+                    return error.InputClosed;
+                }
 
-            // Error condition on fd
-            if ((fds[0].revents & std.posix.POLL.ERR) != 0 or
-                (fds[0].revents & std.posix.POLL.HUP) != 0)
-            {
-                return error.InputClosed;
-            }
-
-            // No data available despite poll returning > 0
-            if ((fds[0].revents & std.posix.POLL.IN) == 0) {
-                continue;
+                // No data available despite poll returning > 0
+                if ((fds[0].revents & std.posix.POLL.IN) == 0) {
+                    continue;
+                }
             }
         }
 
-        const n = if (from_pending) takePendingInput(state, &buf) else stdin.readStreaming(std.Io.Threaded.global_single_threaded.io(), &.{&buf}) catch |err| {
+        // SONNY-6861: a carried escape sequence start comes first.
+        const carried = state.esc_carry_len;
+        @memcpy(buf[0..carried], state.esc_carry[0..carried]);
+        const got = if (flush_carry) 0 else if (from_pending) takePendingInput(state, buf[carried..]) else stdin.readStreaming(std.Io.Threaded.global_single_threaded.io(), &.{buf[carried..]}) catch |err| {
             // EINTR from signal - check for SIGINT and retry
             if (err == error.Interrupted) {
                 if (platform.checkAndClearSigint()) {
@@ -840,13 +854,20 @@ fn processInput(state: *ReplState) !void {
             }
             return err;
         };
-        if (n == 0) continue;
+        if (got == 0 and !flush_carry) continue;
+        state.esc_carry_len = 0;
+        const n = carried + got;
 
         // Process all bytes in buffer to handle pastes
         var i: usize = 0;
         var last_action: KeyAction = .none;
 
         while (i < n) {
+            // SONNY-6861: an escape sequence (or the paste end marker) cut
+            // off by the end of this read is finished by the next read, not
+            // parsed as ESC and literal characters.
+            if (!flush_carry and holdIncompleteEscape(state, buf[i..n], state.in_bracketed_paste)) break;
+
             // Check for bracketed paste start sequence: \x1b[200~
             if (i + 5 < n and buf[i] == 0x1b and buf[i + 1] == '[' and buf[i + 2] == '2' and buf[i + 3] == '0' and buf[i + 4] == '0' and buf[i + 5] == '~') {
                 state.in_bracketed_paste = true;
@@ -1133,6 +1154,58 @@ fn takePendingInput(state: *ReplState, buf: []u8) usize {
     @memcpy(buf[0..n], state.pending_input.items[0..n]);
     state.pending_input.replaceRangeAssumeCapacity(0, n, &.{});
     return n;
+}
+
+/// The longest escape sequence start carried to the next read (SONNY-6861).
+const max_esc_carry = 16;
+
+/// How long the start of an escape sequence waits for the rest of it before
+/// it is read as it is: a bare ESC (SONNY-6861). Terminals send a sequence in
+/// one write, so its parts arrive well within this; it is the delay of a
+/// lone ESC press (readline uses 500 ms, zsh 400 ms, vim 100 ms).
+const esc_sequence_wait_ms: i64 = 200;
+
+fn nowMs() i64 {
+    return std.Io.Clock.awake.now(replIo()).toMilliseconds();
+}
+
+/// Whether `tail`, the end of a read, is the start of an escape sequence
+/// that the next bytes may finish (SONNY-6861). In a bracketed paste only
+/// the end marker ESC[201~ matters: any other ESC there is pasted text.
+fn isIncompleteEscape(tail: []const u8, in_paste: bool) bool {
+    if (tail.len == 0 or tail[0] != 0x1b or tail.len > max_esc_carry) return false;
+    const paste_end = "\x1b[201~";
+    if (in_paste) return tail.len < paste_end.len and std.mem.startsWith(u8, paste_end, tail);
+    if (tail.len == 1) return true; // ESC: Alt+key, CSI or SS3 may follow
+    if (tail[1] == 'O') return tail.len == 2; // SS3: one more byte
+    if (tail[1] != '[') return false; // ESC + key: complete
+    // CSI: parameter and intermediate bytes so far, no final byte yet.
+    for (tail[2..]) |c| {
+        if (c < 0x20 or c > 0x3f) return false;
+    }
+    return true;
+}
+
+/// Keeps `tail` for the next read when it is an incomplete escape sequence
+/// (SONNY-6861). Not on Windows, whose read loop does not poll.
+fn holdIncompleteEscape(state: *ReplState, tail: []const u8, in_paste: bool) bool {
+    if (builtin.os.tag == .windows or !isIncompleteEscape(tail, in_paste)) return false;
+    @memcpy(state.esc_carry[0..tail.len], tail);
+    state.esc_carry_len = tail.len;
+    state.esc_carry_deadline_ms = nowMs() + esc_sequence_wait_ms;
+    return true;
+}
+
+/// The poll timeout: 100 ms, or what is left of a carried sequence's wait.
+fn escPollTimeoutMs(state: *const ReplState, in_paste: bool) i32 {
+    if (state.esc_carry_len == 0 or in_paste) return 100;
+    return @intCast(std.math.clamp(state.esc_carry_deadline_ms - nowMs(), 0, 100));
+}
+
+/// Whether a carried escape sequence start waited long enough to be read as
+/// it is. In a paste it waits for the next bytes, which the paste sends.
+fn escapeWaitOver(state: *const ReplState, in_paste: bool) bool {
+    return state.esc_carry_len > 0 and !in_paste and nowMs() >= state.esc_carry_deadline_ms;
 }
 
 fn parseKeyEvent(data: []const u8) !KeyEvent {
@@ -1534,11 +1607,12 @@ fn handleSearch(state: *ReplState) !void {
         const from_pending = state.pending_input.items.len > 0;
 
         // Use poll() with timeout to periodically check for SIGINT while waiting for input
+        var flush_carry = false;
         if (!from_pending and builtin.os.tag != .windows) {
             var fds = [_]std.posix.pollfd{
                 .{ .fd = stdin.handle, .events = std.posix.POLL.IN, .revents = 0 },
             };
-            const poll_result = std.posix.poll(&fds, 100) catch |err| {
+            const poll_result = std.posix.poll(&fds, escPollTimeoutMs(state, in_paste)) catch |err| {
                 if (err == error.Interrupted) {
                     if (platform.checkAndClearSigint()) {
                         state.searching = false;
@@ -1551,11 +1625,17 @@ fn handleSearch(state: *ReplState) !void {
                 }
                 return err;
             };
-            if (poll_result == 0) continue; // Timeout, check SIGINT and continue
-            if ((fds[0].revents & std.posix.POLL.IN) == 0) continue;
+            if (poll_result == 0) {
+                // Timeout, check SIGINT and continue (SONNY-6861: or read a
+                // carried escape sequence start as it is)
+                if (!escapeWaitOver(state, in_paste)) continue;
+                flush_carry = true;
+            } else if ((fds[0].revents & std.posix.POLL.IN) == 0) continue;
         }
 
-        const n = if (from_pending) takePendingInput(state, &search_buf) else stdin.readStreaming(replIo(), &.{&search_buf}) catch |err| {
+        const carried = state.esc_carry_len;
+        @memcpy(search_buf[0..carried], state.esc_carry[0..carried]);
+        const got = if (flush_carry) 0 else if (from_pending) takePendingInput(state, search_buf[carried..]) else stdin.readStreaming(replIo(), &.{search_buf[carried..]}) catch |err| {
             if (err == error.Interrupted) {
                 if (platform.checkAndClearSigint()) {
                     state.searching = false;
@@ -1568,7 +1648,9 @@ fn handleSearch(state: *ReplState) !void {
             }
             return err;
         };
-        if (n == 0) continue;
+        if (got == 0 and !flush_carry) continue;
+        state.esc_carry_len = 0;
+        const n = carried + got;
 
         var i: usize = 0;
         var should_exit = false;
@@ -1576,6 +1658,9 @@ fn handleSearch(state: *ReplState) !void {
         var term_changed = false;
 
         while (i < n) {
+            // SONNY-6861: finish a sequence cut off by the end of the read.
+            if (!flush_carry and holdIncompleteEscape(state, search_buf[i..n], in_paste)) break;
+
             // Check for bracketed paste start sequence: \x1b[200~
             if (i + 5 < n and search_buf[i] == 0x1b and search_buf[i + 1] == '[' and
                 search_buf[i + 2] == '2' and search_buf[i + 3] == '0' and
