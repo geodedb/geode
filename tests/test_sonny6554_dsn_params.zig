@@ -162,13 +162,18 @@ test "SONNY-6554 (5): geode query honours DSN insecure=true like --insecure-tls-
     const a = testing.allocator;
 
     // Self-signed dev server: the DSN alone turns verification off, with the
-    // flag's warning.
+    // flag's warning. SONNY-6874: only a Debug build is dev posture; a release
+    // build refuses it exactly like the flag.
     inline for (.{ "insecure=true", "insecure_tls_skip_verify=1", "skip_verify=yes" }) |flag| {
         const dsn = try std.fmt.allocPrint(a, "{s}?" ++ flag ++ "&" ++ creds, .{server.addr()});
         defer a.free(dsn);
         const r = try query(dsn, &.{});
         defer r.deinit();
-        if (r.code == null or r.code.? != 0 or !r.has(answer) or !r.has("TLS certificate verification DISABLED")) {
+        const ok = if (builtin.mode == .Debug)
+            r.code != null and r.code.? == 0 and r.has(answer) and r.has("TLS certificate verification DISABLED")
+        else
+            r.code != null and r.code.? == 1 and !r.has(answer) and r.has("SECURITY: refusing --insecure-tls-skip-verify");
+        if (!ok) {
             r.dump("query --dsn " ++ flag);
             return error.TestUnexpectedResult;
         }
@@ -254,11 +259,14 @@ test "SONNY-6554 (5): geode query refuses a DSN parameter it cannot honour and n
     var server = try startServer();
     defer server.stop();
     const a = testing.allocator;
+    // SONNY-6874: the DSNs carry insecure=true; a release build needs the
+    // acknowledgement for it, which this test (about parameters) is not about.
+    const ack = [_]Env{.{ .name = "GEODE_ALLOW_INSECURE_TLS", .value = "1" }};
     // Security-relevant parameters the CLI cannot apply: refused (exit 2).
     for ([_][]const u8{ "tenant=acme", "server_name=db.example.com", "tls=false" }) |p| {
         const dsn = try std.fmt.allocPrint(a, "{s}?{s}&insecure=true&" ++ creds, .{ server.addr(), p });
         defer a.free(dsn);
-        const r = try query(dsn, &.{});
+        const r = try query(dsn, &ack);
         defer r.deinit();
         if (r.code == null or r.code.? != 2 or r.has(answer) or !r.has("is not supported by geode query")) {
             r.dump(p);
@@ -269,7 +277,7 @@ test "SONNY-6554 (5): geode query refuses a DSN parameter it cannot honour and n
     {
         const dsn = try std.fmt.allocPrint(a, "{s}?hello_name=my-app&insecure=true&" ++ creds, .{server.addr()});
         defer a.free(dsn);
-        const r = try query(dsn, &.{});
+        const r = try query(dsn, &ack);
         defer r.deinit();
         if (r.code == null or r.code.? != 0 or !r.has(answer) or !r.has("'hello_name' has no effect")) {
             r.dump("hello_name");
