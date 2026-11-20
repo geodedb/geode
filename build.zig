@@ -8623,6 +8623,23 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6494-repl-long-input", "Run SONNY-6494 item 3 regression (geode shell: \\echo, \\set, an unknown command, \\use and \\graph answer long text; \\source runs a path over 500 bytes and names one it cannot open; a statement over 4 KiB typed across lines runs once, whole; \\history prints it; ESC before a UTF-8 character is not Alt; real shell, plain mode and a PTY)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6846: geode shell lost an Enter that arrived in the same read as
+    // the keys after it (type-ahead while the shell is busy). The real shell
+    // through a PTY, stopped while the keys are written.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6846_repl_typeahead.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6846-repl-typeahead", "Run SONNY-6846 regression (geode shell runs each statement when Enter and the keys typed after it arrive in one read: two statements typed ahead, and a 4 KiB pasted line whose Enter arrives with the next line; real shell through a PTY, stopped while the keys are written)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6511 (5): the shell keeps the character after ESC when it is a
     // digit or punctuation; GEODE_AUDIT_*_ENABLED takes 1/0, true/false,
     // yes/no in any case and refuses anything else.

@@ -358,6 +358,16 @@ fn startShell(allocator: std.mem.Allocator, threaded: *std.Io.Threaded, pty: Pty
     });
 }
 
+/// Whether the shell process is gone (a zombie or reaped); leaves it to be
+/// reaped by the test's cleanup.
+fn shellExited(pid: posix.pid_t) bool {
+    var info: linux.siginfo_t = undefined;
+    @memset(std.mem.asBytes(&info), 0);
+    const rc = linux.waitid(.PID, pid, &info, linux.W.EXITED | linux.W.NOHANG | linux.W.NOWAIT, null);
+    if (linux.errno(rc) != .SUCCESS) return true;
+    return info.fields.common.first.piduid.pid == pid;
+}
+
 /// Pastes `text` (bracketed paste, as a terminal sends a paste) in chunks
 /// the pseudo-terminal buffer takes.
 fn paste(session: *Session, text: []const u8) void {
@@ -411,8 +421,21 @@ test "SONNY-6494: geode shell runs a statement over 4 KiB typed across lines onc
     session.typeText("len6494");
     session.key("\r");
     if (!session.waitFor("4200", before_enter, 30_000)) {
-        const tail = session.transcript.items[before_enter..];
-        std.debug.print("the statement did not run whole; transcript after the first Enter ({d} bytes):\n{s}\n", .{ tail.len, tail[0..@min(tail.len, 4000)] });
+        // SONNY-6846: the end of the transcript says what happened (the
+        // first 4000 bytes are only redraws of the 4 KiB line).
+        const after = session.transcript.items[before_enter..];
+        const tail = after[after.len - @min(after.len, 3000) ..];
+        const has = struct {
+            fn f(hay: []const u8, needle: []const u8) bool {
+                return std.mem.indexOf(u8, hay, needle) != null;
+            }
+        }.f;
+        std.debug.print("the statement did not run whole; transcript after the first Enter: {d} bytes; " ++
+            "'len6494' echoed: {}; continuation prompt 'geode-> ' drawn: {}; line 2 joined to line 1 ('ASlen6494'): {}; " ++
+            "'Error' printed: {}; shell exited: {}\n--- last {d} bytes ---\n{s}\n--- end ---\n", .{
+            after.len,           has(after, "len6494"), has(after, "geode-> "), has(after, "ASlen6494"),
+            has(after, "Error"), shellExited(pid),      tail.len,               tail,
+        });
         return error.LongStatementSplit;
     }
     if (std.mem.indexOfPos(u8, session.transcript.items, before_enter, "Error") != null) {
