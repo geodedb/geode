@@ -420,6 +420,10 @@ pub const ReplState = struct {
     is_continuation: bool,
     in_bracketed_paste: bool = false, // Track bracketed paste mode
     paste_strip_leading: bool = false, // Track if we should strip leading whitespace from paste
+    // SONNY-6846: keys read from the terminal after an Enter (or Ctrl+C,
+    // Ctrl+D) in the same read. The line is handled first; these are the
+    // input of the next one, processed before reading the terminal again.
+    pending_input: std.ArrayList(u8) = .empty,
     content_changed: bool = true, // Track if buffer content changed (need full re-render)
     last_buffer_len: usize = 0, // Track previous buffer length
     last_visual_lines: usize = 0, // Track previous render's visual line count
@@ -441,6 +445,7 @@ pub const ReplState = struct {
         self.kill_ring.deinit(self.allocator);
         self.search_buffer.deinit(self.allocator);
         self.multi_line_buffer.deinit(self.allocator);
+        self.pending_input.deinit(self.allocator);
         self.completion_ctx.deinit();
     }
 };
@@ -755,10 +760,13 @@ fn processInput(state: *ReplState) !void {
             break :outer;
         }
 
+        // SONNY-6846: keys left over from the previous line come first.
+        const from_pending = state.pending_input.items.len > 0;
+
         // CANARY: REQ=REQ-SHELL-INTERRUPT-048; FEATURE="SourceInterrupt"; ASPECT=PollForInput; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
         // Use poll() with timeout to periodically check for SIGINT while waiting for input.
         // This prevents blocking indefinitely in read() when SIGINT is delivered.
-        if (builtin.os.tag != .windows) {
+        if (!from_pending and builtin.os.tag != .windows) {
             var fds = [_]std.posix.pollfd{
                 .{ .fd = stdin.handle, .events = std.posix.POLL.IN, .revents = 0 },
             };
@@ -807,7 +815,7 @@ fn processInput(state: *ReplState) !void {
             }
         }
 
-        const n = stdin.readStreaming(std.Io.Threaded.global_single_threaded.io(), &.{&buf}) catch |err| {
+        const n = if (from_pending) takePendingInput(state, &buf) else stdin.readStreaming(std.Io.Threaded.global_single_threaded.io(), &.{&buf}) catch |err| {
             // EINTR from signal - check for SIGINT and retry
             if (err == error.Interrupted) {
                 if (platform.checkAndClearSigint()) {
@@ -900,6 +908,16 @@ fn processInput(state: *ReplState) !void {
             // Process action
             processAction(state, action) catch break;
             last_action = action;
+
+            // SONNY-6846: an action that ends the line is handled below,
+            // after this loop, by looking at last_action. The keys after it
+            // in this read belong to the next line: keep them for it. Going
+            // on would overwrite last_action (an Enter followed by more keys
+            // in one read was lost, and those keys joined the line).
+            if (endsLine(state, action)) {
+                try state.pending_input.insertSlice(state.allocator, 0, buf[i..n]);
+                break;
+            }
         }
 
         // Only render when not in bracketed paste and stdin is quiet
@@ -1090,6 +1108,24 @@ fn processInput(state: *ReplState) !void {
             }
         }
     }
+}
+
+/// Whether `action` ends the input of this line: processInput stops at it
+/// and handles it before any key read after it (SONNY-6846).
+fn endsLine(state: *const ReplState, action: KeyAction) bool {
+    return switch (action) {
+        .execute, .cancel => true,
+        .quit => state.buffer.items.len == 0,
+        else => false,
+    };
+}
+
+/// Moves up to `buf.len` bytes of pending input into `buf` (SONNY-6846).
+fn takePendingInput(state: *ReplState, buf: []u8) usize {
+    const n = @min(buf.len, state.pending_input.items.len);
+    @memcpy(buf[0..n], state.pending_input.items[0..n]);
+    state.pending_input.replaceRangeAssumeCapacity(0, n, &.{});
+    return n;
 }
 
 fn parseKeyEvent(data: []const u8) !KeyEvent {
