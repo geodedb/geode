@@ -91,8 +91,8 @@ REQ-0002,Language Surface Requirements,Compliance,IMPL,,,core,2026-11-14,src/gql
 REQ-0003,Engine Contract Requirements,Execution,IMPL,,,execution,2026-11-14,src/execution/query_execution.zig,694
 REQ-0005,Security Requirements,Security,IMPL,,,security,2026-11-14,src/security/geode_auth_lib.zig,2
 REQ-0006,DistributedQuery,Federation,IMPL,,,distributed,2026-11-12,tests/test_gap_0193_batch2_testing.zig,20
-REQ-0008,Platform Build Requirements,ReleaseSafe,TESTED,,,ci,2026-01-16,.gitlab-ci.yml,1183
-REQ-0009,Performance Budget Enforcement,CI,TESTED,,,ci,2026-01-30,.gitlab-ci.yml,1346
+REQ-0008,Platform Build Requirements,ReleaseSafe,TESTED,,,ci,2026-01-16,.gitlab-ci.yml,1202
+REQ-0009,Performance Budget Enforcement,CI,TESTED,,,ci,2026-01-30,.gitlab-ci.yml,1365
 REQ-0009,Performance Targets,Benchmark,BENCHED,,,ops-team,2026-01-15,benchmarks/benchmark_monitoring_metrics_variance_unified.zig,6
 REQ-2PC-001,2PC,PreparePhase,IMPL,,,distributed,2026-11-14,tests/test_gap_0193_final_batch.zig,482
 REQ-2PC-002,2PC,CommitPhase,IMPL,,,distributed,2026-11-14,tests/test_gap_0193_final_batch.zig,489
@@ -459,14 +459,14 @@ REQ-CDC-PROC-026,CDCProcedures,Start,TESTED,,,cdc,2026-11-15,src/execution/stora
 REQ-CENTRALITY-001,Centrality,PageRank,IMPL,,,engine,2026-11-14,tests/test_gap_0193_final_batch.zig,496
 REQ-CENTRALITY-002,Centrality,Betweenness,IMPL,,,engine,2026-11-14,tests/test_gap_0193_final_batch.zig,503
 REQ-CI-CACHE-001,BoundedZigCache,CI,TESTED,,,ci,2026-10-24,.gitlab-ci.yml,197
-REQ-CI-CANARY-LINT-001,CI CANARY Linting,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,607
+REQ-CI-CANARY-LINT-001,CI CANARY Linting,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,626
 REQ-CI-CANARY-LINT-TEST-001,CANARY Lint Unit Tests,UnitTesting,TESTED,,,governance,2026-01-17,tools/test_canary_lint.py,4
-REQ-CI-CANARYSCAN-001,CI Canaryscan Verify,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,629
-REQ-CI-COMPLIANCE-001,GQL Compliance CI,Core,TESTED,,,ci,2026-01-14,.gitlab-ci.yml,1743
-REQ-CI-CONFORMANCE-SYNC-001,CI Conformance Sync,Governance,TESTED,,,ci,2026-01-25,.gitlab-ci.yml,699
-REQ-CI-COVERAGE-001,CodeCoverageCI,Core,IMPL,,,ci,2026-10-13,.gitlab-ci.yml,1611
-REQ-CI-GOV-001,CI Governance Checks,Core,TESTED,,,ci,2026-01-16,.gitlab-ci.yml,360
-REQ-CI-REQ-DOC-REPORT-001,CI REQ-DOC Reports,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,664
+REQ-CI-CANARYSCAN-001,CI Canaryscan Verify,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,648
+REQ-CI-COMPLIANCE-001,GQL Compliance CI,Core,TESTED,,,ci,2026-01-14,.gitlab-ci.yml,1762
+REQ-CI-CONFORMANCE-SYNC-001,CI Conformance Sync,Governance,TESTED,,,ci,2026-01-25,.gitlab-ci.yml,718
+REQ-CI-COVERAGE-001,CodeCoverageCI,Core,IMPL,,,ci,2026-10-13,.gitlab-ci.yml,1630
+REQ-CI-GOV-001,CI Governance Checks,Core,TESTED,,,ci,2026-01-16,.gitlab-ci.yml,379
+REQ-CI-REQ-DOC-REPORT-001,CI REQ-DOC Reports,Governance,TESTED,,,ci,2026-01-17,.gitlab-ci.yml,683
 REQ-CI-REQ-DOC-REPORT-001,Requirement ID Report Generator,Governance,TESTED,,,governance,2026-01-17,tools/req_doc_report.py,4
 REQ-CI-REQ-DOC-TEST-001,REQ-DOC Report Unit Tests,UnitTesting,TESTED,,,governance,2026-01-17,tools/test_req_doc_report.py,4
 REQ-CI-STATUS-GEN-TEST-001,StatusGenerateUnitTests,UnitTesting,TESTED,,,governance,2026-04-16,tools/test_status_generate.py,4
@@ -2155,7 +2155,7 @@ REQ-GQL-CHAIN-LIMIT-001,GQLChainLimit,LimitInChain,TESTED,,,engine,2026-01-15,te
 REQ-GQL-CHAIN-ORDERBY-001,ChainOrderBy,FinalSorting,TESTED,,,execution,2025-12-26,src/execution/query_execution.zig,833
 REQ-GQL-CHAIN-WITH-AGG-001,ChainedWithAggregation,IntermediateWithAgg,TESTED,,,execution,2026-11-14,src/execution/query_execution.zig,749
 REQ-GQL-CHAIN-WITH-AGG-001,GQLChainedAggregation,WithAgg,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig,28
-REQ-GQL-CI-001,GQL Compliance CI,TestEnforcement,TESTED,,,ci,2026-01-14,.gitlab-ci.yml,1791
+REQ-GQL-CI-001,GQL Compliance CI,TestEnforcement,TESTED,,,ci,2026-01-14,.gitlab-ci.yml,1810
 REQ-GQL-COLNAME-001,UniqueColumnNames,DEDUP,TESTED,,,execution,2025-12-22,src/execution/result_utils.zig,23
 REQ-GQL-COMMA-MATCH,CommaSepar atedMatches,MultipleChains,TESTED,,,engine,2025-10-12,src/execution/pattern_helpers.zig,112
 REQ-GQL-COMMA-MATCH,CommaSeparatedMatches,CartesianProduct,TESTED,,,engine,2025-10-12,src/execution/match_operations.zig,4611

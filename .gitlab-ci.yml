@@ -354,6 +354,25 @@ variables:
         echo "⚠ protoc pre-fetch exhausted all legs; zig build will fetch from GitHub on its own"
       fi
     fi
+    # SONNY-6837: zig-pkg/ is empty on CI, so every job fetches each eager
+    # dependency from gitlab.com over git, and with 40 test shards a DNS blip
+    # ("unable to discover remote git server capabilities: NameServerFailure")
+    # failed a shard before any test ran, and fail-fast cancelled the
+    # pipeline. Fetch the tree here with retries; non-fatal, as above.
+    if command -v zig >/dev/null 2>&1 && [ -f build.zig ]; then
+      for attempt in 1 2 3 4 5; do
+        if zig build --fetch=needed >/tmp/zig-fetch-deps.log 2>&1; then
+          echo "✓ fetched the Zig dependency tree (attempt ${attempt})"
+          break
+        fi
+        echo "⚠ Zig dependency fetch failed (attempt ${attempt}): $(grep -m1 'error:' /tmp/zig-fetch-deps.log)"
+        if [ "${attempt}" = "5" ]; then
+          echo "⚠ Zig dependency fetch exhausted its retries; zig build will fetch on its own"
+        else
+          sleep $((attempt * 15))
+        fi
+      done
+    fi
 
 # =============================================================================
 # Governance Stage - Status and Feature Flag Checks
