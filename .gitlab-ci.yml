@@ -187,11 +187,14 @@ cache: []
       # The Ubuntu Zig images do not include Python. Check before the long
       # build so cache maintenance cannot silently fail in after_script.
       # SONNY-6850: test_capability_gate_startup traces the real geode with
-      # strace and fingerprints openssl, which the images lack too.
+      # strace and fingerprints openssl, which the images lack too. Linux
+      # only: the test skips off Linux, and macOS has no strace.
       missing=""
       command -v python3 >/dev/null 2>&1 || missing="$missing python3"
-      command -v strace >/dev/null 2>&1 || missing="$missing strace"
-      command -v openssl >/dev/null 2>&1 || missing="$missing openssl"
+      if [ "$(uname -s)" = "Linux" ]; then
+        command -v strace >/dev/null 2>&1 || missing="$missing strace"
+        command -v openssl >/dev/null 2>&1 || missing="$missing openssl"
+      fi
       if [ -n "$missing" ]; then
         command -v apt-get >/dev/null 2>&1 || { echo "Required tools missing:$missing" >&2; exit 1; }
         apt-get update
