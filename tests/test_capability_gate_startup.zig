@@ -179,7 +179,10 @@ const process_test =
     \\    for mode in ('quic','grpc','combined','metrics','lsp','cluster','env','file','discovery'):
     \\        case(mode)
     \\        case(mode,'canonical')
-    \\    for kind in ('missing','directory','fifo','oversize','exact-size','symlink','unreadable','malformed'): case('quic',kind)
+    \\    # SONNY-6853: root reads a mode-000 file, so 'unreadable' exists only for a non-root uid (CI runs as root).
+    \\    for kind in ('missing','directory','fifo','oversize','exact-size','symlink','unreadable','malformed'):
+    \\        if kind == 'unreadable' and os.geteuid() == 0: continue
+    \\        case('quic',kind)
     \\    case('file','bad-config')
     \\    case('discovery','bad-config')
     \\    case('env','empty-path')
