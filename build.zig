@@ -1786,7 +1786,9 @@ pub fn build(b: *std.Build) void {
     gap0844_test_mod.link_libc = true; // setenv/unsetenv + std.c.getenv
     // GAP-0886 (#813): the REQ-FLE-ENFORCE-030 flag-invariant regression also
     // lives inline in fle_integration.zig; run it through this same step.
-    const gap0844_tests = b.addTest(.{ .root_module = gap0844_test_mod, .filters = &.{ "GAP-0844", "GAP-0886" } });
+    // SONNY-2656: so does the FLE singleton-allocator regression (also run by
+    // test-sonny2656-extended-value-leaks).
+    const gap0844_tests = b.addTest(.{ .root_module = gap0844_test_mod, .filters = &.{ "GAP-0844", "GAP-0886", "SONNY-2656" } });
     const run_gap0844_tests = b.addRunArtifact(gap0844_tests);
     const gap0844_step = b.step("test-gap0844", "Run GAP-0844 FLE role-isolation regression (GEODE_CURRENT_ROLE no longer overrides per-thread role) + GAP-0886 FLE flag invariant");
     gap0844_step.dependOn(&run_gap0844_tests.step);
@@ -10365,6 +10367,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny2656_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny2656_step = b.step("test-sonny2656-extended-value-leaks", "Run SONNY-2656 regression (the node-scan fast path frees a projected typed extended value with its row, and the clone a WHERE reads at every predicate site, for every extended kind)");
     sonny2656_step.dependOn(&run_sonny2656_tests.step);
+    sonny2656_step.dependOn(&run_gap0844_tests.step);
 
     // SONNY-1330 TSan companion: the same regression file under
     // -fsanitize-thread, so the fork-join over a COLD store is checked for the

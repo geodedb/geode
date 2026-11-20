@@ -328,6 +328,35 @@ const Cluster = struct {
         const idx = currentLeaderIdx(&self.captures) orelse return null;
         return NODE_IPS[idx];
     }
+
+    /// Keep draining the three servers while the client waits. Leaving their
+    /// log pipes unread during a query can block a server's writer and prevent
+    /// the very Raft progress that the query is waiting for.
+    // CANARY: REQ=REQ-SONNY-3044-CLUSTER-DELETE-RETURN; FEATURE="DistributedCluster"; ASPECT=DrainLogsDuringQuery; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-10-30
+    fn query(self: *Cluster, ip: []const u8, text: []const u8) ![]u8 {
+        const Query = struct {
+            cluster: *Cluster,
+            ip: []const u8,
+            text: []const u8,
+            done: std.atomic.Value(bool) = .init(false),
+            result: anyerror![]u8 = error.QueryNotCompleted,
+
+            fn run(request: *@This()) void {
+                const c = request.cluster;
+                request.result = runQuery(c.gpa, c.io, c.aa, request.ip, request.text);
+                request.done.store(true, .release);
+            }
+        };
+        var request = Query{ .cluster = self, .ip = ip, .text = text };
+        const thread = try std.Thread.spawn(.{}, Query.run, .{&request});
+        defer thread.join();
+        while (!request.done.load(.acquire)) {
+            drainAll(&self.captures, &self.children, self.gpa, self.io);
+            sleepMs(10);
+        }
+        drainAll(&self.captures, &self.children, self.gpa, self.io);
+        return request.result;
+    }
 };
 
 /// Bring up the 3-node cluster and block until a single leader + >=1 follower is
@@ -444,7 +473,7 @@ fn waitForLeader(cluster: *Cluster) !usize {
     return error.NoStableLeaderForWrite;
 }
 
-const MutationQuery = *const fn (std.mem.Allocator, std.Io, std.mem.Allocator, []const u8, []const u8) anyerror![]u8;
+const MutationQuery = *const fn (*Cluster, []const u8, []const u8) anyerror![]u8;
 
 /// Submit the mutation once, then require the exact existing expected result on
 /// every healthy follower. A client timeout is an unknown outcome, so observe
@@ -456,7 +485,7 @@ fn assertMutationReplicates(
     read_q: []const u8,
     expect_substr: []const u8,
 ) !void {
-    return assertMutationReplicatesUsing(cluster, label_for_msg, mutate_q, read_q, expect_substr, runQuery);
+    return assertMutationReplicatesUsing(cluster, label_for_msg, mutate_q, read_q, expect_substr, Cluster.query);
 }
 
 fn assertMutationReplicatesUsing(
@@ -468,10 +497,10 @@ fn assertMutationReplicatesUsing(
     mutate: MutationQuery,
 ) !void {
     const gpa = cluster.gpa;
-    const aa = cluster.aa;
     const io = cluster.io;
+    const aa = cluster.aa;
     const li = try waitForLeader(cluster);
-    const out: ?[]u8 = mutate(gpa, io, aa, NODE_IPS[li], mutate_q) catch |err| switch (err) {
+    const out: ?[]u8 = mutate(cluster, NODE_IPS[li], mutate_q) catch |err| switch (err) {
         error.Timeout => blk: {
             std.debug.print("[repl] '{s}' client timed out; checking the original write without resubmitting\n", .{label_for_msg});
             break :blk null;
@@ -498,7 +527,7 @@ fn assertMutationReplicatesUsing(
         var got: usize = 0;
         for (0..3) |fi| {
             if (fi == li or !isNodeHealthy(&cluster.captures, fi)) continue;
-            const read_out = runQuery(gpa, io, aa, NODE_IPS[fi], read_q) catch |err| {
+            const read_out = cluster.query(NODE_IPS[fi], read_q) catch |err| {
                 last_out[fi] = @errorName(err);
                 continue;
             };
@@ -618,11 +647,37 @@ test "cluster: DETACH DELETE replicates to followers" {
     );
 }
 
-/// Run once against the resolved leader. In particular, DELETE ... RETURN
-/// cannot be repeated after an unknown outcome without changing its result.
+/// Run `q` against the current leader, retrying only an explicit leadership
+/// refusal. A client error may follow a committed mutation and must propagate
+/// instead of replaying it. The caller frees the output with `cluster.gpa`.
 fn runOnLeader(cluster: *Cluster, q: []const u8) ![]u8 {
-    const li = try waitForLeader(cluster);
-    return runQuery(cluster.gpa, cluster.io, cluster.aa, NODE_IPS[li], q);
+    return runOnLeaderWith(cluster, q, Cluster.query);
+}
+
+fn runOnLeaderWith(cluster: *Cluster, q: []const u8, comptime query: anytype) ![]u8 {
+    var attempt: usize = 0;
+    while (attempt < 12) : (attempt += 1) {
+        const leader_ip = cluster.leaderIp() orelse {
+            sleepMs(500);
+            continue;
+        };
+        const out = try query(cluster, leader_ip, q);
+        if (std.mem.indexOf(u8, out, "ClusterNotLeader") != null) {
+            cluster.gpa.free(out);
+            sleepMs(700);
+            continue;
+        }
+        return out;
+    }
+    return error.NoStableLeaderForWrite;
+}
+
+fn printNodeLogs(cluster: *Cluster) void {
+    drainAll(&cluster.captures, &cluster.children, cluster.gpa, cluster.io);
+    for (cluster.captures, 0..) |capture, i| {
+        const start = capture.buf.items.len -| 16384;
+        std.debug.print("[repl] node {d} log tail: {s}\n", .{ i + 1, capture.buf.items[start..] });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -653,10 +708,68 @@ test "cluster: a DELETE's RETURN is computed over the rows it deletes, as a stan
     defer gpa.free(out);
     if (std.mem.indexOf(u8, out, "\"s\":3") == null or std.mem.indexOf(u8, out, "deleted_count") != null) {
         std.debug.print("\n[repl] the leader's DELETE ... RETURN sum(n.i) AS s answered: {s}\n", .{out});
+        printNodeLogs(&cluster);
         return error.WrongDeleteReturn;
     }
     // And the delete replicated.
     try assertMutationReplicates(&cluster, "DelRet-deleted", "RETURN 1", "MATCH (n:DelRet) RETURN count(n) AS c", "\"c\":0");
+}
+
+// CANARY: REQ=REQ-SONNY-3044-CLUSTER-DELETE-RETURN; FEATURE="DistributedCluster"; ASPECT=LostResponseNoReplay; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-10-30
+test "cluster: a lost DELETE response does not replay a committed mutation" {
+    if (skipPreflight()) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var cluster = try startCluster(gpa, aa, io);
+    defer cluster.deinit();
+    try seedReplicableNode(&cluster, "LostDelRet", "CREATE (:LostDelRet {i: 3})");
+
+    const LostResponse = struct {
+        var calls: usize = 0;
+
+        fn query(c: *Cluster, ip: []const u8, text: []const u8) ![]u8 {
+            // A real client timeout (a loaded CI runner exceeds the CLI's 15s
+            // budget) is already a lost response with an unknown outcome:
+            // count it as the one attempt and let it propagate. A replay
+            // would show up as a second call.
+            const out = c.query(ip, text) catch |err| {
+                calls += 1;
+                if (err == error.Timeout) std.debug.print("[repl] 'LostDelRet' DELETE client timed out; checking it is not replayed\n", .{});
+                return err;
+            };
+            if (std.mem.indexOf(u8, out, "ClusterNotLeader") != null) return out;
+            calls += 1;
+            // Execute against the real cluster, then lose its first successful
+            // response at the client boundary. No database reply is fabricated.
+            if (calls == 1) {
+                defer c.gpa.free(out);
+                if (std.mem.indexOf(u8, out, "\"s\":3") == null) {
+                    std.debug.print("[repl] DELETE response before fault injection: {s}\n", .{out});
+                    printNodeLogs(c);
+                }
+                try std.testing.expect(std.mem.indexOf(u8, out, "\"s\":3") != null);
+                return error.TestLostResponse;
+            }
+            return out;
+        }
+    };
+    LostResponse.calls = 0;
+    if (runOnLeaderWith(&cluster, "MATCH (n:LostDelRet) DELETE n RETURN sum(n.i) AS s", LostResponse.query)) |out| {
+        defer gpa.free(out);
+        std.debug.print("[repl] an ambiguous DELETE was replayed {d} time(s): {s}\n", .{ LostResponse.calls - 1, out });
+        return error.AmbiguousMutationReplayed;
+    } else |err| switch (err) {
+        error.TestLostResponse, error.Timeout => {},
+        else => return err,
+    }
+    try std.testing.expectEqual(@as(usize, 1), LostResponse.calls);
+    try assertMutationReplicates(&cluster, "LostDelRet-deleted", "RETURN 1", "MATCH (n:LostDelRet) RETURN count(n) AS c", "\"c\":0");
 }
 
 // ---------------------------------------------------------------------------
@@ -848,7 +961,7 @@ test "cluster: MATCH…CREATE edge sent to a follower fails closed" {
     // (00000 success), applies the edge to its LOCAL store only, and never
     // forwards/rejects -> a follower holds data the rest of the cluster does
     // not. It must instead be rejected with error.ClusterNotLeader.
-    const rej_out = runQuery(gpa, io, aa, follower_ip, "MATCH (a:McFSrc {id:1}), (b:McFDst {id:2}) CREATE (a)-[:FOLLOWERMCL]->(b)") catch |err| {
+    const rej_out = cluster.query(follower_ip, "MATCH (a:McFSrc {id:1}), (b:McFDst {id:2}) CREATE (a)-[:FOLLOWERMCL]->(b)") catch |err| {
         std.debug.print("[repl] follower MATCH…CREATE probe {s} failed: {s}\n", .{ follower_ip, @errorName(err) });
         return error.FollowerWriteProbeFailed;
     };
@@ -864,7 +977,7 @@ test "cluster: MATCH…CREATE edge sent to a follower fails closed" {
     // And nothing may have landed in the follower's local store (divergence).
     sleepMs(1500);
     drainAll(&cluster.captures, &cluster.children, gpa, io);
-    const fr_read = runQuery(gpa, io, aa, follower_ip, "MATCH (:McFSrc)-[r:FOLLOWERMCL]->(:McFDst) RETURN count(r) AS c") catch return error.FollowerWriteProbeFailed;
+    const fr_read = cluster.query(follower_ip, "MATCH (:McFSrc)-[r:FOLLOWERMCL]->(:McFDst) RETURN count(r) AS c") catch return error.FollowerWriteProbeFailed;
     defer gpa.free(fr_read);
     if (std.mem.indexOf(u8, fr_read, "\"c\":0") == null) {
         std.debug.print("[repl] FOLLOWER SILENTLY APPLIED MATCH…CREATE (divergence): {s}\n", .{fr_read});
@@ -948,7 +1061,7 @@ test "cluster: unreplicated write surfaces fail closed (no silent divergence)" {
                 sleepMs(500);
                 continue;
             };
-            const out = runQuery(gpa, io, aa, leader_ip, s.query) catch {
+            const out = cluster.query(leader_ip, s.query) catch {
                 sleepMs(500);
                 continue;
             };
@@ -994,7 +1107,7 @@ test "cluster: unreplicated write surfaces fail closed (no silent divergence)" {
             try failures.append(aa, try std.fmt.allocPrint(aa, "{s} (no healthy follower to probe)", .{s.name}));
             continue;
         };
-        const f_out = runQuery(gpa, io, aa, NODE_IPS[fidx], s.query) catch |err| {
+        const f_out = cluster.query(NODE_IPS[fidx], s.query) catch |err| {
             std.debug.print("[failclosed] follower probe for '{s}' failed: {s}\n", .{ s.name, @errorName(err) });
             try failures.append(aa, try std.fmt.allocPrint(aa, "{s} (follower probe failed)", .{s.name}));
             continue;
@@ -1033,9 +1146,9 @@ test "cluster: unreplicated write surfaces fail closed (no silent divergence)" {
 /// Fault injection after a REAL successful CLI mutation: discard its response
 /// and report the same timeout outcome as a lost acknowledgement. No database
 /// response is fabricated; the regression reads all real follower stores.
-fn runQueryDiscardingAcknowledgement(gpa: std.mem.Allocator, io: std.Io, aa: std.mem.Allocator, ip: []const u8, q: []const u8) ![]u8 {
-    const out = try runQuery(gpa, io, aa, ip, q);
-    defer gpa.free(out);
+fn runQueryDiscardingAcknowledgement(cluster: *Cluster, ip: []const u8, q: []const u8) ![]u8 {
+    const out = try cluster.query(ip, q);
+    defer cluster.gpa.free(out);
     if (std.mem.indexOf(u8, out, "\"status_class\":\"00000\"") == null) return error.MutationFailed;
     return error.Timeout;
 }
