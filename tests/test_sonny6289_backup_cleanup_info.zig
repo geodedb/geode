@@ -513,7 +513,9 @@ test "SONNY-6289 backup cleanup --yes deletes old geode backups in --dir only, k
     }
 
     // A deletion that fails (directory not writable): non-zero, reported.
-    {
+    // SONNY-6864: root deletes from a read-only directory, so this needs a
+    // non-root uid (CI runs as root).
+    if (std.c.geteuid() != 0) {
         const ro = try join(allocator, cd.root.path(), "ro");
         defer allocator.free(ro);
         try std.Io.Dir.cwd().createDirPath(fsIo(), ro);
