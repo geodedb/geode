@@ -27,11 +27,12 @@ const procedure_registry = @import("procedure_registry.zig");
 /// Delegates to procedure_registry for actual procedure handling
 pub const executeCallProcedure = procedure_registry.executeCallProcedure;
 
-/// Public accessor for the global CDC engine (used by gRPC transport).
-pub const getGlobalCdcEngine = procedure_registry.getGlobalCdcEngine;
-
-/// Public accessor for the CDC mutex (used by gRPC transport for thread-safe CDC access).
-pub const getCdcMutex = procedure_registry.getCdcMutex;
+/// SONNY-6561: the CDC frames' answers, one implementation for QUIC and gRPC.
+pub const CdcRefusal = procedure_registry.CdcRefusal;
+pub const cdcDiagnosticsAnswer = procedure_registry.cdcDiagnosticsAnswer;
+pub const cdcControlAnswer = procedure_registry.cdcControlAnswer;
+pub const CdcActor = procedure_registry.CdcActor;
+pub const auditCdcFrameRefusal = procedure_registry.auditCdcFrameRefusal;
 
 /// Execute CALL subquery statement
 /// Executes the subquery statement (Query, Call, Create, etc.) with context
@@ -120,6 +121,8 @@ fn parseCallStatement(src: []const u8) !struct { ast.CallStatement, std.heap.Are
 }
 
 test "executeCallStatement routes read-only procedures through QueryReadSession" {
+    const saved_override = graph_store.saveDataDirOverride();
+    defer saved_override.restore();
     graph_store.deinitGlobalStore();
     defer graph_store.deinitGlobalStore();
 

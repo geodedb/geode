@@ -421,17 +421,24 @@ const scale60 = "0." ++ "0" ** 59 ++ "1";
 const scale40 = "0." ++ "0" ** 39 ++ "1";
 
 fn checkConversions(s: *Session, f: *Failures) !void {
-    // toFloat and CAST to a float type are a scale-6 decimal: a string past
-    // it, NaN or an infinity is 22003 (NaN was a garbage coefficient).
-    for ([_][]const u8{ "1e400", "-1e400", "nan", "inf", "1e33" }) |text| {
-        try expectFail(s, f, try std.fmt.allocPrint(s.arena.allocator(), "RETURN toFloat('{s}') AS x", .{text}), &.{}, error.DecimalOverflow);
+    // SONNY-6518 item 2: toFloat is CAST(x AS FLOAT), a DOUBLE (it was a
+    // scale-6 decimal): 1e400 no double holds (22003), NaN and an infinity
+    // are no numeric literal (22018), 1e33 fits.
+    for ([_][]const u8{ "1e400", "-1e400" }) |text| {
+        try expectFail(s, f, try std.fmt.allocPrint(s.arena.allocator(), "RETURN toFloat('{s}') AS x", .{text}), &.{}, error.NumericOutOfRange);
     }
-    try expectValue(s, f, "RETURN toFloat('4503599627370496') AS x", "4503599627370496.000000m");
-    try expectValue(s, f, "RETURN toFloat('2.5') AS x", "2.500000m");
-    try expectFail(s, f, "RETURN CAST('nan' AS DOUBLE) AS x", &.{}, error.DecimalOverflow);
-    try expectFail(s, f, "RETURN CAST('1e400' AS FLOAT) AS x", &.{}, error.DecimalOverflow);
-    try expectFail(s, f, "RETURN CAST('-inf' AS REAL) AS x", &.{}, error.DecimalOverflow);
-    try expectValue(s, f, "RETURN CAST('2.5' AS DOUBLE) AS x", "2.500000m");
+    for ([_][]const u8{ "nan", "inf" }) |text| {
+        try expectFail(s, f, try std.fmt.allocPrint(s.arena.allocator(), "RETURN toFloat('{s}') AS x", .{text}), &.{}, error.InvalidCast);
+    }
+    try expectValue(s, f, "RETURN toFloat('1e33') AS x", "1e33d");
+    try expectValue(s, f, "RETURN toFloat('4503599627370496') AS x", "4503599627370496d");
+    try expectValue(s, f, "RETURN toFloat('2.5') AS x", "2.5d");
+    // SONNY-6499: an approximate CAST target gives a DOUBLE; 'nan' and
+    // 'inf' are no numeric literal (22018); 1e400 no double holds (22003).
+    try expectFail(s, f, "RETURN CAST('nan' AS DOUBLE) AS x", &.{}, error.InvalidCast);
+    try expectFail(s, f, "RETURN CAST('1e400' AS FLOAT) AS x", &.{}, error.NumericOutOfRange);
+    try expectFail(s, f, "RETURN CAST('-inf' AS REAL) AS x", &.{}, error.InvalidCast);
+    try expectValue(s, f, "RETURN CAST('2.5' AS DOUBLE) AS x", "2.5d");
     // degrees and radians.
     try expectFail(s, f, "RETURN degrees(1e33) AS x", &.{}, error.DecimalOverflow);
     try expectFail(s, f, "RETURN radians(1e35) AS x", &.{}, error.DecimalOverflow);
@@ -444,8 +451,12 @@ fn checkConversions(s: *Session, f: *Failures) !void {
     try expectValue(s, f, "RETURN floor(9223372036854775807.5) AS x", "9223372036854775807");
     try expectValue(s, f, "RETURN ceil(-9223372036854775808.5) AS x", "-9223372036854775808");
     try expectFail(s, f, "RETURN floor(-9223372036854775808.5) AS x", &.{}, error.IntegerOverflow);
-    try expectFail(s, f, "RETURN floor(1e30) AS x", &.{}, error.IntegerOverflow);
-    try expectFail(s, f, "RETURN round(1e30) AS x", &.{}, error.IntegerOverflow);
+    // SONNY-6596: `1e30` is an approximate literal (a DOUBLE) and floors to a
+    // DOUBLE (20.22 GR 12 b ii); the exact 10^30 is past i64.
+    try expectFail(s, f, "RETURN floor(1000000000000000000000000000000.0) AS x", &.{}, error.IntegerOverflow);
+    try expectFail(s, f, "RETURN round(1000000000000000000000000000000.0) AS x", &.{}, error.IntegerOverflow);
+    try expectValue(s, f, "RETURN floor(1e30) AS x", "1e30d");
+    try expectValue(s, f, "RETURN round(2.5E0) AS x", "3d");
     try expectValue(s, f, "RETURN round(2.5) AS x", "3");
     try expectValue(s, f, "RETURN round(-2.5) AS x", "-3");
     try expectValue(s, f, "RETURN round(" ++ scale60 ++ ") AS x", "0");
@@ -461,17 +472,20 @@ fn checkConversions(s: *Session, f: *Failures) !void {
     try expectFail(s, f, "RETURN toInteger(9223372036854775808.0) AS x", &.{}, error.IntegerOverflow);
     try expectValue(s, f, "RETURN toInteger(9223372036854775807.9) AS x", "9223372036854775807");
     try expectValue(s, f, "RETURN toInteger(" ++ scale40 ++ ") AS x", "0");
-    try expectValue(s, f, "RETURN toInteger(-" ++ scale40 ++ ") AS x", "-1");
+    // SONNY-6518 item 2: CAST(x AS INTEGER) truncates (IA005); toInteger
+    // floored to -1.
+    try expectValue(s, f, "RETURN toInteger(-" ++ scale40 ++ ") AS x", "0");
     // sum() and avg() of a list (a scalar function, in WHERE or a list
     // comprehension): a decimal narrowed to its floor, and the sum, checked.
-    // (The planned read's WHERE drops a row whose predicate fails, so there
-    // the overflow filters every row out instead of failing the query.)
+    // The overflow fails the query in every mode: since SONNY-6296 the
+    // planned read raises a WHERE that errors instead of dropping the row
+    // (ISO/IEC 39075:2024 19.1 GR 1).
     for ([_][]const u8{
         "MATCH (n:F) WHERE sum([9223372036854775808.0]) > 0 RETURN count(*) AS c",
         "MATCH (n:F) WHERE sum([9223372036854775807, 1]) > 0 RETURN count(*) AS c",
         "MATCH (n:F) WHERE avg([9223372036854775808.0]) > 0 RETURN count(*) AS c",
     }) |q| {
-        if (s.mode == .in_memory) try expectFail(s, f, q, &.{}, error.IntegerOverflow) else try expectValue(s, f, q, "0");
+        try expectFail(s, f, q, &.{}, error.IntegerOverflow);
     }
     try expectValue(s, f, "RETURN [x IN [1] | sum([1.5, 2])] AS s", "[3]");
     try expectValue(s, f, "RETURN [x IN [1] | avg([2.5, 4])] AS s", "[3]");
@@ -552,7 +566,9 @@ test "SONNY-2739: a typed ARRAY parameter past the decimal is refused" {
 fn checkGeo(s: *Session, f: *Failures) !void {
     // A NaN coordinate is no longer a valid LatLon (it passed both range
     // checks), so latitude() and friends no longer answer a garbage decimal
-    // (2^127 - 1) or a garbage distance (minInt(i64)).
+    // (2^127 - 1) or a garbage distance (minInt(i64)). SONNY-6518 item 1:
+    // latlon('nan,0') raises its own error (InvalidLatitude / Longitude,
+    // 22023); it degraded to NULL, which the outer function refused (22G03).
     for ([_][]const u8{
         "RETURN latitude(latlon('nan,0')) AS x",
         "RETURN longitude(latlon('0,nan')) AS x",
@@ -560,8 +576,8 @@ fn checkGeo(s: *Session, f: *Failures) !void {
         "RETURN geo_lon(latlon('0,nan')) AS x",
         "RETURN geo_bearing(latlon('nan,0'), latlon('0,0')) AS x",
         "RETURN distance_haversine(latlon('nan,0'), latlon('0,0')) AS x",
-        "RETURN altitude(latlonalt('0,0,nan')) AS x",
-    }) |q| try expectFail(s, f, q, &.{}, error.TypeMismatch);
+    }) |q| try expectFail(s, f, q, &.{}, error.InvalidArgs);
+    try expectFail(s, f, "RETURN altitude(latlonalt('0,0,nan')) AS x", &.{}, error.TypeMismatch);
     try expectValue(s, f, "RETURN latitude(latlon('45.5,10')) AS x", "45.500000m");
     try expectValue(s, f, "RETURN distance_haversine(latlon('0,0'), latlon('0,90')) AS x", "10007543");
     // An altitude or a coordinate past the decimal is 22003.

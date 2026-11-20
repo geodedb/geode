@@ -54,14 +54,13 @@ fi
 # data dir is fresh so it triggers the first-boot path). The geode QUIC
 # transport is UDP-only — we cannot use a TCP probe, so wait for the
 # "server ready" log line instead.
-PASSWORD="MermaidTestPassword123!"
+PASSWORD="Mermaid External Test Passphrase"
 echo "Starting geode on 127.0.0.1:$PORT (data: $TMPDIR/data)..."
 mkdir -p "$TMPDIR/data"
 GEODE_ADMIN_PASSWORD="$PASSWORD" \
 "$GEODE_BIN" serve \
     --listen "127.0.0.1:$PORT" \
     --data-dir "$TMPDIR/data" \
-    --no-cluster \
     --log-level warn \
     >"$TMPDIR/server.log" 2>&1 &
 SERVER_PID=$!

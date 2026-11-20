@@ -172,15 +172,15 @@ const Harness = struct {
     }
 
     /// Explicit transaction, driven the way the QUIC handler drives it: the
-    /// engine session txn is aborted before the undo log replays.
+    /// engine session txn is ended after the undo log replays (SONNY-6529).
     fn begin(self: *Harness) !void {
         try self.run("BEGIN");
         self.in_txn = true;
     }
 
     fn rollback(self: *Harness) !void {
-        if (graph_store.getGlobalAdapter()) |ad| ad.abortSessionTxn();
         try self.run("ROLLBACK");
+        if (graph_store.getGlobalAdapter()) |ad| ad.endSessionTxn();
         self.in_txn = false;
     }
 
@@ -236,7 +236,7 @@ test "atomicity (a): a failed oversized CREATE leaves no node, before and after 
     defer testing.allocator.free(big);
 
     const res = h.execParams(
-        "CREATE (n:AtomA {ok: 1, big: $big})",
+        "CREATE (n:AtomA {ok: 1, big: $`big`})",
         &.{"big"},
         &.{Value{ .Str = big }},
     );
@@ -288,7 +288,7 @@ test "atomicity (c): a failed relationship CREATE leaves no endpoints and no edg
     defer testing.allocator.free(big);
 
     const res = h.execParams(
-        "CREATE (a:AtomCL {x: 1})-[r:ATOM_REL {w: 2}]->(b:AtomCR {big: $big})",
+        "CREATE (a:AtomCL {x: 1})-[r:ATOM_REL {w: 2}]->(b:AtomCR {big: $`big`})",
         &.{"big"},
         &.{Value{ .Str = big }},
     );
@@ -318,7 +318,7 @@ test "atomicity (d): a failed MERGE ON CREATE SET leaves no node" {
     defer testing.allocator.free(big);
 
     const res = h.execParams(
-        "MERGE (n:AtomD {k: 'one'}) ON CREATE SET n.big = $big",
+        "MERGE (n:AtomD {k: 'one'}) ON CREATE SET n.big = $`big`",
         &.{"big"},
         &.{Value{ .Str = big }},
     );
@@ -345,7 +345,7 @@ test "atomicity (e): a failed multi-assignment SET applies nothing and keeps the
     try h.run("CREATE (n:AtomE {name: 'abc', tag: 'keep'})");
 
     const res = h.execParams(
-        "MATCH (n:AtomE {name: 'abc'}) SET n.tag = 'changed', n.name = $big",
+        "MATCH (n:AtomE {name: 'abc'}) SET n.tag = 'changed', n.name = $`big`",
         &.{"big"},
         &.{Value{ .Str = big }},
     );
@@ -593,7 +593,7 @@ test "atomicity (g) guard: an explicit transaction still rolls back a failed bat
     try h.begin();
     try h.run("CREATE (a:AtomG {v: 1})");
     try testing.expectError(error.PropertyValueTooLarge, h.execParams(
-        "CREATE (b:AtomGBad {v: 1, big: $big})",
+        "CREATE (b:AtomGBad {v: 1, big: $`big`})",
         &.{"big"},
         &.{Value{ .Str = big }},
     ));

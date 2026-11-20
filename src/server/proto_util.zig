@@ -8,7 +8,11 @@ const graph_store = @import("../graph_store.zig");
 const heap = @import("../storage/heap.zig");
 const type_helpers = @import("../eval/type_helpers.zig");
 const eval_extended = @import("../eval_extended.zig");
+const eval = @import("../eval.zig");
 const property_codec = @import("../property_value_codec.zig");
+const unique_constraints = @import("../execution/unique_constraints.zig");
+const storage_dispatch = @import("../execution/storage_dispatch.zig");
+const fle_integration = @import("../fle_integration.zig");
 
 pub const ParamBindings = struct {
     names: []const []const u8,
@@ -172,6 +176,26 @@ fn checkedCharLen(len: usize) error{InvalidParams}!u16 {
     return std.math.cast(u16, len) orelse error.InvalidParams;
 }
 
+// CANARY: REQ=REQ-SONNY-6359-ALTER-USER-OTHER-PASSWORD; FEATURE="GQL Auth DDL"; ASPECT=AdminResetOverWire; STATUS=TESTED; TEST=tests/test_sonny6359_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6359: whether the QUIC / gRPC password intercept handles `ALTER
+/// USER <target> SET PASSWORD`: the session's own password (it also runs
+/// during a forced reset), and any request with no authenticated user (the
+/// intercept refuses it). Another user's goes to the parser, which runs it
+/// as `geode.auth.user_reset_password` (Admin only, the password policy,
+/// audited), as docs/GQL_AUTH_DDL.md maps it; the intercept refused it with
+/// 42501 for everyone, Admin included.
+pub fn passwordInterceptApplies(authenticated_user: ?[]const u8, target: []const u8) bool {
+    const user = authenticated_user orelse return true;
+    return std.mem.eql(u8, user, target);
+}
+
+/// SONNY-6600: the HELLO refusal messages of `auth_rate_limiter`
+/// (`hello_unavailable_message`, `hello_credential_invalid_message`; that
+/// module is the server executable's, so they are repeated here and kept
+/// equal by a comptime check in quic_connection_handler.zig).
+pub const auth_unavailable_message = "Authentication temporarily unavailable";
+pub const auth_credential_invalid_message = "Authentication unavailable: the stored credential of this account cannot be used (server-side error; contact the administrator)";
+
 pub fn mapError(err: anyerror) ErrorInfo {
     return switch (err) {
         // SONNY-2675: grouping_error (42803), the class every other grouping
@@ -180,7 +204,12 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.GroupingError => .{ .code = "42803", .message = "grouping error: non-aggregated expression not in GROUP BY" },
         // GAP-0914: a GROUP BY key that resolves to no alias, variable, or
         // binding is rejected instead of collapsing rows into one null group.
-        error.UnknownGroupKey => .{ .code = "42703", .message = "GROUP BY key does not resolve to any RETURN alias, variable, or binding" },
+        // CANARY: REQ=REQ-SONNY-6543-ISO-STATUS-CODES; FEATURE="GQLStatus"; ASPECT=Table8InvalidReference; STATUS=TESTED; TEST=tests/test_sonny6543_iso_status_codes.zig; OWNER=server; UPDATED=2026-11-15
+        // SONNY-6543: an invalid reference is ISO/IEC 39075:2024 Table 8's
+        // "syntax error or access rule violation - invalid reference", 42002
+        // (here, for HAVING and for knn()'s property). It was 42703, the
+        // PostgreSQL undefined_column code. BREAKING for a client matching it.
+        error.UnknownGroupKey => .{ .code = "42002", .message = "GROUP BY key does not resolve to any RETURN alias, variable, or binding" },
         error.UnorderedPagination => .{ .code = "US001", .message = "OFFSET requires ORDER BY clause" },
         error.TransactionAlreadyActive => .{ .code = "25001", .message = "Transaction already active" },
         // GAP-0917: statement failed mid-transaction; everything until
@@ -196,11 +225,24 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-3031: the storage engine could not commit the transaction's
         // changes; the transaction is rolled back.
         error.SessionCommitFailed => .{ .code = "40000", .message = "The transaction's changes could not be committed to storage; the transaction was rolled back" },
+        // SONNY-6658: an auto-commit statement's undo could not be written
+        // to the durable undo log before a change; the statement was undone.
+        error.StatementUndoNotDurable => .{ .code = "40000", .message = "The statement's undo could not be written to the durable undo log; its changes were rolled back" },
+        error.StatementCommitFailed => .{ .code = "40000", .message = "The statement's changes could not be committed to storage; it was rolled back" },
         error.NoActiveTransaction => .{ .code = "25000", .message = "No active transaction" },
         // SONNY-3348 (round 18, I2): COMMIT of a transaction a failed
         // statement aborted: it was rolled back, and it is over.
         error.TransactionRolledBack => .{ .code = "40000", .message = "The transaction failed and was rolled back; COMMIT did not commit it" },
-        error.UnionColumnCountMismatch => .{ .code = "42601", .message = "UNION column count mismatch" },
+        // SONNY-6543: a Syntax Rule refusal with no explicit condition is
+        // 42000 (ISO/IEC 39075:2024 4.7.3 step 4 e); it was the PostgreSQL
+        // 42601. BREAKING for a client matching it.
+        // SONNY-6645: a tenant quota is a resource limit; Table 8 has no
+        // class for one, so the implementation-defined class 53 (23.1: a
+        // class code beginning with '5'), with Geode's other resource
+        // limits. Both transports sent 42000. BREAKING.
+        error.TenantConnectionQuotaExceeded => .{ .code = "53300", .message = "Connection quota exceeded for tenant" },
+        error.TenantQueryQuotaExceeded => .{ .code = "53400", .message = "Query quota exceeded for tenant" },
+        error.UnionColumnCountMismatch => .{ .code = "42000", .message = "UNION column count mismatch" },
         // SONNY-2755: `YIELD path, path` used to free that column twice.
         error.DuplicateYieldColumn => .{ .code = "42702", .message = "YIELD names the same column more than once; name each column once" },
         // SONNY-2791: the __geode_* graphs are the engine's own.
@@ -213,7 +255,63 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.DuplicateGraph => .{ .code = "42P07", .message = "Duplicate graph name" },
         error.GraphNotFound => .{ .code = "3F000", .message = "Graph does not exist" },
         // SONNY-3038: geode.auth.revoke could not save the revoke.
-        error.RevokeNotPersisted => .{ .code = "58030", .message = "The revoke could not be saved to the security graph; the privilege may return at the next start. Retry it" },
+        // SONNY-1333: the privilege is taken away in memory first.
+        // SONNY-6647: REVOKE of a privilege the user does not hold there.
+        error.GrantNotHeld => .{ .code = "42704", .message = "The user holds no such privilege on that graph; nothing was revoked" },
+        error.RevokeNotPersisted => .{ .code = "58030", .message = "The revoke could not be saved to the security graph: the privilege is removed now but returns at the next start. Retry it" },
+        // CANARY: REQ=REQ-SONNY-6324-FLE-CATALOG-FAIL-CLOSED; FEATURE="FieldLevelEncryption"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny6324_fle_catalog_fail_closed.zig; OWNER=security; UPDATED=2026-11-11
+        // SONNY-6324: the FLE catalog fails closed (58030 io_error, as the
+        // other "could not be saved / read" refusals).
+        error.FleCatalogNotPersisted => .{ .code = "58030", .message = "The FLE catalog could not be saved; the change was not applied. Retry it" },
+        error.FleRevokeNotPersisted => .{ .code = "58030", .message = "The plaintext-access revoke is in effect but could not be saved to the FLE catalog; the role regains access at the next start unless the revoke is retried and saved. Retry it" },
+        // CANARY: REQ=REQ-SONNY-6335-NO-INDEX-ON-ENCRYPTED-FIELD; FEATURE="FieldLevelEncryption"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny6335_fle_identity_and_indexes.zig; OWNER=security; UPDATED=2026-11-12
+        // SONNY-6335: no index or UNIQUE constraint over an encrypted field.
+        // SONNY-6362: MERGE cannot match a randomized FLE ciphertext.
+        // SONNY-6433: a MERGE key property that is null can match nothing.
+        error.NullMergeKey => .{ .code = "22004", .message = "null value not allowed: a MERGE pattern's property value is null. A null property is absent, and `k = null` is never true, so the pattern can match nothing and MERGE does not create an element without the key. Give the key a value, or use CREATE" },
+        // SONNY-6688: geode.fle.migrateEncrypt.
+        error.FieldNotEncrypted => .{ .code = "22023", .message = "The field is not configured for field-level encryption: configure it (CALL geode.fle.configureField) before migrating its values" },
+        error.MigrationInTransaction => .{ .code = "25000", .message = "geode.fle.migrateEncrypt commits batch by batch and cannot run inside an explicit transaction" },
+        error.CorruptFleMigrationJournal => .{ .code = "XX001", .message = "fle_migration.journal is damaged: the FLE migration batch it records cannot be finished" },
+        error.MigrationNeedsDurableCommits => .{ .code = "55000", .message = "geode.fle.migrateEncrypt needs durable commits; the store runs with GEODE_WAL_SYNC=deferred" },
+        // SONNY-6692: the post-migration scrub.
+        error.TransactionsOpen => .{ .code = "55006", .message = "A transaction is open on the graph, so its dead space cannot be overwritten now: the values are migrated; run geode.fle.migrateEncrypt again when it has ended" },
+        error.GraphLockOrder => .{ .code = "0A000", .message = "geode.fle.migrateEncrypt of another graph than the session's: USE GRAPH <graph> first" },
+        error.MigrationInterrupted => .{ .code = "58030", .message = "The FLE migration stopped part way; the batches done are kept. Run it again to finish" },
+        error.MergeOnEncryptedField => .{ .code = "0A000", .message = "MERGE on an FLE-encrypted property is not supported: the stored value is randomized ciphertext, so a pattern value never matches it and MERGE would create a duplicate. MERGE on an unencrypted key and set the encrypted property with ON CREATE SET / SET" },
+        error.IndexOnEncryptedField => .{ .code = "0A000", .message = "The field is FLE-encrypted: an index or UNIQUE / NODE KEY constraint over it would hold ciphertext (or plaintext); none can be created. Equality search over an encrypted field is not available; index or constrain an unencrypted property instead" },
+        error.EncryptedFieldIndexed => .{ .code = "0A000", .message = "The field has an index or a UNIQUE / NODE KEY constraint over it; drop it before encrypting the field" },
+        // SONNY-6341: CALL geode.fle.grantRole / revokeRole.
+        error.FleRoleGrantNotPersisted => .{ .code = "58030", .message = "The FLE role grant could not be saved to the security graph; it was not applied. Retry it" },
+        error.FleRoleRevokeNotPersisted => .{ .code = "58030", .message = "The FLE role revoke is in effect but could not be saved to the security graph; the role may return at the next start. Retry it" },
+        error.FleRoleUserNotFound => .{ .code = "42002", .message = "User does not exist" },
+        error.InvalidFleRole => .{ .code = "22023", .message = "An FLE role name is non-empty and uses only letters, digits, '_' and '-'" },
+        error.FleCatalogUnavailable => .{ .code = "58030", .message = "The FLE catalog could not be loaded, so which fields are encrypted is unknown; string property writes and reads are refused until it is restored (see the server log)" },
+        // SONNY-6327: an encrypted value the principal may read does not
+        // decrypt (damaged, or written under another key or identity).
+        error.FleDecryptionFailed => .{ .code = "58030", .message = "An encrypted property value could not be decrypted (damaged, or written under another FLE key); the read is refused (see the server log)" },
+        error.EncryptionRequired => .{ .code = "58030", .message = "The value must be stored encrypted and could not be encrypted (FLE catalog or keys unavailable); nothing was written" },
+        // SONNY-1333: geode.auth.grant could not save the grant.
+        error.GrantNotPersisted => .{ .code = "58030", .message = "The grant could not be saved to the security graph; nothing was granted. Retry it" },
+        // SONNY-3038: DROP USER, ALTER USER (password, role, ENABLE/DISABLE),
+        // geode.auth.user_import could not save the change. The stored user
+        // is unchanged; a delete, a disable, a password change or a role
+        // downgrade locks the user out until a change to it is saved or the
+        // next start.
+        error.UserNotPersisted => .{ .code = "58030", .message = "The change to the user could not be saved to the security graph and was not made; a delete, disable, password change or role downgrade locks the user out until a change to it is saved. Retry it" },
+        // SONNY-3038: CREATE ROLE (not created) or DROP ROLE (removed now,
+        // but its stored record returns at the next start).
+        // SONNY-6293: a security record's node could not be deleted (DROP
+        // POLICY): nothing was removed, the record is still stored and in
+        // force.
+        error.SecurityRecordDeleteFailed => .{ .code = "58030", .message = "A record could not be deleted from the security graph; nothing was removed and it is still in force. Retry it" },
+        // SONNY-3034: a geode.rls.* restriction change that could not be
+        // stored in the security graph.
+        // SONNY-6369: a geode.rls add / remove procedure in a process with no
+        // RLS filter or expression engine (it answered 00000 "error:" rows).
+        error.RlsEngineNotInitialized => .{ .code = "55000", .message = "The row-level security engine is not initialized in this process (the server was started without RLS support), so the restriction was not changed" },
+        error.RlsRestrictionNotPersisted => .{ .code = "58030", .message = "The RLS restriction change could not be saved to the security graph and was not made (an add is taken out again; a removal leaves the restriction in force). Retry it" },
+        error.RoleNotPersisted => .{ .code = "58030", .message = "The role change could not be saved to the security graph: CREATE ROLE created nothing; DROP ROLE removed the role now but it returns at the next start. Retry it" },
         // SONNY-3028: DROP GRAPH of the graph the session's transaction changed.
         // SONNY-3134: or another session's open transaction.
         error.ObjectInUse => .{ .code = "55006", .message = "Object in use: an open transaction (this session's or another's) changed the graph; it can be dropped or replaced once that transaction commits or rolls back" },
@@ -233,9 +331,47 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.GraphBound => .{ .code = "42000", .message = "USE GRAPH not allowed: session is bound to a graph via DSN connection string" },
         error.DuplicateSchema => .{ .code = "42P07", .message = "Duplicate schema name" },
         error.SchemaNotFound => .{ .code = "3F000", .message = "Schema does not exist" },
-        error.DuplicateIndex => .{ .code = "42P07", .message = "Duplicate index name" },
+        error.DuplicateIndex => .{ .code = "42P07", .message = "Duplicate index name: an index of this name exists in the graph (index names are unique per graph, across labels)" },
+        error.IndexAlreadyExists => .{ .code = "42P07", .message = "Duplicate index name" },
+        // CANARY: REQ=REQ-SONNY-6294-DROP-INDEX-RULES; FEATURE="SchemaCatalog"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny6294_drop_index_rules.zig; OWNER=catalog; UPDATED=2026-11-11
+        // SONNY-6294: a missing index or constraint is undefined_object
+        // (42704); both reached clients as 58000 (system error).
+        error.IndexNotFound => .{ .code = "42002", .message = "Index does not exist" },
+        error.ConstraintNotFound => .{ .code = "42002", .message = "Constraint does not exist in the session's graph" },
+        error.FulltextIndexInDefaultGraph => .{ .code = "0A000", .message = "A fulltext index lives in the default graph: drop it from the default graph (USE GRAPH default; DROP INDEX <name>)" },
+        // SONNY-1319: the name is held in another graph by an index whose
+        // runtime structure is keyed by name alone (vector and other advanced
+        // indexes), so it cannot be created in this graph too.
+        error.IndexNameInUseByOtherGraph => .{ .code = "42P07", .message = "Index name is in use in another graph by an index type whose runtime structure is shared by name (vector and other advanced indexes); choose another name" },
         // SONNY-2809: a second CREATE CONSTRAINT with the same name.
-        error.ConstraintAlreadyExists => .{ .code = "42710", .message = "Duplicate constraint name" },
+        error.ConstraintAlreadyExists => .{ .code = "42710", .message = "Duplicate constraint name: a constraint of this name exists in the graph (constraint names are unique per graph, across labels)" },
+        // CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=UniqueViolationCode; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=engine; UPDATED=2026-11-11
+        // SONNY-2846: a statement that would give two nodes one UNIQUE key,
+        // or a CREATE CONSTRAINT over existing duplicates. 23505 is SQL's
+        // unique_violation. The message names the constraint (or how many
+        // duplicate groups there are), never a value.
+        error.UniqueConstraintViolation => .{ .code = "23505", .message = unique_constraints.violationMessage() },
+        error.UniqueConstraintCheckFailed => .{ .code = "58030", .message = "the UNIQUE constraint check could not read the store; the statement was not applied" },
+        // CANARY: REQ=REQ-SONNY-6281-EXISTENCE-CONSTRAINTS; FEATURE="ConstraintEnforcement"; ASPECT=NotNullViolationCode; STATUS=TESTED; TEST=tests/test_sonny6281_existence_constraints.zig; OWNER=engine; UPDATED=2026-11-12
+        // SONNY-6281: a statement that would leave a node without a property
+        // a NOT NULL / EXISTS / NODE KEY constraint requires, or a CREATE
+        // CONSTRAINT over nodes that lack it. 23502 is SQL's
+        // not_null_violation. The message names the constraint, never a value.
+        error.NotNullConstraintViolation => .{ .code = "23502", .message = unique_constraints.notNullMessage() },
+        // SONNY-6281: CREATE UNIQUE INDEX built a plain index and ignored
+        // UNIQUE; it is refused, and uniqueness is a constraint.
+        error.UniqueIndexNotSupported => .{ .code = "0A000", .message = "CREATE UNIQUE INDEX is not supported: declare uniqueness with CREATE CONSTRAINT <name> FOR (n:Label) REQUIRE n.prop IS UNIQUE (enforced), or create a plain index with CREATE INDEX" },
+        // SONNY-2846: a bulk fast-path write that reached a graph a UNIQUE
+        // constraint was just created in; a retry runs through the executor,
+        // which checks it.
+        error.UniqueConstraintFastPathConflict => .{ .code = "40001", .message = "UniqueConstraintFastPathConflict: a constraint (UNIQUE, NODE KEY, NOT NULL or EXISTS) now applies in this graph; the write was not applied, retry it" },
+        // CANARY: REQ=REQ-SONNY-6659-SINGLE-WRITER; FEATURE="TransactionManagement"; ASPECT=WriteConflictSqlstate; STATUS=TESTED; TEST=tests/test_sonny6659_geode_single_writer.zig; OWNER=storage; UPDATED=2026-11-16
+        // SONNY-6659: graph-storage (from v0.4.25) refused a write to a page
+        // another open engine transaction had written: a concurrent writer
+        // on the same shard. The refused transaction is aborted and the
+        // statement undone; 40001 = serialization_failure, retry it. Matched
+        // by name, so it compiles against engines without the error.
+        error.WriteConflict => .{ .code = "40001", .message = "WriteConflict: another open transaction was writing the same storage page; the write was not applied, retry it" },
         // GAP-0923: ABAC policy DDL validation (duplicate name rejected).
         error.PolicyAlreadyExists => .{ .code = "42710", .message = "Duplicate policy name" },
         error.IncompatibleIndexDataType => .{ .code = "42804", .message = "Incompatible index data type" },
@@ -285,7 +421,42 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // CANARY: REQ=REQ-ENG-3910-IN-PREDICATE-TYPE-SAFETY; FEATURE="InOperator"; ASPECT=NonListRightHandSide; STATUS=TESTED; TEST=tests/test_eng3910_in_type_safety.zig; OWNER=eval; UPDATED=2026-08-24
         error.ValuesNotComparable => .{ .code = "22G04", .message = "values not comparable: an ordering comparison of a year-to-month duration and a day-to-second duration (1 month is not a number of days)" },
         error.InListRequiresList => .{ .code = "22000", .message = "The right-hand side of IN / NOT IN must be a list (or NULL); a scalar value is not a list. Bind a list parameter, e.g. --param p '[1,2,3]'" },
-        error.InvalidTypeConversion => .{ .code = "22003", .message = "Invalid type conversion" },
+        // CANARY: REQ=REQ-SONNY-6499-GQLSTATE-RESIDUALS; FEATURE="ErrorMapping"; ASPECT=DataExceptionGqlstatusResiduals; STATUS=TESTED; TEST=tests/test_sonny6499_gqlstate_residuals.zig; OWNER=engine; UPDATED=2026-11-13
+        // SONNY-6499: data errors that answered 58000 (system error), each
+        // with its ISO/IEC 39075:2024 23.1 Table 8 code. (InvalidTypeConversion,
+        // 22003 here, had no raise site; its arm was removed.)
+        // A value of the wrong type for an operation, a function or a CAST
+        // (20.8 GR 7 d ii): invalid value type. Internal failures carry
+        // errors of their own (TypeMismatch is the user-data one).
+        // SONNY-6738: ISO/IEC 39075:2024 13.5 GR 5, "dependent object error -
+        // edges still exist" (23.1 Table 8, class G1): a DELETE of a node
+        // that keeps an edge the statement does not delete. A caller's
+        // statement, not a server fault; it answered the generic 58000.
+        error.NodeHasEdges => .{ .code = "G1001", .message = "Dependent object error: the node still has edges (DELETE a node only when the statement deletes all its edges, or use DETACH DELETE)" },
+        error.TypeMismatch => .{ .code = "22G03", .message = "Invalid value type: a value of a type the operation, function or CAST does not accept" },
+        // No GQL number is NaN or infinite: numeric value out of range.
+        error.FloatNaN => .{ .code = "22003", .message = "Numeric value out of range: NaN and infinite numbers are not values" },
+        // A substring error (ISO/IEC 39075:2024 20.24 GR 1 d): LEFT / RIGHT of a
+        // negative length (SONNY-6518), substring()'s start.
+        error.IndexOutOfBounds => .{ .code = "22011", .message = "Substring error: a negative length (LEFT, RIGHT, substring) or a start position before the first character" },
+        // range() past its 10,000,000-element limit: the class the other size
+        // limits use (VectorTooLarge, PropertyValueTooLarge).
+        error.RangeTooLarge => .{ .code = "54000", .message = "RangeTooLarge: range() would return more than 10,000,000 elements" },
+        // intrange() bounds that do not form a range; no subclass names it.
+        error.RangeBoundsError => .{ .code = "22000", .message = "Data exception: the range bounds are invalid (a lower bound above the upper, or bounds text other than '[]', '[)', '(]', '()')" },
+        // The text of an extension-type value that does not parse: the
+        // condition 20.8 GR g ii / k i name for text cast to a type.
+        error.HexFormatError => .{ .code = "22018", .message = "Invalid character value for cast: not hexadecimal text" },
+        error.JsonInvalid => .{ .code = "22018", .message = "Invalid character value for cast: not a JSON document" },
+        error.XmlNotWellFormed => .{ .code = "22018", .message = "Invalid character value for cast: not a well-formed XML document" },
+        error.UrlParseError => .{ .code = "22018", .message = "Invalid character value for cast: not a URL" },
+        error.DomainSyntaxError => .{ .code = "22018", .message = "Invalid character value for cast: not a domain name" },
+        error.UuidParseError => .{ .code = "22018", .message = "Invalid character value for cast: not a UUID" },
+        error.BitParseError => .{ .code = "22018", .message = "Invalid character value for cast: not a bit string" },
+        error.InvalidSubnet => .{ .code = "22018", .message = "Invalid character value for cast: not a subnet (CIDR)" },
+        error.IdnaError => .{ .code = "22018", .message = "Invalid character value for cast: not an internationalized domain name" },
+        error.EnumValueError => .{ .code = "22018", .message = "Invalid character value for cast: not a value of the enum" },
+        error.EnumTypeError => .{ .code = "22G03", .message = "Invalid value type: not a value of the enum type" },
         // GAP-0905/GAP-0907: checked numeric narrowing (CAST, MakeInterval, ...)
         // surfaces as SQLSTATE 22003 numeric_value_out_of_range.
         error.IntegerOverflow => .{ .code = "22003", .message = "Integer value out of range" },
@@ -299,6 +470,21 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.DecimalOverflow => .{ .code = "22003", .message = "Numeric value out of range for DECIMAL" },
         // GAP-0921: CAST semantic validation.
         error.InvalidCast => .{ .code = "22018", .message = "Invalid character value for cast" },
+        // SONNY-6499: ISO/IEC 39075 20.8 GR i i 2 (numeric value out of range).
+        error.NumericOutOfRange => .{ .code = "22003", .message = "Numeric value out of range: no value of the target type represents it" },
+        // SONNY-6518: ISO/IEC 39075:2024 20.22 GR 9 b), 11 b) e) (Table 8).
+        error.InvalidLogArgument => .{ .code = "2201E", .message = "Invalid argument for natural logarithm: the argument of LN (log) is 0 or negative" },
+        error.InvalidPowerArgument => .{ .code = "2201F", .message = "Invalid argument for power function: 0 to a negative power, a negative number to a power that is not a whole number, or the square root of a negative number" },
+        // CANARY: REQ=REQ-SONNY-6489-DATA-EXCEPTION-CODES; FEATURE="ErrorMapping"; ASPECT=DataExceptionGqlstatus; STATUS=TESTED; TEST=tests/test_sonny6489_data_exception_codes.zig; OWNER=engine; UPDATED=2026-11-13
+        // SONNY-6489: data exceptions with an ISO/IEC 39075:2024 code (23.1,
+        // Table 8, class 22); each answered 58000 (system error).
+        error.TimeParse => .{ .code = "22007", .message = "invalid date, time, or datetime format: the string is not an ISO 8601 date, time or datetime" },
+        error.DurationParse => .{ .code = "22G0H", .message = "invalid duration format: the string is not an ISO 8601 duration (P[n]Y[n]M[n]DT[n]H[n]M[n]S)" },
+        error.DecimalDivZero => .{ .code = "22012", .message = "Division by zero" },
+        error.CharLengthExceeded => .{ .code = "22001", .message = "String data right truncation: the string is longer than the fixed length" },
+        error.IntervalFieldOverflow => .{ .code = "22015", .message = "interval field overflow: the duration is out of range" },
+        error.DatetimeFieldOverflow => .{ .code = "22008", .message = "datetime field overflow: the datetime is out of range" },
+        error.IncompatibleTemporalUnitGroups => .{ .code = "22G14", .message = "incompatible temporal instant unit groups: a year-to-month duration and a day-to-second duration cannot be added or subtracted (1 month is not a number of days)" },
         error.UnsupportedCastTarget => .{ .code = "0A000", .message = "Unsupported CAST target type" },
         // GAP-0926: out-of-range positional parameter.
         // SONNY-3247: a parameter the request does not supply, named or
@@ -308,11 +494,17 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // SONNY-3367: a pattern names one variable as two kinds of element
         // (a relationship reused as a node pattern bound every node of the
         // graph). A syntax error, refused before anything runs.
+        // SONNY-3245: ISO/IEC 39075:2024 16.5 <insert graph pattern>.
+        error.InvalidInsertPattern => .{ .code = "42000", .message = "Invalid CREATE / INSERT pattern: a variable a MATCH bound, or one declared earlier in the pattern, takes no label or property (use SET), and an inserted relationship points left or right and has one type (ISO/IEC 39075 16.5)" },
+        error.VariableNotInScope => .{ .code = "42000", .message = "Variable not in scope: a reference names a variable nothing before it binds (a MATCH, FOR, CALL ... YIELD or LET of the statement), or one a WITH (or NEXT) does not project; bind or project it, or write a parameter as $name (ISO/IEC 39075 20.12 SR 8)" },
         error.VariableKindConflict => .{ .code = "42000", .message = "Variable kind conflict: a pattern names one variable as two kinds of element (a node, a relationship, a variable-length relationship list or a path), or names a variable that holds a value (a WITH expression's alias, a FOR variable); name each element with a variable of its own" },
         // SONNY-3248 (round 4b-1 review m-2): a SKIP or LIMIT parameter that
         // is no non-negative integer read as "no window" (every row).
         error.InvalidWindowParameter => .{ .code = "22G03", .message = "Invalid SKIP or LIMIT value: a SKIP or LIMIT parameter must be a non-negative integer" },
-        error.MissingParameter => .{ .code = "42P02", .message = "Undefined parameter: the statement references a parameter ($name or $n) that the request does not supply" },
+        // SONNY-6645: a parameter the request does not supply is an invalid
+        // reference (ISO/IEC 39075:2024 22.1 SR 5 d ii 1, Table 8: 42002);
+        // it was the PostgreSQL 42P02. BREAKING.
+        error.MissingParameter => .{ .code = "42002", .message = "Undefined parameter: the statement references a parameter ($name or $n) that the request does not supply" },
         // GAP-0926: nested aggregate (sum(avg(...))) is invalid.
         error.NestedAggregate => .{ .code = "42803", .message = "Aggregate functions cannot be nested" },
         // SONNY-2675: a HAVING over groups reads each group's keys, projected
@@ -321,10 +513,14 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // CANARY: REQ=REQ-SONNY-2675-GROUPED-HAVING; FEATURE="GroupedHaving"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2675_grouped_having.zig; OWNER=engine; UPDATED=2026-09-25
         error.UngroupedHavingReference => .{ .code = "42803", .message = "Grouping error: a HAVING (or a WHERE after an aggregating RETURN) may reference only grouping keys, projected columns and aggregates" },
         error.AggregateInRowFilter => .{ .code = "42803", .message = "Aggregate functions are not allowed in a WHERE after a RETURN that does not aggregate" },
-        error.UnsupportedGroupedHavingPredicate => .{ .code = "0A000", .message = "A pattern or subquery predicate, or an aggregate of a list comprehension variable, is not supported in a grouped HAVING" },
+        error.UnsupportedGroupedHavingPredicate => .{ .code = "0A000", .message = "A pattern or subquery predicate is not supported in a grouped HAVING or beside an aggregate in a RETURN or WITH item" },
         // SONNY-2675: a HAVING (or WHERE after RETURN) name that is no column,
         // binding or parameter; it used to evaluate to NULL (GAP-0926).
-        error.UnknownHavingReference => .{ .code = "42703", .message = "A HAVING (or a WHERE after RETURN) names something that is no column, binding or parameter" },
+        error.UnknownHavingReference => .{ .code = "42002", .message = "A HAVING (or a WHERE after RETURN) names something that is no column, binding or parameter" },
+        // SONNY-2696: a NEXT-chained part computes only an aggregate call and
+        // arithmetic over aggregates; it answered any other expression over an
+        // aggregate as NULL or as one row's value.
+        error.UnsupportedAggregateExpression => .{ .code = "0A000", .message = "An aggregate inside a function call, list, map, CASE or unary operator is not supported in a NEXT-chained statement part; compute the aggregate in a WITH (WITH count(*) AS c) and use its alias" },
         // SONNY-2683: the executors of these shapes ignored a GROUP BY, HAVING
         // or WHERE after RETURN; refuse it rather than return other rows.
         // CANARY: REQ=REQ-SONNY-2683-RETURN-SHAPES; FEATURE="LegacyReturnProjection"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2683_return_shapes.zig; OWNER=engine; UPDATED=2026-09-25
@@ -335,7 +531,15 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // edges) or on a path variable.
         // SONNY-3248 (round-4a review M-2): one SET clause assigned one
         // property of an element twice; the second silently won.
-        error.RepeatedSetTarget => .{ .code = "22G03", .message = "A SET clause assigns one property of an element more than once (or `SET n = {map}` beside another assignment to n); its values are evaluated together, so there is no order to settle them. Split it into two SET clauses" },
+        // SONNY-6368: 22G0M, data exception - multiple assignments to a
+        // graph element property (ISO/IEC 39075:2024 13.3 General Rule 7 a).
+        // It answered 22G03 (invalid value type).
+        error.RepeatedSetTarget => .{ .code = "22G0M", .message = "A SET clause assigns one property of an element more than once (or `SET n = {map}` beside another assignment to n); its values are evaluated together, so there is no order to settle them. Split it into two SET clauses" },
+        // SONNY-3046: a pattern naming a variable the incoming row binds where
+        // the join cannot constrain it is refused, not answered by binding
+        // the name again.
+        error.UnsupportedBoundVariableJoin => .{ .code = "0A000", .message = "A variable bound before this MATCH (passed on by WITH or NEXT) is named in a part with an OPTIONAL MATCH, a shortest path, a variable-length relationship, or as a path where it is a node or relationship (or the reverse); joining it there is not supported. Match the pattern with a new variable and compare it in a WHERE" },
+        error.UnsupportedOptionalMatchShape => .{ .code = "0A000", .message = "A path variable or an inline LET in a query part with an OPTIONAL MATCH is not supported; return the pattern's nodes and relationships, and compute the value in a WITH after it" },
         error.OptionalPathVariable => .{ .code = "0A000", .message = "A path variable on an OPTIONAL MATCH pattern after the first is not supported; return the pattern's nodes and relationships instead" },
         error.VariableLengthPathWrite => .{ .code = "0A000", .message = "A SET or REMOVE cannot target a variable-length relationship variable (the list of its edges) or a path variable; target the path's nodes" },
         // SONNY-3384: a SET or REMOVE before a DELETE in one query runs only
@@ -346,32 +550,75 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // shape does not apply is refused, before anything is written, rather
         // than dropped.
         error.WriteClauseNotApplied => .{ .code = "0A000", .message = "This statement writes in a shape that is not supported: a statement that writes is accepted only in the allowlisted shapes (CREATE/INSERT; MERGE; MATCH ... [WHERE] SET/REMOVE/DELETE/CREATE/MERGE; MATCH ... WITH ... SET/REMOVE/DELETE, or one CREATE or MERGE; each after an optional WITH of values or an UNWIND, in a FOR body, under PROFILE, or in a UNION of MATCH ... SET parts), with every variable bound, and no write inside an expression. Split the statement" },
+        // SONNY-6735: the write-shape check's variable-name limit
+        // (`write_shape.Names.max`), named instead of the generic 0A000.
+        error.TooManyWriteVariables => .{ .code = "54000", .message = "A statement that writes may name at most 4096 distinct variables and parameters" },
         error.TooManyWriteClauses => .{ .code = "54000", .message = "A query part may carry at most 1024 SET, REMOVE, CREATE and MERGE clauses" },
         // SONNY-3244: the parser's limits (gql/parser.zig `max_*`).
         error.TooManyStatements => .{ .code = "54000", .message = "A request may carry at most 1024 statements" },
         error.ParseMemoryLimit => .{ .code = "54000", .message = "Parsing the request needs more than 64 MiB" },
+        // SONNY-6433: ISO/IEC 39075 Feature GH02 (the parser's own message is the same).
+        error.UndirectedEdgeNotSupported => .{ .code = "0A000", .message = "undirected edges are not supported: Geode stores directed edges only, so an undirected edge pattern (~[ ]~, ~, <~[ ]~, ~[ ]~>; ISO/IEC 39075 Feature GH02) can be neither matched nor inserted. Use -[ ]-> or <-[ ]- (or -[ ]- to match either direction)" },
+        // SONNY-6343: the parser's message (which names the shape) is the
+        // detail where the parse outcome carries it.
+        error.UnsupportedQueryShape => .{ .code = "0A000", .message = "This query shape is not supported: a NEXT after a statement with no RETURN or after a UNION, INTERSECT, EXCEPT or OTHERWISE, or an inline CALL other than a statement-level CALL { } followed by WITH, WHERE or RETURN" },
         error.QueryNestingTooDeep => .{ .code = "54001", .message = "Queries may nest at most 10 deep (WITH chain parts, CALL { }, IN (subquery), FOR bodies, CTE bodies)" },
         error.StringDataRightTruncation => .{ .code = "22001", .message = "String data right truncation" },
         error.InvalidKeyProvider => .{ .code = "42704", .message = "Invalid TDE key provider" },
         error.InvalidGuardrailConfiguration => .{ .code = "42704", .message = "Invalid CDC guardrail configuration" },
-        error.PasswordPolicyViolation => .{ .code = "22000", .message = "password does not meet policy requirements (min 8 chars, letters and numbers)" },
-        error.UnknownProcedure => .{ .code = "42883", .message = "Unknown procedure" },
+        // CANARY: REQ=REQ-SONNY-6331-ONE-PASSWORD-POLICY; FEATURE="Unified Password Policy Validation"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny6331_password_policy_paths.zig; OWNER=security; UPDATED=2026-11-12
+        // SONNY-6331: a password the policy refuses (CREATE USER, ALTER USER
+        // SET PASSWORD, geode.auth.user_create / user_reset_password /
+        // user_change_password), with the rule it broke and the configured
+        // limit; never the password. It named an older 8-character rule.
+        error.PasswordTooShort,
+        error.PasswordTooLong,
+        error.PasswordMissingUppercase,
+        error.PasswordMissingLowercase,
+        error.PasswordMissingDigit,
+        error.PasswordContainsSpaces,
+        error.PasswordNotPassphrase,
+        => blk: {
+            const PasswordPolicy = @import("geode_auth").PasswordPolicy;
+            break :blk .{ .code = "22000", .message = PasswordPolicy.geodeSecure().message(PasswordPolicy.violationOf(err).?) };
+        },
+        error.PasswordReuse => .{ .code = "22000", .message = "New password must not match the current password" },
+        // SONNY-6645: a procedure or function name that identifies none is an
+        // invalid reference (Table 8: 42002); both were the PostgreSQL 42883
+        // undefined_function. BREAKING.
+        error.UnknownProcedure => .{ .code = "42002", .message = "Unknown procedure" },
         // docs/@BUGS_731.md bug 8b: an unresolved scalar function used to
         // silently evaluate to NULL; surface it with the same
         // undefined_function SQLSTATE the procedure path uses.
-        error.UnknownFunction => .{ .code = "42883", .message = "Unknown function" },
+        error.UnknownFunction => .{ .code = "42002", .message = "Unknown function" },
         // geode#877 (c): knn()/vector_knn() named a property no row supplies.
         // Previously an empty list with SQLSTATE 00000 — indistinguishable from
         // "no neighbours". Same diagnostic posture as UnknownFunction above.
         // CANARY: REQ=REQ-GEODE-877-KNN-UNKNOWN-PROPERTY; FEATURE="VectorKnn"; ASPECT=UnknownPropertyDiagnostic; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
-        error.UnknownProperty => .{ .code = "42703", .message = "Unknown property: no row in scope supplies this property" },
+        error.UnknownProperty => .{ .code = "42002", .message = "Unknown property: no row in scope supplies this property" },
         // docs/@BUGS_731.md bug 8d: a wrong-arity / wrong-value function call
         // (e.g. the docs' `knn(d.embedding, $q, 10)`, which is missing the
         // metric and passes a vector where a property NAME belongs) reached the
         // generic 58000 "internal error" fallback. It is a caller error:
         // 22023 = invalid_parameter_value.
-        error.InvalidArgs => .{ .code = "22023", .message = "Invalid arguments for function (wrong number of arguments, or an argument value the function does not accept)" },
+        error.InvalidArgs => .{ .code = "22023", .message = "Invalid arguments for function (an argument value the function does not accept) or procedure (a value, or a number of arguments, it does not accept)" },
+        // SONNY-6555 item 5: an operand count is decided by the program text
+        // (ISO/IEC 39075:2024 4.7.3 step 4).
+        error.WrongArgumentCount => .{ .code = "42000", .message = "Wrong number of arguments: the function does not take that many operands" },
         error.Unauthenticated => .{ .code = "28000", .message = "Authentication required" },
+        // CANARY: REQ=REQ-SONNY-6600-AUTH-ERROR-GQLSTATUS; FEATURE="AuthOutcomeClassification"; ASPECT=ProcedureGqlstatus; STATUS=TESTED; TEST=tests/test_sonny6600_auth_outcomes.zig; OWNER=security; UPDATED=2026-11-15
+        // SONNY-6600: a credential check that could not run, reaching a
+        // procedure (geode.auth.user_change_password's old-password check),
+        // answers what HELLO answers (SONNY-6598), not the generic 58000
+        // with the error's name. AuthUnavailable is retryable (the KDF or the
+        // user store could not run, e.g. out of memory under load): 53000,
+        // insufficient resources, the class OutOfMemory (53200) and the MFA
+        // lockout (53400) use. AuthCredentialInvalid is the account's stored
+        // hash being unusable, which a retry does not cure: 58000, the class
+        // of the other damaged-stored-data errors (DataCorruption, ...).
+        // Neither is 28000: the credential was not checked.
+        error.AuthUnavailable => .{ .code = "53000", .message = auth_unavailable_message },
+        error.AuthCredentialInvalid => .{ .code = "58000", .message = auth_credential_invalid_message },
         error.Unauthorized => .{ .code = "42501", .message = "Permission denied" },
         // GAP-0840: strict-tenancy rejected a tenant-scoped operation with no
         // concrete tenant scope (unset/empty/"default"). Surface as a
@@ -382,20 +629,69 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.GraphLockHeld => .{ .code = "0A000", .message = "geode.tenant.backfill_edge_tags takes each graph's lock itself; send it as the only statement in its request" },
         error.BackfillInTransaction => .{ .code = "25000", .message = "geode.tenant.backfill_edge_tags cannot run inside a transaction: ROLLBACK would not undo its re-tags (a dry run can)" },
         error.BackfillProjection => .{ .code = "0A000", .message = "geode.tenant.backfill_edge_tags takes no RETURN or ORDER BY: it runs with no statement lock, and they would read the store; YIELD its columns instead" },
+        // SONNY-6700: geode.storage.scrub refusals.
+        error.ScrubLockHeld => .{ .code = "0A000", .message = "geode.storage.scrub takes each graph's lock itself; send it as the only statement in its request" },
+        error.ScrubInTransaction => .{ .code = "25000", .message = "geode.storage.scrub cannot run inside a transaction: ROLLBACK would not undo it" },
+        error.ScrubProjection => .{ .code = "0A000", .message = "geode.storage.scrub takes no RETURN or ORDER BY: it runs with no statement lock, and they would read the store; YIELD its columns instead" },
         // SONNY-2686: a MERGE whose pattern only nodes the session's row-level
         // security hides match is refused (nothing bound, updated or created)
         // rather than binding the hidden node or creating a duplicate of it.
         // CANARY: REQ=REQ-SONNY-2686-MERGE-ROW-VISIBILITY; FEATURE="MergeRowVisibility"; ASPECT=SqlstateMapping; STATUS=TESTED; TEST=tests/test_sonny2686_merge_rls.zig; OWNER=security; UPDATED=2026-09-25
         error.MergeMatchNotVisible => .{ .code = "42501", .message = "MergeMatchNotVisible: the MERGE pattern matches an existing node that row-level security hides from this session; the statement was refused, and nothing was bound, updated or created" },
+        // SONNY-2817: the per-session, per-label limit on those refusals.
+        error.MergeRefusalRateLimited => .{ .code = "53400", .message = "MergeRefusalRateLimited: this session was refused too many MERGEs for rows row-level security hides on a label of this graph; every MERGE naming that label is refused for 5 minutes, and nothing was bound, updated or created" },
         // SONNY-2691 item 5: the evaluator's row visibility was never
         // installed in this process; the statement is refused rather than
         // answered without the session's RLS policies.
         error.EvaluatorNotInitialized => .{ .code = "XX000", .message = "EvaluatorNotInitialized: the query evaluator's execution layer and row-level security are not initialized in this process; the statement was refused" },
         error.SearchNotPermitted => .{ .code = "42501", .message = "Access denied: READ_PLAINTEXT privilege required for encrypted searchable field" },
-        error.InvalidIpAddress => .{ .code = "22P02", .message = "Invalid IP address format" },
-        error.InvalidMac, error.InvalidMacFormat, error.InvalidMacTag => .{ .code = "22P02", .message = "Invalid MAC address format" },
+        // SONNY-6499: 22P02 is PostgreSQL's; GQL's is 22018 (Table 8).
+        error.InvalidIpAddress => .{ .code = "22018", .message = "Invalid character value for cast: not an IP address" },
+        error.InvalidMac, error.InvalidMacFormat, error.InvalidMacTag => .{ .code = "22018", .message = "Invalid character value for cast: not a MAC address" },
         error.DivisionByZero => .{ .code = "22012", .message = "Division by zero" },
+        // SONNY-6291: the geode.auth.apikey_* procedures (no server-side
+        // API-key store).
+        // SONNY-6292: GRANT ROLE / ALTER USER SET ROLE / user_assign_role
+        // of a custom role (it answered "assigned" and conferred nothing).
+        error.CustomRoleMembershipNotSupported => .{ .code = "0A000", .message = "A custom role cannot be granted to a user: custom roles carry no privileges, so the grant would confer nothing. Grant a built-in role (admin, readwrite, user, readonly) or per-graph privileges (GRANT READ | WRITE | SCHEMA | ALL ON GRAPH <g> TO <user>)" },
+        // SONNY-6369: ALTER USER SET ROLE / user_assign_role of a role other
+        // than admin to a superuser (it answered "assigned" and changed nothing).
+        error.SuperuserRoleFixed => .{ .code = "0A000", .message = "The user is a superuser: a superuser always holds the admin role, so another role would never take effect; nothing was changed" },
+        error.ApiKeysNotSupported => .{ .code = "0A000", .message = "API keys are not supported by the server: the geode.auth.apikey_* procedures create, list, check and revoke nothing, and the handshake does not authenticate by key" },
+        // SONNY-6291: user_show / user_permissions (SHOW PERMISSIONS FOR) of
+        // a user that does not exist, for an Admin.
+        // SONNY-6645: a user, index, constraint or attribute that does not
+        // exist is an invalid reference, 42002 (it was the PostgreSQL 42704
+        // undefined_object). BREAKING.
+        error.UserNotFound => .{ .code = "42002", .message = "User does not exist" },
+        // SONNY-6369: user_remove_attribute of an attribute the user does not
+        // have (it answered 00000 "attribute ... not set").
+        error.UserAttributeNotSet => .{ .code = "42002", .message = "The user has no such attribute; nothing was removed" },
+        // SONNY-6359: auth procedure failures that answered 00000 with a
+        // status row starting "error:" or "note:".
+        error.UserAlreadyExists => .{ .code = "42710", .message = "User already exists" },
+        error.ReservedUsername => .{ .code = "42939", .message = "Reserved user name: geode-cluster is the federation node identity and cannot be a user" },
+        error.UnknownPrivilege => .{ .code = "22023", .message = "Unknown privilege: expected READ, WRITE, SCHEMA or ALL" },
+        // SONNY-6367: geode.auth.mfa_verify / mfa_enable / user_import
+        // refusals that answered 00000 with a status row.
+        error.InvalidMfaCode => .{ .code = "28000", .message = "invalid token: the MFA code does not verify against the user's TOTP secret" },
+        error.MfaNotEnrolled => .{ .code = "55000", .message = "mfa_not_enrolled: the user has no TOTP secret; run geode.auth.mfa_setup first" },
+        error.MfaRateLimited => .{ .code = "53400", .message = "Too many failed MFA verifications for the user: locked out for 5 minutes" },
+        // SONNY-6608: an MFA enrollment or on/off change that could not be
+        // stored in the security graph was not applied.
+        error.MfaChangeNotPersisted => .{ .code = "58030", .message = "The MFA change could not be saved to the security graph; it was not applied. Retry it" },
+        error.FeatureDisabled => .{ .code = "0A000", .message = "Feature disabled on this server: the operation needs a feature that is turned off (MFA: start the server with GEODE_ENABLE_MFA=1)" },
+        error.FipsUnsupported => .{ .code = "0A000", .message = "Not available under FIPS mode: the operation needs a primitive that is not FIPS-approved (Argon2id, BLAKE2b)" },
+        // SONNY-3135 (N7d): geode.auth.grant(..., '*') (it stored a grant on a
+        // graph named '*', which no request matches).
+        error.GrantWildcardNotSupported => .{ .code = "0A000", .message = "A per-graph grant needs one graph: there is no grant on every graph ('*'). Give the user a built-in role, or create an allow policy for every graph (CREATE POLICY ... ON GRAPH *); nothing was changed" },
+        error.GlobalPrivilegeNotSupported => .{ .code = "0A000", .message = "GRANT / REVOKE of a privilege needs ON GRAPH <graph>: there are no global per-privilege grants (global privilege is the user's role: admin, readwrite, user, readonly); nothing was changed" },
         error.NotImplemented, error.Unsupported => .{ .code = "0A000", .message = @errorName(err) },
+        // SONNY-6570: a cdc.* procedure that cannot answer truthfully while
+        // change capture is not implemented (the message names it and why),
+        // and start / stop / reset_guardrails with no CDC engine.
+        error.CdcNotImplemented => .{ .code = "0A000", .message = storage_dispatch.cdcNotImplementedMessage() },
+        error.CdcNotEnabled => .{ .code = "55000", .message = "CDC is not enabled: there is no CDC engine to start, stop or reset; CALL cdc.enable() starts it" },
         // GAP-0856: distributed EXPLAIN/PROFILE is intentionally node-local only.
         error.DistributedExplainUnsupported => .{ .code = "0A000", .message = @import("../distributed/distributed_explain.zig").unsupported_message },
         // GAP-0871: GQL BACKUP/RESTORE statements are intentionally unsupported;
@@ -490,8 +786,117 @@ pub fn mapError(err: anyerror) ErrorInfo {
         // reopens it. A storage corruption error from the build is reported
         // as itself (58000 ChecksumMismatch / DataCorruption / InvalidData).
         error.GraphQuarantined => .{ .code = "58000", .message = "GraphQuarantined: the graph's indexes could not be loaded from storage, so it is quarantined and refuses reads and writes; see the server log, then restart the server to retry" },
+        // SONNY-6517 item 1: an allocation failure (a parse's included, which
+        // was answered as a syntax error) is SQLSTATE 53200 out_of_memory
+        // (class 53, insufficient resources), as the read and write budgets
+        // are; it fell through to 58000.
+        // SONNY-6716: no-steal keeps every page a statement dirtied in the buffer
+        // pool until it ends; a statement that dirties more pages than the pool
+        // holds fails (class 53) and is undone, instead of falling through to 58000.
+        error.BufferPoolFull => .{ .code = "53200", .message = "BufferPoolFull: this statement changes more data than the buffer pool can hold (GEODE_BUFFER_POOL_PAGES). Nothing was applied; split the statement into smaller ones or raise GEODE_BUFFER_POOL_PAGES" },
+        error.OutOfMemory => .{ .code = "53200", .message = "OutOfMemory: the server could not allocate the memory this request needs. Retry, or narrow the request" },
+        // CANARY: REQ=REQ-SONNY-6528-CORRUPTION-MESSAGES; FEATURE="StorageIntegrity"; ASPECT=OperatorMessage; STATUS=TESTED; TEST=tests/test_sonny6528_corruption_messages.zig; OWNER=storage; UPDATED=2026-11-14
+        // SONNY-6528 (5): the storage corruption errors (a read that found
+        // the damage, every statement on a quarantined graph) said only
+        // their name. 58000 still (the class GraphQuarantined uses); no path.
+        // SONNY-6612 (3): the storage read / write failures SONNY-6594 and
+        // SONNY-6607 surface, and the tenant lifecycle refusals.
+        error.StorageReadFailed => .{ .code = "58000", .message = "StorageReadFailed: a node or edge this statement needed could not be read from storage (the cause is in the server log). The statement failed and made no change; it never answers without the rows it could not read. Retry it; if it keeps failing, check the storage and the server log" },
+        error.StorageWriteFailed => .{ .code = "58000", .message = "StorageWriteFailed: the storage engine could not apply a write of this statement (the cause is in the server log). The statement failed and its changes were undone. Retry it; if it keeps failing, check the storage and the server log" },
+        error.TenantDropping => .{ .code = "42501", .message = "TenantDropping: this session's tenant is being dropped (a DROP that did not finish), so its statements are refused. Finish the drop with CALL geode.tenant.drop, then connect with another tenant" },
+        error.TenantNotRegistered => .{ .code = "42501", .message = "TenantNotRegistered: this session's tenant is not in the tenant registry, so its statements are refused. Register it (CALL geode.tenant.create) or connect with a registered tenant" },
+        error.TenantRegistryOrphanParent => .{ .code = "58000", .message = "TenantRegistryOrphanParent: the tenant registry holds a tenant whose parent tenant is not registered, so the tenant hierarchy cannot be rebuilt and the server refuses to start. Restore the registry from a backup, or re-parent or remove the tenant; the server log names it" },
+        error.DataCorruption => .{ .code = "58000", .message = "DataCorruption: the graph's stored data is damaged (records the storage engine counts are missing or inconsistent). The statement was refused and returned no partial result; a graph found damaged when it was loaded is quarantined and refuses every read and write. Restore the graph from a backup, or remove it with DROP GRAPH; the server log names the graph and the check that failed" },
+        error.ChecksumMismatch => .{ .code = "58000", .message = "ChecksumMismatch: a page of the graph's stored data failed its checksum (the bytes read back are not the bytes written). The statement was refused and returned no partial result; a graph found damaged when it was loaded is quarantined and refuses every read and write. Restore the graph from a backup, or remove it with DROP GRAPH; the server log names the graph and the page" },
+        error.InvalidData => .{ .code = "58000", .message = "InvalidData: a record of the graph's stored data could not be decoded (it is malformed). The statement was refused and returned no partial result; a graph found damaged when it was loaded is quarantined and refuses every read and write. Restore the graph from a backup, or remove it with DROP GRAPH; the server log names the graph and the record" },
+        // SONNY-6524: graph-storage refused to open the graph because its
+        // shards' label dictionaries disagree on what a label id used by
+        // records means; serving it could return wrong labels.
+        error.LabelDictionaryDiverged => .{ .code = "58000", .message = "LabelDictionaryDiverged: the graph's shard label dictionaries disagree, so it is not opened and refuses reads and writes; other graphs are unaffected. The server log names the graph and says whether GEODE_LABEL_DICT_ADOPT_SHARD0 can repair it or it needs a manual repair" },
+        // CANARY: REQ=REQ-SONNY-6590-SIDE-FILE-REFUSAL; FEATURE="TDEFileLevelEncryption"; ASPECT=OperatorMessage; STATUS=TESTED; TEST=tests/test_sonny6590_tde_side_files.zig; OWNER=security; UPDATED=2026-11-15
+        // SONNY-6590: graph-storage 0.4.17 seals the files that hold the
+        // graph's label, relationship-type and property-key names under TDE
+        // and refuses to open the graph when one cannot be read under the
+        // configured key. No key material or file content is echoed.
+        error.SideFileEncrypted => .{ .code = "58000", .message = "SideFileEncrypted: the graph's storage files are encrypted at rest (TDE) but the server has no encryption key, so the graph is not opened and refuses reads and writes; other graphs are unaffected. Restart the server with the GEODE_TDE_KEY the graph was written with. The server log names the graph" },
+        error.SideFileAuthFailed => .{ .code = "58000", .message = "SideFileAuthFailed: a file of the graph's encrypted storage did not authenticate under the server's encryption key (the key is not the one the graph was written with, or the file was modified or copied from another graph), so the graph is not opened and refuses reads and writes; other graphs are unaffected. Restart with the GEODE_TDE_KEY the graph was written with, or restore the graph's directory from a backup. The server log names the graph" },
+        error.SideFileNotSealed => .{ .code = "58000", .message = "SideFileNotSealed: a file of the graph's storage is in plaintext although the graph's files are encrypted at rest (it was replaced, possibly by an older geode or by hand), so the graph is not opened and refuses reads and writes; other graphs are unaffected. Restore the graph's directory from a backup. The server log names the graph" },
+        // SONNY-6616: graph-storage >= 0.4.20 reports a graph whose
+        // manifests or WAL do not authenticate under the key as itself (it
+        // was NoManifest, which read as a missing graph).
+        error.EncryptionKeyMismatch => .{ .code = "58000", .message = "EncryptionKeyMismatch: the graph's storage does not authenticate under the server's encryption key (GEODE_TDE_KEY is not the key the graph was written with, it was written without one, or its manifests or write-ahead log were modified), so the graph is not opened and refuses reads and writes; other graphs are unaffected. Restart with the GEODE_TDE_KEY the graph was written with, or restore the graph's directory from a backup. The server log names the graph" },
+        // CANARY: REQ=REQ-SONNY-6642-WAL-CORRUPTED-QUARANTINE; FEATURE="StorageIntegrity"; ASPECT=OperatorMessage; STATUS=TESTED; TEST=tests/test_sonny6642_wal_corrupted_quarantine.zig; OWNER=storage; UPDATED=2026-11-15
+        // SONNY-6642: graph-storage >= 0.4.20 refuses to open a graph whose
+        // WAL has a damaged record followed by valid ones (not a torn tail)
+        // and leaves the log untouched; it was the generic GraphQuarantined.
+        error.WalCorrupted => .{ .code = "58000", .message = "WalCorrupted: a record in the middle of the graph's write-ahead log is damaged and valid records follow it, so the log cannot be replayed without losing committed writes; the graph is not opened and refuses reads and writes, and the log is left as it was. Other graphs are unaffected. Restore the graph's directory from a backup (or remove the graph with DROP GRAPH). The server log names the graph and the byte offset of the damaged record" },
+        error.TimeseriesNeedsTdeKey => .{ .code = "58000", .message = "TimeseriesNeedsTdeKey: the graph's time-series data is encrypted at rest but the server runs without GEODE_TDE_KEY (or with GEODE_TS_TDE=0), so the graph is not opened and refuses reads and writes; other graphs are unaffected. Restart with the GEODE_TDE_KEY it was written with and without GEODE_TS_TDE=0. The server log names the graph" },
+        error.TimeseriesNotEncrypted => .{ .code = "58000", .message = "TimeseriesNotEncrypted: the graph holds time-series data written in plaintext before TDE covered time-series, and the server will not keep plaintext data under GEODE_TDE_KEY, so the graph is not opened and refuses reads and writes; other graphs are unaffected. See docs/TDE_FILE_LEVEL_ENCRYPTION.md: start with GEODE_TS_TDE=0 to read it as plaintext, export it, and remove the graph's timeseries directory. The server log names the graph" },
+        // CANARY: REQ=REQ-SONNY-6527-LABEL-ID-SPACE; FEATURE="StorageIntegrity"; ASPECT=OperatorMessage; STATUS=TESTED; TEST=tests/test_sonny6529_abort_quarantine.zig; OWNER=storage; UPDATED=2026-11-15
+        // SONNY-6527: graph-storage 0.4.16 refuses a new label or
+        // relationship-type name once ids 0..maxInt(u32)-1 are taken (it
+        // used to wrap and reuse ids). 54000 = SQLSTATE program_limit_exceeded.
+        error.LabelIdSpaceExhausted => .{ .code = "54000", .message = "LabelIdSpaceExhausted: the graph has used every label id (4,294,967,295 label and relationship-type names), so no new name can be created; statements using existing labels and types still run. Nothing was written" },
+        // CANARY: REQ=REQ-SONNY-6529-ABORT-NOT-UNDONE; FEATURE="TransactionManagement"; ASPECT=OperatorMessage; STATUS=TESTED; TEST=tests/test_sonny6529_abort_quarantine.zig; OWNER=storage; UPDATED=2026-11-15
+        // SONNY-6529: graph-storage could not undo an aborted transaction
+        // (its writes stay in the shard's pages, which then refuse every
+        // write and checkpoint), or a commit failed after the store's
+        // in-memory copy took the writes. Nothing uncommitted reached disk.
+        error.AbortNotUndone => .{ .code = "58000", .message = "AbortNotUndone: the storage engine could not undo a transaction that was rolled back, so the graph refuses reads and writes until it is reopened; other graphs are unaffected. Committed data on disk is intact and the rolled-back writes were not made durable: restart the server to reopen the graph at its committed state. The server log names the graph and the operation" },
+        error.CommitFailed => .{ .code = "58000", .message = "CommitFailed: a transaction of the graph could not be committed to storage and was undone there, but the server's in-memory copy of the graph still held its writes, so the graph refuses reads and writes until it is reopened; other graphs are unaffected. Committed data on disk is intact: check the storage (disk full, I/O errors), then restart the server to reopen the graph at its committed state. The server log names the graph and the error" },
         else => .{ .code = "58000", .message = @errorName(err) },
     };
+}
+
+// CANARY: REQ=REQ-SONNY-6547-TRANSPORT-PARITY; FEATURE="StorageIntegrity"; ASPECT=SharedHandlerErrorAnswer; STATUS=TESTED; TEST=tests/test_sonny6547_transport_parity.zig; OWNER=transport; UPDATED=2026-11-14
+/// SONNY-6547 (1): the answer to an error a request handler did not answer
+/// itself, when the error is one the client must be told about as itself: a
+/// limit the statement ran into (`eval.isResourceLimitError`) or the
+/// storage-integrity refusal of a graph (`graph_store.GraphQuarantineError`).
+/// Null for any other error. The node-scan stream's errors were answered
+/// only for a limit and returned out of the handler otherwise, so a scan of
+/// a damaged graph failed the gRPC call and answered QUIC with the generic
+/// "Internal Server Error".
+pub fn statementErrorInfo(err: anyerror) ?ErrorInfo {
+    if (eval.isResourceLimitError(err)) return mapError(err);
+    return switch (err) {
+        error.GraphQuarantined,
+        error.ChecksumMismatch,
+        error.DataCorruption,
+        error.InvalidData,
+        error.LabelDictionaryDiverged,
+        error.AbortNotUndone,
+        error.CommitFailed,
+        error.SideFileEncrypted,
+        error.SideFileAuthFailed,
+        error.SideFileNotSealed,
+        error.TimeseriesNotEncrypted,
+        error.TimeseriesNeedsTdeKey,
+        error.EncryptionKeyMismatch,
+        error.WalCorrupted,
+        // SONNY-6605: a graph's hydration failed transiently (the graph is
+        // built again on its next access); OutOfMemory is a limit above.
+        error.SystemResources,
+        error.ProcessFdQuotaExceeded,
+        error.SystemFdQuotaExceeded,
+        error.ThreadQuotaExceeded,
+        error.LockedMemoryLimitExceeded,
+        error.NoSpaceLeft,
+        error.DiskQuota,
+        error.WouldBlock,
+        error.DeviceBusy,
+        // SONNY-6659: retryable (40001), not an internal error.
+        error.WriteConflict,
+        => mapError(err),
+        else => null,
+    };
+}
+
+/// SONNY-6547 (1): the answer both transports give to an error a request
+/// handler failed with: `statementErrorInfo`, else the generic 58000
+/// "Internal Server Error" (the error's name is logged, not sent).
+pub fn unhandledErrorInfo(err: anyerror) ErrorInfo {
+    return statementErrorInfo(err) orelse .{ .code = "58000", .message = "Internal Server Error" };
 }
 
 pub fn buildStatus(allocator: std.mem.Allocator, status_class: []const u8, flagger_findings: []const []const u8) !schema.Status {
@@ -601,21 +1006,30 @@ fn dupOrderKeys(allocator: std.mem.Allocator, keys: []const []const u8) !std.Arr
     return list;
 }
 
-/// Leading rows `inferColumnType` samples to type a column. SONNY-1221: the
-/// node-scan fast path builds exactly this many rows before its schema frame
-/// (`NodeScanStream.prefetchSchemaSample`), so both paths type a column from
-/// the same rows.
+/// Rows the node-scan fast path builds before its schema frame
+/// (`NodeScanStream.prefetchSchemaSample`, SONNY-1221). SONNY-6562: a stream
+/// those rows exhaust is typed from them exactly as the executor's result
+/// (`inferColumnType` reads every row); a longer one has not been read when
+/// the frame is sent, so its projection columns are declared ANY.
 pub const column_type_sample_rows: usize = 10;
 
+// CANARY: REQ=REQ-SONNY-6562-DECLARED-TYPE; FEATURE="ResultMetadata"; ASPECT=ColumnTypeFromAllRows; STATUS=TESTED; TEST=tests/test_sonny6562_wire_metadata.zig; OWNER=server; UPDATED=2026-11-15
+/// SONNY-6562: a column's declared type is the combination of the types of
+/// all its values (ISO/IEC 39075:2024 14.2 SR for a UNION's operands, 22.18 /
+/// 22.19; `type_helpers.combineTypeNames`): NULL when every value is null,
+/// ANY when values of different primary base types meet. It was the type of
+/// the first non-null value among the first 10 rows, so a UNION, an ORDER BY
+/// or a later row could hold a value its declared type contradicts.
 fn inferColumnType(rows: [][]value_types.Value, col_idx: usize) []const u8 {
-    const sample_size = @min(rows.len, column_type_sample_rows);
-    for (rows[0..sample_size]) |row| {
+    var declared: []const u8 = "NULL";
+    for (rows) |row| {
         if (col_idx >= row.len) continue;
         const val = row[col_idx];
         if (val == .Null) continue;
-        return type_helpers.getTypeName(val);
+        declared = type_helpers.combineTypeNames(declared, type_helpers.getTypeName(val));
+        if (std.mem.eql(u8, declared, "ANY")) break;
     }
-    return "NULL";
+    return declared;
 }
 
 pub fn valueToProto(allocator: std.mem.Allocator, value: value_types.Value) !schema.Value {
@@ -701,7 +1115,9 @@ fn nodeToProto(allocator: std.mem.Allocator, node: graph_store.Node) !schema.Nod
     var it = node.properties.iterator();
     while (it.next()) |entry| {
         const key = try allocator.dupe(u8, entry.key_ptr.*);
-        const val = try propertyValueToProto(allocator, entry.value_ptr.*);
+        // SONNY-6327: a string through the FLE read policy (RETURN n sent
+        // the stored bytes: ciphertext, to every principal).
+        const val = try entityPropertyToProto(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", node.id, node.tenant_id, entry.key_ptr.*, entry.value_ptr.*);
         try props.append(allocator, .{ .key = key, .value = val });
     }
     return .{
@@ -716,7 +1132,7 @@ fn edgeToProto(allocator: std.mem.Allocator, edge: graph_store.Edge) !schema.Edg
     var it = edge.properties.iterator();
     while (it.next()) |entry| {
         const key = try allocator.dupe(u8, entry.key_ptr.*);
-        const val = try propertyValueToProto(allocator, entry.value_ptr.*);
+        const val = try entityPropertyToProto(allocator, .edge, edge.label, edge.id, edge.tenant_id, entry.key_ptr.*, entry.value_ptr.*);
         try props.append(allocator, .{ .key = key, .value = val });
     }
     return .{
@@ -726,6 +1142,26 @@ fn edgeToProto(allocator: std.mem.Allocator, edge: graph_store.Edge) !schema.Edg
         .label = try allocator.dupe(u8, edge.label),
         .properties = props,
     };
+}
+
+// CANARY: REQ=REQ-SONNY-6327-FLE-READ-POLICY; FEATURE="FieldLevelEncryption"; ASPECT=WireEncoding; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6327: a property of a whole node, edge or path on the wire. A
+/// string goes through the shared FLE read policy for a whole entity
+/// (`fle_integration.readStoredStringForEntity`).
+fn entityPropertyToProto(
+    allocator: std.mem.Allocator,
+    kind: fle_integration.EntityKind,
+    type_name: []const u8,
+    id: u64,
+    record_tenant: []const u8,
+    key: []const u8,
+    value: graph_store.PropertyValue,
+) !schema.Value {
+    if (value == .String) {
+        const shown = try fle_integration.readStoredStringForEntity(allocator, kind, type_name, key, value.String, id, record_tenant);
+        return .{ .kind = .{ .string_val = .{ .value = shown, .kind = .STRING } } };
+    }
+    return propertyValueToProto(allocator, value);
 }
 
 fn propertyValueToProto(allocator: std.mem.Allocator, value: graph_store.PropertyValue) !schema.Value {

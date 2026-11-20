@@ -8,6 +8,8 @@ const schema = @import("schema");
 const query_runner = @import("query_runner.zig");
 
 pub const handshake_stream_id: u31 = 1;
+/// The stream of the first Execute after a HELLO on `handshake_stream_id`.
+/// Later RPCs on the same connection take later ids (`StreamIds`).
 pub const execute_stream_id: u31 = 3;
 pub const handshake_method_path = "/geode.GeodeService/Handshake";
 pub const execute_method_path = "/geode.GeodeService/Execute";
@@ -35,11 +37,64 @@ const h2_default_max_frame_size: usize = 16384;
 /// replenishment in `readResponse` for the connection-level (stream 0) window.
 const h2_client_initial_window: u32 = 16 * 1024 * 1024;
 
-/// Peer's SETTINGS_MAX_FRAME_SIZE, learned in `drainInitialSettings` and read by
-/// `sendRequest` to cap outbound DATA-frame fragmentation. Thread-local so each
-/// connection (the CLI query thread, a distributed-coordination worker) keeps
-/// its own negotiated value without a shared-state race.
-threadlocal var tl_peer_max_frame_size: usize = h2_default_max_frame_size;
+/// RFC 9113 §6.9.2: every flow-control window starts at 65,535 octets.
+const h2_default_window: u32 = 65_535;
+
+// CANARY: REQ=REQ-SONNY-6607-GRPC-FRAME-SIZE; FEATURE="GrpcTransport"; ASPECT=PerConnectionMaxFrameSize; STATUS=TESTED; TEST=tests/test_sonny6607_grpc_frame_size.zig; OWNER=transport; UPDATED=2026-11-15
+/// Peer's SETTINGS_MAX_FRAME_SIZE per connection (keyed by its socket),
+/// learned in `drainInitialSettings` / `readResponse` and read by
+/// `sendRequest` to cap outbound DATA-frame fragmentation. SONNY-6607 (5): it
+/// was a thread-local, so two connections used from one thread shared it,
+/// and a request on one went out in frames sized by the other's peer (a
+/// FRAME_SIZE_ERROR). A connection with no entry (none learned, or the
+/// entry could not be stored) uses the default every peer accepts.
+var peer_frame_sizes: std.AutoHashMapUnmanaged(std.posix.socket_t, usize) = .empty;
+var peer_frame_sizes_mutex: std.Io.Mutex = .init;
+
+fn frameSizesIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
+fn peerMaxFrameSize(stream: std.Io.net.Stream) usize {
+    peer_frame_sizes_mutex.lockUncancelable(frameSizesIo());
+    defer peer_frame_sizes_mutex.unlock(frameSizesIo());
+    return peer_frame_sizes.get(stream.socket.handle) orelse h2_default_max_frame_size;
+}
+
+fn setPeerMaxFrameSize(stream: std.Io.net.Stream, size: ?usize) void {
+    peer_frame_sizes_mutex.lockUncancelable(frameSizesIo());
+    defer peer_frame_sizes_mutex.unlock(frameSizesIo());
+    const v = size orelse {
+        _ = peer_frame_sizes.remove(stream.socket.handle);
+        return;
+    };
+    // Process-lifetime map (one small entry per open socket handle, reused
+    // with the handle). Out of memory: the default, which is always safe.
+    peer_frame_sizes.put(std.heap.smp_allocator, stream.socket.handle, v) catch {
+        _ = peer_frame_sizes.remove(stream.socket.handle);
+    };
+}
+
+// CANARY: REQ=REQ-SONNY-6567-GRPC-STREAM-IDS; FEATURE="GrpcTransport"; ASPECT=StreamIdAllocation; STATUS=TESTED; TEST=tests/test_sonny6567_grpc_stream_ids.zig; OWNER=transport; UPDATED=2026-11-14
+/// SONNY-6567 (1): the client stream ids of ONE connection. RFC 9113 §5.1.1:
+/// a client opens streams with odd ids that only increase, and never reuses
+/// one. Every Execute rode stream 3, so the second Execute on a connection
+/// reused a closed stream and the server refused it (the client saw
+/// `IncompleteResponse`). Keep one `StreamIds` per connection and take an id
+/// for every RPC. Ids run out after 2^30 RPCs: `take` then fails with
+/// `StreamIdsExhausted` (it never wraps), and the caller opens a new
+/// connection.
+pub const StreamIds = struct {
+    /// The next id to hand out; > maxInt(u31) once they are exhausted.
+    next: u32 = handshake_stream_id,
+
+    pub fn take(self: *StreamIds) error{StreamIdsExhausted}!u31 {
+        if (self.next > std.math.maxInt(u31)) return error.StreamIdsExhausted;
+        const id: u31 = @intCast(self.next);
+        self.next += 2;
+        return id;
+    }
+};
 
 pub const ProgressHooks = struct {
     on_progress: ?*const fn () void = null,
@@ -96,9 +151,9 @@ pub fn connectPlaintext(
     errdefer stream.close(io);
 
     setSocketTimeouts(stream, timeout_secs);
-    // Reset the negotiated peer frame size for this (thread's) connection; it is
-    // refined below when the peer's SETTINGS arrive.
-    tl_peer_max_frame_size = h2_default_max_frame_size;
+    // A new connection (on a socket handle an earlier one may have used)
+    // starts at the default; refined when the peer's SETTINGS arrive.
+    setPeerMaxFrameSize(stream, null);
     try writeAll(stream, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
     // Advertise a large receive window so a big streamed response is not stalled
     // by the 65535-byte default per-stream window (RFC 7540 §6.9.2). Connection-
@@ -106,6 +161,13 @@ pub fn connectPlaintext(
     var settings_payload: [6]u8 = undefined;
     writeSetting(&settings_payload, H2_SETTINGS_INITIAL_WINDOW_SIZE, h2_client_initial_window);
     try writeFrame(stream, H2_SETTINGS, 0, 0, &settings_payload);
+    // SONNY-6567 (1): SETTINGS_INITIAL_WINDOW_SIZE raises the STREAM windows
+    // only; the CONNECTION window stays at 65,535 until a WINDOW_UPDATE on
+    // stream 0 (RFC 9113 §6.9.2). The server cannot read the WINDOW_UPDATEs
+    // `readResponse` sends while it pushes a result (grpc-zig reads only
+    // between RPCs, SONNY-1560), so a result over 64 KiB was refused after
+    // its first pages. Raise it to the stream window up front.
+    try sendWindowUpdate(stream, 0, h2_client_initial_window - h2_default_window);
     try drainInitialSettings(allocator, stream, hooks);
     return stream;
 }
@@ -121,10 +183,10 @@ fn writeSetting(dest: *[6]u8, id: u16, value: u32) void {
 }
 
 /// Parse a SETTINGS frame payload and apply the peer's SETTINGS_MAX_FRAME_SIZE
-/// to `tl_peer_max_frame_size`, so `sendRequest` can split an oversized request
-/// into frames the peer will accept. Malformed/partial payloads are ignored
-/// (the default stays in effect).
-fn applyPeerSettings(payload: []const u8) void {
+/// to this connection (`stream`), so `sendRequest` can split an oversized
+/// request into frames the peer will accept. Malformed/partial payloads are
+/// ignored (the default stays in effect).
+fn applyPeerSettings(stream: std.Io.net.Stream, payload: []const u8) void {
     var i: usize = 0;
     while (i + 6 <= payload.len) : (i += 6) {
         const id = (@as(u16, payload[i]) << 8) | @as(u16, payload[i + 1]);
@@ -137,7 +199,7 @@ fn applyPeerSettings(payload: []const u8) void {
             // default (a smaller value would be a peer protocol violation, and a
             // smaller split gains nothing).
             const clamped = @max(@as(usize, value), h2_default_max_frame_size);
-            tl_peer_max_frame_size = @min(clamped, @as(usize, 16_777_215));
+            setPeerMaxFrameSize(stream, @min(clamped, @as(usize, 16_777_215)));
         }
     }
 }
@@ -158,7 +220,7 @@ pub fn drainInitialSettings(
             got_settings_ack = true;
         } else {
             // The peer's own SETTINGS: learn its MAX_FRAME_SIZE, then ACK.
-            applyPeerSettings(frame.payload);
+            applyPeerSettings(stream, frame.payload);
             try writeFrame(stream, H2_SETTINGS, 0x1, 0, &.{});
         }
     }
@@ -287,7 +349,7 @@ pub fn sendRequest(
     // as one oversized frame drew a spec-correct FRAME_SIZE_ERROR from the server
     // and looked like a bogus TLS reset to the caller. END_STREAM rides ONLY the
     // final frame; the gRPC message boundary is the whole reassembled byte run.
-    const chunk_size = @max(tl_peer_max_frame_size, @as(usize, 1));
+    const chunk_size = @max(peerMaxFrameSize(stream), @as(usize, 1));
     var offset: usize = 0;
     if (grpc_frame.len == 0) {
         // Degenerate: still send an empty END_STREAM DATA frame.
@@ -330,6 +392,19 @@ pub fn readResponse(
     stream: std.Io.net.Stream,
     hooks: ProgressHooks,
 ) !?[]u8 {
+    return readResponseOn(allocator, stream, null, hooks);
+}
+
+/// `readResponse` for the RPC on stream `stream_id`: a DATA, HEADERS or
+/// RST_STREAM frame of any other stream (a late frame of an RPC already
+/// answered) is skipped, never taken for this RPC's. Null `stream_id`
+/// accepts every stream.
+pub fn readResponseOn(
+    allocator: std.mem.Allocator,
+    stream: std.Io.net.Stream,
+    stream_id: ?u31,
+    hooks: ProgressHooks,
+) !?[]u8 {
     var msg_buf: std.ArrayList(u8) = .empty;
     defer msg_buf.deinit(allocator);
 
@@ -341,6 +416,16 @@ pub fn readResponse(
         const frame_type = frame.frame_type;
         const flags = frame.flags;
         const payload = frame.payload;
+
+        if (stream_id) |want| {
+            const per_stream = frame_type == H2_DATA or frame_type == H2_HEADERS or frame_type == H2_RST_STREAM;
+            if (per_stream and frame.stream_id != want) {
+                // Connection-level credit is still owed for DATA bytes.
+                if (frame_type == H2_DATA and payload.len > 0) sendWindowUpdate(stream, 0, @intCast(payload.len)) catch {};
+                allocator.free(payload);
+                continue;
+            }
+        }
 
         if (frame_type == H2_DATA) {
             if (payload.len > 0) {
@@ -384,7 +469,7 @@ pub fn readResponse(
 
         if (frame_type == H2_SETTINGS) {
             if ((flags & 0x1) == 0) {
-                applyPeerSettings(payload);
+                applyPeerSettings(stream, payload);
                 try writeFrame(stream, H2_SETTINGS, 0x1, 0, &.{});
             }
             allocator.free(payload);
@@ -441,6 +526,18 @@ pub fn hello(
     options: HelloOptions,
     hooks: ProgressHooks,
 ) !schema.HelloResponse {
+    return helloOn(allocator, stream, handshake_stream_id, options, hooks);
+}
+
+/// `hello` on stream `stream_id` (taken from the connection's `StreamIds`),
+/// for a connection that runs more than one HELLO.
+pub fn helloOn(
+    allocator: std.mem.Allocator,
+    stream: std.Io.net.Stream,
+    stream_id: u31,
+    options: HelloOptions,
+    hooks: ProgressHooks,
+) !schema.HelloResponse {
     const hello_req = schema.HelloRequest{
         .username = options.username orelse "",
         .password = options.password orelse "",
@@ -449,9 +546,9 @@ pub fn hello(
     };
     const hello_bytes = try encodeMessage(allocator, hello_req);
     defer allocator.free(hello_bytes);
-    try sendRequest(allocator, stream, handshake_method_path, hello_bytes, handshake_stream_id);
+    try sendRequest(allocator, stream, handshake_method_path, hello_bytes, stream_id);
 
-    const hello_resp_bytes = try readResponse(allocator, stream, hooks) orelse return error.EmptyHandshakeResponse;
+    const hello_resp_bytes = try readResponseOn(allocator, stream, stream_id, hooks) orelse return error.EmptyHandshakeResponse;
     defer allocator.free(hello_resp_bytes);
 
     var reader: std.Io.Reader = .fixed(hello_resp_bytes);
@@ -461,6 +558,13 @@ pub fn hello(
 pub const StreamingQueryAdapter = struct {
     stream: std.Io.net.Stream,
     hooks: ProgressHooks = .{},
+    /// The connection's stream ids (SONNY-6567 (1)). Null: the adapter keeps
+    /// its own, starting at `execute_stream_id`, for a connection whose only
+    /// other RPC is one HELLO on `handshake_stream_id` (the CLI).
+    stream_ids: ?*StreamIds = null,
+    own_stream_ids: StreamIds = .{ .next = execute_stream_id },
+    /// The stream of the Execute in flight.
+    current_stream_id: u31 = execute_stream_id,
 
     pub fn asTransport(self: *@This()) query_runner.QueryTransport {
         return .{
@@ -484,7 +588,9 @@ pub const StreamingQueryAdapter = struct {
         };
         const exec_bytes = try encodeMessage(allocator, exec_req);
         defer allocator.free(exec_bytes);
-        try sendRequest(allocator, self.stream, execute_method_path, exec_bytes, execute_stream_id);
+        const ids = self.stream_ids orelse &self.own_stream_ids;
+        self.current_stream_id = try ids.take();
+        try sendRequest(allocator, self.stream, execute_method_path, exec_bytes, self.current_stream_id);
     }
 
     fn nextEvent(
@@ -494,7 +600,7 @@ pub const StreamingQueryAdapter = struct {
     ) !?query_runner.QueryEvent {
         _ = timeout_secs;
         const self: *@This() = @ptrCast(@alignCast(query_transport.context));
-        const resp_bytes = try readResponse(allocator, self.stream, self.hooks) orelse return null;
+        const resp_bytes = try readResponseOn(allocator, self.stream, self.current_stream_id, self.hooks) orelse return null;
         defer allocator.free(resp_bytes);
         var reader: std.Io.Reader = .fixed(resp_bytes);
         const exec_resp = try protobuf.decode(schema.ExecutionResponse, &reader, allocator);

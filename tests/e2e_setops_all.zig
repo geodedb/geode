@@ -1,12 +1,16 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const proto_util = @import("proto_test_util.zig");
 
 fn run(server: []const u8, gql: []const u8) !struct { code: i32, out: []u8, err: []u8 } {
-    return cli_test_util.runAgainstServer(std.testing.allocator, server, &.{ "./zig-out/bin/geode", "query", gql });
+    return cli_test_util.runAgainstServer(std.testing.allocator, server, &.{ geode_test_bin.geode_exe, "query", gql });
 }
 
 test "INTERSECT ALL trivial one" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var server = try proto_util.spawnServerRandom(std.testing.allocator, proto_util.TestEnv.standard());
     defer server.deinit();
     const r = try run(server.getAddr(), "RETURN 1 AS x INTERSECT ALL RETURN 1 AS x");
@@ -17,6 +21,8 @@ test "INTERSECT ALL trivial one" {
 }
 
 test "EXCEPT ALL subtract multiplicity simple chain" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var server = try proto_util.spawnServerRandom(std.testing.allocator, proto_util.TestEnv.standard());
     defer server.deinit();
     // (1 UNION ALL 1) EXCEPT ALL 1 => one 1 remains

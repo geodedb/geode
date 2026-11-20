@@ -17,12 +17,115 @@ pub const Severity = enum {
 };
 
 pub const Recommendation = struct {
+    /// 0-based line and byte column of `anchor` in the analysed source
+    /// (`analyzeSource`); 0, 0 from `analyze`, which has no source.
     line: u32,
     column: u32,
     severity: Severity,
     code: []const u8,
     message: []const u8,
+    /// SONNY-6511: the source token the recommendation is about (a property
+    /// or field name, `count`, or the `*` of a variable-length path),
+    /// borrowed from the AST. The AST carries no source positions, so
+    /// `analyzeSource` finds the token in the source text.
+    anchor: []const u8 = "",
+    /// Byte column one past the anchor on `line` (the anchor is one token).
+    end_column: u32 = 0,
 };
+
+/// A one-line source range: 0-based line, byte columns [column, end_column).
+pub const SourceSpan = struct {
+    line: u32,
+    column: u32,
+    end_column: u32,
+};
+
+fn isWordByte(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_' or c >= 0x80;
+}
+
+/// SONNY-6511: the `nth` (0-based) occurrence of `token` in `source` outside
+/// string literals and comments, compared ASCII case-insensitively; a word
+/// token must be a whole word. An empty `token` finds the first byte that is
+/// not whitespace or comment (the start of the first statement).
+pub fn locate(source: []const u8, token: []const u8, nth: usize) ?SourceSpan {
+    const word = token.len > 0 and isWordByte(token[0]);
+    var seen: usize = 0;
+    var line: u32 = 0;
+    var line_start: usize = 0;
+    var i: usize = 0;
+    while (i < source.len) {
+        const c = source[i];
+        if (c == '\n') {
+            line += 1;
+            i += 1;
+            line_start = i;
+            continue;
+        }
+        // Comments: // and -- to the end of the line, /* ... */.
+        if (i + 1 < source.len and ((c == '/' and source[i + 1] == '/') or (c == '-' and source[i + 1] == '-'))) {
+            while (i < source.len and source[i] != '\n') i += 1;
+            continue;
+        }
+        if (i + 1 < source.len and c == '/' and source[i + 1] == '*') {
+            i += 2;
+            while (i < source.len and !(source[i] == '*' and i + 1 < source.len and source[i + 1] == '/')) {
+                if (source[i] == '\n') {
+                    line += 1;
+                    line_start = i + 1;
+                }
+                i += 1;
+            }
+            i = @min(source.len, i + 2);
+            continue;
+        }
+        // String literals: '...' and "...", with backslash escapes and
+        // doubled quotes.
+        if (c == '\'' or c == '"') {
+            i += 1;
+            while (i < source.len) {
+                if (source[i] == '\\') {
+                    i += 2;
+                    continue;
+                }
+                if (source[i] == '\n') {
+                    line += 1;
+                    line_start = i + 1;
+                }
+                if (source[i] == c) {
+                    if (i + 1 < source.len and source[i + 1] == c) {
+                        i += 2;
+                        continue;
+                    }
+                    break;
+                }
+                i += 1;
+            }
+            i += 1;
+            continue;
+        }
+        if (std.ascii.isWhitespace(c)) {
+            i += 1;
+            continue;
+        }
+        if (token.len == 0) return .{ .line = line, .column = @intCast(i - line_start), .end_column = @intCast(i - line_start) };
+        const fits = i + token.len <= source.len and std.ascii.eqlIgnoreCase(source[i .. i + token.len], token);
+        const bounded = !word or ((i == 0 or !isWordByte(source[i - 1])) and (i + token.len == source.len or !isWordByte(source[i + token.len])));
+        if (fits and bounded) {
+            if (seen == nth) return .{ .line = line, .column = @intCast(i - line_start), .end_column = @intCast(i + token.len - line_start) };
+            seen += 1;
+            i += token.len;
+            continue;
+        }
+        // Step over the rest of a word so a token never matches inside one.
+        if (isWordByte(c)) {
+            while (i < source.len and isWordByte(source[i])) i += 1;
+        } else {
+            i += 1;
+        }
+    }
+    return null;
+}
 
 /// Maps variable names to their labels from graph patterns.
 const LabelMap = std.StringHashMap([]const u8);
@@ -38,14 +141,47 @@ pub const RecommendationEngine = struct {
         };
     }
 
+    /// Frees every recommendation's `message` (the engine owns them all)
+    /// and the result list. Slices returned by `analyze` are invalid after.
     pub fn deinit(self: *RecommendationEngine) void {
+        for (self.results.items) |rec| self.allocator.free(rec.message);
         self.results.deinit(self.allocator);
+    }
+
+    /// SONNY-6484: `rec.message` is heap-allocated with `self.allocator`;
+    /// the engine takes ownership (freed by `deinit`, or here if the
+    /// append fails).
+    fn appendOwned(self: *RecommendationEngine, rec: Recommendation) !void {
+        errdefer self.allocator.free(rec.message);
+        try self.results.append(self.allocator, rec);
     }
 
     /// Analyze a parsed program and return recommendations.
     pub fn analyze(self: *RecommendationEngine, program: ast.Program) ![]const Recommendation {
         for (program.statements) |stmt| {
             try self.analyzeStatement(stmt);
+        }
+        return self.results.items;
+    }
+
+    /// SONNY-6511: `analyze`, then place each recommendation on its anchor
+    /// in `source` (the text `program` was parsed from): the n-th
+    /// recommendation naming an anchor goes to the anchor's n-th whole-word
+    /// occurrence outside string literals and comments. One whose anchor is
+    /// not found goes to the start of the first statement (the AST has no
+    /// statement positions either).
+    pub fn analyzeSource(self: *RecommendationEngine, program: ast.Program, source: []const u8) ![]const Recommendation {
+        _ = try self.analyze(program);
+        const fallback = locate(source, "", 0) orelse SourceSpan{ .line = 0, .column = 0, .end_column = 0 };
+        for (self.results.items, 0..) |*rec, i| {
+            var nth: usize = 0;
+            for (self.results.items[0..i]) |prev| {
+                if (std.ascii.eqlIgnoreCase(prev.anchor, rec.anchor)) nth += 1;
+            }
+            const span = (if (rec.anchor.len > 0) locate(source, rec.anchor, nth) else null) orelse fallback;
+            rec.line = span.line;
+            rec.column = span.column;
+            rec.end_column = span.end_column;
         }
         return self.results.items;
     }
@@ -80,19 +216,23 @@ pub const RecommendationEngine = struct {
             try self.walkExprForIndexHints(where, &label_map);
             try self.walkExprForCoalesce(where);
         }
+        if (query.filter_clause) |filter| {
+            try self.walkExprForIndexHints(filter, &label_map);
+            try self.walkExprForCoalesce(filter);
+        }
 
         // Check ORDER BY for index suggestions
         if (query.order_by) |ob| {
             for (ob.keys) |key| {
-                if (key.expr == .PropertyAccess) {
-                    const pa = key.expr.PropertyAccess;
+                if (propertyRef(key.expr)) |pa| {
                     const label = label_map.get(pa.object) orelse "Label";
                     const msg = try std.fmt.allocPrint(self.allocator, "Consider creating a btree index for ORDER BY: CREATE INDEX ON :{s}({s})", .{ label, pa.property });
-                    try self.results.append(self.allocator, .{
+                    try self.appendOwned(.{
                         .line = 0,
                         .column = 0,
                         .severity = .hint,
                         .code = "geode/suggest-index",
+                        .anchor = pa.property,
                         .message = msg,
                     });
                 }
@@ -109,12 +249,13 @@ pub const RecommendationEngine = struct {
             for (chain.hops) |hop| {
                 if (hop.rel.min_len != null or hop.rel.max_len != null) {
                     if (chain.path_mode == .walk and !chain.is_shortest) {
-                        try self.results.append(self.allocator, .{
+                        try self.appendOwned(.{
                             .line = 0,
                             .column = 0,
                             .severity = .information,
                             .code = "geode/suggest-path-mode",
-                            .message = "Variable-length path detected. Consider using a path mode (TRAIL, ACYCLIC, SIMPLE) or shortestPath() for deterministic traversal.",
+                            .anchor = "*",
+                            .message = try self.allocator.dupe(u8, "Variable-length path detected. Consider using a path mode (TRAIL, ACYCLIC, SIMPLE) or shortestPath() for deterministic traversal."),
                         });
                     }
                 }
@@ -148,21 +289,23 @@ pub const RecommendationEngine = struct {
                 switch (level) {
                     .high => {
                         const msg = try std.fmt.allocPrint(self.allocator, "Property '{s}' may contain sensitive data. Consider using @encrypted annotation for field-level encryption.", .{prop.key});
-                        try self.results.append(self.allocator, .{
+                        try self.appendOwned(.{
                             .line = 0,
                             .column = 0,
                             .severity = .information,
                             .code = "geode/suggest-encrypted",
+                            .anchor = prop.key,
                             .message = msg,
                         });
                     },
                     .medium => {
                         const msg = try std.fmt.allocPrint(self.allocator, "Property '{s}' may contain personal data. Consider using @searchable annotation for encrypted but searchable storage.", .{prop.key});
-                        try self.results.append(self.allocator, .{
+                        try self.appendOwned(.{
                             .line = 0,
                             .column = 0,
                             .severity = .hint,
                             .code = "geode/suggest-searchable",
+                            .anchor = prop.key,
                             .message = msg,
                         });
                     },
@@ -176,11 +319,12 @@ pub const RecommendationEngine = struct {
                     if (node.labels.len > 0) node.labels[0] else "Label",
                     prop.key,
                 });
-                try self.results.append(self.allocator, .{
+                try self.appendOwned(.{
                     .line = 0,
                     .column = 0,
                     .severity = .hint,
                     .code = "geode/suggest-vector-index",
+                    .anchor = prop.key,
                     .message = msg,
                 });
             }
@@ -206,21 +350,23 @@ pub const RecommendationEngine = struct {
                 switch (level) {
                     .high => {
                         const msg = try std.fmt.allocPrint(self.allocator, "Field '{s}' in graph type '{s}' may contain sensitive data. Consider adding @encrypted annotation.", .{ field.name, cgt.name });
-                        try self.results.append(self.allocator, .{
+                        try self.appendOwned(.{
                             .line = 0,
                             .column = 0,
                             .severity = .information,
                             .code = "geode/suggest-encrypted",
+                            .anchor = field.name,
                             .message = msg,
                         });
                     },
                     .medium => {
                         const msg = try std.fmt.allocPrint(self.allocator, "Field '{s}' in graph type '{s}' may contain personal data. Consider adding @searchable annotation.", .{ field.name, cgt.name });
-                        try self.results.append(self.allocator, .{
+                        try self.appendOwned(.{
                             .line = 0,
                             .column = 0,
                             .severity = .hint,
                             .code = "geode/suggest-searchable",
+                            .anchor = field.name,
                             .message = msg,
                         });
                     },
@@ -234,26 +380,26 @@ pub const RecommendationEngine = struct {
             .Binary => |bin| {
                 if (bin.op == .Eq) {
                     // Check if one side is PropertyAccess
-                    if (bin.left.* == .PropertyAccess) {
-                        const pa = bin.left.PropertyAccess;
+                    if (propertyRef(bin.left.*)) |pa| {
                         const label = label_map.get(pa.object) orelse "Label";
                         const msg = try std.fmt.allocPrint(self.allocator, "Consider creating an index for faster lookups: CREATE INDEX ON :{s}({s})", .{ label, pa.property });
-                        try self.results.append(self.allocator, .{
+                        try self.appendOwned(.{
                             .line = 0,
                             .column = 0,
                             .severity = .hint,
                             .code = "geode/suggest-index",
+                            .anchor = pa.property,
                             .message = msg,
                         });
-                    } else if (bin.right.* == .PropertyAccess) {
-                        const pa = bin.right.PropertyAccess;
+                    } else if (propertyRef(bin.right.*)) |pa| {
                         const label = label_map.get(pa.object) orelse "Label";
                         const msg = try std.fmt.allocPrint(self.allocator, "Consider creating an index for faster lookups: CREATE INDEX ON :{s}({s})", .{ label, pa.property });
-                        try self.results.append(self.allocator, .{
+                        try self.appendOwned(.{
                             .line = 0,
                             .column = 0,
                             .severity = .hint,
                             .code = "geode/suggest-index",
+                            .anchor = pa.property,
                             .message = msg,
                         });
                     }
@@ -263,29 +409,29 @@ pub const RecommendationEngine = struct {
                 try self.walkExprForIndexHints(bin.right.*, label_map);
             },
             .Contains => |c| {
-                if (c.value.* == .PropertyAccess) {
-                    const pa = c.value.PropertyAccess;
+                if (propertyRef(c.value.*)) |pa| {
                     const label = label_map.get(pa.object) orelse "Label";
                     const msg = try std.fmt.allocPrint(self.allocator, "CONTAINS on '{s}' may benefit from a fulltext index: CREATE FULLTEXT INDEX ON :{s}({s})", .{ pa.property, label, pa.property });
-                    try self.results.append(self.allocator, .{
+                    try self.appendOwned(.{
                         .line = 0,
                         .column = 0,
                         .severity = .hint,
                         .code = "geode/suggest-fulltext-index",
+                        .anchor = pa.property,
                         .message = msg,
                     });
                 }
             },
             .StartsWith => |sw| {
-                if (sw.value.* == .PropertyAccess) {
-                    const pa = sw.value.PropertyAccess;
+                if (propertyRef(sw.value.*)) |pa| {
                     const label = label_map.get(pa.object) orelse "Label";
                     const msg = try std.fmt.allocPrint(self.allocator, "STARTS WITH on '{s}' may benefit from a fulltext index: CREATE FULLTEXT INDEX ON :{s}({s})", .{ pa.property, label, pa.property });
-                    try self.results.append(self.allocator, .{
+                    try self.appendOwned(.{
                         .line = 0,
                         .column = 0,
                         .severity = .hint,
                         .code = "geode/suggest-fulltext-index",
+                        .anchor = pa.property,
                         .message = msg,
                     });
                 }
@@ -298,14 +444,14 @@ pub const RecommendationEngine = struct {
         switch (expr) {
             .IsNull => |is_null| {
                 if (!is_null.negated) {
-                    if (is_null.target.* == .PropertyAccess) {
-                        const pa = is_null.target.PropertyAccess;
+                    if (propertyRef(is_null.target.*)) |pa| {
                         const msg = try std.fmt.allocPrint(self.allocator, "Consider using coalesce({s}.{s}, default_value) as an alternative to IS NULL checks.", .{ pa.object, pa.property });
-                        try self.results.append(self.allocator, .{
+                        try self.appendOwned(.{
                             .line = 0,
                             .column = 0,
                             .severity = .hint,
                             .code = "geode/suggest-coalesce",
+                            .anchor = pa.property,
                             .message = msg,
                         });
                     }
@@ -328,12 +474,13 @@ pub const RecommendationEngine = struct {
                     const name = call.callee.Ident.orig;
                     if (std.ascii.eqlIgnoreCase(name, "count") and call.args.len == 1) {
                         if (call.args[0].* == .Ident and !std.mem.eql(u8, call.args[0].Ident.orig, "*")) {
-                            try self.results.append(self.allocator, .{
+                            try self.appendOwned(.{
                                 .line = 0,
                                 .column = 0,
                                 .severity = .hint,
                                 .code = "geode/suggest-degree",
-                                .message = "count() on a relationship variable may be replaceable with indegree()/outdegree() or algo.degree.stream for better performance.",
+                                .anchor = "count",
+                                .message = try self.allocator.dupe(u8, "count() on a relationship variable may be replaceable with indegree()/outdegree() or algo.degree.stream for better performance."),
                             });
                         }
                     }
@@ -376,6 +523,19 @@ fn isVectorPropertyName(name: []const u8) bool {
     return false;
 }
 
+const PropertyRef = struct { object: []const u8, property: []const u8 };
+
+/// SONNY-6494: the parser writes `n.prop` as `.Member` on an `.Ident`
+/// target; `.PropertyAccess` is built only by internal rewrites. Matching
+/// `.PropertyAccess` alone left every WHERE / ORDER BY recommendation dead.
+fn propertyRef(expr: ast.Expr) ?PropertyRef {
+    return switch (expr) {
+        .PropertyAccess => |pa| .{ .object = pa.object, .property = pa.property },
+        .Member => |m| if (m.target.* == .Ident) .{ .object = m.target.Ident.orig, .property = m.field } else null,
+        else => null,
+    };
+}
+
 /// Collect variable→label mapping from a GraphPattern.
 fn collectLabelVariableMap(pattern: ast.GraphPattern, map: *LabelMap) void {
     for (pattern.chains) |chain| {
@@ -401,7 +561,7 @@ fn addNodeToLabelMap(node: ast.NodePattern, map: *LabelMap) void {
 
 const geode = @import("../lib.zig");
 
-test "recommend encrypted for password property" {
+test "recommendations: recommend encrypted for password property" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("CREATE (u:User {password: 'x'})", allocator);
     defer result.deinit();
@@ -413,7 +573,7 @@ test "recommend encrypted for password property" {
     try std.testing.expectEqualStrings("geode/suggest-encrypted", recs[0].code);
 }
 
-test "recommend searchable for email property" {
+test "recommendations: recommend searchable for email property" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("INSERT (u:User {email: 'a@b.com'})", allocator);
     defer result.deinit();
@@ -425,7 +585,7 @@ test "recommend searchable for email property" {
     try std.testing.expectEqualStrings("geode/suggest-searchable", recs[0].code);
 }
 
-test "no recommendation for non-sensitive properties" {
+test "recommendations: no recommendation for non-sensitive properties" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("CREATE (p:Product {price: 9.99})", allocator);
     defer result.deinit();
@@ -436,7 +596,7 @@ test "no recommendation for non-sensitive properties" {
     try std.testing.expectEqual(@as(usize, 0), recs.len);
 }
 
-test "recommend index for WHERE equality" {
+test "recommendations: recommend index for WHERE equality" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("MATCH (n:Person) WHERE n.email = 'x' RETURN n", allocator);
     defer result.deinit();
@@ -452,7 +612,7 @@ test "recommend index for WHERE equality" {
     try std.testing.expect(found_index);
 }
 
-test "recommend fulltext for CONTAINS" {
+test "recommendations: recommend fulltext for CONTAINS" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("MATCH (n:Article) WHERE n.content CONTAINS 'x' RETURN n", allocator);
     defer result.deinit();
@@ -468,7 +628,7 @@ test "recommend fulltext for CONTAINS" {
     try std.testing.expect(found);
 }
 
-test "recommend vector index for embedding property" {
+test "recommendations: recommend vector index for embedding property" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("CREATE (d:Doc {embedding: [1.0]})", allocator);
     defer result.deinit();
@@ -484,7 +644,7 @@ test "recommend vector index for embedding property" {
     try std.testing.expect(found);
 }
 
-test "recommend path mode for variable-length path" {
+test "recommendations: recommend path mode for variable-length path" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("MATCH (a)-[*1..5]->(b) RETURN a", allocator);
     defer result.deinit();
@@ -500,7 +660,7 @@ test "recommend path mode for variable-length path" {
     try std.testing.expect(found);
 }
 
-test "recommend coalesce for IS NULL" {
+test "recommendations: recommend coalesce for IS NULL" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("MATCH (n:Person) WHERE n.nick IS NULL RETURN n", allocator);
     defer result.deinit();
@@ -516,7 +676,7 @@ test "recommend coalesce for IS NULL" {
     try std.testing.expect(found);
 }
 
-test "recommend degree for count relationship" {
+test "recommendations: recommend degree for count relationship" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("MATCH (n)-[r]->() RETURN n, count(r)", allocator);
     defer result.deinit();
@@ -532,7 +692,7 @@ test "recommend degree for count relationship" {
     try std.testing.expect(found);
 }
 
-test "multiple recommendations for multiple patterns" {
+test "recommendations: multiple recommendations for multiple patterns" {
     const allocator = std.testing.allocator;
     var result = try geode.parseGql("MATCH (u:User) WHERE u.email = 'x' RETURN u", allocator);
     defer result.deinit();
@@ -544,9 +704,9 @@ test "multiple recommendations for multiple patterns" {
     try std.testing.expect(recs.len >= 1);
 }
 
-test "recommend encrypted in graph type fields" {
+test "recommendations: recommend encrypted in graph type fields" {
     const allocator = std.testing.allocator;
-    var result = try geode.parseGql("CREATE GRAPH TYPE T (password STRING)", allocator);
+    var result = try geode.parseGql("CREATE GRAPH TYPE T AS { password text }", allocator);
     defer result.deinit();
 
     var engine = RecommendationEngine.init(allocator);
@@ -556,9 +716,9 @@ test "recommend encrypted in graph type fields" {
     try std.testing.expectEqualStrings("geode/suggest-encrypted", recs[0].code);
 }
 
-test "skip recommendation when annotation already present" {
+test "recommendations: skip recommendation when annotation already present" {
     const allocator = std.testing.allocator;
-    var result = try geode.parseGql("CREATE GRAPH TYPE T (password STRING @encrypted)", allocator);
+    var result = try geode.parseGql("CREATE GRAPH TYPE T AS { ssn text @encrypted }", allocator);
     defer result.deinit();
 
     var engine = RecommendationEngine.init(allocator);
@@ -568,26 +728,56 @@ test "skip recommendation when annotation already present" {
     for (recs) |rec| {
         if (std.mem.eql(u8, rec.code, "geode/suggest-encrypted")) {
             // If there's a recommendation for encrypted, it should not be for 'password'
-            try std.testing.expect(std.mem.indexOf(u8, rec.message, "'password'") == null);
+            try std.testing.expect(std.mem.indexOf(u8, rec.message, "'ssn'") == null);
         }
     }
 }
 
-test "isSensitivePropertyName detects high sensitivity" {
+test "recommendations: isSensitivePropertyName detects high sensitivity" {
     try std.testing.expect(isSensitivePropertyName("password") == .high);
     try std.testing.expect(isSensitivePropertyName("PASSWORD") == .high);
     try std.testing.expect(isSensitivePropertyName("api_key") == .high);
     try std.testing.expect(isSensitivePropertyName("ssn") == .high);
 }
 
-test "isSensitivePropertyName detects medium sensitivity" {
+test "recommendations: isSensitivePropertyName detects medium sensitivity" {
     try std.testing.expect(isSensitivePropertyName("email") == .medium);
     try std.testing.expect(isSensitivePropertyName("phone") == .medium);
     try std.testing.expect(isSensitivePropertyName("address") == .medium);
 }
 
-test "isSensitivePropertyName returns null for non-sensitive" {
+test "recommendations: isSensitivePropertyName returns null for non-sensitive" {
     try std.testing.expect(isSensitivePropertyName("name") == null);
     try std.testing.expect(isSensitivePropertyName("price") == null);
     try std.testing.expect(isSensitivePropertyName("count") == null);
+}
+
+fn expectCode(src: []const u8, code: []const u8, needle: []const u8) !void {
+    const allocator = std.testing.allocator;
+    var result = try geode.parseGql(src, allocator);
+    defer result.deinit();
+
+    var engine = RecommendationEngine.init(allocator);
+    defer engine.deinit();
+    const recs = try engine.analyze(result.program);
+    for (recs) |rec| {
+        if (std.mem.eql(u8, rec.code, code) and std.mem.indexOf(u8, rec.message, needle) != null) return;
+    }
+    return error.TestExpectedRecommendation;
+}
+
+test "recommendations: index for ORDER BY property names the label" {
+    try expectCode("MATCH (n:Person) RETURN n ORDER BY n.age", "geode/suggest-index", "CREATE INDEX ON :Person(age)");
+}
+
+test "recommendations: index for FILTER equality" {
+    try expectCode("MATCH (n:Person) FILTER n.age = 30 RETURN n", "geode/suggest-index", "CREATE INDEX ON :Person(age)");
+}
+
+test "recommendations: fulltext for STARTS WITH" {
+    try expectCode("MATCH (n:Article) WHERE n.title STARTS WITH 'x' RETURN n", "geode/suggest-fulltext-index", "STARTS WITH on 'title'");
+}
+
+test "recommendations: WHERE equality names the matched label and property" {
+    try expectCode("MATCH (n:Person) WHERE n.age = 30 RETURN n", "geode/suggest-index", "CREATE INDEX ON :Person(age)");
 }

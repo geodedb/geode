@@ -207,9 +207,14 @@ governance-status-check:
     - diff docs/status.csv /tmp/status_check.csv
 ```
 
-`test-zig-unit` (8 Debug shards) is the blocking unit gate on MR, branch and
-default-branch pipelines; a branch push pipeline skips it while an MR is open
-because the MR pipeline for the same commit runs it.
+`test-zig-unit` (16 Debug shards over four runner slots) is the blocking
+unit gate on MR and default-branch pipelines; `test-zig-release-safe` runs
+the same aggregate in 24 ReleaseSafe shards. The counts doubled when
+SONNY-2772 put every named step in the aggregate, so a shard's build cache
+stays within the 20Gi of a k8s pod. A push to any other branch starts no pipeline: a
+pipeline runs only for a merge request (created or updated), a push to the
+default branch, a tag, a schedule, or a manual web/API run
+(`scripts/ci/test_workflow_rules.py` pins this).
 
 ### Code coverage (kcov lane)
 
@@ -220,7 +225,7 @@ that runs only in a pipeline started by a schedule, the web UI or the API with
 ```bash
 # What one lane shard does (needs kcov on PATH and ptrace allowed):
 mkdir -p coverage/raw
-zig build test -Dtest-coverage=true -Dtest-shard-total=8 -Dtest-shard-index=0
+zig build test -Dtest-coverage=true -Dtest-shard-total=16 -Dtest-shard-index=0
 python3 scripts/ci/kcov_coverage.py shard --shard 0 --build-rc $?
 # After all shards: merge and publish only when every manifest entry has data
 python3 scripts/ci/kcov_coverage.py report --total 8
@@ -308,6 +313,14 @@ the aggregate is green, run `zig build test-compile`: it compiles every
 aggregate artifact in all shards, including those with no named step, which a
 sweep of named steps cannot see.
 
+A named `test-*` step that stays out of the aggregate (that red reproduction,
+a TSan companion, a subprocess cluster, GPU, an e2e or benchmark lane) must be
+listed, with its reason, in `not_in_aggregate_steps` in `build.zig`. Every
+build, `zig build -l` included, fails at configure time when a named step runs
+in no aggregate shard and is not listed, or when a listed name matches no step
+or a step that is in the aggregate (SONNY-2772). That list is the one place
+that records which named steps the aggregate does not run.
+
 Shell-based regression scripts go in the `tests/` directory:
 
 ```bash
@@ -377,8 +390,8 @@ GEODE_DEBUG=1 ./geode command
 #### 2. Check Server Logs
 
 ```bash
-# Enable JSON logging (unified CLI - geode serve symlink also works for backward compat)
-./zig-out/bin/geode serve --log_json
+# Verbose server logging (geode serve has no --log_json option; it refuses unknown options)
+./zig-out/bin/geode serve --log-level debug
 
 # Capture server stderr
 GEODE_CAPTURE_SERVER_STDERR=1 ./run_tests.sh

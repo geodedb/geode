@@ -1,6 +1,7 @@
 // CANARY: REQ=REQ-MULTI-GRAPH-SECURITY-TEST; FEATURE="MultiGraphSecurityTests"; ASPECT=Security; STATUS=IMPL; OWNER=testing; UPDATED=2025-12-20
 // End-to-end tests for multi-graph security features
-// Tests graph-scoped RBAC, FLE, and audit logging
+// Tests graph-scoped RBAC and FLE (SONNY-6511: the graph-scoped audit log
+// and getRolesForGraph these also tested never compiled and were removed)
 
 const std = @import("std");
 const multi_graph_security = @import("geode").multi_graph_security;
@@ -146,71 +147,6 @@ test "GraphRBACPolicy - revoke role from specific graph" {
     try std.testing.expect(!rbac.hasPermission(1, "sales", "node", .read));
 }
 
-test "GraphRBACPolicy - get all roles for user in graph" {
-    const allocator = std.testing.allocator;
-
-    var rbac = multi_graph_security.GraphRBACPolicy.init(allocator);
-    defer rbac.deinit();
-
-    // Assign multiple roles
-    try rbac.assignRoleForGraph(1, 100, "sales");
-    try rbac.assignRoleForGraph(1, 101, "sales");
-    try rbac.assignGlobalRole(1, 999);
-
-    // Get all roles for user 1 in "sales" graph
-    const roles = try rbac.getRolesForGraph(allocator, 1, "sales");
-    defer allocator.free(roles);
-
-    // Should have 3 roles: 2 graph-specific + 1 global
-    try std.testing.expectEqual(@as(usize, 3), roles.len);
-}
-
-// ============================================================================
-// Graph-Scoped Audit Log Tests
-// ============================================================================
-
-test "GraphAuditLog - log events with graph context" {
-    const allocator = std.testing.allocator;
-
-    var audit = multi_graph_security.GraphAuditLog.init(allocator);
-    defer audit.deinit();
-
-    // Log role assignments for different graphs
-    try audit.logRoleAssignedForGraph(1, 100, "sales");
-    try audit.logRoleAssignedForGraph(2, 200, "hr");
-    try audit.logAccessDeniedForGraph(1, "hr", "node:salary", .read, "insufficient permissions");
-
-    // Filter events for "sales" graph
-    const sales_events = try audit.getEventsForGraph(allocator, "sales");
-    defer allocator.free(sales_events);
-
-    try std.testing.expectEqual(@as(usize, 1), sales_events.len);
-    try std.testing.expectEqual(auth.AuditEventType.role_assigned, sales_events[0].event_type);
-
-    // Filter events for "hr" graph
-    const hr_events = try audit.getEventsForGraph(allocator, "hr");
-    defer allocator.free(hr_events);
-
-    try std.testing.expectEqual(@as(usize, 2), hr_events.len);
-}
-
-test "GraphAuditLog - log access granted for graph" {
-    const allocator = std.testing.allocator;
-
-    var audit = multi_graph_security.GraphAuditLog.init(allocator);
-    defer audit.deinit();
-
-    try audit.logAccessGrantedForGraph(1, "sales", "node:customer", .read);
-
-    const events = try audit.getEventsForGraph(allocator, "sales");
-    defer allocator.free(events);
-
-    try std.testing.expectEqual(@as(usize, 1), events.len);
-    try std.testing.expectEqual(auth.AuditEventType.access_granted, events[0].event_type);
-    try std.testing.expect(std.mem.indexOf(u8, events[0].details, "read") != null);
-    try std.testing.expect(std.mem.indexOf(u8, events[0].details, "sales") != null);
-}
-
 // ============================================================================
 // Graph Security Context Tests
 // ============================================================================
@@ -233,7 +169,7 @@ test "GraphSecurityContext - superuser has all permissions" {
         .created_at = 0,
         .updated_at = 0,
         .last_login = null,
-        .email = null,
+        .email = "",
         .attributes = std.StringHashMap([]const u8).init(allocator),
     };
     defer user.attributes.deinit();
@@ -248,7 +184,8 @@ test "GraphSecurityContext - superuser has all permissions" {
             .ip_address = "127.0.0.1",
             .user_agent = "test",
             .timestamp = 0,
-            .geo_location = null,
+            .location = null,
+            .device_id = null,
         },
     };
 
@@ -274,7 +211,7 @@ test "GraphSecurityContext - normal user needs graph context" {
         .created_at = 0,
         .updated_at = 0,
         .last_login = null,
-        .email = null,
+        .email = "",
         .attributes = std.StringHashMap([]const u8).init(allocator),
     };
     defer user.attributes.deinit();
@@ -290,7 +227,8 @@ test "GraphSecurityContext - normal user needs graph context" {
             .ip_address = "127.0.0.1",
             .user_agent = "test",
             .timestamp = 0,
-            .geo_location = null,
+            .location = null,
+            .device_id = null,
         },
     };
 
@@ -307,9 +245,6 @@ test "integration - multi-graph role isolation" {
 
     var rbac = multi_graph_security.GraphRBACPolicy.init(allocator);
     defer rbac.deinit();
-
-    var audit = multi_graph_security.GraphAuditLog.init(allocator);
-    defer audit.deinit();
 
     // Setup: 3 users with different access levels
     // User 1: Global admin
@@ -352,18 +287,4 @@ test "integration - multi-graph role isolation" {
     try std.testing.expect(rbac.hasPermission(3, "hr", "node", .read));
     try std.testing.expect(!rbac.hasPermission(3, "hr", "node", .create));
     try std.testing.expect(!rbac.hasPermission(3, "sales", "node", .read));
-
-    // Log audit events
-    try audit.logAccessGrantedForGraph(2, "sales", "node:customer", .read);
-    try audit.logAccessDeniedForGraph(2, "hr", "node:salary", .read, "no role in hr graph");
-
-    // Verify audit
-    const sales_audit = try audit.getEventsForGraph(allocator, "sales");
-    defer allocator.free(sales_audit);
-    try std.testing.expectEqual(@as(usize, 1), sales_audit.len);
-
-    const hr_audit = try audit.getEventsForGraph(allocator, "hr");
-    defer allocator.free(hr_audit);
-    try std.testing.expectEqual(@as(usize, 1), hr_audit.len);
-    try std.testing.expectEqual(auth.AuditEventType.access_denied, hr_audit[0].event_type);
 }

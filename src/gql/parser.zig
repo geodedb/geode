@@ -1,8 +1,8 @@
-// CANARY: REQ=REQ-0001; FEATURE="Standards & Conformance Requirements"; ASPECT=Compliance; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=core; UPDATED=2026-01-15
-// CANARY: REQ=REQ-0002; FEATURE="Language Surface Requirements"; ASPECT=Compliance; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=core; UPDATED=2026-01-15
-// CANARY: REQ=REQ-GQL-006; FEATURE="GQL Parser"; ASPECT=Parser; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=parser; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-007; FEATURE="MATCH/OPTIONAL Parsing"; ASPECT=Parser; STATUS=TESTED; TEST=tests/e2e_graph_match.zig; OWNER=parser; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-008; FEATURE="ORDER/LIMIT/OFFSET Parsing"; ASPECT=Parser; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=parser; UPDATED=2025-09-20
+// CANARY: REQ=REQ-0001; FEATURE="Standards & Conformance Requirements"; ASPECT=Compliance; STATUS=IMPL; OWNER=core; UPDATED=2026-11-14
+// CANARY: REQ=REQ-0002; FEATURE="Language Surface Requirements"; ASPECT=Compliance; STATUS=IMPL; OWNER=core; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-006; FEATURE="GQL Parser"; ASPECT=Parser; STATUS=IMPL; OWNER=parser; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-007; FEATURE="MATCH/OPTIONAL Parsing"; ASPECT=Parser; STATUS=IMPL; TEST=tests/e2e_graph_match.zig; OWNER=parser; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-008; FEATURE="ORDER/LIMIT/OFFSET Parsing"; ASPECT=Parser; STATUS=IMPL; OWNER=parser; UPDATED=2026-11-14
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -10,6 +10,7 @@ const tok = @import("gql_lib").token;
 const ast = @import("ast.zig");
 const temporal = @import("../temporal.zig");
 const Lexer = @import("lexer.zig").Lexer;
+const identifier_words = @import("identifier_words.zig");
 const stack_guard = @import("../stack_guard.zig");
 
 // CANARY: REQ=REQ-SONNY-3133-PARSER-NESTING; FEATURE="GQLParser"; ASPECT=StackGuard; STATUS=TESTED; TEST=tests/test_sonny3133_parser_nesting.zig; OWNER=parser; UPDATED=2026-09-27
@@ -28,6 +29,10 @@ const stack_guard = @import("../stack_guard.zig");
 /// buys 64 Debug levels on 8 MiB (64 x 0.2 MiB is over 8 MiB), so the limit
 /// is Debug-only and documented, not tuned; the QUIC workers' 16 MiB hold
 /// about twice as many (tests/test_sonny3191_round13_items.zig pins it).
+/// SONNY-738 (item 0b): a level had grown to 0.33 MiB (0.46 MiB for a FOR
+/// body), because every error exit of `parseQuery` held a copy of its 1.5 KiB
+/// result; it is 0.12 MiB (0.18 MiB) since `parseQueryInto`, and
+/// tests/test_sonny738_parser_frame_budget.zig pins it.
 const stack_reserve_bytes: usize = if (builtin.mode == .Debug) 2 * 1024 * 1024 else 512 * 1024;
 
 /// SONNY-3133: is more than `stack_reserve_bytes` of the calling thread's
@@ -35,8 +40,23 @@ const stack_reserve_bytes: usize = if (builtin.mode == .Debug) 2 * 1024 * 1024 e
 /// this frame is not on the thread's stack (a fiber's). SONNY-3181: the
 /// bounds lookup is `stack_guard`'s, which the evaluator shares.
 fn stackHasRoom() bool {
+    if (test_frame_probe) |probe| probe.lowest = @min(probe.lowest, @frameAddress());
     return stack_guard.hasRoomBelow(@frameAddress(), stack_reserve_bytes);
 }
+
+// CANARY: REQ=REQ-SONNY-738-PARSER-FRAME-BUDGET; FEATURE="GQLParser"; ASPECT=FrameProbe; STATUS=TESTED; TEST=tests/test_sonny738_parser_frame_budget.zig; OWNER=parser; UPDATED=2026-11-13
+/// SONNY-738 (item 0b): a test seam that measures the parser's stack. When
+/// set on a thread, `parseQuery` records its frame address at each query
+/// nesting depth and `stackHasRoom` the lowest frame address it is called
+/// from, so a test can pin what one level of query nesting costs (a parser
+/// change that grows it fails that test, not the slow transport test whose
+/// deepest nesting stops fitting an 8 MiB connection thread). Never set
+/// outside tests.
+pub const FrameProbe = struct {
+    query_frames: [Parser.max_query_nesting + 1]usize = @splat(0),
+    lowest: usize = std.math.maxInt(usize),
+};
+pub threadlocal var test_frame_probe: ?*FrameProbe = null;
 
 /// SONNY-3133: statements nested in statements (EXPLAIN, EXPLAIN POLICY FOR,
 /// PROFILE, a START TRANSACTION body, a parenthesized statement, a VALUES
@@ -412,10 +432,27 @@ pub const Parser = struct {
         return out;
     }
 
-    // Helper function to accept identifiers or keywords as identifiers (for aliases, etc.)
-    // CANARY: REQ=REQ-GQL-001; FEATURE="KeywordsAsIdentifiers"; ASPECT=ParserSupport; STATUS=TESTED; OWNER=parser; UPDATED=2025-10-09
-    // Per ISO/IEC 39075:2024, keywords can be used as identifiers in most contexts (aliases, variable names, property names, labels)
+    // CANARY: REQ=REQ-GQL-001; FEATURE="KeywordsAsIdentifiers"; ASPECT=ParserSupport; STATUS=TESTED; OWNER=parser; UPDATED=2026-11-15
+    /// A name in a position only a name can take: a label, a relationship
+    /// type, a property or record field name, a property key. SONNY-6564:
+    /// Geode accepts any word here, a 21.3 <reserved word> included (a
+    /// documented extension, docs/GQL_COMPLIANCE.md: ISO/IEC 39075:2024 21.3
+    /// SR 18 refuses a reserved word in these <identifier>s too), and a
+    /// delimited identifier (`...`). Names that bind or reference a variable,
+    /// an alias or a parameter go through `expectBindingName`.
     fn expectIdentifierOrKeyword(self: *Parser) !tok.Token {
+        if (self.cur.kind == .quoted_identifier) {
+            var out = self.cur;
+            out.lexeme = try self.delimitedName(out);
+            self.advance();
+            return out;
+        }
+        if (self.isDoubleQuoted(self.cur)) {
+            var out = self.cur;
+            out.lexeme = try self.doubleQuotedName(out);
+            self.advance();
+            return out;
+        }
         if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) {
             const out = self.cur;
             self.advance();
@@ -429,12 +466,164 @@ pub const Parser = struct {
         return error.UnexpectedToken;
     }
 
+    // CANARY: REQ=REQ-SONNY-6564-BINDING-NAMES; FEATURE="GQLParser"; ASPECT=ReservedWordRefusal; STATUS=TESTED; TEST=tests/test_sonny6564_identifier_words.zig; OWNER=parser; UPDATED=2026-11-15
+    /// SONNY-6564: ISO/IEC 39075:2024 21.3 for a name that binds or references
+    /// something in the query's scope: a variable (16.x <binding variable>,
+    /// a <regular identifier>), an alias (<identifier>), a parameter
+    /// (<parameter name>). SR 18: a <non-delimited identifier> whose
+    /// case-normal form is a <reserved word> is not one, so `match`, `list`
+    /// or `sum` name nothing (except the five words Geode's own procedures
+    /// yield, `identifier_words.geode_binding_extension`: PATH, VALUE, COUNT,
+    /// AVG, TIMESTAMP, a documented non-conformance); a <non-reserved word> (TYPE, PROPERTY, NODE,
+    /// ...) and every word 21.3 does not list (Geode's MERGE, UNWIND, ...)
+    /// does. A delimited identifier (`match`) always does (a binding variable
+    /// written that way is a Geode extension: 21.3 makes it a <regular
+    /// identifier>). The parser took any keyword token, reserved or not, in
+    /// most of these positions and only plain identifiers in others (SET,
+    /// REMOVE, DELETE, FOR, UNWIND, LET): `MATCH (match:X) RETURN match`
+    /// parsed and `MATCH (type:T) SET type.x = 1` did not.
+    fn isBindingName(self: *Parser, t: tok.Token) bool {
+        return switch (t.kind) {
+            .quoted_identifier => true,
+            .identifier => !identifier_words.isRefusedBindingName(t.lexeme),
+            else => self.isKeyword(t.kind) and !identifier_words.isRefusedBindingName(t.lexeme),
+        };
+    }
+
+    /// A word token (an identifier or any keyword) that 21.3 reserves and
+    /// Geode does not keep as a binding name.
+    fn isReservedWordToken(self: *Parser, t: tok.Token) bool {
+        const word = t.kind == .identifier or self.isKeyword(t.kind) or
+            (@intFromEnum(t.kind) >= @intFromEnum(tok.TokenKind.MATCH) and @intFromEnum(t.kind) < @intFromEnum(tok.TokenKind.eof));
+        return word and identifier_words.isRefusedBindingName(t.lexeme);
+    }
+
+    /// SONNY-6564: a reserved word read where an expression starts begins one
+    /// of the constructs the 21.3 keyword list exists for, so it is not
+    /// taken as a variable reference: a built-in function call (20.x: ABS,
+    /// COUNT, UPPER, ... are keyword productions), a subquery or record
+    /// (`COUNT { }`, `EXISTS { }`, `VALUE { }`), a typed temporal literal
+    /// (`DURATION 'P1D'`), a list constructor (`LIST [1, 2]`), or a niladic
+    /// value function (`CURRENT_DATE`, `SESSION_USER`, ...).
+    fn reservedWordStartsExpression(self: *Parser, t: tok.Token) bool {
+        const next = self.peekKind();
+        if (next == .l_paren or next == .l_brace) return true;
+        const eq = std.ascii.eqlIgnoreCase;
+        if (next == .string_lit) {
+            for ([_][]const u8{ "DATE", "TIME", "DATETIME", "TIMESTAMP", "DURATION", "LOCAL_DATETIME", "LOCAL_TIME", "LOCAL_TIMESTAMP", "ZONED_DATETIME", "ZONED_TIME" }) |w| {
+                if (eq(t.lexeme, w)) return true;
+            }
+        }
+        if (next == .DATETIME or next == .TIME or next == .TIMESTAMP) {
+            if (eq(t.lexeme, "LOCAL") or eq(t.lexeme, "ZONED")) return true;
+        }
+        if (next == .l_bracket and (eq(t.lexeme, "LIST") or eq(t.lexeme, "ARRAY"))) return true;
+        for ([_][]const u8{
+            "CURRENT_DATE",        "CURRENT_TIME",           "CURRENT_TIMESTAMP", "LOCAL_TIME",   "LOCAL_TIMESTAMP",
+            "LOCAL_DATETIME",      "CURRENT_GRAPH",          "CURRENT_SCHEMA",    "HOME_GRAPH",   "HOME_SCHEMA",
+            "HOME_PROPERTY_GRAPH", "CURRENT_PROPERTY_GRAPH", "SESSION_USER",      "CURRENT_USER", "SYSTEM_USER",
+            "CURRENT_ROLE",
+        }) |w| {
+            if (eq(t.lexeme, w)) return true;
+        }
+        return false;
+    }
+
+    /// SONNY-6564: the 42000 refusal of a reserved word written where a name
+    /// binds or is referenced, naming the delimited form that is accepted.
+    fn refuseReservedName(self: *Parser, t: tok.Token, what: []const u8) ParserError {
+        self.last_error = std.fmt.allocPrint(
+            self.arena.allocator(),
+            "`{s}` is a reserved word (ISO/IEC 39075:2024 21.3) and cannot be used as {s} at line {d} col {d}; write it as a delimited identifier: `{s}`",
+            .{ t.lexeme, what, t.loc.line, t.loc.column, t.lexeme },
+        ) catch "a reserved word (ISO/IEC 39075:2024 21.3) cannot be used as an identifier; write it as a delimited identifier";
+        return error.UnexpectedToken;
+    }
+
+    /// SONNY-6564: consume a name that binds or references something in
+    /// scope (see `isBindingName`); `what` names the position for the
+    /// refusal ("a variable", "an alias", "a parameter name").
+    fn expectBindingName(self: *Parser, what: []const u8) ParserError![]const u8 {
+        const t = self.cur;
+        if (self.isBindingName(t)) {
+            self.advance();
+            return if (t.kind == .quoted_identifier) try self.delimitedName(t) else t.lexeme;
+        }
+        if (self.isDoubleQuoted(t)) {
+            const name = try self.doubleQuotedName(t);
+            self.advance();
+            return name;
+        }
+        if (self.isReservedWordToken(t)) return self.refuseReservedName(t, what);
+        self.last_error = std.fmt.allocPrint(
+            self.arena.allocator(),
+            "expected {s}, got '{s}' at line {d} col {d}",
+            .{ what, @tagName(t.kind), t.loc.line, t.loc.column },
+        ) catch what;
+        return error.UnexpectedToken;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6596-DOUBLE-QUOTED-IDENTIFIER; FEATURE="GQLParser"; ASPECT=DelimitedIdentifier; STATUS=TESTED; TEST=tests/test_sonny6596_double_quoted_identifiers.zig; OWNER=parser; UPDATED=2026-11-15
+    /// SONNY-6596: a character string token written in double quotes, a
+    /// <double quoted character sequence> (21.1). ISO/IEC 39075:2024 21.3
+    /// makes it a <delimited identifier> as well as (21.2) a <character
+    /// string literal>. The parser reads it as a name where only a name can
+    /// stand (`expectBindingName`, `expectIdentifierOrKeyword` and the
+    /// variable declarations of a pattern); where an expression starts the
+    /// grammar admits both and gives no rule to choose, and Geode keeps the
+    /// literal, as before (docs/GQL_COMPLIANCE.md). The lexer leaves the
+    /// quotes out of the lexeme; the byte before it in the source tells.
+    fn isDoubleQuoted(self: *Parser, t: tok.Token) bool {
+        if (t.kind != .string_lit) return false;
+        const src = self.lx.src;
+        const start = @intFromPtr(t.lexeme.ptr);
+        const base = @intFromPtr(src.ptr);
+        if (start <= base or start > base + src.len) return false;
+        return src[start - base - 1] == '"';
+    }
+
+    /// The name a double-quoted delimited identifier stands for (21.3 SR 4):
+    /// its text with a doubled quote undoubled and its escapes read, never
+    /// zero-length.
+    fn doubleQuotedName(self: *Parser, t: tok.Token) ParserError![]const u8 {
+        var text = t.lexeme;
+        if (std.mem.indexOf(u8, text, "\"\"") != null) {
+            const out = try self.arena.allocator().alloc(u8, text.len);
+            var n: usize = 0;
+            var i: usize = 0;
+            while (i < text.len) : (i += 1) {
+                out[n] = text[i];
+                n += 1;
+                if (text[i] == '"' and i + 1 < text.len and text[i + 1] == '"') i += 1;
+            }
+            text = out[0..n];
+        }
+        const name = try self.unescapeString(text);
+        if (name.len == 0) return self.unexpected("a delimited identifier is not zero-length (ISO/IEC 39075:2024 21.3 SR 4)");
+        return name;
+    }
+
+    /// The name a delimited identifier stands for: its text with each doubled
+    /// accent undoubled (21.1 <accent quoted character sequence>).
+    fn delimitedName(self: *Parser, t: tok.Token) ParserError![]const u8 {
+        if (std.mem.indexOf(u8, t.lexeme, "``") == null) return t.lexeme;
+        const out = try self.arena.allocator().alloc(u8, t.lexeme.len);
+        var n: usize = 0;
+        var i: usize = 0;
+        while (i < t.lexeme.len) : (i += 1) {
+            out[n] = t.lexeme[i];
+            n += 1;
+            if (t.lexeme[i] == '`' and i + 1 < t.lexeme.len and t.lexeme[i + 1] == '`') i += 1;
+        }
+        return out[0..n];
+    }
+
     // Parser operations can fail due to syntax or allocation issues.
     // We’ll thread a tiny error wrapper with a message alongside generic errors when needed.
     // ENG-3906: `UnknownIndexParameter` — a WITH parameter a vector index does
     // not implement. Distinct from `UnexpectedToken` so the diagnostic can say
     // "this knob does not exist" rather than "syntax error".
-    const ParserError = error{ UnexpectedToken, OutOfMemory, Overflow, InvalidCharacter, InvalidIndexType, UnknownIndexParameter, UnknownIndexOption, UnsupportedAggregateFunction, TooManyWriteClauses, TooManyStatements, ParseMemoryLimit, QueryNestingTooDeep };
+    const ParserError = error{ UnexpectedToken, OutOfMemory, Overflow, InvalidCharacter, InvalidIndexType, UnknownIndexParameter, UnknownIndexOption, UnsupportedAggregateFunction, TooManyWriteClauses, TooManyStatements, ParseMemoryLimit, QueryNestingTooDeep, UndirectedEdgeNotSupported, UnsupportedQueryShape };
 
     // CANARY: REQ=REQ-SONNY-3190-CLAUSE-CAP; FEATURE="WriteClauseCap"; ASPECT=Parser; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist.zig; OWNER=parser; UPDATED=2026-09-27
     /// SONNY-3190: the most SET, REMOVE, CREATE and MERGE clauses one query
@@ -544,6 +733,84 @@ pub const Parser = struct {
         return self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, kw);
     }
 
+    // CANARY: REQ=REQ-SONNY-6433-UNDIRECTED-EDGE-MESSAGE; FEATURE="Parser"; ASPECT=UndirectedEdgeRefusal; STATUS=TESTED; TEST=tests/test_sonny6433_undirected_edge_message.zig; OWNER=parser; UPDATED=2026-11-12
+    /// SONNY-6433: is the parser at an undirected edge pattern, `~[ ]~`, `~`,
+    /// `<~[ ]~`, `<~`, `~[ ]~>` or `~>` (ISO/IEC 39075:2024 16.7 <edge
+    /// pattern>, Feature GH02)? The lexer has no `~` token (`=~` and `!~`
+    /// are its own), so a lone `~` is an invalid token and `<~` a `<`
+    /// followed by one.
+    /// SONNY-6267: whether `second` starts where `first` ends (no separator
+    /// between them), as `<->` and `<--` are spelled.
+    fn adjacentTokens(first: tok.Token, second: tok.Token) bool {
+        return @intFromPtr(first.lexeme.ptr) + first.lexeme.len == @intFromPtr(second.lexeme.ptr);
+    }
+
+    /// SONNY-6267: a hop through an <abbreviated edge pattern> (ISO/IEC
+    /// 39075:2024 16.7), which is the empty full edge pattern of its
+    /// orientation, to the node pattern that follows.
+    fn appendAbbreviatedHop(self: *Parser, hops: *std.ArrayList(ast.Hop), left: *ast.NodePattern, dir: ast.RelDir) ParserError!void {
+        const rel = ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = dir, .min_len = null, .max_len = null };
+        const right = try self.parseNodePattern();
+        try hops.append(self.arena.allocator(), .{ .left = left.*, .rel = rel, .right = right });
+        left.* = right;
+    }
+
+    fn atUndirectedEdge(self: *Parser) bool {
+        if (self.cur.kind == .invalid) return self.cur.lexeme.len > 0 and self.cur.lexeme[0] == '~';
+        if (self.cur.kind != .lt or self.cur.lexeme.len == 0) return false;
+        const src_start = @intFromPtr(self.lx.src.ptr);
+        const at = @intFromPtr(self.cur.lexeme.ptr);
+        if (at < src_start) return false;
+        const next = at - src_start + 1;
+        return next < self.lx.src.len and self.lx.src[next] == '~';
+    }
+
+    /// SONNY-6433: refuse an undirected edge pattern with a message that
+    /// says so (0A000, `lib.parseErrorCode`); it was a generic parse error
+    /// at the `~`.
+    fn undirectedEdge(self: *Parser) ParserError {
+        self.last_error = "undirected edges are not supported: Geode stores directed edges only, so an undirected edge pattern (~[ ]~, ~, <~[ ]~, ~[ ]~>; ISO/IEC 39075 Feature GH02) can be neither matched nor inserted. Use -[ ]-> or <-[ ]- (or -[ ]- to match either direction)";
+        return error.UndirectedEdgeNotSupported;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6437-WHERE-AFTER-YIELD; FEATURE="ProcedureCall"; ASPECT=YieldWhereRefusal; STATUS=TESTED; TEST=tests/test_sonny6437_query_residuals.zig; OWNER=parser; UPDATED=2026-11-12
+    /// SONNY-6437 item 7: a WHERE right after a YIELD list (`CALL db.labels()
+    /// YIELD label WHERE ...`, a Cypher form) is not ISO/IEC 39075:2024 GQL:
+    /// 16.14 <yield clause> is `YIELD <yield item list>` only, and in a linear
+    /// query (14.3) a call query statement (14.5) is filtered by a following
+    /// filter statement (14.6, `FILTER [WHERE] <search condition>`). Refused
+    /// with a message that says so (42000); it was a bare syntax error.
+    fn refuseWhereAfterYield(self: *Parser) ParserError!void {
+        if (self.cur.kind != .WHERE) return;
+        return self.unexpected("a WHERE after YIELD is not ISO/IEC 39075 GQL: a <yield clause> (16.14) is YIELD <yield item list> only; filter a procedure call's rows with a FILTER statement (14.6) after it: CALL ... YIELD ... FILTER [WHERE] <condition>");
+    }
+
+    // CANARY: REQ=REQ-SONNY-6460-FILTER-STATEMENT; FEATURE="FilterStatement"; ASPECT=Parser; STATUS=TESTED; TEST=tests/test_sonny6460_filter_statement.zig; OWNER=parser; UPDATED=2026-11-13
+    /// SONNY-6460 item 2: ISO/IEC 39075:2024 14.6 <filter statement>,
+    /// `FILTER { <where clause> | <search condition> }` (SR 2: `FILTER SC` is
+    /// `FILTER WHERE SC`), any number in a row. Each keeps a record only when
+    /// its condition is True (16.13 GR 2, 19.1 GR 2), so consecutive ones are
+    /// their conditions ANDed. Null when there is none.
+    fn parseFilterStatements(self: *Parser) ParserError!?ast.Expr {
+        var combined: ?ast.Expr = null;
+        while (self.cur.kind == .FILTER) {
+            self.advance();
+            if (self.cur.kind == .WHERE) self.advance();
+            const condition = try self.parseOrExpr();
+            combined = if (combined) |earlier| try self.makeBinary(.And, earlier, condition) else condition;
+        }
+        return combined;
+    }
+
+    /// `parseFilterStatements`, the condition on the parser's arena: a
+    /// procedure call keeps a pointer (`ast.CallProcedure.filter`).
+    fn parseFilterStatementsBoxed(self: *Parser) ParserError!?*const ast.Expr {
+        const condition = (try self.parseFilterStatements()) orelse return null;
+        const boxed = try self.arena.allocator().create(ast.Expr);
+        boxed.* = condition;
+        return boxed;
+    }
+
     fn unexpected(self: *Parser, what: []const u8) ParserError {
         // For now, we just return UnexpectedToken; callers like CLI can add context using 'what'.
         self.last_error = what;
@@ -564,6 +831,41 @@ pub const Parser = struct {
 
     /// Parse a LIMIT or OFFSET value: accepts either an integer literal or a $param reference.
     /// Returns .{ literal_value_or_null, param_name_or_null }.
+    /// SONNY-6555 item 6: the page of an ORDER BY and page statement (ISO/IEC
+    /// 39075:2024 14.9): `<offset clause> [<limit clause>] | <limit clause>`,
+    /// the offset (OFFSET | SKIP, 16.19) first. `LIMIT n OFFSET m` is a Geode
+    /// extension and means the same page. Each clause is given at most once;
+    /// a second is left for the caller, which refuses it (42000).
+    const PageClauses = struct {
+        limit: ?u64 = null,
+        limit_param: ?[]const u8 = null,
+        offset: ?u64 = null,
+        offset_param: ?[]const u8 = null,
+        has_limit: bool = false,
+        has_offset: bool = false,
+    };
+
+    fn parsePageClauses(self: *Parser) !PageClauses {
+        var page: PageClauses = .{};
+        var i: usize = 0;
+        while (i < 2) : (i += 1) {
+            if (!page.has_offset and (self.cur.kind == .OFFSET or self.cur.kind == .SKIP)) {
+                self.advance();
+                const off = try self.parseLimitValue();
+                page.offset = off.value;
+                page.offset_param = off.param;
+                page.has_offset = true;
+            } else if (!page.has_limit and self.cur.kind == .LIMIT) {
+                self.advance();
+                const lim = try self.parseLimitValue();
+                page.limit = lim.value;
+                page.limit_param = lim.param;
+                page.has_limit = true;
+            } else break;
+        }
+        return page;
+    }
+
     fn parseLimitValue(self: *Parser) !struct { value: ?u64, param: ?[]const u8 } {
         if (self.cur.kind == .dollar) {
             self.advance();
@@ -573,8 +875,10 @@ pub const Parser = struct {
                 self.advance();
                 return .{ .value = null, .param = name.lexeme };
             }
-            const name = try self.expectIdentifierOrKeyword();
-            return .{ .value = null, .param = name.lexeme };
+            // SONNY-6564: a <parameter name> is a <separated identifier>
+            // (21.3), so a reserved word is refused: write $`limit`.
+            const name = try self.expectBindingName("a parameter name");
+            return .{ .value = null, .param = name };
         }
         const lim_tok = try self.expect(.integer_lit);
         return .{ .value = try std.fmt.parseInt(u64, lim_tok.lexeme, 10), .param = null };
@@ -663,6 +967,7 @@ pub const Parser = struct {
     }
 
     pub fn parseProgram(self: *Parser) ParserError!ast.Program {
+        try self.desugarNext();
         // SONNY-3244: a parse cut short by `max_parse_arena_bytes` (`advance`)
         // is refused as such, whatever the truncated input parsed as.
         const program = self.parseProgramInner() catch |err| {
@@ -678,6 +983,154 @@ pub const Parser = struct {
             return error.ParseMemoryLimit;
         }
         return program;
+    }
+
+    /// SONNY-6343: refuse a query shape Geode does not run, with 0A000 and
+    /// a message naming it (`error.UnsupportedQueryShape`).
+    fn refuseShape(self: *Parser, what: []const u8) ParserError {
+        self.last_error = what;
+        return error.UnsupportedQueryShape;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6496-SUBQUERY-FORMS; FEATURE="LinearComposition"; ASPECT=SubqueryStart; STATUS=TESTED; TEST=tests/test_sonny6496_subquery_forms.zig; OWNER=parser; UPDATED=2026-11-13
+    /// SONNY-6496 item 3: the query of an IN / NOT IN subquery or of a CTE
+    /// body, into `out`. ISO/IEC 39075:2024 14.8 <for statement> is a
+    /// <simple query statement>, so one may start the query: it runs once
+    /// over the incoming row, as `WITH * FOR ...` (the executor's FOR after
+    /// an initial WITH). A CALL of a named procedure there is refused with
+    /// 0A000: no executor runs a query that starts with one (both were
+    /// syntax errors).
+    fn parseSubqueryInto(self: *Parser, out: *ast.Query) ParserError!void {
+        if (self.cur.kind == .FOR) return self.parseForStartedQuery(out);
+        if (self.cur.kind == .CALL and self.peekToken() != .l_brace) {
+            return self.refuseShape("CALL of a procedure at the start of a subquery or a CTE body is not supported: CALL it as a statement of its own, or start the subquery with MATCH, WITH or FOR");
+        }
+        return self.parseQueryInto(out);
+    }
+
+    /// `FOR ...` at the start of a subquery, as `WITH * FOR ...` into `out`.
+    /// Its own frame: a statement's union is large (see `parseStatement`).
+    noinline fn parseForStartedQuery(self: *Parser, out: *ast.Query) ParserError!void {
+        const a = self.arena.allocator();
+        const for_ptr = try a.create(ast.ForStatement);
+        for_ptr.* = (try self.parseForStatement()).For;
+        const star = try a.alloc(ast.ReturnItem, 1);
+        star[0] = .{ .expr = .{ .Ident = .{ .orig = "*", .cnf = "*" } }, .alias = null };
+        out.* = ast.Query{
+            .optional_match = false,
+            .match = .{ .chains = &.{} },
+            .create_pattern = null,
+            .where_clause = null,
+            .with_clause = .{ .items = star },
+            .set_clauses = &.{},
+            .remove_clauses = &.{},
+            .ret = for_ptr.return_clause orelse .{ .items = &.{}, .distinct = false },
+            .order_by = for_ptr.order_by,
+            .offset = for_ptr.offset,
+            .limit = for_ptr.limit,
+            .next_query = null,
+            .group_by = null,
+            .having = null,
+            .for_statement = for_ptr,
+        };
+    }
+
+    // CANARY: REQ=REQ-SONNY-6343-NEXT-AND-CALL; FEATURE="LinearComposition"; ASPECT=NextAsWithChain; STATUS=TESTED; TEST=tests/test_sonny6343_next_and_call.zig; OWNER=parser; UPDATED=2026-11-13
+    /// SONNY-6343: ISO/IEC 39075:2024 9.2 <procedure body>:
+    /// `<statement> NEXT [<yield clause>] <statement>` (Feature GQ20). The
+    /// result binding table of the statement before NEXT becomes the working
+    /// table of the one after it (9.2 GR 4), narrowed and renamed by the
+    /// <yield clause> (16.14), and only its columns are in scope there. That
+    /// is Geode's WITH chain: the RETURN that ends the statement before NEXT
+    /// projects, with its DISTINCT, aggregates, GROUP BY, ORDER BY, OFFSET
+    /// and LIMIT, the rows the next statement continues from, as a WITH
+    /// does; a YIELD selects and renames columns, as a WITH of them does. So
+    /// before parsing, each NEXT is rewritten in the source: the last RETURN
+    /// at its level becomes `WITH  `, the NEXT four spaces, and a YIELD right
+    /// after it `WITH `, each the same length, so every position the parser
+    /// reports is unchanged and one mechanism (the WITH chain, its parser,
+    /// validator and executors) runs both. Refused with 0A000: a NEXT after a
+    /// statement with no RETURN at its level (it has no result table), and a
+    /// NEXT after a UNION, INTERSECT, EXCEPT or OTHERWISE (a composite query
+    /// statement; the WITH chain cannot continue from it). A `next` that is a
+    /// name (after `.`, `:` or `$`, or a map key) is left alone.
+    fn desugarNext(self: *Parser) ParserError!void {
+        const src = self.lx.src;
+        if (std.ascii.indexOfIgnoreCase(src, "next") == null) return;
+        const a = self.arena.allocator();
+        const Frame = struct { last_return: ?usize = null, composite: bool = false };
+        const Edit = struct { at: usize, text: []const u8 };
+        var frames: std.ArrayList(Frame) = .empty;
+        try frames.append(a, .{});
+        var edits: std.ArrayList(Edit) = .empty;
+        var scan = Lexer{ .src = src };
+        var prev: tok.TokenKind = .eof;
+        // A NEXT keyword candidate, settled by the token after it (a map
+        // key `next:` is not the keyword).
+        var pending: ?usize = null;
+        var yield_may_follow = false;
+        while (true) {
+            const t = scan.next();
+            const at = @intFromPtr(t.lexeme.ptr) -| @intFromPtr(src.ptr);
+            if (pending) |next_at| {
+                pending = null;
+                if (t.kind != .colon) {
+                    const f = &frames.items[frames.items.len - 1];
+                    if (f.composite) return self.refuseShape("NEXT after a UNION, INTERSECT, EXCEPT or OTHERWISE (a composite query statement) is not supported: run the composite statement in a CALL { } and continue with WITH");
+                    const ret_at = f.last_return orelse return self.refuseShape("NEXT continues from the result table of the statement before it, and that statement has no RETURN at its level: end it with RETURN (ISO/IEC 39075 9.2)");
+                    try edits.append(a, .{ .at = ret_at, .text = "WITH  " });
+                    try edits.append(a, .{ .at = next_at, .text = "    " });
+                    f.* = .{};
+                    yield_may_follow = true;
+                }
+            }
+            if (yield_may_follow) {
+                yield_may_follow = false;
+                if (t.kind == .YIELD) try edits.append(a, .{ .at = at, .text = "WITH " });
+            }
+            const is_name = prev == .dot or prev == .colon or prev == .dollar;
+            switch (t.kind) {
+                .eof => break,
+                .l_paren, .l_brace, .l_bracket => try frames.append(a, .{}),
+                .r_paren, .r_brace, .r_bracket => {
+                    if (frames.items.len > 1) _ = frames.pop();
+                },
+                .semicolon => if (frames.items.len == 1) {
+                    frames.items[0] = .{};
+                },
+                .RETURN => if (!is_name and t.lexeme.len == "RETURN".len) {
+                    frames.items[frames.items.len - 1].last_return = at;
+                },
+                .UNION, .INTERSECT, .EXCEPT, .OTHERWISE => if (!is_name) {
+                    frames.items[frames.items.len - 1].composite = true;
+                },
+                .NEXT => if (!is_name and t.lexeme.len == "NEXT".len) {
+                    pending = at;
+                },
+                else => {},
+            }
+            prev = t.kind;
+        }
+        if (edits.items.len == 0) return;
+        const buf = try a.dupe(u8, src);
+        for (edits.items) |e| @memcpy(buf[e.at..][0..e.text.len], e.text);
+        self.lx.* = Lexer{ .src = buf };
+        self.cur = self.lx.next();
+    }
+
+    /// SONNY-6343: what may follow a statement-level CALL { }.
+    fn refuseClauseAfterCallSubquery(self: *Parser) ParserError!void {
+        switch (self.cur.kind) {
+            .MATCH, .OPTIONAL, .CALL, .CREATE, .INSERT, .MERGE, .SET, .REMOVE, .DELETE, .DETACH, .FOR, .LET, .FILTER, .UNWIND => return self.refuseShape("CALL { } followed by another clause than WITH, WHERE or RETURN is not supported: continue with WITH (for example CALL { ... } WITH x MATCH ...)"),
+            else => {},
+        }
+    }
+
+    /// SONNY-6343: OPTIONAL CALL (ISO/IEC 39075 15.1 <call procedure
+    /// statement>, OPTIONAL) is not run; `self.cur` is the token after
+    /// OPTIONAL.
+    fn refuseOptionalCall(self: *Parser) ParserError!void {
+        if (self.cur.kind == .CALL) return self.refuseShape("OPTIONAL CALL is not supported");
     }
 
     fn parseProgramInner(self: *Parser) ParserError!ast.Program {
@@ -848,10 +1301,8 @@ pub const Parser = struct {
 
     /// Parse a single CTE: name [(col1, col2)] AS (query)
     fn parseSingleCTE(self: *Parser, is_recursive_context: bool) ParserError!ast.CommonTableExpression {
-        // Parse CTE name
-        if (self.cur.kind != .identifier) return error.UnexpectedToken;
-        const cte_name = self.cur.lexeme;
-        self.advance();
+        // SONNY-6564: the CTE name binds a table name in the query.
+        const cte_name = try self.expectBindingName("a CTE name");
 
         // Optional column list: (col1, col2, ...)
         var column_names: ?[]const []const u8 = null;
@@ -898,9 +1349,8 @@ pub const Parser = struct {
     /// Parse CTE body - detect if it's anchor UNION recursive or simple query
     fn parseCTEBody(self: *Parser, is_recursive_context: bool, cte_name: []const u8) ParserError!ast.CommonTableExpression.CTEBody {
         // Parse first query (could be anchor or full query)
-        const first_query = try self.parseQueryForCTE();
         const first_ptr = try self.arena.allocator().create(ast.Query);
-        first_ptr.* = first_query;
+        try self.parseSubqueryInto(first_ptr);
 
         // Check for UNION (indicates recursive CTE structure)
         if (is_recursive_context and self.cur.kind == .UNION) {
@@ -935,20 +1385,46 @@ pub const Parser = struct {
     }
 
     // CANARY: REQ=REQ-GQL-VALUES-MATCH-001; FEATURE="ValuesMatchChaining"; ASPECT=Parser; STATUS=TESTED; TEST=TestValuesMatchBasic|TestValuesMatchWhere|TestValuesMatchMultiRow; OWNER=engine; UPDATED=2026-04-17
+    /// SONNY-738 (item 0b): a statement, parsed into `out` by
+    /// `parseStatementInto`, whose error exits do not each hold an
+    /// `ast.Statement` (3 KiB) on its frame (see `parseQuery`). It was a
+    /// 562 KiB frame on every request's parse, and on every statement a
+    /// PROFILE, EXPLAIN or transaction body nests.
     fn parseStatement(self: *Parser) ParserError!ast.Statement {
+        var out: ast.Statement = undefined;
+        try self.parseStatementInto(&out);
+        return out;
+    }
+
+    fn parseStatementInto(self: *Parser, out: *ast.Statement) ParserError!void {
         // SONNY-3244: at most `max_statements_per_request` statements.
         try self.countStatement();
-        return switch (self.cur.kind) {
+        // SONNY-6729: NODETACH DELETE, a plain DELETE (ISO/IEC 39075 13.5).
+        const at_nodetach = self.atNoDetachDelete();
+        out.* = try @as(ParserError!ast.Statement, if (at_nodetach) self.parseDeleteStatement() else switch (self.cur.kind) {
             .VALUES => self.parseValuesStatement(),
             .FOR => self.parseForStatement(),
             .LET => blk_let: {
                 const first = try self.parseQuery();
                 break :blk_let self.handleQueryResult(first);
             },
+            // SONNY-6613: UNWIND (a Geode extension; ISO/IEC 39075 iterates
+            // with FOR, 14.8) may begin a statement, read as that FOR.
+            .UNWIND => blk_unwind: {
+                var unwind_stmt: ast.Statement = undefined;
+                try self.parseLeadingUnwindInto(&unwind_stmt);
+                break :blk_unwind unwind_stmt;
+            },
             .CREATE => self.parseCreateStatement(),
             .DELETE => self.parseDeleteStatement(),
             .DETACH => self.parseDeleteStatement(),
-            .MERGE => self.parseMergeStatement(),
+            .MERGE => blk_merge: {
+                const m = try self.parseMergeStatement();
+                // SONNY-6496 item 3: no executor runs a CREATE after a
+                // statement-level MERGE (it was a syntax error).
+                if (self.cur.kind == .CREATE) return self.refuseShape("MERGE followed by CREATE is not supported: end the MERGE with ';' and CREATE in a statement of its own, or MATCH ... MERGE ... CREATE");
+                break :blk_merge m;
+            },
             .DROP => self.parseDropStatement(),
             .SHOW => self.parseShowStatement(),
             .EXPLAIN => self.parseExplainStatement(),
@@ -1029,8 +1505,7 @@ pub const Parser = struct {
                     var alias: ?[]const u8 = null;
                     if (self.cur.kind == .AS) {
                         self.advance();
-                        const al = try self.expectIdentifierOrKeyword();
-                        alias = al.lexeme;
+                        alias = try self.expectBindingName("an alias"); // SONNY-6564
                     }
                     try items.append(self.arena.allocator(), .{ .expr = expr, .alias = alias });
                     if (self.cur.kind != .comma) break;
@@ -1060,7 +1535,10 @@ pub const Parser = struct {
 
                 // Try to detect MATCH...DELETE pattern
                 self.advance(); // Skip MATCH
-                _ = self.parseGraphPattern() catch {
+                _ = self.parseGraphPattern() catch |look_err| {
+                    // SONNY-6517 item 1: an allocation failure is the
+                    // parse's, not a reason to try the other form.
+                    if (look_err == error.OutOfMemory) return error.OutOfMemory;
                     // If pattern parsing fails, restore and parse as query
                     self.lx.* = saved_pos;
                     self.cur = saved_cur;
@@ -1071,11 +1549,13 @@ pub const Parser = struct {
                 // Check for optional WHERE
                 if (self.cur.kind == .WHERE) {
                     self.advance();
-                    _ = self.parseOrExpr() catch {};
+                    _ = self.parseOrExpr() catch |look_err| {
+                        if (look_err == error.OutOfMemory) return error.OutOfMemory;
+                    };
                 }
 
                 // Check if DELETE or DETACH DELETE follows
-                const is_delete = self.cur.kind == .DELETE or self.cur.kind == .DETACH;
+                const is_delete = self.cur.kind == .DELETE or self.cur.kind == .DETACH or self.atNoDetachDelete();
 
                 // Restore position
                 self.lx.* = saved_pos;
@@ -1092,11 +1572,8 @@ pub const Parser = struct {
                         where_clause = try self.parseOrExpr();
                     }
 
-                    // Handle optional DETACH
-                    const detach = if (self.cur.kind == .DETACH) blk: {
-                        self.advance();
-                        break :blk true;
-                    } else false;
+                    // Handle optional DETACH or NODETACH
+                    const detach = self.parseDetachMode();
 
                     _ = try self.expect(.DELETE);
 
@@ -1131,6 +1608,17 @@ pub const Parser = struct {
                         };
                     }
 
+                    // SONNY-6496 item 3: a RETURN with ORDER BY, SKIP,
+                    // OFFSET or LIMIT is the query form's (a DELETE
+                    // statement has no page): parse the statement again as
+                    // a query, whose executor applies the DELETE to every
+                    // row and pages only the RETURN.
+                    if (self.cur.kind == .ORDER or self.cur.kind == .SKIP or self.cur.kind == .OFFSET or self.cur.kind == .LIMIT) {
+                        self.lx.* = saved_pos;
+                        self.cur = saved_cur;
+                        const first = try self.parseQuery();
+                        break :blk_match self.handleQueryResult(first);
+                    }
                     break :blk_match .{ .Delete = .{
                         .match_clause = match_pattern,
                         .where_clause = where_clause,
@@ -1222,18 +1710,15 @@ pub const Parser = struct {
                         order_by = order_by_ptr;
                     }
 
-                    if (self.cur.kind == .LIMIT) {
-                        self.advance();
-                        const limit_expr = try self.parseOrExpr();
-                        if (limit_expr != .Int) return self.unexpected("LIMIT requires integer constant");
-                        limit_val = @intCast(limit_expr.Int);
+                    // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9).
+                    const page = try self.parsePageClauses();
+                    if (page.has_limit) {
+                        limit_val = page.limit;
+                        limit_param = page.limit_param;
                     }
-
-                    if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-                        self.advance();
-                        const offset_expr = try self.parseOrExpr();
-                        if (offset_expr != .Int) return self.unexpected("OFFSET/SKIP requires integer constant");
-                        offset_val = @intCast(offset_expr.Int);
+                    if (page.has_offset) {
+                        offset_val = page.offset;
+                        offset_param = page.offset_param;
                     }
 
                     break :blk_with .{ .Union = .{
@@ -1355,18 +1840,15 @@ pub const Parser = struct {
                         order_by = order_by_ptr;
                     }
 
-                    if (self.cur.kind == .LIMIT) {
-                        self.advance();
-                        const lim = try self.parseLimitValue();
-                        limit_val = lim.value;
-                        limit_param = lim.param;
+                    // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9).
+                    const page = try self.parsePageClauses();
+                    if (page.has_limit) {
+                        limit_val = page.limit;
+                        limit_param = page.limit_param;
                     }
-
-                    if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-                        self.advance();
-                        const off = try self.parseLimitValue();
-                        offset_val = off.value;
-                        offset_param = off.param;
+                    if (page.has_offset) {
+                        offset_val = page.offset;
+                        offset_param = page.offset_param;
                     }
 
                     break :blk_r .{ .Union = .{
@@ -1512,7 +1994,8 @@ pub const Parser = struct {
                 if (self.cur.kind == .TRANSACTION) {
                     self.advance();
                 }
-                return .{ .StartTransaction = .{ .body = null } };
+                out.* = .{ .StartTransaction = .{ .body = null } };
+                return;
             },
             .COMMIT => {
                 self.advance();
@@ -1520,7 +2003,8 @@ pub const Parser = struct {
                 if (self.cur.kind == .TRANSACTION) {
                     self.advance();
                 }
-                return .Commit;
+                out.* = .Commit;
+                return;
             },
             .ROLLBACK => {
                 self.advance();
@@ -1528,7 +2012,8 @@ pub const Parser = struct {
                 if (self.cur.kind == .TRANSACTION) {
                     self.advance();
                 }
-                return .Rollback;
+                out.* = .Rollback;
+                return;
             },
             .CALL => blk_call: {
                 self.advance();
@@ -1558,10 +2043,9 @@ pub const Parser = struct {
                             while (true) {
                                 if (self.cur.kind == .dollar) {
                                     self.advance();
-                                    if (self.cur.kind == .identifier) {
-                                        const var_name = self.cur.lexeme;
-                                        try imports.append(self.arena.allocator(), var_name);
-                                        self.advance();
+                                    // SONNY-6564: a <parameter name>.
+                                    if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur) or self.isDoubleQuoted(self.cur)) {
+                                        try imports.append(self.arena.allocator(), try self.expectBindingName("a parameter name"));
                                     }
                                 }
                                 if (self.cur.kind == .comma) {
@@ -1593,6 +2077,12 @@ pub const Parser = struct {
                     // Expect closing brace
                     _ = try self.expect(.r_brace);
 
+                    // SONNY-6343: a statement-level CALL { } is followed by
+                    // WITH, WHERE or RETURN (or ends the statement); another
+                    // clause after it (MATCH, a second CALL, a write) was a
+                    // syntax error and is a shape Geode does not run.
+                    try self.refuseClauseAfterCallSubquery();
+
                     // If there's a WITH clause after the CALL, this needs to be parsed as a Query
                     // not as a standalone Statement.Call
                     if (self.cur.kind == .WITH or self.cur.kind == .WHERE) {
@@ -1623,6 +2113,18 @@ pub const Parser = struct {
                             where_clause = try self.parseOrExpr();
                         }
 
+                        // CANARY: REQ=REQ-SONNY-6383-CALL-WITH-RETURN; FEATURE="CallSubquery"; ASPECT=ParserReturnTail; STATUS=TESTED; TEST=tests/test_sonny6383_query_residuals.zig; OWNER=parser; UPDATED=2026-11-12
+                        // SONNY-6383 item 2: the RETURN is a full
+                        // <primitive result statement> (ISO/IEC 39075:2024
+                        // 14.10: a <return statement>, its GROUP BY after
+                        // the items (14.11), then the ORDER BY and page
+                        // statement); this parsed its items only, so a GROUP
+                        // BY, ORDER BY, SKIP / OFFSET or LIMIT after it was a
+                        // syntax error. The GROUP BY and HAVING belong to the
+                        // RETURN (`return_grouping`).
+                        var group_by: ?ast.GroupBy = null;
+                        var having: ?ast.Expr = null;
+                        var page: OrderAndPage = .{ .order_by = null, .limit = null, .offset = null, .limit_param = null, .offset_param = null };
                         if (self.cur.kind == .RETURN) {
                             self.advance();
                             const distinct = if (self.cur.kind == .DISTINCT) blk: {
@@ -1635,6 +2137,22 @@ pub const Parser = struct {
                                 .items = try return_items.toOwnedSlice(self.arena.allocator()),
                                 .distinct = distinct,
                             };
+                            if (self.cur.kind == .GROUP) {
+                                self.advance();
+                                _ = try self.expect(.BY);
+                                var keys = std.ArrayList(ast.Expr).empty;
+                                while (true) {
+                                    try keys.append(self.arena.allocator(), try self.parseOrExpr());
+                                    if (self.cur.kind != .comma) break;
+                                    self.advance();
+                                }
+                                group_by = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
+                                if (self.cur.kind == .HAVING) {
+                                    self.advance();
+                                    having = try self.parseOrExpr();
+                                }
+                            }
+                            page = try self.parseOrderAndPage(ret_clause.items.len);
                         }
 
                         // Create a Query with the CALL result as input
@@ -1644,13 +2162,34 @@ pub const Parser = struct {
                             .where_clause = where_clause,
                             .with_clause = with_clause,
                             .ret = ret_clause,
-                            .order_by = null,
-                            .limit = null,
-                            .offset = null,
+                            .group_by = group_by,
+                            .having = having,
+                            .return_grouping = group_by != null,
+                            .order_by = page.order_by,
+                            .limit = page.limit,
+                            .offset = page.offset,
+                            .limit_param = page.limit_param,
+                            .offset_param = page.offset_param,
                             .initial_call_subquery = query_ptr,
                         };
 
                         break :blk_call .{ .Query = wrapper_query };
+                    }
+
+                    // CANARY: REQ=REQ-SONNY-3389-CALL-RETURN; FEATURE="CallSubquery"; ASPECT=ParserReturnTail; STATUS=TESTED; TEST=tests/test_sonny3184_optional_match_distinct_call.zig; OWNER=parser; UPDATED=2026-11-11
+                    // SONNY-3389: a RETURN after the CALL { } is the rest of
+                    // the statement, computed over the body's rows: a query
+                    // whose `initial_call_subquery` is the body, with the
+                    // RETURN's DISTINCT, GROUP BY, ORDER BY, SKIP and LIMIT.
+                    // It was kept as `return_clause`, which nothing applied
+                    // (the body's rows were the answer), and an ORDER BY or
+                    // LIMIT after it was a syntax error.
+                    if (self.cur.kind == .RETURN) {
+                        const query_ptr = try self.arena.allocator().create(ast.Query);
+                        query_ptr.* = query;
+                        var tail = try self.parseQuery();
+                        tail.initial_call_subquery = query_ptr;
+                        break :blk_call .{ .Query = tail };
                     }
 
                     // Optional RETURN clause after subquery
@@ -1679,6 +2218,9 @@ pub const Parser = struct {
                         },
                     };
                 } else {
+                    // SONNY-6343: `CALL (x, y) { ... }`, an inline procedure
+                    // call with a <variable scope clause> (ISO/IEC 39075 15.2).
+                    if (self.cur.kind == .l_paren) return self.refuseShape("CALL (variables) { } (an inline procedure call with a variable scope clause) is not supported: use CALL { } with WITH or RETURN after it");
                     // Traditional procedure call (e.g., db.labels())
                     const procedure = try self.parseOrExpr();
 
@@ -1689,7 +2231,11 @@ pub const Parser = struct {
                         var items = std.ArrayList(ast.ReturnItem).empty;
                         try self.parseProjectionItems(&items);
                         yield_items = try items.toOwnedSlice(self.arena.allocator());
+                        try self.refuseWhereAfterYield();
                     }
+
+                    // SONNY-6460 item 2: FILTER statements over the call's rows.
+                    const call_filter = try self.parseFilterStatementsBoxed();
 
                     // Optional RETURN clause
                     var return_clause: ?ast.ReturnClause = null;
@@ -1705,6 +2251,33 @@ pub const Parser = struct {
                             .items = try return_items.toOwnedSlice(self.arena.allocator()),
                             .distinct = distinct,
                         };
+                    }
+
+                    // CANARY: REQ=REQ-SONNY-6596-CALL-GROUP-BY; FEATURE="CallProcedure"; ASPECT=ReturnGroupBy; STATUS=TESTED; TEST=tests/test_sonny6596_doc_examples_parse.zig; OWNER=parser; UPDATED=2026-11-15
+                    // SONNY-6596: the RETURN's GROUP BY and HAVING (ISO/IEC
+                    // 39075:2024 14.11: the <group by clause> is part of the
+                    // <return statement body>), as after MATCH and CALL { }.
+                    // `CALL algo.louvain.stream() YIELD nodeId, community
+                    // RETURN community, count(*) AS size GROUP BY community`
+                    // was a syntax error.
+                    var call_group_by: ?ast.GroupBy = null;
+                    var call_having: ?*const ast.Expr = null;
+                    if (return_clause != null and self.cur.kind == .GROUP) {
+                        self.advance();
+                        _ = try self.expect(.BY);
+                        var keys = std.ArrayList(ast.Expr).empty;
+                        while (true) {
+                            try keys.append(self.arena.allocator(), try self.parseOrExpr());
+                            if (self.cur.kind != .comma) break;
+                            self.advance();
+                        }
+                        call_group_by = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
+                        if (self.cur.kind == .HAVING) {
+                            self.advance();
+                            const h = try self.arena.allocator().create(ast.Expr);
+                            h.* = try self.parseOrExpr();
+                            call_having = h;
+                        }
                     }
 
                     // Optional ORDER BY clause (after RETURN)
@@ -1725,30 +2298,20 @@ pub const Parser = struct {
                         order_by = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
                     }
 
-                    // Optional LIMIT clause
-                    var limit: ?usize = null;
-                    var limit_param: ?[]const u8 = null;
-                    if (self.cur.kind == .LIMIT) {
-                        self.advance();
-                        const lim = try self.parseLimitValue();
-                        limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
-                        limit_param = lim.param;
-                    }
-
-                    // Optional OFFSET/SKIP clause
-                    var offset: ?usize = null;
-                    var offset_param: ?[]const u8 = null;
-                    if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-                        self.advance();
-                        const off = try self.parseLimitValue();
-                        offset = if (off.value) |v| @as(usize, @intCast(v)) else null;
-                        offset_param = off.param;
-                    }
+                    // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9).
+                    const page = try self.parsePageClauses();
+                    const limit: ?usize = if (page.limit) |v| @as(usize, @intCast(v)) else null;
+                    const limit_param = page.limit_param;
+                    const offset: ?usize = if (page.offset) |v| @as(usize, @intCast(v)) else null;
+                    const offset_param = page.offset_param;
 
                     break :blk_call .{ .Call = .{ .Procedure = .{
                         .procedure = procedure,
                         .yield_items = yield_items,
+                        .filter = call_filter,
                         .return_clause = return_clause,
+                        .group_by = call_group_by,
+                        .having = call_having,
                         .order_by = order_by,
                         .limit = limit,
                         .offset = offset,
@@ -1823,7 +2386,93 @@ pub const Parser = struct {
                 break :blk_paren inner_stmt;
             },
             else => return error.UnexpectedToken,
-        };
+        });
+    }
+
+    /// The ORDER BY, LIMIT and OFFSET / SKIP after a RETURN of `return_len`
+    /// items (a parsed query's, and SONNY-6351: a CREATE ... RETURN's).
+    const OrderAndPage = struct {
+        order_by: ?ast.OrderBy,
+        limit: ?usize,
+        offset: ?usize,
+        limit_param: ?[]const u8,
+        offset_param: ?[]const u8,
+    };
+
+    fn parseOrderAndPage(self: *Parser, return_len: usize) ParserError!OrderAndPage {
+        var ord: ?ast.OrderBy = null;
+        if (self.cur.kind == .ORDER) {
+            self.advance();
+            _ = try self.expect(.BY);
+            var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
+            // first expression key - allow expressions now
+            const expr1 = try self.parseOrExpr();
+            // Parse-time enforcement: forbid function calls inside ORDER BY keys when policy active.
+            // We examine the AST recursively; if any call node appears, raise an IllegalOrderKey style error.
+            if (self.forbid_orderby_calls and self.containsCall(expr1)) {
+                // Message string matched in diagnostics mapping path (server expects substring)
+                self.last_error = "function calls in ORDER BY are disabled"; // triggers IllegalOrderKey diagnostic
+                return error.UnexpectedToken;
+            }
+            // Check if it's an ordinal
+            if (expr1 == .Int and self.isValidOrdinal(expr1.Int, return_len)) {
+                self.has_ordinal_sort_key = true;
+            }
+            const mods1 = try self.parseOrderKeyModifiers();
+            try keys.append(self.arena.allocator(), .{ .expr = expr1, .desc = mods1.desc, .nulls = mods1.nulls });
+            while (self.cur.kind == .comma) {
+                self.advance();
+                const exprk = try self.parseOrExpr();
+                if (self.forbid_orderby_calls and self.containsCall(exprk)) {
+                    self.last_error = "function calls in ORDER BY are disabled";
+                    return error.UnexpectedToken;
+                }
+                // Check if it's an ordinal
+                if (exprk == .Int and self.isValidOrdinal(exprk.Int, return_len)) {
+                    self.has_ordinal_sort_key = true;
+                }
+                const modsk = try self.parseOrderKeyModifiers();
+                try keys.append(self.arena.allocator(), .{ .expr = exprk, .desc = modsk.desc, .nulls = modsk.nulls });
+            }
+            ord = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
+        }
+
+        var limit: ?usize = null;
+        var offset: ?usize = null;
+        var limit_param: ?[]const u8 = null;
+        var offset_param: ?[]const u8 = null;
+
+        // Additional legality enforcement: when ident_order_only policy active, reject any ORDER BY key that is not a bare identifier.
+        if (ord) |ob| {
+            if (self.ident_order_only) {
+                var i_chk: usize = 0;
+                while (i_chk < ob.keys.len) : (i_chk += 1) {
+                    const ke = ob.keys[i_chk].expr;
+                    if (ke != .Ident) {
+                        if (self.containsCall(ke)) {
+                            self.last_error = "function calls in ORDER BY are disabled";
+                        } else {
+                            self.last_error = "ORDER BY key must be identifier";
+                        }
+                        return error.UnexpectedToken;
+                    }
+                }
+            }
+        }
+
+        // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9), or Geode's
+        // LIMIT-first extension.
+        const page = try self.parsePageClauses();
+        if (page.has_limit) {
+            limit = if (page.limit) |v| @as(usize, @intCast(v)) else null;
+            limit_param = page.limit_param;
+        }
+        if (page.has_offset) {
+            offset = if (page.offset) |v| @as(usize, @intCast(v)) else null;
+            offset_param = page.offset_param;
+        }
+
+        return .{ .order_by = ord, .limit = limit, .offset = offset, .limit_param = limit_param, .offset_param = offset_param };
     }
 
     fn handleQueryResult(self: *Parser, first: ast.Query) ParserError!ast.Statement {
@@ -1909,18 +2558,15 @@ pub const Parser = struct {
                 order_by = order_by_ptr;
             }
 
-            if (self.cur.kind == .LIMIT) {
-                self.advance();
-                const lim = try self.parseLimitValue();
-                limit_val = lim.value;
-                limit_param = lim.param;
+            // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9).
+            const page = try self.parsePageClauses();
+            if (page.has_limit) {
+                limit_val = page.limit;
+                limit_param = page.limit_param;
             }
-
-            if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-                self.advance();
-                const off = try self.parseLimitValue();
-                offset_val = off.value;
-                offset_param = off.param;
+            if (page.has_offset) {
+                offset_val = page.offset;
+                offset_param = page.offset_param;
             }
 
             return .{ .Union = .{
@@ -1936,23 +2582,166 @@ pub const Parser = struct {
         return .{ .Query = first };
     }
 
+    /// SONNY-738 (item 0b): a query, parsed into `out` by `parseQueryInto`.
+    /// In a Debug build every error exit of a function materialises its
+    /// whole return value on the frame, so `parseQuery` returning an
+    /// `ast.Query` (1.5 KiB) from about 150 error exits had a 335 KiB frame,
+    /// and every level of query nesting (a WITH chain part, CALL { }, IN
+    /// (subquery), a FOR body) paid it: nine FOR bodies no longer fitted an
+    /// 8 MiB gRPC connection thread. `parseQueryInto` returns nothing, so its
+    /// error exits cost nothing; this wrapper keeps the by-value interface.
     fn parseQuery(self: *Parser) ParserError!ast.Query {
+        var out: ast.Query = undefined;
+        try self.parseQueryInto(&out);
+        return out;
+    }
+
+    /// SONNY-6637 item 1: the operands of `shortestPath(a, b)` (the `(` read),
+    /// making `base`, the callee, the call. Out of line: its Expr temporaries
+    /// stay off the recursive postfix frame.
+    noinline fn parseShortestPathNodes(self: *Parser, base: *ast.Expr) ParserError!void {
+        const a = self.arena.allocator();
+        const args = try a.alloc(*ast.Expr, 2);
+        args[0] = try a.create(ast.Expr);
+        args[0].* = try self.parseOrExpr();
+        if (self.cur.kind != .comma) return self.unexpected("expected a graph pattern, or two node expressions, in shortestPath / allShortestPaths");
+        self.advance();
+        args[1] = try a.create(ast.Expr);
+        args[1].* = try self.parseOrExpr();
+        _ = try self.expect(.r_paren);
+        const cp = try a.create(ast.Expr);
+        cp.* = base.*;
+        base.* = .{ .Call = .{ .callee = cp, .args = args } };
+    }
+
+    const LetStages = struct { stages: []ast.Query, tail: *ast.Query };
+
+    // CANARY: REQ=REQ-SONNY-6637-LET-SEQUENTIAL; FEATURE="LetStatement"; ASPECT=DefinitionsSeeEarlierOnes; STATUS=TESTED; TEST=tests/test_sonny6637_query_items.zig; OWNER=parser; UPDATED=2026-11-15
+    /// SONNY-6637 item 5: ISO/IEC 39075:2024 14.7 SR 9-11 run a LET's
+    /// definitions as one <binding variable definition block>, each seeing
+    /// the ones before it (9.2 SR 2 f). A leading LET was parsed as one
+    /// initial WITH, whose items see none of each other, so `LET a = 1, b =
+    /// a + 1` read `a` as NULL. When a definition reads an earlier one, the
+    /// LET runs as a chain of parts, one per definition, each passing the
+    /// earlier ones on (SONNY-6645: also when one reads its own or a later
+    /// one) (`RETURN d1 NEXT RETURN a1, d2 NEXT ...`), and the
+    /// query that follows the LET is the part after them (`tail`), reading
+    /// every definition from the record the chain passes it, as a part
+    /// after `MATCH ... WITH` does. Null when no definition reads an earlier
+    /// one.
+    noinline fn letStages(self: *Parser, items: []ast.ReturnItem) ParserError!?LetStages {
+        if (items.len == 0) return null;
+        const a = self.arena.allocator();
+        const names = try a.alloc([]const u8, items.len);
+        for (items, names) |item, *name| name.* = item.alias.?;
+        // SONNY-6645 item 3: and when one reads its own name or a later
+        // definition's. Each part's items are checked against what comes in
+        // (14.7 SR 7), so a definition read before it is defined is refused
+        // (42000) rather than read as NULL; an outer variable of that name
+        // is still read, as SR 7 allows.
+        const reads_definition = for (items) |item| {
+            if (letMentions(&item.expr, names)) break true;
+        } else false;
+        if (!reads_definition) return null;
+        const stages = try a.alloc(ast.Query, items.len);
+        const tail = try a.create(ast.Query);
+        for (stages, 0..) |*stage, k| {
+            stage.* = .{
+                .optional_match = false,
+                .match = .{ .chains = &.{} },
+                .create_pattern = null,
+                .where_clause = null,
+                .with_clause = null,
+                .set_clauses = &.{},
+                .remove_clauses = &.{},
+                .ret = .{ .items = try self.letStageItems(items, k), .distinct = false },
+                .order_by = null,
+                .limit = null,
+                .offset = null,
+                .next_query = if (k + 1 < stages.len) &stages[k + 1] else tail,
+                .group_by = null,
+                .having = null,
+            };
+        }
+        return .{ .stages = stages, .tail = tail };
+    }
+
+    /// The query parsed after a staged LET becomes the part after its
+    /// stages (`let_tail`), and the first stage the query.
+    noinline fn finishLetStages(stages: []ast.Query, tail: *ast.Query, out: *ast.Query) void {
+        tail.* = out.*;
+        out.* = stages[0];
+    }
+
+    /// The items of LET part `k`: the definitions before it passed on, then
+    /// its own.
+    fn letStageItems(self: *Parser, items: []const ast.ReturnItem, k: usize) ParserError![]ast.ReturnItem {
+        const a = self.arena.allocator();
+        const out = try a.alloc(ast.ReturnItem, k + 1);
+        const unicode = @import("../unicode/unicode_tables.zig");
+        for (items[0..k], out[0..k]) |item, *o| {
+            const name = item.alias.?;
+            const cnf = unicode.caseFoldToUpper(a, name) catch |fold_err| switch (fold_err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => name,
+            };
+            o.* = .{ .expr = .{ .Ident = .{ .orig = name, .cnf = cnf } }, .alias = name };
+        }
+        out[k] = items[k];
+        return out;
+    }
+
+    fn parseQueryInto(self: *Parser, out: *ast.Query) ParserError!void {
         // SONNY-3244: queries nest at most `max_query_nesting` deep.
         try self.enterQuery();
         defer self.query_depth -= 1;
+        if (test_frame_probe) |probe| probe.query_frames[self.query_depth] = @frameAddress();
         // SONNY-3190: the SET, REMOVE and CREATE clauses of this part.
         var write_clauses: usize = 0;
         // Parse LET bindings first (LET $var = expr, ...)
         var let_bindings = std.ArrayList(ast.LetBinding).empty;
+        // CANARY: REQ=REQ-SONNY-6613-LEADING-LET; FEATURE="LetStatement"; ASPECT=StatementLeading; STATUS=TESTED; TEST=tests/test_sonny6613_leading_let_unwind.zig; OWNER=parser; UPDATED=2026-11-15
+        // SONNY-6613: ISO/IEC 39075:2024 14.7 <let statement> is a <primitive
+        // query statement> (14.4), so a linear query may begin with one:
+        // `LET x = 4 RETURN x`. Over the incoming unit table it is the
+        // projection `WITH 4 AS x` (each definition adds a column, GR 2), and
+        // is parsed as that initial WITH. It was a syntax error ("expected $").
+        var leading_let_items: ?[]ast.ReturnItem = null;
+        // SONNY-6637 item 5: the chain parts a leading LET whose definitions
+        // read earlier ones runs as (`letStages`); the query parsed below
+        // becomes the last part, `let_tail`, once it is whole.
+        var let_stages: ?[]ast.Query = null;
+        var let_tail: *ast.Query = undefined;
+        // A call, not the copies inline: the defer is expanded at every
+        // return of this recursive function, and each inline Query copy took
+        // its own stack slot (SONNY-3133's depth guard counts this frame).
+        defer if (let_stages) |stages| finishLetStages(stages, let_tail, out);
+        errdefer let_stages = null;
+        if (self.cur.kind == .LET and self.peekKind() != .dollar) {
+            self.advance();
+            var items = std.ArrayList(ast.ReturnItem).empty;
+            while (true) {
+                const var_name = try self.expectBindingName("a variable");
+                _ = try self.expect(.eq);
+                try items.append(self.arena.allocator(), .{ .expr = try self.parseOrExpr(), .alias = var_name });
+                if (self.cur.kind != .comma) break;
+                self.advance();
+            }
+            if (self.cur.kind == .WITH or self.cur.kind == .LET) return self.refuseShape("a statement-leading LET followed by WITH or another LET is not supported: write the definitions in one LET, or as a WITH");
+            leading_let_items = try items.toOwnedSlice(self.arena.allocator());
+            if (try self.letStages(leading_let_items.?)) |staged| {
+                let_stages = staged.stages;
+                let_tail = staged.tail;
+                leading_let_items = null;
+            }
+        }
         if (self.cur.kind == .LET) {
             self.advance();
             while (true) {
                 // Parse $variable
                 if (self.cur.kind != .dollar) return self.unexpected("expected $ parameter variable after LET");
                 self.advance();
-                if (self.cur.kind != .identifier) return self.unexpected("expected identifier after $");
-                const var_name = self.cur.lexeme;
-                self.advance();
+                const var_name = try self.expectBindingName("a parameter name"); // SONNY-6564
                 _ = try self.expect(.eq);
                 const value_expr = try self.parseOrExpr();
                 try let_bindings.append(self.arena.allocator(), .{ .variable = var_name, .value = value_expr });
@@ -1974,9 +2763,17 @@ pub const Parser = struct {
 
         // Check for WITH at the beginning (for queries like: WITH 5 AS x RETURN x)
         // Parse WITH clause first if present, before MATCH/CREATE
-        var initial_with_clause: ?ast.WithClause = null;
+        var initial_with_clause: ?ast.WithClause = if (leading_let_items) |items| .{
+            .items = items,
+            .distinct = false,
+            .order_by = null,
+            .limit = null,
+            .offset = null,
+            .limit_param = null,
+            .offset_param = null,
+        } else null;
         var initial_where_expr: ?ast.Expr = null; // WHERE clause after initial WITH
-        if (self.cur.kind == .WITH) {
+        if (leading_let_items == null and self.cur.kind == .WITH) {
             self.advance();
             // Support WITH DISTINCT for initial WITH clause
             const with_distinct = if (self.cur.kind == .DISTINCT) blk: {
@@ -2009,18 +2806,15 @@ pub const Parser = struct {
                 with_order_by = order_by_ptr;
             }
 
-            if (self.cur.kind == .LIMIT) {
-                self.advance();
-                const lim = try self.parseLimitValue();
-                with_limit = lim.value;
-                with_limit_param = lim.param;
+            // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9).
+            const page = try self.parsePageClauses();
+            if (page.has_limit) {
+                with_limit = page.limit;
+                with_limit_param = page.limit_param;
             }
-
-            if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-                self.advance();
-                const off = try self.parseLimitValue();
-                with_offset = off.value;
-                with_offset_param = off.param;
+            if (page.has_offset) {
+                with_offset = page.offset;
+                with_offset_param = page.offset_param;
             }
 
             initial_with_clause = .{
@@ -2050,7 +2844,7 @@ pub const Parser = struct {
                 const for_ptr = try self.arena.allocator().create(ast.ForStatement);
                 for_ptr.* = for_stmt.For;
 
-                return ast.Query{
+                out.* = ast.Query{
                     .optional_match = false,
                     .match = .{ .chains = &.{} }, // Empty match pattern
                     .create_pattern = null,
@@ -2071,6 +2865,7 @@ pub const Parser = struct {
                     // that writes after one.
                     .initial_where = initial_where_expr,
                 };
+                return;
             }
 
             // CANARY: REQ=REQ-GQL-WITH-CHAIN-003; FEATURE="ConsecutiveWithClauses"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
@@ -2084,7 +2879,7 @@ pub const Parser = struct {
                 next_ptr.* = next_query;
 
                 // Return a query with initial_with_clause and next_query
-                return ast.Query{
+                out.* = ast.Query{
                     .optional_match = false,
                     .match = .{ .chains = &.{} }, // Empty match pattern
                     .create_pattern = null,
@@ -2092,14 +2887,19 @@ pub const Parser = struct {
                     .with_clause = null, // WITH items become ret.items for chaining
                     .set_clauses = &.{},
                     .remove_clauses = &.{},
-                    .ret = .{ .items = initial_with_clause.?.items, .distinct = false },
-                    .order_by = null,
-                    .limit = null,
-                    .offset = null,
+                    // SONNY-6540 item 5: and its DISTINCT, ORDER BY, SKIP and
+                    // LIMIT, which were dropped here.
+                    .ret = .{ .items = initial_with_clause.?.items, .distinct = initial_with_clause.?.distinct },
+                    .order_by = if (initial_with_clause.?.order_by) |ob| ob.* else null,
+                    .limit = if (initial_with_clause.?.limit) |l| @intCast(l) else null,
+                    .offset = if (initial_with_clause.?.offset) |o| @intCast(o) else null,
+                    .limit_param = initial_with_clause.?.limit_param,
+                    .offset_param = initial_with_clause.?.offset_param,
                     .next_query = next_ptr,
                     .group_by = null,
                     .having = null,
                 };
+                return;
             }
 
             // GAP #57: Handle MERGE after initial WITH clause (e.g., WITH a MERGE (b) RETURN ...)
@@ -2108,7 +2908,7 @@ pub const Parser = struct {
                 const merge_ptr = try self.arena.allocator().create(ast.MergeStatement);
                 merge_ptr.* = merge_stmt.Merge;
 
-                return ast.Query{
+                out.* = ast.Query{
                     .optional_match = false,
                     .match = .{ .chains = &.{} },
                     .create_pattern = null,
@@ -2130,6 +2930,7 @@ pub const Parser = struct {
                     .initial_with = initial_with_clause,
                     .initial_where = initial_where_expr,
                 };
+                return;
             }
         }
 
@@ -2167,9 +2968,7 @@ pub const Parser = struct {
             self.advance();
             const list_expr = try self.parseOrExpr();
             _ = try self.expect(.AS);
-            if (self.cur.kind != .identifier) return self.unexpected("expected identifier after UNWIND ... AS");
-            const var_name = self.cur.lexeme;
-            self.advance();
+            const var_name = try self.expectBindingName("a variable"); // SONNY-6564
             unwind_clause = .{ .list_expr = list_expr, .variable = var_name };
         }
 
@@ -2199,7 +2998,7 @@ pub const Parser = struct {
                 // Regular procedure CALL - return empty query for now
                 // This will be handled elsewhere in the query body
                 const empty_match = ast.GraphPattern{ .chains = &.{} };
-                return ast.Query{
+                out.* = ast.Query{
                     .optional_match = false,
                     .match = empty_match,
                     .create_pattern = null,
@@ -2215,6 +3014,7 @@ pub const Parser = struct {
                     .group_by = null,
                     .having = null,
                 };
+                return;
             }
         }
 
@@ -2235,6 +3035,7 @@ pub const Parser = struct {
             create_pattern = .{ .chains = try create_chains.toOwnedSlice(self.arena.allocator()) };
         } else if (self.cur.kind == .OPTIONAL) {
             self.advance();
+            try self.refuseOptionalCall();
             // Check for OPTIONAL { } block, OPTIONAL (...), or OPTIONAL MATCH
             if (self.cur.kind == .l_brace or self.cur.kind == .l_paren) {
                 // OPTIONAL { ... } or OPTIONAL (...) block - treat as optional match without initial MATCH
@@ -2259,10 +3060,17 @@ pub const Parser = struct {
         // SONNY-3140: the WHEREs either side of a WITH after the MATCH.
         var pre_with_where: ?ast.Expr = null;
         var with_where: ?ast.Expr = null;
+        // SONNY-6467 (3): FILTER statements between MATCH statements.
+        var between_filter: ?ast.Expr = null;
         // SONNY-3184: a WHERE after an OPTIONAL MATCH.
         var optional_where = false;
+        // SONNY-3184, SONNY-6337: each MATCH / OPTIONAL MATCH clause and its
+        // own WHERE (`ast.Query.match_clauses`).
+        var match_clauses = std.ArrayList(ast.MatchClause).empty;
         var group_by: ?ast.GroupBy = null;
         var having_expr: ?ast.Expr = null;
+        // SONNY-2698: `group_by` / `having_expr` came after the RETURN items.
+        var return_grouping = false;
         var path_variable: ?[]const u8 = null;
         const pat: ast.GraphPattern = if (have_match) blk_pat: {
             // Handle OPTIONAL { } at the start
@@ -2317,6 +3125,9 @@ pub const Parser = struct {
             for (first_gp.chains) |chain| {
                 try all_chains.append(self.arena.allocator(), chain);
             }
+            // A part that starts with OPTIONAL MATCH (after WITH, or a
+            // statement of its own) is one optional clause.
+            try match_clauses.append(self.arena.allocator(), .{ .optional = optional_match, .end = all_chains.items.len });
 
             // Check for additional MATCH or OPTIONAL MATCH clauses and combine their chains
             // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-002; FEATURE="OptionalMatchParsing"; ASPECT=ChainMarking; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2025-12-22
@@ -2326,6 +3137,7 @@ pub const Parser = struct {
                 // Handle OPTIONAL MATCH
                 if (self.cur.kind == .OPTIONAL) {
                     self.advance();
+                    try self.refuseOptionalCall();
                     is_currently_optional = true;
                     // Check for OPTIONAL { ... } or OPTIONAL (...) block syntax
                     if (self.cur.kind == .l_brace or self.cur.kind == .l_paren) {
@@ -2357,6 +3169,7 @@ pub const Parser = struct {
                             _ = try self.expect(.r_brace);
                         }
                         optional_match = true;
+                        try match_clauses.append(self.arena.allocator(), .{ .optional = true, .end = all_chains.items.len });
                         continue;
                     }
                     if (self.cur.kind != .MATCH) {
@@ -2377,6 +3190,7 @@ pub const Parser = struct {
                         try all_chains.append(self.arena.allocator(), chain);
                     }
                 }
+                try match_clauses.append(self.arena.allocator(), .{ .optional = is_currently_optional, .end = all_chains.items.len });
             }
 
             var combined_gp = ast.GraphPattern{ .chains = try all_chains.toOwnedSlice(self.arena.allocator()) };
@@ -2392,56 +3206,45 @@ pub const Parser = struct {
                 for (combined_gp.chains) |chain| {
                     if (chain.is_optional) optional_where = true;
                 }
+                // It is the last clause's own WHERE.
+                if (match_clauses.items.len > 0) match_clauses.items[match_clauses.items.len - 1].where = where_expr;
             }
+            try self.parseFilterBetweenMatches(&between_filter);
 
-            // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
-            // Check for OPTIONAL MATCH after WHERE clause
-            // e.g., MATCH (e) WHERE e.x = 1 OPTIONAL MATCH (e)-[:R]->(m) RETURN ...
-            if (self.cur.kind == .OPTIONAL) {
+            // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-003; FEATURE="OptionalMatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=tests/test_sonny3184_optional_match_distinct_call.zig; OWNER=parser; UPDATED=2026-11-11
+            // CANARY: REQ=REQ-GQL-MATCH-AFTER-WHERE-001; FEATURE="MatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2026-11-11
+            // More MATCH and OPTIONAL MATCH clauses after a WHERE, each with a
+            // WHERE of its own: `MATCH (e) WHERE e.x = 1 OPTIONAL MATCH
+            // (e)-[:R]->(m) WHERE m.y = 2 MATCH (d {k: e.k}) WHERE ...`.
+            // SONNY-3184: an OPTIONAL MATCH here took no WHERE (a syntax
+            // error) and was not followed by a MATCH.
+            if (self.cur.kind == .MATCH or self.cur.kind == .OPTIONAL) {
                 var post_where_chains = std.ArrayList(ast.Chain).empty;
                 // First add the existing chains
                 for (combined_gp.chains) |chain| {
                     try post_where_chains.append(self.arena.allocator(), chain);
                 }
-                // Parse OPTIONAL MATCH clauses
-                while (self.cur.kind == .OPTIONAL) {
-                    self.advance(); // consume OPTIONAL
-                    if (self.cur.kind == .MATCH) {
-                        self.advance(); // consume MATCH
-                        const opt_gp = try self.parseGraphPattern();
-                        for (opt_gp.chains) |chain| {
-                            var optional_chain = chain;
-                            optional_chain.is_optional = true;
-                            try post_where_chains.append(self.arena.allocator(), optional_chain);
-                        }
-                    } else {
-                        return error.UnexpectedToken;
-                    }
-                }
-                combined_gp = .{ .chains = try post_where_chains.toOwnedSlice(self.arena.allocator()) };
-            }
-
-            // CANARY: REQ=REQ-GQL-MATCH-AFTER-WHERE-001; FEATURE="MatchAfterWhere"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=parser; UPDATED=2025-12-26
-            // Check for required MATCH after WHERE clause
-            // e.g., MATCH (d:Department) WHERE d.budget > 0 MATCH (e:Employee {department: d.name}) RETURN ...
-            if (self.cur.kind == .MATCH) {
-                var post_where_chains = std.ArrayList(ast.Chain).empty;
-                // First add the existing chains
-                for (combined_gp.chains) |chain| {
-                    try post_where_chains.append(self.arena.allocator(), chain);
-                }
-                // Parse additional MATCH clauses
                 // SONNY-3181: each WHERE below is ANDed onto the WHERE so far,
                 // one link per MATCH: the conditions count as one expression
                 // (`max_expr_links`), whatever the MATCH clauses parse.
                 self.enterExpr();
                 defer self.leaveExpr();
-                while (self.cur.kind == .MATCH) {
+                while (self.cur.kind == .MATCH or self.cur.kind == .OPTIONAL) {
+                    const clause_optional = self.cur.kind == .OPTIONAL;
+                    if (clause_optional) {
+                        self.advance(); // consume OPTIONAL
+                        try self.refuseOptionalCall();
+                        if (self.cur.kind != .MATCH) return error.UnexpectedToken;
+                        optional_match = true;
+                    }
                     self.advance(); // consume MATCH
                     const additional_pattern = try self.parseGraphPattern();
                     for (additional_pattern.chains) |additional_chain| {
-                        try post_where_chains.append(self.arena.allocator(), additional_chain);
+                        var chain = additional_chain;
+                        if (clause_optional) chain.is_optional = true;
+                        try post_where_chains.append(self.arena.allocator(), chain);
                     }
+                    var clause_where: ?ast.Expr = null;
                     // Check for WHERE clause after this MATCH
                     if (self.cur.kind == .WHERE) {
                         self.advance();
@@ -2451,12 +3254,15 @@ pub const Parser = struct {
                         }
                         // Combine with existing where_expr using AND
                         const new_where = try self.parseOrExpr();
+                        clause_where = new_where;
                         if (where_expr) |existing_where| {
                             where_expr = try self.makeBinary(.And, existing_where, new_where);
                         } else {
                             where_expr = new_where;
                         }
                     }
+                    try match_clauses.append(self.arena.allocator(), .{ .optional = clause_optional, .end = post_where_chains.items.len, .where = clause_where });
+                    try self.parseFilterBetweenMatches(&between_filter);
                 }
                 combined_gp = .{ .chains = try post_where_chains.toOwnedSlice(self.arena.allocator()) };
             }
@@ -2503,15 +3309,10 @@ pub const Parser = struct {
         }
 
         // Parse FILTER clause (ISO/IEC 39075:2024)
-        var filter_expr: ?ast.Expr = null;
-        if (self.cur.kind == .FILTER) {
-            self.advance();
-            // FILTER can have optional WHERE keyword: "FILTER WHERE expr" or "FILTER expr"
-            if (self.cur.kind == .WHERE) {
-                self.advance();
-            }
-            filter_expr = try self.parseOrExpr();
-        }
+        // SONNY-6460 item 2: any number of them (`parseFilterStatements`).
+        const final_filter: ?ast.Expr = try self.parseFilterStatements();
+        // SONNY-6467 (3): with the FILTER statements between MATCH statements.
+        var filter_expr: ?ast.Expr = if (between_filter) |earlier| (if (final_filter) |later| try self.makeBinary(.And, earlier, later) else earlier) else final_filter;
 
         // Parse inline LET clause (after MATCH/WHERE/FILTER, before WITH/RETURN)
         // Syntax: MATCH ... LET var1 = expr1, var2 = expr2 RETURN ...
@@ -2521,9 +3322,7 @@ pub const Parser = struct {
             self.advance();
             while (true) {
                 // Parse variable name (no $ prefix for inline LET)
-                if (self.cur.kind != .identifier) return self.unexpected("expected identifier after LET");
-                const var_name = self.cur.lexeme;
-                self.advance();
+                const var_name = try self.expectBindingName("a variable"); // SONNY-6564
                 _ = try self.expect(.eq);
                 const value_expr = try self.parseOrExpr();
                 try inline_let_bindings.append(self.arena.allocator(), .{ .variable = var_name, .value = value_expr });
@@ -2539,7 +3338,25 @@ pub const Parser = struct {
         // Optional WITH projection forwarding (works for both MATCH and CREATE)
         // CANARY: REQ=REQ-GQL-CHAIN; FEATURE="Query Chaining via WITH"; ASPECT=Parser; STATUS=TESTED; TEST=graph_algorithms; OWNER=parser; UPDATED=2025-10-10
         var next_query_ptr: ?*ast.Query = null;
-        if (have_match and self.cur.kind == .FOR and !have_create and merge_statement == null) {
+        if (have_match and self.cur.kind == .FILTER and inline_let_bindings.items.len > 0 and !have_create and merge_statement == null) {
+            // CANARY: REQ=REQ-SONNY-6467-FILTER-AFTER-LET; FEATURE="FilterStatement"; ASPECT=AfterInlineLet; STATUS=TESTED; TEST=tests/test_sonny6467_query_residuals.zig; OWNER=parser; UPDATED=2026-11-13
+            // SONNY-6467 (3): ISO/IEC 39075:2024 14.6 <filter statement> is a
+            // <simple query statement>, so it may follow a <let statement>
+            // (14.7) and read its variables. It is `... LET x = e WITH
+            // <the pattern's variables>, x WHERE <condition> ...`: the WITH
+            // carries every row with the LET's values, and its WHERE keeps the
+            // rows the FILTER keeps.
+            const condition = (try self.parseFilterStatements()).?;
+            with_clause = .{ .items = try self.patternAndLetItems(pat, inline_let_bindings.items) };
+            // The WHERE and the FILTERs before the LET filter the pattern's
+            // rows; `where_clause` joins them with the WITH's (SONNY-3140).
+            var before: ?ast.Expr = where_expr;
+            if (filter_expr) |f| before = if (before) |w| try self.makeBinary(.And, w, f) else f;
+            filter_expr = null;
+            pre_with_where = before;
+            with_where = condition;
+            where_expr = if (before) |cond1| try self.makeBinary(.And, cond1, condition) else condition;
+        } else if (have_match and self.cur.kind == .FOR and !have_create and merge_statement == null) {
             // ISO/IEC 39075: a FOR after a MATCH extends each matched row
             // (`MATCH (n) FOR x IN n.list RETURN sum(x)`). It is the chain
             // `MATCH ... WITH <its variables> FOR ...`, whose FOR runs over
@@ -2580,18 +3397,15 @@ pub const Parser = struct {
                 with_order_by = order_by_ptr;
             }
 
-            if (self.cur.kind == .LIMIT) {
-                self.advance();
-                const lim = try self.parseLimitValue();
-                with_limit = lim.value;
-                with_limit_param = lim.param;
+            // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9).
+            const page = try self.parsePageClauses();
+            if (page.has_limit) {
+                with_limit = page.limit;
+                with_limit_param = page.limit_param;
             }
-
-            if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-                self.advance();
-                const off = try self.parseLimitValue();
-                with_offset = off.value;
-                with_offset_param = off.param;
+            if (page.has_offset) {
+                with_offset = page.offset;
+                with_offset_param = page.offset_param;
             }
 
             with_clause = .{
@@ -2621,7 +3435,9 @@ pub const Parser = struct {
             // CANARY: REQ=REQ-GQL-WITH-CHAIN-001; FEATURE="ChainedWithClauses"; ASPECT=ParserSupport; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=parser; UPDATED=2025-12-24
             // Check for query chaining: WITH ... WITH/MATCH/CREATE/FOR ...
             // If we see WITH, MATCH, CREATE, or FOR after WITH, parse it as a chained query or statement
-            if (self.cur.kind == .WITH or self.cur.kind == .MATCH or self.cur.kind == .CREATE or self.cur.kind == .FOR or self.cur.kind == .MERGE) {
+            // SONNY-6337: and OPTIONAL MATCH (`MATCH (q) WITH q OPTIONAL MATCH
+            // (q)-[:S]->(t)`), which was a syntax error.
+            if (self.cur.kind == .WITH or self.cur.kind == .MATCH or self.cur.kind == .OPTIONAL or self.cur.kind == .CREATE or self.cur.kind == .FOR or self.cur.kind == .MERGE) {
                 if (self.cur.kind == .FOR) {
                     // FOR needs special handling as it's a statement, not a query
                     next_query_ptr = try self.parseForContinuation();
@@ -2741,6 +3557,9 @@ pub const Parser = struct {
             self.advance();
             detach_delete = true;
             if (self.cur.kind != .DELETE) _ = try self.expect(.DELETE);
+        } else if (self.atNoDetachDelete()) {
+            // SONNY-6729: NODETACH DELETE is the plain DELETE.
+            self.advance();
         }
         if (self.cur.kind == .DELETE) {
             self.advance();
@@ -2774,6 +3593,9 @@ pub const Parser = struct {
         var call_clause: ?ast.CallClause = null;
         if (self.cur.kind == .CALL) {
             self.advance();
+            // SONNY-6343: an inline procedure call after MATCH (a subquery run
+            // per incoming row, ISO/IEC 39075 15.2) is not run.
+            if (self.cur.kind == .l_brace or self.cur.kind == .l_paren) return self.refuseShape("CALL { } or CALL (variables) { } after MATCH (an inline procedure call per matched row) is not supported: run the subquery first (CALL { ... } WITH ...) or use a pattern in the MATCH");
             // Parse procedure call expression (e.g., algo.bfs.stream(start, {maxDepth: 3}))
             const procedure = try self.parseOrExpr();
 
@@ -2784,11 +3606,14 @@ pub const Parser = struct {
                 var items = std.ArrayList(ast.ReturnItem).empty;
                 try self.parseProjectionItems(&items);
                 yield_items = try items.toOwnedSlice(self.arena.allocator());
+                try self.refuseWhereAfterYield();
             }
 
             call_clause = .{
                 .procedure = procedure,
                 .yield_items = yield_items,
+                // SONNY-6460 item 2: FILTER statements over the joined rows.
+                .filter = try self.parseFilterStatementsBoxed(),
             };
         }
 
@@ -2804,14 +3629,31 @@ pub const Parser = struct {
             try self.parseProjectionItems(&items);
             return_clause = .{ .items = try items.toOwnedSlice(self.arena.allocator()), .distinct = distinct };
 
+            // CANARY: REQ=REQ-SONNY-2698-GROUPING-STAGE; FEATURE="StageOwnedGrouping"; ASPECT=ParserReturnTail; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=parser; UPDATED=2026-11-12
+            // SONNY-2698: a WHERE, GROUP BY or HAVING after the RETURN items
+            // is the RETURN's (ISO/IEC 39075:2024 14.11: the <group by
+            // clause> is part of the <return statement body>), recorded in
+            // `return_grouping`. A part keeps one GROUP BY and one HAVING, so
+            // one already written (between a WITH and the RETURN) is not
+            // replaced but refused: the RETURN's used to overwrite it, so
+            // `WITH g, count(*) AS c GROUP BY g RETURN c, count(*) GROUP BY c`
+            // grouped once, by c, over the pattern's rows.
+
             // Allow WHERE after RETURN items as post-projection filter
             if (self.cur.kind == .WHERE) {
+                if (having_expr != null or (with_clause != null and group_by != null)) {
+                    return self.unexpected("a WHERE after RETURN beside the GROUP BY or HAVING written before the RETURN: one grouping per query part");
+                }
                 self.advance();
                 having_expr = try self.parseOrExpr();
+                return_grouping = true;
             }
 
             // Allow GROUP BY (and optional HAVING) after RETURN as well
             if (self.cur.kind == .GROUP) {
+                if (group_by != null) {
+                    return self.unexpected("a GROUP BY after RETURN beside the GROUP BY written before the RETURN: one grouping per query part");
+                }
                 self.advance();
                 _ = try self.expect(.BY);
                 var keys_list2 = std.ArrayList(ast.Expr).empty;
@@ -2821,8 +3663,12 @@ pub const Parser = struct {
                     self.advance();
                 }
                 group_by = .{ .keys = try keys_list2.toOwnedSlice(self.arena.allocator()) };
+                return_grouping = true;
                 // Also accept WHERE after GROUP BY as post-aggregation filter
                 if (self.cur.kind == .HAVING or self.cur.kind == .WHERE) {
+                    if (having_expr != null) {
+                        return self.unexpected("a HAVING beside the WHERE after RETURN: one per query part");
+                    }
                     self.advance();
                     having_expr = try self.parseOrExpr();
                 }
@@ -2858,94 +3704,18 @@ pub const Parser = struct {
             unreachable;
         }
 
-        var ord: ?ast.OrderBy = null;
-        if (self.cur.kind == .ORDER) {
-            self.advance();
-            _ = try self.expect(.BY);
-            var keys = std.ArrayList(ast.OrderBy.OrderKey).empty;
-            // first expression key - allow expressions now
-            const expr1 = try self.parseOrExpr();
-            // Parse-time enforcement: forbid function calls inside ORDER BY keys when policy active.
-            // We examine the AST recursively; if any call node appears, raise an IllegalOrderKey style error.
-            if (self.forbid_orderby_calls and self.containsCall(expr1)) {
-                // Message string matched in diagnostics mapping path (server expects substring)
-                self.last_error = "function calls in ORDER BY are disabled"; // triggers IllegalOrderKey diagnostic
-                return error.UnexpectedToken;
-            }
-            // Check if it's an ordinal
-            if (expr1 == .Int and self.isValidOrdinal(expr1.Int, return_clause.items.len)) {
-                self.has_ordinal_sort_key = true;
-            }
-            const mods1 = try self.parseOrderKeyModifiers();
-            try keys.append(self.arena.allocator(), .{ .expr = expr1, .desc = mods1.desc, .nulls = mods1.nulls });
-            while (self.cur.kind == .comma) {
-                self.advance();
-                const exprk = try self.parseOrExpr();
-                if (self.forbid_orderby_calls and self.containsCall(exprk)) {
-                    self.last_error = "function calls in ORDER BY are disabled";
-                    return error.UnexpectedToken;
-                }
-                // Check if it's an ordinal
-                if (exprk == .Int and self.isValidOrdinal(exprk.Int, return_clause.items.len)) {
-                    self.has_ordinal_sort_key = true;
-                }
-                const modsk = try self.parseOrderKeyModifiers();
-                try keys.append(self.arena.allocator(), .{ .expr = exprk, .desc = modsk.desc, .nulls = modsk.nulls });
-            }
-            ord = .{ .keys = try keys.toOwnedSlice(self.arena.allocator()) };
-        }
-
-        var limit: ?usize = null;
-        var offset: ?usize = null;
-        var limit_param: ?[]const u8 = null;
-        var offset_param: ?[]const u8 = null;
-
-        // Additional legality enforcement: when ident_order_only policy active, reject any ORDER BY key that is not a bare identifier.
-        if (ord) |ob| {
-            if (self.ident_order_only) {
-                var i_chk: usize = 0;
-                while (i_chk < ob.keys.len) : (i_chk += 1) {
-                    const ke = ob.keys[i_chk].expr;
-                    if (ke != .Ident) {
-                        if (self.containsCall(ke)) {
-                            self.last_error = "function calls in ORDER BY are disabled";
-                        } else {
-                            self.last_error = "ORDER BY key must be identifier";
-                        }
-                        return error.UnexpectedToken;
-                    }
-                }
-            }
-        }
-
-        // Parse LIMIT and OFFSET in any order
-        // First check for LIMIT
-        if (self.cur.kind == .LIMIT) {
-            self.advance();
-            const lim = try self.parseLimitValue();
-            limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
-            limit_param = lim.param;
-        }
-        // Check for OFFSET/SKIP
-        if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-            self.advance();
-            const off = try self.parseLimitValue();
-            offset = if (off.value) |v| @as(usize, @intCast(v)) else null;
-            offset_param = off.param;
-        }
-        // Check for LIMIT again (in case it comes after OFFSET)
-        if (limit == null and limit_param == null and self.cur.kind == .LIMIT) {
-            self.advance();
-            const lim = try self.parseLimitValue();
-            limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
-            limit_param = lim.param;
-        }
+        const page = try self.parseOrderAndPage(return_clause.items.len);
+        const ord = page.order_by;
+        const limit = page.limit;
+        const offset = page.offset;
+        const limit_param = page.limit_param;
+        const offset_param = page.offset_param;
 
         // Keep let_bindings and inline_let_bindings separate for proper evaluation timing
         // Parameter bindings (before MATCH) are evaluated once upfront
         // Inline bindings (after MATCH) are evaluated per result row with matched variables in scope
 
-        return .{
+        out.* = .{
             .let_bindings = try let_bindings.toOwnedSlice(self.arena.allocator()),
             .inline_let_bindings = try inline_let_bindings.toOwnedSlice(self.arena.allocator()),
             .optional_match = optional_match,
@@ -2961,6 +3731,7 @@ pub const Parser = struct {
             .initial_where = if (select_mode) null else initial_where_expr,
             .select_projection = select_mode,
             .optional_where = optional_where,
+            .match_clauses = try match_clauses.toOwnedSlice(self.arena.allocator()),
             .pre_with_where = pre_with_where,
             .with_where = with_where,
             .split_create = split_create,
@@ -2971,6 +3742,7 @@ pub const Parser = struct {
             .detach_delete = detach_delete,
             .group_by = group_by,
             .having = having_expr,
+            .return_grouping = return_grouping,
             .ret = return_clause,
             .order_by = ord,
             .limit = limit,
@@ -3048,9 +3820,10 @@ pub const Parser = struct {
             // Optional path alias: ident '=' before a node pattern or shortestPath function
             // CANARY: REQ=REQ-GQL-091; FEATURE="PathAssignmentAfterWITH"; ASPECT=Parser; STATUS=TESTED; TEST=subgraph-isomorphism; OWNER=parser; UPDATED=2025-10-14
             var chain_name: ?[]const u8 = null;
-            if ((self.cur.kind == .identifier or self.cur.kind == .PATH or self.isKeyword(self.cur.kind)) and self.peekKind() == .eq) {
-                chain_name = self.cur.lexeme;
-                self.advance(); // ident, PATH, or keyword
+            // SONNY-6564: a path variable is a binding name (PATH, a 21.3
+            // reserved word, is one of the five Geode keeps).
+            if ((self.isBindingName(self.cur) or self.isReservedWordToken(self.cur) or self.isDoubleQuoted(self.cur)) and self.peekKind() == .eq) {
+                chain_name = try self.expectBindingName("a path variable");
                 _ = try self.expect(.eq);
 
                 // Check if this is a shortestPath or allShortestPaths function call
@@ -3113,8 +3886,41 @@ pub const Parser = struct {
                         continue;
                     }
                     self.advance();
+                    // SONNY-6267: ISO/IEC 39075:2024 16.7 <abbreviated edge
+                    // pattern> <minus sign>, `(a)-(b)`: the empty `-[ ]-`,
+                    // an edge in any direction.
+                    if (self.cur.kind == .l_paren) {
+                        try self.appendAbbreviatedHop(&hops, &left, .undirected);
+                        continue;
+                    }
+                    if (self.atGraphPatternQuantifier()) {
+                        try self.appendQuantifiedAbbreviatedHop(&hops, &left, .undirected);
+                        continue;
+                    }
                 } else if (self.cur.kind == .arrow_l) {
+                    const arrow = self.cur;
                     self.advance();
+                    // SONNY-6267: 16.7 <left minus right>, `(a)<->(b)` (lexed
+                    // as `<-` `>`): the empty `<-[ ]->`, an edge pointing
+                    // left or right. Geode's edges are all directed, so that
+                    // is an edge in either direction.
+                    if (self.cur.kind == .gt and adjacentTokens(arrow, self.cur)) {
+                        self.advance();
+                        if (self.cur.kind != .l_paren) return self.unexpected("expected a node pattern after <->");
+                        try self.appendAbbreviatedHop(&hops, &left, .undirected);
+                        continue;
+                    }
+                    // SONNY-6267: `<--` is not GQL. 16.7 SR: a token exposing
+                    // a minus sign on the right (`<-`) is not juxtaposed with
+                    // one exposing it on the left (`-`), as the two minus
+                    // signs would be a <simple comment introducer> (NOTE 238).
+                    if (self.cur.kind == .minus and adjacentTokens(arrow, self.cur)) {
+                        return self.unexpected("`<--` is not GQL (ISO/IEC 39075:2024 16.7: `--` begins a comment): write `<-` for an edge pointing left, `<-[ ]-` with a filler, or `-` / `<->` for either direction");
+                    }
+                    if (self.atGraphPatternQuantifier()) {
+                        try self.appendQuantifiedAbbreviatedHop(&hops, &left, .left);
+                        continue;
+                    }
                     // Check for bracketless left-directed relationship (<-() without bracket)
                     if (self.cur.kind == .l_paren) {
                         dir = .left;
@@ -3134,6 +3940,10 @@ pub const Parser = struct {
                     dir = .left;
                 } else if (self.cur.kind == .arrow_r) {
                     self.advance();
+                    if (self.atGraphPatternQuantifier()) {
+                        try self.appendQuantifiedAbbreviatedHop(&hops, &left, .right);
+                        continue;
+                    }
                     // Check for bracketless right-directed relationship (->() without bracket)
                     if (self.cur.kind == .l_paren) {
                         dir = .right;
@@ -3152,6 +3962,7 @@ pub const Parser = struct {
                     }
                     dir = .right;
                 } else {
+                    if (self.atUndirectedEdge()) return self.undirectedEdge(); // SONNY-6433
                     break;
                 }
                 // Parse the relationship pattern first, then determine final direction from trailing connector
@@ -3160,7 +3971,9 @@ pub const Parser = struct {
                 // CRITICAL FIX: For patterns like -[*]-> or -[:R*1]->, the direction should come from
                 // the TRAILING connector (->), not the leading one (-). Update the direction here.
                 if (self.cur.kind == .arrow_r) {
-                    rel.dir = .right;
+                    // SONNY-6267: 16.7 <full edge left or right>, `<-[ ]->`:
+                    // an edge pointing left or right, i.e. either direction.
+                    rel.dir = if (dir == .left) .undirected else .right;
                     self.advance();
                 } else if (self.cur.kind == .arrow_l) {
                     rel.dir = .left;
@@ -3168,7 +3981,10 @@ pub const Parser = struct {
                 } else if (self.cur.kind == .minus) {
                     // Trailing - means undirected (already the default)
                     self.advance();
+                } else if (self.atUndirectedEdge()) {
+                    return self.undirectedEdge(); // SONNY-6433: `-[ ]~`
                 }
+                if (self.atGraphPatternQuantifier()) try self.parseGraphPatternQuantifier(&rel);
                 const right = try self.parseNodePattern();
                 try hops.append(self.arena.allocator(), .{ .left = left, .rel = rel, .right = right });
                 left = right; // chain continues from the right node
@@ -3193,13 +4009,91 @@ pub const Parser = struct {
         return .{ .chains = try chains.toOwnedSlice(self.arena.allocator()) };
     }
 
+    // CANARY: REQ=REQ-SONNY-6564-PATH-QUANTIFIER; FEATURE="GQLParser"; ASPECT=GraphPatternQuantifier; STATUS=TESTED; TEST=tests/test_sonny6564_identifier_words.zig; OWNER=parser; UPDATED=2026-11-15
+    /// SONNY-6564: an ISO/IEC 39075:2024 16.11 <graph pattern quantifier>
+    /// follows: `{`, or `*` / `+` before a node pattern.
+    fn atGraphPatternQuantifier(self: *Parser) bool {
+        return switch (self.cur.kind) {
+            .l_brace => true,
+            .star, .plus => self.peekKind() == .l_paren,
+            else => false,
+        };
+    }
+
+    /// SONNY-6564: read a 16.11 <graph pattern quantifier> after an edge
+    /// pattern (Feature G036, quantified edges) into the edge's length
+    /// bounds, the ones the Cypher-style `-[*m..n]->` sets, so both run on
+    /// the same variable-length expansion. 16.11 SR 2: `*` is `{0,}`, `+` is
+    /// `{1,}`, `{n}` is `{n,n}`, and a <general quantifier> without a lower
+    /// bound has 0; SR 3 a: an upper bound is greater than 0 and not below
+    /// the lower bound. An edge whose brackets already carry `*` takes none.
+    fn parseGraphPatternQuantifier(self: *Parser, rel: *ast.RelPattern) ParserError!void {
+        if (rel.min_len != null or rel.max_len != null) {
+            return self.unexpected("an edge pattern takes one quantifier: write `-[:R*1..2]->` or `-[:R]->{1,2}`, not both (ISO/IEC 39075:2024 16.11)");
+        }
+        var lower: ?u32 = null;
+        var upper: ?u32 = null;
+        switch (self.cur.kind) {
+            .star => {
+                self.advance();
+                lower = 0;
+            },
+            .plus => {
+                self.advance();
+                lower = 1;
+            },
+            .l_brace => {
+                self.advance();
+                var general = false;
+                if (self.cur.kind == .integer_lit) {
+                    lower = std.fmt.parseInt(u32, self.cur.lexeme, 10) catch return self.unexpected("graph pattern quantifier bound out of range");
+                    self.advance();
+                }
+                if (self.cur.kind == .comma) {
+                    general = true;
+                    self.advance();
+                    if (self.cur.kind == .integer_lit) {
+                        upper = std.fmt.parseInt(u32, self.cur.lexeme, 10) catch return self.unexpected("graph pattern quantifier bound out of range");
+                        self.advance();
+                    }
+                }
+                if (self.cur.kind != .r_brace) return self.unexpected("expected `}` closing the graph pattern quantifier (ISO/IEC 39075:2024 16.11: {n}, {m,n}, {m,} or {,n})");
+                self.advance();
+                if (!general) {
+                    if (lower == null) return self.unexpected("a fixed quantifier needs its count: {n} (ISO/IEC 39075:2024 16.11)");
+                    upper = lower;
+                } else if (lower == null) {
+                    lower = 0;
+                }
+                if (upper) |u| {
+                    if (u == 0) return self.unexpected("a graph pattern quantifier's upper bound must be greater than 0 (ISO/IEC 39075:2024 16.11 SR 3)");
+                    if (lower.? > u) return self.unexpected("a graph pattern quantifier's lower bound must not exceed its upper bound (ISO/IEC 39075:2024 16.11 SR 3)");
+                }
+            },
+            else => return,
+        }
+        rel.min_len = lower;
+        rel.max_len = upper;
+    }
+
+    /// SONNY-6564: an abbreviated edge (`-`, `<-`, `->`) with a quantifier,
+    /// `(a)->{1,2}(b)`, then the node pattern it reaches.
+    fn appendQuantifiedAbbreviatedHop(self: *Parser, hops: *std.ArrayList(ast.Hop), left: *ast.NodePattern, dir: ast.RelDir) ParserError!void {
+        var rel = ast.RelPattern{ .name = null, .types = &.{}, .props = null, .dir = dir, .min_len = null, .max_len = null };
+        try self.parseGraphPatternQuantifier(&rel);
+        const right = try self.parseNodePattern();
+        try hops.append(self.arena.allocator(), .{ .left = left.*, .rel = rel, .right = right });
+        left.* = right;
+    }
+
     fn parseNodePattern(self: *Parser) ParserError!ast.NodePattern {
         _ = try self.expect(.l_paren);
         var name: ?[]const u8 = null;
-        // Accept keywords as variable names (e.g., MATCH (create:Person))
-        if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) {
-            name = self.cur.lexeme;
-            self.advance();
+        // SONNY-6564: a node variable is a binding name (21.3 SR 18): a
+        // non-reserved word (`(type:T)`) or a delimited identifier names it,
+        // a reserved word (`(match:X)`) is refused.
+        if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur) or self.isDoubleQuoted(self.cur)) {
+            name = try self.expectBindingName("a node variable");
         }
         var labels = std.ArrayList([]const u8).empty;
         while (self.cur.kind == .colon) {
@@ -3219,10 +4113,9 @@ pub const Parser = struct {
     fn parseRelPattern(self: *Parser, dir: ast.RelDir) ParserError!ast.RelPattern {
         _ = try self.expect(.l_bracket);
         var name: ?[]const u8 = null;
-        // Accept keywords as variable names (e.g., MATCH ()-[property:KNOWS]->())
-        if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) {
-            name = self.cur.lexeme;
-            self.advance();
+        // SONNY-6564: an edge variable is a binding name, as a node's.
+        if (self.isBindingName(self.cur) or self.isReservedWordToken(self.cur) or self.isDoubleQuoted(self.cur)) {
+            name = try self.expectBindingName("an edge variable");
         }
         var types = std.ArrayList([]const u8).empty;
         while (self.cur.kind == .colon) {
@@ -3296,13 +4189,14 @@ pub const Parser = struct {
                 // Accept identifier, string_lit, or any keyword as property keys
                 // This allows {name: 'value'}, {'name': 'value'}, and {value: 1} syntax
                 // Keywords like VALUE, RETURN, etc. are valid property names
+                // SONNY-6564: a property key is a name only, so any word is
+                // taken (docs/GQL_COMPLIANCE.md), and a delimited identifier.
                 const key = if (self.cur.kind == .string_lit)
                     try self.expect(.string_lit)
-                else if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) blk: {
-                    const token = self.cur;
-                    self.advance();
-                    break :blk token;
-                } else return self.unexpected("property key");
+                else if (self.cur.kind == .identifier or self.cur.kind == .quoted_identifier or self.isKeyword(self.cur.kind))
+                    try self.expectIdentifierOrKeyword()
+                else
+                    return self.unexpected("property key");
                 _ = try self.expect(.colon);
                 const expr = try self.parseOrExpr();
                 const a = self.arena.allocator();
@@ -3319,16 +4213,13 @@ pub const Parser = struct {
     }
 
     fn parseProjectionItems(self: *Parser, out: *std.ArrayList(ast.ReturnItem)) ParserError!void {
-        // Handle RETURN NO BINDINGS to return 0 rows
-        if (self.cur.kind == .NO) {
+        // Handle RETURN NO BINDINGS to return 0 rows. SONNY-6564: NO is a
+        // 21.3 non-reserved word, so `RETURN no` returns a variable `no`.
+        if (self.cur.kind == .NO and self.peekKind() == .BINDINGS) {
             self.advance();
-            if (self.cur.kind == .BINDINGS) {
-                self.advance();
-                // Return empty list of items - this signals no rows should be returned
-                return;
-            } else {
-                return error.UnexpectedToken;
-            }
+            self.advance();
+            // Return empty list of items - this signals no rows should be returned
+            return;
         }
 
         // Handle RETURN * to return all bound variables
@@ -3337,6 +4228,9 @@ pub const Parser = struct {
             // Create a special marker using Ident with "*" to signal executor to return all bindings
             const star_expr = ast.Expr{ .Ident = .{ .orig = "*", .cnf = "*" } };
             try out.append(self.arena.allocator(), .{ .expr = star_expr, .alias = null });
+            // SONNY-6525 item 3: ISO/IEC 39075:2024 14.11 <return statement
+            // body> is `*` or a list of items, never both.
+            if (self.cur.kind == .comma) return self.unexpected("`*` is the whole projection list and cannot be followed by items (ISO/IEC 39075:2024 14.11 <return statement body>: `*` or a list of items); name every item instead, e.g. WITH n, n.k AS k");
             return;
         }
 
@@ -3345,13 +4239,12 @@ pub const Parser = struct {
             var alias: ?[]const u8 = null;
             if (self.cur.kind == .AS) {
                 self.advance();
-                // Accept either identifier/keyword or quoted string literal for alias
-                const a = if (self.cur.kind == .string_lit) blk: {
-                    const token = self.cur;
-                    self.advance();
-                    break :blk token;
-                } else try self.expectIdentifierOrKeyword();
-                alias = a.lexeme;
+                // A binding name (SONNY-6564: a reserved word is refused,
+                // ISO/IEC 39075:2024 21.3), delimited by accents or (SONNY-6596)
+                // double quotes. SONNY-6613: a single-quoted sequence is a
+                // character string literal only (21.2), never an <identifier>
+                // (14.11 <return item alias>); `AS 'x'` named the column.
+                alias = try self.expectBindingName("an alias");
             }
             try out.append(self.arena.allocator(), .{ .expr = expr, .alias = alias });
             if (self.cur.kind != .comma) break;
@@ -3388,6 +4281,24 @@ pub const Parser = struct {
         return left;
     }
 
+    /// SONNY-6467 (1): at `ident )`, whether an edge follows the closing
+    /// parenthesis (`(n)-`, `(n)<-`, `(n)->`, `(n)<~`, `(n)~`), which makes
+    /// `(n)` a node pattern. The parser's position is restored.
+    fn edgeFollowsVariableInParens(self: *Parser) bool {
+        const saved_lx = self.lx.*;
+        const saved_cur = self.cur;
+        defer {
+            self.lx.* = saved_lx;
+            self.cur = saved_cur;
+        }
+        self.advance(); // identifier
+        self.advance(); // )
+        return switch (self.cur.kind) {
+            .minus, .arrow_l, .arrow_r => true,
+            else => self.atUndirectedEdge(),
+        };
+    }
+
     fn parseNotExpr(self: *Parser) ParserError!ast.Expr {
         if (self.cur.kind == .NOT) {
             // Check if this is NOT IN (handled in parseCmpExpr)
@@ -3417,9 +4328,18 @@ pub const Parser = struct {
                 // expression mixing HasLabel predicates with OR/AND.  When the
                 // tokens after `(ident:Label` are `OR`, `AND`, comparison ops,
                 // or `:` continuing a multi-label test, treat as expression.
+                // SONNY-6467 (1): an identifier is a node pattern's variable
+                // only when a node pattern continues it: a label or property
+                // map (`(n:L`, `(n {`), or a closing parenthesis followed by
+                // an edge (`(n)-`, `(n)<-`, `(n)->`). Anything else is a
+                // parenthesized boolean value expression (ISO/IEC 39075:2024
+                // 19.2): `NOT (k = 1)` was `NOT EXISTS { (k) ... }`.
                 var looks_like_pattern = if (self.cur.kind == .identifier)
-                    // Identifier followed by . is property access (expression), not node pattern
-                    self.peekToken() != .dot
+                    switch (self.peekToken()) {
+                        .colon, .l_brace => true,
+                        .r_paren => self.edgeFollowsVariableInParens(),
+                        else => false,
+                    }
                 else
                     // :Label or () patterns
                     (self.cur.kind == .colon or self.cur.kind == .r_paren);
@@ -3553,14 +4473,13 @@ pub const Parser = struct {
                     if (self.cur.kind == .l_paren) {
                         // IN (subquery) - parse as subquery
                         self.advance(); // consume (
-                        const subquery = try self.parseQuery();
+                        const a = self.arena.allocator();
+                        const qp = try a.create(ast.Query);
+                        try self.parseSubqueryInto(qp);
                         _ = try self.expect(.r_paren);
 
-                        const a = self.arena.allocator();
                         const vp = try a.create(ast.Expr);
                         vp.* = left;
-                        const qp = try a.create(ast.Query);
-                        qp.* = subquery;
                         return .{ .InSubquery = .{ .value = vp, .subquery = qp } };
                     } else if (self.cur.kind == .l_bracket) {
                         // IN [list] - parse as list
@@ -3604,14 +4523,13 @@ pub const Parser = struct {
                     if (self.cur.kind == .l_paren) {
                         // NOT IN (subquery)
                         self.advance(); // consume (
-                        const subquery = try self.parseQuery();
+                        const a = self.arena.allocator();
+                        const qp = try a.create(ast.Query);
+                        try self.parseSubqueryInto(qp);
                         _ = try self.expect(.r_paren);
 
-                        const a = self.arena.allocator();
                         const vp = try a.create(ast.Expr);
                         vp.* = left;
-                        const qp = try a.create(ast.Query);
-                        qp.* = subquery;
                         return .{ .NotInSubquery = .{ .value = vp, .subquery = qp } };
                     } else if (self.cur.kind == .l_bracket) {
                         // NOT IN [list]
@@ -3790,9 +4708,13 @@ pub const Parser = struct {
             // SONNY-3133: `- - ... 1` recursed with no limit.
             try self.enterRecursion();
             defer self.leaveRecursion();
-            // SONNY-3181: and it is a link of the expression.
-            try self.countExprLink();
             const e = try self.parseUnaryExpr();
+            // SONNY-3181: and it is a link of the expression, unless it
+            // signs a numeric literal (SONNY-6540): ISO/IEC 39075:2024 21.2,
+            // `<signed numeric literal> ::= [ <sign> ] <unsigned numeric
+            // literal>`, so a vector literal of 65,535 negative components
+            // is 65,535 literals, not an operator chain.
+            if (!isUnsignedNumericLiteral(e)) try self.countExprLink();
             const a = self.arena.allocator();
             const ep = try a.create(ast.Expr);
             ep.* = e;
@@ -3803,8 +4725,8 @@ pub const Parser = struct {
             // SONNY-3133: as unary minus.
             try self.enterRecursion();
             defer self.leaveRecursion();
-            try self.countExprLink();
             const e = try self.parseUnaryExpr();
+            if (!isUnsignedNumericLiteral(e)) try self.countExprLink();
             const a = self.arena.allocator();
             const ep = try a.create(ast.Expr);
             ep.* = e;
@@ -3821,11 +4743,8 @@ pub const Parser = struct {
         while (true) : (try self.countExprLink()) {
             if (self.cur.kind == .dot) {
                 self.advance();
-                const field = if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) blk: {
-                    const token = self.cur;
-                    self.advance();
-                    break :blk token;
-                } else try self.expect(.identifier);
+                // SONNY-6564: a property name; any word, or `...`.
+                const field = try self.expectIdentifierOrKeyword();
                 const a = self.arena.allocator();
                 const bp = try a.create(ast.Expr);
                 bp.* = base;
@@ -3868,10 +4787,19 @@ pub const Parser = struct {
                         self.advance(); // consume '('
                         // CANARY: REQ=REQ-GQL-PATH-NULL-001; FEATURE="ShortestPath"; ASPECT=NullHandling; STATUS=TESTED; TEST=geodetestlab/specs/gap_0087_0089_resolution.yml; OWNER=parser; UPDATED=2026-01-25
                         // Handle NULL input - shortestPath(null) should return NULL
-                        if (self.cur.kind == .NULL) {
+                        if (self.cur.kind == .NULL and self.peekKind() == .r_paren) {
                             self.advance(); // consume NULL
                             _ = try self.expect(.r_paren);
                             base = .Null;
+                            continue;
+                        }
+                        // CANARY: REQ=REQ-SONNY-6637-SHORTEST-PATH-NODES; FEATURE="ShortestPath"; ASPECT=TwoArgumentForm; STATUS=TESTED; TEST=tests/test_sonny6637_query_items.zig; OWNER=parser; UPDATED=2026-11-15
+                        // SONNY-6637 item 1: `shortestPath(a, b)`, two node
+                        // expressions, is the call the evaluator walks
+                        // between them (`eval.evalShortestPathBetween`). A
+                        // graph pattern starts with `(`, or with `p =`.
+                        if (self.cur.kind != .l_paren and self.peekKind() != .eq) {
+                            try self.parseShortestPathNodes(&base);
                             continue;
                         }
                         // Parse graph pattern argument
@@ -3919,7 +4847,7 @@ pub const Parser = struct {
                 if (base == .Ident and (std.ascii.eqlIgnoreCase(base.Ident.orig, "all") or
                     std.ascii.eqlIgnoreCase(base.Ident.orig, "any") or
                     std.ascii.eqlIgnoreCase(base.Ident.orig, "none") or
-                    std.ascii.eqlIgnoreCase(base.Ident.orig, "single")) and self.cur.kind == .identifier)
+                    std.ascii.eqlIgnoreCase(base.Ident.orig, "single")) and self.isBindingName(self.cur))
                 {
                     // Check if this is a list comprehension: identifier IN ...
                     const saved_idx = self.lx.idx;
@@ -4005,7 +4933,10 @@ pub const Parser = struct {
                         self.advance();
                         const ap = try self.arena.allocator().create(ast.Expr);
                         const unicode = @import("../unicode/unicode_tables.zig");
-                        const cnf = unicode.caseFoldToUpper(self.arena.allocator(), star_token.lexeme) catch star_token.lexeme;
+                        const cnf = unicode.caseFoldToUpper(self.arena.allocator(), star_token.lexeme) catch |fold_err| switch (fold_err) {
+                            error.OutOfMemory => return error.OutOfMemory,
+                            else => star_token.lexeme,
+                        };
                         ap.* = .{ .Ident = .{ .orig = star_token.lexeme, .cnf = cnf } };
                         try args.append(self.arena.allocator(), ap);
                     } else {
@@ -4174,8 +5105,10 @@ pub const Parser = struct {
                     self.advance();
                     break :blk_param .{ .Param = name.lexeme };
                 }
-                const name = try self.expectIdentifierOrKeyword();
-                break :blk_param .{ .Param = name.lexeme };
+                // SONNY-6564: a <parameter name> (21.3): a reserved word
+                // is refused, a delimited one ($`limit`) is not.
+                const name = try self.expectBindingName("a parameter name");
+                break :blk_param .{ .Param = name };
             },
             .date_lit => blk_dt: {
                 const tkn = self.cur;
@@ -4238,10 +5171,30 @@ pub const Parser = struct {
             },
             .identifier => blk: {
                 const tkn = self.cur;
+                // SONNY-6564: a reserved word is no variable reference.
+                if (identifier_words.isRefusedBindingName(tkn.lexeme) and !self.reservedWordStartsExpression(tkn)) {
+                    return self.refuseReservedName(tkn, "a variable");
+                }
+                // SONNY-6727: CURRENT_GRAPH and CURRENT_PROPERTY_GRAPH (ISO/IEC
+                // 39075:2024 7.1, 20.x) are value expressions naming the
+                // session's graph, never variable references. A delimited
+                // `CURRENT_GRAPH` is a plain identifier (quoted_identifier).
+                if (self.peekKind() != .l_paren and
+                    (std.ascii.eqlIgnoreCase(tkn.lexeme, "CURRENT_GRAPH") or std.ascii.eqlIgnoreCase(tkn.lexeme, "CURRENT_PROPERTY_GRAPH")))
+                {
+                    self.advance();
+                    const a = self.arena.allocator();
+                    const callee = try a.create(ast.Expr);
+                    callee.* = .{ .Ident = .{ .orig = ast.session_graph_value_fn, .cnf = "__CURRENT_GRAPH" } };
+                    break :blk .{ .Call = .{ .callee = callee, .args = &.{} } };
+                }
                 self.advance();
                 // Create CNF representation for identifiers
                 const unicode = @import("../unicode/unicode_tables.zig");
-                const cnf = unicode.caseFoldToUpper(self.arena.allocator(), tkn.lexeme) catch tkn.lexeme;
+                const cnf = unicode.caseFoldToUpper(self.arena.allocator(), tkn.lexeme) catch |fold_err| switch (fold_err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => tkn.lexeme,
+                };
                 break :blk .{ .Ident = .{ .orig = tkn.lexeme, .cnf = cnf } };
             },
             .string_lit => blk: {
@@ -4273,27 +5226,17 @@ pub const Parser = struct {
                 }
 
                 if (has_exp) {
-                    // Parse scientific notation: parse as f64 and convert to decimal
+                    // CANARY: REQ=REQ-SONNY-6596-APPROXIMATE-LITERAL; FEATURE="GQLParser"; ASPECT=ApproximateNumericLiteral; STATUS=TESTED; TEST=tests/test_sonny6596_approximate_literal.zig; OWNER=parser; UPDATED=2026-11-15
+                    // SONNY-6596: an <unsigned decimal in scientific notation>
+                    // is an <approximate numeric literal> (ISO/IEC 39075:2024
+                    // 21.2); its declared type is implementation-defined
+                    // (SR 19 c, ID079): Geode's is DOUBLE. It was evaluated
+                    // as an exact scale-15 DECIMAL. SR 20: a value beyond the
+                    // DOUBLE range is refused (GAP-0905: a clean parse error,
+                    // never a panic).
                     const value = try std.fmt.parseFloat(f64, lex);
-                    // Use 15 decimal places to preserve precision for small values (e.g. 1.23e-7).
-                    // GAP-0905: guard the i128 conversion — an unchecked @intFromFloat
-                    // panicked (and killed the server) for literals like 1.0e308.
-                    // 0x1p127 is 2^127 as f64; i128 holds (-2^127, 2^127). NaN fails
-                    // both comparisons and falls through to the error.
-                    const i128_limit: f64 = 0x1p127;
-                    const scaled = value * 1_000_000_000_000_000;
-                    if (scaled >= -i128_limit and scaled < i128_limit) {
-                        const coeff = @as(i128, @intFromFloat(scaled));
-                        break :blk_f .{ .Decimal = .{ .coeff = coeff, .scale = 15 } };
-                    }
-                    if (value >= -i128_limit and value < i128_limit) {
-                        // Too large for the scale-15 fixed-point form; fall back to an
-                        // integer-valued decimal so huge-but-representable literals work.
-                        break :blk_f .{ .Decimal = .{ .coeff = @as(i128, @intFromFloat(value)), .scale = 0 } };
-                    }
-                    // Unrepresentable in a 38-digit decimal: clean parse error, matching
-                    // the pre-existing oversized-integer-literal policy (error.Overflow).
-                    return error.Overflow;
+                    if (!std.math.isFinite(value)) return error.Overflow;
+                    break :blk_f .{ .DoubleLit = value };
                 } else {
                     // Standard decimal notation
                     var dot_idx: usize = 0;
@@ -4304,11 +5247,18 @@ pub const Parser = struct {
                     // SONNY-2739: more than 255 fraction digits aborted the
                     // server here (`@intCast`); it is an out-of-range literal.
                     const scale: u8 = std.math.cast(u8, frac_part.len) orelse return error.Overflow;
-                    // coeff = parse int_part ++ frac_part as i128
-                    var buf = std.ArrayList(u8).empty;
-                    try buf.appendSlice(self.arena.allocator(), int_part);
-                    try buf.appendSlice(self.arena.allocator(), frac_part);
-                    const coeff = try std.fmt.parseInt(i128, buf.items, 10);
+                    // CANARY: REQ=REQ-SONNY-6540-VECTOR-LITERAL-PARSE; FEATURE="GQLParser"; ASPECT=DecimalLiteralScratch; STATUS=TESTED; TEST=tests/test_sonny6540_vector_literal_parse.zig; OWNER=parser; UPDATED=2026-11-14
+                    // coeff = parse int_part ++ frac_part as i128.
+                    // SONNY-6540: the digits are scratch, built on the
+                    // stack and freed here. On the arena they stayed for
+                    // the whole parse: a decimal element cost more than
+                    // twice an integer one, and a 65,535-dimension vector
+                    // literal crossed `max_parse_arena_bytes`.
+                    var digits_sfa = std.heap.stackFallback(128, self.arena.allocator());
+                    const digits_alloc = digits_sfa.get();
+                    const digits = try std.mem.concat(digits_alloc, u8, &.{ int_part, frac_part });
+                    defer digits_alloc.free(digits);
+                    const coeff = try std.fmt.parseInt(i128, digits, 10);
                     break :blk_f .{ .Decimal = .{ .coeff = coeff, .scale = scale } };
                 }
             },
@@ -4409,16 +5359,16 @@ pub const Parser = struct {
                 // literal whose first element is negative) from the expression parser.
                 self.advance();
                 var starts_pattern = false;
-                if (self.cur.kind == .l_paren or ((self.cur.kind == .identifier or self.cur.kind == .PATH) and self.peekKind() == .eq)) {
+                if (self.cur.kind == .l_paren or ((self.isBindingName(self.cur) or self.isReservedWordToken(self.cur)) and self.peekKind() == .eq)) {
                     starts_pattern = true;
                 }
                 if (!starts_pattern) {
                     // Check for list comprehension: [x IN list WHERE cond | expr]
                     // Detected by: identifier IN ...
-                    if (self.cur.kind == .identifier and self.peekKind() == .IN) {
-                        // Parse list comprehension
-                        const var_name = self.cur.lexeme;
-                        self.advance(); // consume identifier
+                    if ((self.isBindingName(self.cur) or self.isReservedWordToken(self.cur)) and self.peekKind() == .IN) {
+                        // Parse list comprehension; SONNY-6564: its variable
+                        // is a binding name.
+                        const var_name = try self.expectBindingName("a variable");
                         self.advance(); // consume IN
 
                         // Parse source expression
@@ -4507,7 +5457,10 @@ pub const Parser = struct {
                     // The execution engine will interpret this as returning the target node
                     const unicode = @import("../unicode/unicode_tables.zig");
                     const synthetic_name = "__pattern_target__";
-                    const cnf = unicode.caseFoldToUpper(self.arena.allocator(), synthetic_name) catch synthetic_name;
+                    const cnf = unicode.caseFoldToUpper(self.arena.allocator(), synthetic_name) catch |fold_err| switch (fold_err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        else => synthetic_name,
+                    };
                     map_expr_v = .{ .Ident = .{ .orig = synthetic_name, .cnf = cnf } };
                 }
                 const mp = try self.arena.allocator().create(ast.Expr);
@@ -4522,20 +5475,52 @@ pub const Parser = struct {
                 // Implement simpler form: allow after comprehension an optional 'AS ident' alias; or embed none. We'll stick to none here; aliasing can be carried by outer ReturnItem alias.
                 break :blk_pc .{ .PatternComp = .{ .pattern = pat_ptr, .where = where_expr, .map = mp, .alias = null } };
             },
+            // SONNY-6564: a delimited identifier references a variable of any
+            // name (`match`).
+            .quoted_identifier => blk_q: {
+                const tkn = self.cur;
+                const name = try self.delimitedName(tkn);
+                self.advance();
+                const unicode = @import("../unicode/unicode_tables.zig");
+                const cnf = unicode.caseFoldToUpper(self.arena.allocator(), name) catch |fold_err| switch (fold_err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => name,
+                };
+                break :blk_q .{ .Ident = .{ .orig = name, .cnf = cnf } };
+            },
             else => blk: {
-                // Accept keywords as identifiers (ISO/IEC 39075:2024 compliance)
-                // This handles cases like: MATCH (create:Person) RETURN create
+                // A keyword token: a non-reserved word (TYPE, PROPERTY, ...)
+                // references a variable of that name (`MATCH (type:T) RETURN
+                // type`); SONNY-6564: a reserved word (`RETURN match`) does
+                // not, unless it starts a construct (a call, COUNT { }, ...).
                 if (self.isKeyword(self.cur.kind)) {
                     const tkn = self.cur;
+                    if (identifier_words.isRefusedBindingName(tkn.lexeme) and !self.reservedWordStartsExpression(tkn)) {
+                        return self.refuseReservedName(tkn, "a variable");
+                    }
                     self.advance();
                     // Create CNF representation for identifiers
                     const unicode = @import("../unicode/unicode_tables.zig");
-                    const cnf = unicode.caseFoldToUpper(self.arena.allocator(), tkn.lexeme) catch tkn.lexeme;
+                    const cnf = unicode.caseFoldToUpper(self.arena.allocator(), tkn.lexeme) catch |fold_err| switch (fold_err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        else => tkn.lexeme,
+                    };
                     break :blk .{ .Ident = .{ .orig = tkn.lexeme, .cnf = cnf } };
                 }
                 // Not an identifier or keyword, return error
                 return error.UnexpectedToken;
             },
+        };
+    }
+
+    // CANARY: REQ=REQ-SONNY-6540-VECTOR-LITERAL-PARSE; FEATURE="GQLParser"; ASPECT=SignedNumericLiteralNotALink; STATUS=TESTED; TEST=tests/test_sonny6540_vector_literal_parse.zig; OWNER=parser; UPDATED=2026-11-14
+    /// SONNY-6540: an <unsigned numeric literal> (ISO/IEC 39075:2024 21.2)
+    /// as the parser builds it: an integer, a decimal or (SONNY-6596) an
+    /// approximate numeric literal.
+    fn isUnsignedNumericLiteral(e: ast.Expr) bool {
+        return switch (e) {
+            .Int, .Decimal, .DoubleLit => true,
+            else => false,
         };
     }
 
@@ -4625,6 +5610,7 @@ pub const Parser = struct {
         return switch (e) {
             .Int => true,
             .Decimal => true,
+            .DoubleLit => true, // SONNY-6596: 1.5E0
             .Binary => true, // allow arithmetic expressions
             .Unary => true,
             .Ident => true,
@@ -4952,18 +5938,15 @@ pub const Parser = struct {
                     with_order_by = order_by_ptr;
                 }
 
-                if (self.cur.kind == .LIMIT) {
-                    self.advance();
-                    const lim = try self.parseLimitValue();
-                    with_limit = lim.value;
-                    with_limit_param = lim.param;
+                // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9).
+                const page = try self.parsePageClauses();
+                if (page.has_limit) {
+                    with_limit = page.limit;
+                    with_limit_param = page.limit_param;
                 }
-
-                if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-                    self.advance();
-                    const off = try self.parseLimitValue();
-                    with_offset = off.value;
-                    with_offset_param = off.param;
+                if (page.has_offset) {
+                    with_offset = page.offset;
+                    with_offset_param = page.offset_param;
                 }
 
                 with_clause = .{
@@ -5086,6 +6069,13 @@ pub const Parser = struct {
             // Check if RETURN is followed by UNION, ORDER BY, LIMIT, or OFFSET
             // If so, convert to Query and handle through handleQueryResult
             if (self.cur.kind == .UNION or self.cur.kind == .ORDER or self.cur.kind == .LIMIT or self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
+                // CANARY: REQ=REQ-SONNY-6351-CREATE-RETURN-ORDER; FEATURE="CreateReturn"; ASPECT=OrderAndPage; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=parser; UPDATED=2026-11-12
+                // SONNY-6351 item 5 (SONNY-3128 residual): the RETURN's ORDER
+                // BY, LIMIT and OFFSET / SKIP are the query's, parsed here as
+                // after any RETURN (`parseOrderAndPage`). `handleQueryResult`
+                // parses them only after a UNION, so `CREATE (n) RETURN n.i
+                // ORDER BY n.i` stopped at ORDER (UnexpectedToken).
+                const page = try self.parseOrderAndPage(return_clause.?.items.len);
                 // Convert CREATE ... RETURN to a Query
                 const query = ast.Query{
                     .optional_match = false,
@@ -5094,12 +6084,14 @@ pub const Parser = struct {
                     .with_clause = null,
                     .create_pattern = pattern,
                     .ret = return_clause.?,
-                    .order_by = null,
-                    .limit = null,
-                    .offset = null,
+                    .order_by = page.order_by,
+                    .limit = page.limit,
+                    .offset = page.offset,
+                    .limit_param = page.limit_param,
+                    .offset_param = page.offset_param,
                     .next_query = null,
                 };
-                // handleQueryResult will parse UNION, ORDER BY, LIMIT, OFFSET
+                // handleQueryResult parses a UNION after it
                 return self.handleQueryResult(query);
             }
         }
@@ -5110,12 +6102,30 @@ pub const Parser = struct {
         } };
     }
 
+    /// SONNY-6729: at the NODETACH of `NODETACH DELETE` (ISO/IEC 39075:2024
+    /// 13.5 <delete statement>). The lexer library has no NODETACH token, so
+    /// it lexes as an identifier; it counts only before DELETE.
+    fn atNoDetachDelete(self: *Parser) bool {
+        return self.cur.kind == .identifier and
+            std.ascii.eqlIgnoreCase(self.cur.lexeme, "NODETACH") and
+            self.peekKind() == .DELETE;
+    }
+
+    /// The optional `DETACH | NODETACH` before DELETE: consumes it and says
+    /// whether it was DETACH. NODETACH is the default (13.5 SR 6), so it
+    /// reads as a plain DELETE.
+    fn parseDetachMode(self: *Parser) bool {
+        if (self.cur.kind == .DETACH) {
+            self.advance();
+            return true;
+        }
+        if (self.atNoDetachDelete()) self.advance();
+        return false;
+    }
+
     // Parse DELETE statement
     fn parseDeleteStatement(self: *Parser) ParserError!ast.Statement {
-        const detach = if (self.cur.kind == .DETACH) blk: {
-            self.advance();
-            break :blk true;
-        } else false;
+        const detach = self.parseDetachMode();
 
         _ = try self.expect(.DELETE);
 
@@ -5174,10 +6184,8 @@ pub const Parser = struct {
     }
 
     fn parseDeleteItem(self: *Parser) ParserError!ast.DeleteItem {
-        if (self.cur.kind != .identifier) return error.UnexpectedToken;
-        const name = self.cur.lexeme;
-        self.advance();
-        return .{ .Variable = name };
+        // SONNY-6564: the variable a DELETE names is a binding name.
+        return .{ .Variable = try self.expectBindingName("a variable") };
     }
 
     // Parse MERGE statement
@@ -5310,10 +6318,10 @@ pub const Parser = struct {
     }
 
     fn parseSetClause(self: *Parser) ParserError!ast.SetClause {
-        // Parse identifier (e.g., n)
-        if (self.cur.kind != .identifier) return error.UnexpectedToken;
-        const object = self.cur.lexeme;
-        self.advance();
+        // SONNY-6564: the target variable is a binding name. Only a plain
+        // identifier was taken, so `MATCH (type:T) SET type.x = 1` failed
+        // though MATCH bound `type` (a 21.3 non-reserved word).
+        const object = try self.expectBindingName("a variable");
 
         // Check what follows the identifier
         if (self.cur.kind == .colon) {
@@ -5377,10 +6385,8 @@ pub const Parser = struct {
     }
 
     fn parseRemoveClause(self: *Parser) ParserError!ast.RemoveClause {
-        // Parse identifier (e.g., n)
-        if (self.cur.kind != .identifier) return error.UnexpectedToken;
-        const object = self.cur.lexeme;
-        self.advance();
+        // SONNY-6564: the target variable is a binding name, as SET's.
+        const object = try self.expectBindingName("a variable");
 
         // Check if it's a label removal (n:Label) or property removal (n.property)
         if (self.cur.kind == .colon) {
@@ -6135,8 +7141,8 @@ pub const Parser = struct {
         if (show_type == .permissions and self.cur.kind == .FOR) {
             self.advance(); // FOR
             target = try self.parseName();
-        } else if (show_type == .grants_for) {
-            if (self.cur.kind != .FOR) return self.unexpected("expected FOR after SHOW GRANTS");
+        } else if (show_type == .grants_for and self.cur.kind == .FOR) {
+            // SONNY-1333: FOR is optional; SHOW GRANTS is the current user's.
             self.advance(); // FOR
             target = try self.parseName();
         }
@@ -6187,17 +7193,11 @@ pub const Parser = struct {
 
         var column_names = std.ArrayList([]const u8).empty;
 
-        // Parse first column name
-        if (self.cur.kind != .identifier) return self.unexpected("expected column name after AS (");
-        try column_names.append(self.arena.allocator(), self.cur.lexeme);
-        self.advance();
-
-        // Parse additional column names
+        // SONNY-6564: each column name binds a variable for what follows.
+        try column_names.append(self.arena.allocator(), try self.expectBindingName("a column name"));
         while (self.cur.kind == .comma) {
             self.advance();
-            if (self.cur.kind != .identifier) return self.unexpected("expected column name");
-            try column_names.append(self.arena.allocator(), self.cur.lexeme);
-            self.advance();
+            try column_names.append(self.arena.allocator(), try self.expectBindingName("a column name"));
         }
 
         _ = try self.expect(.r_paren);
@@ -6221,6 +7221,33 @@ pub const Parser = struct {
     /// One projection item per variable `pattern` binds (path, node and edge
     /// variables, each once, in order): what a MATCH passes on to a FOR
     /// after it.
+    /// SONNY-6467 (3): the FILTER statements after one MATCH statement's
+    /// WHERE, before the next MATCH, ANDed onto `acc`. A FILTER here before a
+    /// CREATE or MERGE stays refused (it was a syntax error).
+    fn parseFilterBetweenMatches(self: *Parser, acc: *?ast.Expr) ParserError!void {
+        const condition = (try self.parseFilterStatements()) orelse return;
+        acc.* = if (acc.*) |earlier| try self.makeBinary(.And, earlier, condition) else condition;
+        if (self.cur.kind == .CREATE or self.cur.kind == .MERGE) return self.unexpected("a FILTER statement before CREATE or MERGE is not supported: filter with the MATCH statement's WHERE");
+    }
+
+    /// SONNY-6467 (3): `patternVariableItems` and then each inline LET
+    /// variable, as WITH items.
+    fn patternAndLetItems(self: *Parser, pattern: ast.GraphPattern, lets: []const ast.LetBinding) ParserError![]ast.ReturnItem {
+        const a = self.arena.allocator();
+        const pattern_items = try self.patternVariableItems(pattern);
+        const items = try a.alloc(ast.ReturnItem, pattern_items.len + lets.len);
+        @memcpy(items[0..pattern_items.len], pattern_items);
+        const unicode = @import("../unicode/unicode_tables.zig");
+        for (lets, items[pattern_items.len..]) |let, *item| {
+            const cnf = unicode.caseFoldToUpper(a, let.variable) catch |fold_err| switch (fold_err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => let.variable,
+            };
+            item.* = .{ .expr = .{ .Ident = .{ .orig = let.variable, .cnf = cnf } }, .alias = null };
+        }
+        return items;
+    }
+
     fn patternVariableItems(self: *Parser, pattern: ast.GraphPattern) ParserError![]ast.ReturnItem {
         const a = self.arena.allocator();
         var names = std.ArrayList([]const u8).empty;
@@ -6242,7 +7269,10 @@ pub const Parser = struct {
         const unicode = @import("../unicode/unicode_tables.zig");
         const items = try a.alloc(ast.ReturnItem, names.items.len);
         for (names.items, items) |name, *item| {
-            const cnf = unicode.caseFoldToUpper(a, name) catch name;
+            const cnf = unicode.caseFoldToUpper(a, name) catch |fold_err| switch (fold_err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => name,
+            };
             item.* = .{ .expr = .{ .Ident = .{ .orig = name, .cnf = cnf } }, .alias = null };
         }
         return items;
@@ -6280,9 +7310,7 @@ pub const Parser = struct {
         _ = try self.expect(.FOR);
 
         // Parse iteration variable: FOR item IN ...
-        if (self.cur.kind != .identifier) return self.unexpected("expected identifier after FOR");
-        const variable = self.cur.lexeme;
-        self.advance();
+        const variable = try self.expectBindingName("a FOR variable"); // SONNY-6564
 
         // Expect IN keyword
         _ = try self.expect(.IN);
@@ -6298,16 +7326,10 @@ pub const Parser = struct {
             self.advance();
             if (self.cur.kind == .ORDINALITY) {
                 self.advance();
-                // Expect variable name after ORDINALITY
-                if (self.cur.kind != .identifier) return self.unexpected("expected identifier after ORDINALITY");
-                ordinality_var = self.cur.lexeme;
-                self.advance();
+                ordinality_var = try self.expectBindingName("an ORDINALITY variable"); // SONNY-6564
             } else if (self.cur.kind == .OFFSET) {
                 self.advance();
-                // Expect variable name after OFFSET
-                if (self.cur.kind != .identifier) return self.unexpected("expected identifier after OFFSET");
-                offset_var = self.cur.lexeme;
-                self.advance();
+                offset_var = try self.expectBindingName("an OFFSET variable"); // SONNY-6564
             } else {
                 return self.unexpected("expected ORDINALITY or OFFSET after WITH");
             }
@@ -6321,8 +7343,35 @@ pub const Parser = struct {
         };
     }
 
+    /// SONNY-738 (item 0b): a FOR statement, parsed into `out` by
+    /// `parseForStatementInto`, whose error exits do not each hold an
+    /// `ast.Statement` (3 KiB) on its frame (see `parseQuery`): a FOR body is
+    /// a level of query nesting.
     fn parseForStatement(self: *Parser) ParserError!ast.Statement {
-        const header = try self.parseForHeader();
+        var out: ast.Statement = undefined;
+        try self.parseForStatementInto(&out);
+        return out;
+    }
+
+    fn parseForStatementInto(self: *Parser, out: *ast.Statement) ParserError!void {
+        return self.parseForRestInto(try self.parseForHeader(), out);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6613-LEADING-UNWIND; FEATURE="Unwind"; ASPECT=StatementLeading; STATUS=TESTED; TEST=tests/test_sonny6613_leading_let_unwind.zig; OWNER=parser; UPDATED=2026-11-15
+    /// SONNY-6613: a statement-leading `UNWIND <list> AS x <rest>` (a Geode
+    /// extension) is the ISO/IEC 39075:2024 14.8 `FOR x IN <list> <rest>`:
+    /// the same working table, a row per element, and the same RETURN (its
+    /// aggregates over every row) or write body.
+    fn parseLeadingUnwindInto(self: *Parser, out: *ast.Statement) ParserError!void {
+        _ = try self.expect(.UNWIND);
+        self.has_unwind = true;
+        const collection = try self.parseOrExpr();
+        _ = try self.expect(.AS);
+        const variable = try self.expectBindingName("a variable");
+        return self.parseForRestInto(.{ .variable = variable, .collection = collection, .ordinality_var = null, .offset_var = null }, out);
+    }
+
+    fn parseForRestInto(self: *Parser, header: ast.ForLoop, out: *ast.Statement) ParserError!void {
         const variable = header.variable;
         const collection = header.collection;
         const ordinality_var = header.ordinality_var;
@@ -6375,7 +7424,7 @@ pub const Parser = struct {
                 body_ptr.* = try self.parseNestedQuery();
             }
 
-            return .{ .For = .{
+            out.* = .{ .For = .{
                 .variable = variable,
                 .collection = collection,
                 .ordinality_var = ordinality_var,
@@ -6383,6 +7432,7 @@ pub const Parser = struct {
                 .return_clause = null,
                 .body = body_ptr,
             } };
+            return;
         }
 
         // Expect RETURN clause
@@ -6450,26 +7500,14 @@ pub const Parser = struct {
         }
 
         // Optional LIMIT
-        var limit: ?usize = null;
-        var limit_param: ?[]const u8 = null;
-        if (self.cur.kind == .LIMIT) {
-            self.advance();
-            const lim = try self.parseLimitValue();
-            limit = if (lim.value) |v| @as(usize, @intCast(v)) else null;
-            limit_param = lim.param;
-        }
+        // SONNY-6555 item 6: OFFSET / SKIP before LIMIT (14.9).
+        const page = try self.parsePageClauses();
+        const limit: ?usize = if (page.limit) |v| @as(usize, @intCast(v)) else null;
+        const limit_param = page.limit_param;
+        const offset: ?usize = if (page.offset) |v| @as(usize, @intCast(v)) else null;
+        const offset_param = page.offset_param;
 
-        // Optional OFFSET
-        var offset: ?usize = null;
-        var offset_param: ?[]const u8 = null;
-        if (self.cur.kind == .OFFSET or self.cur.kind == .SKIP) {
-            self.advance();
-            const off = try self.parseLimitValue();
-            offset = if (off.value) |v| @as(usize, @intCast(v)) else null;
-            offset_param = off.param;
-        }
-
-        return .{ .For = .{
+        out.* = .{ .For = .{
             .variable = variable,
             .collection = collection,
             .ordinality_var = ordinality_var,
@@ -6483,6 +7521,7 @@ pub const Parser = struct {
             .limit_param = limit_param,
             .offset_param = offset_param,
         } };
+        return;
     }
 
     fn parseExplainStatement(self: *Parser) ParserError!ast.Statement {
@@ -6824,7 +7863,7 @@ pub const Parser = struct {
 
     // Parse CREATE GRAPH TYPE statement
     // Field-Level Encryption Parser Extensions
-    // CANARY: REQ=REQ-FLE-PARSER-001; FEATURE="FieldLevelEncryption"; ASPECT=PARSER; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-FLE-PARSER-001; FEATURE="FieldLevelEncryption"; ASPECT=PARSER; STATUS=TESTED; TEST=tests/test_sonny6321_tde_fle_cases.zig; OWNER=security; UPDATED=2026-11-12
 
     /// Parse field definitions within graph type: { field1 TYPE, field2 TYPE @annotations, ... }
     fn parseFieldDefinitions(self: *Parser) ParserError![]ast.FieldDefinition {
@@ -6839,8 +7878,17 @@ pub const Parser = struct {
             const field_name = self.cur.lexeme;
             self.advance();
 
-            // Field type (required)
-            if (self.cur.kind != .identifier) return error.UnexpectedToken;
+            // Field type (required). SONNY-6517 item 2: ISO/IEC 39075:2024
+            // 18.6 <property type> takes a <property value type> (18.7), a
+            // <value type> (18.9), which names the predefined types with
+            // reserved words (STRING, INTEGER, BOOLEAN, FLOAT, DECIMAL, DATE, TIME,
+            // DATETIME, TIMESTAMP, DURATION), which the lexer reads as
+            // keywords: they were refused, and only a type name the lexer does
+            // not know (`text`, `int`) parsed.
+            switch (self.cur.kind) {
+                .identifier, .STRING, .INTEGER, .BOOLEAN, .FLOAT, .DECIMAL, .DATE, .TIME, .DATETIME, .TIMESTAMP, .DURATION => {},
+                else => return self.unexpected("expected a field type (a type name such as STRING, INTEGER, BOOLEAN, FLOAT, DECIMAL, DATE, TIME, DATETIME, TIMESTAMP or DURATION)"),
+            }
             const type_name = self.cur.lexeme;
             self.advance();
 
@@ -7757,27 +8805,27 @@ pub const Parser = struct {
                 self.advance();
                 // Parse parameter specification (with $ prefix)
                 _ = try self.expect(.dollar); // Consume $
-                // Allow any keyword to be used as a parameter name (like count, name, etc.)
+                // SONNY-6564: a <parameter name> (ISO/IEC 39075:2024 21.3):
+                // a reserved word is refused unless delimited ($`count`).
                 const param_spec = if (self.cur.kind == .string_lit) blk: {
                     const spec = self.cur.lexeme;
                     self.advance();
                     break :blk spec;
-                } else blk: {
-                    const token = try self.expectIdentifierOrKeyword();
-                    break :blk token.lexeme;
-                };
+                } else try self.expectBindingName("a parameter name");
 
                 return .{ .SessionReset = .{
                     .arguments = .{ .Parameter = param_spec },
                 } };
-            } else if (std.ascii.eqlIgnoreCase(arg, "TIME")) {
-                // SESSION RESET TIME ZONE
-                self.advance(); // consume TIME
-                _ = try self.expect(.ZONE);
-                return .{ .SessionReset = .{
-                    .arguments = .TimeZone,
-                } };
             }
+        } else if (self.cur.kind == .TIME or self.cur.kind == .time_lit) {
+            // SONNY-6726: SESSION RESET TIME ZONE (ISO/IEC 39075:2024 7.1).
+            // TIME lexes as the .TIME keyword (or .time_lit), never as an
+            // identifier, so the branch matches on the keyword.
+            self.advance(); // consume TIME
+            _ = try self.expect(.ZONE);
+            return .{ .SessionReset = .{
+                .arguments = .TimeZone,
+            } };
         } else if (self.cur.kind == .SCHEMA) {
             self.advance();
             return .{ .SessionReset = .{
@@ -7796,13 +8844,6 @@ pub const Parser = struct {
 
             return .{ .SessionReset = .{
                 .arguments = .{ .Graph = property_graph },
-            } };
-        } else if (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "TIME")) {
-            // Handle TIME ZONE
-            self.advance(); // consume TIME
-            _ = try self.expect(.ZONE);
-            return .{ .SessionReset = .{
-                .arguments = .TimeZone,
             } };
         }
 
@@ -7923,16 +8964,13 @@ pub const Parser = struct {
         // Consume the $ token
         _ = try self.expect(.dollar);
 
-        // Parse parameter specification (identifier or keyword after the $)
-        // Allow any keyword to be used as a parameter name since it follows $
+        // SONNY-6564: a <parameter name> (ISO/IEC 39075:2024 21.3): a
+        // non-reserved word or a delimited identifier ($`count`).
         const specification = if (self.cur.kind == .string_lit) blk: {
             const spec = self.cur.lexeme;
             self.advance();
             break :blk spec;
-        } else blk: {
-            const token = try self.expectIdentifierOrKeyword();
-            break :blk token.lexeme;
-        };
+        } else try self.expectBindingName("a parameter name");
 
         return .{
             .if_not_exists = if_not_exists,
@@ -8072,4 +9110,65 @@ test "#733 parser - unterminated nested map literal is a clean parse error" {
     var parser = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next() };
     const result = parser.parseProgram();
     try std.testing.expectError(error.UnexpectedToken, result);
+}
+
+/// SONNY-6637 item 5: whether `e` may read one of `names`. A pattern, a
+/// subquery or anything else this cannot see into counts as reading them.
+fn letMentions(e: *const ast.Expr, names: []const []const u8) bool {
+    return switch (e.*) {
+        .Ident => |id| letNameIn(names, id.orig),
+        .PropertyAccess => |p| letNameIn(names, p.object),
+        .HasLabel => |h| letNameIn(names, h.node),
+        inline else => |payload| letPayloadMentions(@TypeOf(payload), payload, names),
+    };
+}
+
+fn letNameIn(names: []const []const u8, name: []const u8) bool {
+    for (names) |n| {
+        if (std.ascii.eqlIgnoreCase(n, name)) return true;
+    }
+    return false;
+}
+
+fn letPayloadMentions(comptime T: type, v: T, names: []const []const u8) bool {
+    switch (@typeInfo(T)) {
+        .@"struct" => |st| {
+            inline for (st.fields) |field| {
+                if (letPayloadMentions(field.type, @field(v, field.name), names)) return true;
+            }
+            return false;
+        },
+        .optional => return if (v) |inner| letPayloadMentions(@TypeOf(inner), inner, names) else false,
+        .@"union" => |u| {
+            if (u.tag_type == null) return true;
+            switch (v) {
+                inline else => |inner| return letPayloadMentions(@TypeOf(inner), inner, names),
+            }
+        },
+        .pointer => |p| {
+            if (p.child == ast.Expr) {
+                if (p.size == .one) return letMentions(v, names);
+                for (v) |*x| {
+                    if (letMentions(x, names)) return true;
+                }
+                return false;
+            }
+            if (p.size == .slice and p.child == u8) return false;
+            if (p.size == .slice and p.child == []const u8) return false;
+            if (p.size == .slice and @typeInfo(p.child) == .pointer and @typeInfo(p.child).pointer.child == ast.Expr) {
+                for (v) |x| {
+                    if (letMentions(x, names)) return true;
+                }
+                return false;
+            }
+            if (p.size == .slice and @typeInfo(p.child) == .@"struct" and p.child != ast.Query and p.child != ast.GraphPattern and p.child != ast.Chain) {
+                for (v) |x| {
+                    if (letPayloadMentions(p.child, x, names)) return true;
+                }
+                return false;
+            }
+            return true;
+        },
+        else => return false,
+    }
 }

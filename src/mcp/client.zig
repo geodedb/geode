@@ -7,6 +7,18 @@ const build_options = @import("build_options");
 
 const geode = @import("geode");
 const zig_client = geode.zig_client;
+const schema = @import("schema");
+const protobuf = @import("protobuf");
+const query_runner = geode.query_runner;
+const query_results = geode.query_result_accumulator;
+
+/// The node label sets of the session's graph (the schema tool and resource).
+pub const schema_labels_query =
+    \\MATCH (n)
+    \\WITH DISTINCT labels(n) AS labels
+    \\RETURN labels
+    \\LIMIT 100
+;
 
 pub const GeodeClientError = error{
     ConnectionFailed,
@@ -19,8 +31,56 @@ pub const GeodeClientError = error{
     OutOfMemory,
     ServerError,
     InvalidParams,
-    UnsupportedParamType,
+    /// SONNY-6617 (3): a gRPC endpoint with TLS on (geode-client-zig's gRPC
+    /// client has no TLS); `endpointErrorMessage` says what to do.
+    TlsNotImplemented,
 };
+
+/// SONNY-6494: what is wrong with an endpoint DSN, in words a user can act
+/// on; null when `err` is not about the DSN. SONNY-6531: the one mapping is
+/// `zig_quic_bridge.endpointErrorMessage`, shared with the CLI's `--server`
+/// and `--dsn`. An IPv6 zone parses but cannot be dialled (`parseEndpoint`).
+/// The DSN itself is not part of the message: it may carry a password.
+pub const endpointErrorMessage = geode.zig_quic_bridge.endpointErrorMessage;
+
+/// `endpointErrorMessage`, or `fallback` for any other error.
+pub fn initErrorMessage(err: anyerror, fallback: []const u8) []const u8 {
+    return endpointErrorMessage(err) orelse fallback;
+}
+
+/// SONNY-6569: parse `endpoint` with `geode.dsn_params.parse`, the strict
+/// parser the CLI's `--dsn` uses (it used geode-client-zig's lenient
+/// `parseDSN`, so an out-of-range `connect_timeout` or a malformed
+/// `page_size` silently became the default and an unknown parameter was
+/// ignored). It names a fragment (`error.DsnFragment`), refuses an IPv6
+/// zone (`error.Ipv6ZoneUnsupported`), and gives a userinfo credential
+/// precedence over a `user=` / `pass=` parameter (docs/DSN.md, SONNY-6550).
+/// The returned config's host slices `endpoint`.
+///
+/// CANARY: REQ=REQ-SONNY-6589-MCP-TIMEOUT-APPLIED; FEATURE="MCPBackendTools"; ASPECT=EndpointTimeoutApplied; STATUS=TESTED; TEST=tests/test_sonny6589_mcp_timeout.zig; OWNER=mcp; UPDATED=2026-11-15
+/// SONNY-6589 (2): a `connect_timeout` (`timeout`) or `timeout_ms` is the
+/// config's `timeout_ms`, which geode-client-zig v0.3.18 `initFromConfig`
+/// applies to the QUIC handshake and the HELLO wait (geode refused the
+/// parameter while the library ignored it). Since v0.3.19 (SONNY-6617) the
+/// query, begin, commit, rollback and ping answers wait it too.
+/// Without a `hello_name` / `hello_ver` the HELLO names geode's MCP client.
+fn parseEndpoint(allocator: std.mem.Allocator, endpoint: []const u8) !zig_client.config.Config {
+    const parsed = try geode.dsn_params.parse(allocator, endpoint);
+    var cfg = parsed.config;
+    if (!parsed.present.contains(.hello_name)) cfg.hello_name = hello_name;
+    if (!parsed.present.contains(.hello_ver)) cfg.hello_ver = build_options.version;
+    return cfg;
+}
+
+/// The HELLO `client_name` of geode's MCP backend client.
+pub const hello_name = "geode-mcp";
+
+/// SONNY-6494: check an endpoint DSN without building a client (`geode mcp`
+/// startup). The error maps through `endpointErrorMessage`.
+pub fn checkEndpoint(allocator: std.mem.Allocator, endpoint: []const u8) !void {
+    var cfg = try parseEndpoint(allocator, endpoint);
+    cfg.deinit(allocator);
+}
 
 pub const GeodeClient = struct {
     allocator: std.mem.Allocator,
@@ -40,12 +100,28 @@ pub const GeodeClient = struct {
         const endpoint_storage = try allocator.dupe(u8, endpoint);
         errdefer allocator.free(endpoint_storage);
 
-        var cfg = try zig_client.config.parseDSN(allocator, endpoint_storage);
+        // SONNY-6484/6494: an IPv6 host must be bracketed and a port is
+        // 1-65535; geode-client-zig v0.3.16 refuses the rest of the grammar
+        // itself (InvalidDSN, InvalidPort), so geode's own pre-check is gone.
+        var cfg = try parseEndpoint(allocator, endpoint_storage);
         errdefer cfg.deinit(allocator);
 
         // S-5: Warn if DSN contains embedded credentials to discourage credential leakage via logs.
         if (cfg.username != null or cfg.password != null) {
             std.log.warn("MCP endpoint contains embedded credentials. Prefer explicit credential passing for production.", .{});
+        }
+
+        // SONNY-6453: a DSN `insecure=true` (insecure_tls_skip_verify,
+        // skip_verify) follows the CLI's --insecure-tls-skip-verify rule:
+        // refused under production posture (release build or
+        // GEODE_ENV=production) unless GEODE_ALLOW_INSECURE_TLS=1, and loud
+        // otherwise. stdout is the MCP channel, so both go to the log (stderr).
+        if (cfg.insecure) {
+            if (geode.zig_quic_bridge.liveInsecurePosture() == .refuse) {
+                std.log.warn("MCP endpoint DSN sets insecure=true: refusing to disable TLS certificate verification under production conditions (release build or GEODE_ENV=production). Give the DSN a ca= bundle, or set GEODE_ALLOW_INSECURE_TLS=1 to explicitly accept the risk.", .{});
+                return error.InsecureTlsRefused;
+            }
+            std.log.warn("MCP endpoint DSN sets insecure=true: the server's TLS certificate is NOT verified; this connection is exposed to man-in-the-middle attacks. NOT FOR PRODUCTION.", .{});
         }
 
         const client = try zig_client.GeodeClient.initFromConfig(allocator, cfg);
@@ -83,6 +159,7 @@ pub const GeodeClient = struct {
             error.ReceiveTimeout, error.ConnectionTimeout => GeodeClientError.Timeout,
             error.WriteError => GeodeClientError.StreamError,
             error.OutOfMemory => GeodeClientError.OutOfMemory,
+            error.TlsNotImplemented => GeodeClientError.TlsNotImplemented,
             else => GeodeClientError.ConnectionFailed,
         };
     }
@@ -102,211 +179,157 @@ pub const GeodeClient = struct {
         self.connected = true;
     }
 
-    fn protoValueToJson(allocator: std.mem.Allocator, value: zig_client.proto.Value) !std.json.Value {
-        if (value.null_val) return std.json.Value.null;
-        if (value.int_val) |v| return .{ .integer = v };
-        if (value.double_val) |v| return .{ .float = v };
-        if (value.bool_val) |v| return .{ .bool = v };
-        if (value.string_val) |v| return .{ .string = try allocator.dupe(u8, v) };
-        return std.json.Value.null;
-    }
-
-    fn jsonToProtoValue(allocator: std.mem.Allocator, value: std.json.Value) !zig_client.proto.Value {
-        return switch (value) {
-            .null => zig_client.proto.Value.initNull(),
-            .bool => |v| zig_client.proto.Value.initBool(v),
-            .integer => |v| zig_client.proto.Value.initInt(v),
-            .float => |v| zig_client.proto.Value.initDouble(v),
-            .number_string => |v| zig_client.proto.Value.initString(try allocator.dupe(u8, v)),
-            .string => |v| zig_client.proto.Value.initString(try allocator.dupe(u8, v)),
-            .array, .object => GeodeClientError.UnsupportedParamType,
-        };
-    }
-
-    fn deinitOwnedExecuteRequest(allocator: std.mem.Allocator, execute: *zig_client.proto.ExecuteRequest) void {
-        for (execute.params.items) |*param| {
-            if (param.name.len > 0) allocator.free(param.name);
-            var value = param.value;
-            value.deinit(allocator);
+    fn parseParamsJson(self: *Self, params_json: ?[]const u8) !std.ArrayList(schema.Param) {
+        var params: std.ArrayList(schema.Param) = .empty;
+        errdefer {
+            for (params.items) |*param| param.deinit(self.allocator);
+            params.deinit(self.allocator);
         }
-        execute.params.deinit(allocator);
-    }
-
-    fn appendParamsJson(self: *Self, execute: *zig_client.proto.ExecuteRequest, params_json: ?[]const u8) !void {
-        if (params_json == null) return;
-
-        const trimmed = std.mem.trim(u8, params_json.?, " \t\r\n");
-        if (trimmed.len == 0 or std.mem.eql(u8, trimmed, "null")) return;
+        const text = params_json orelse return params;
+        const trimmed = std.mem.trim(u8, text, " \t\r\n");
+        if (trimmed.len == 0 or std.mem.eql(u8, trimmed, "null")) return params;
 
         const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, trimmed, .{}) catch {
             return GeodeClientError.InvalidParams;
         };
         defer parsed.deinit();
-
         if (parsed.value != .object) return GeodeClientError.InvalidParams;
 
         var it = parsed.value.object.iterator();
         while (it.next()) |entry| {
             const name = try self.allocator.dupe(u8, entry.key_ptr.*);
             errdefer self.allocator.free(name);
-
-            const value = try jsonToProtoValue(self.allocator, entry.value_ptr.*);
-            errdefer {
-                var owned_value = value;
-                owned_value.deinit(self.allocator);
-            }
-
-            try execute.addParam(self.allocator, name, value);
+            // CANARY: REQ=REQ-SONNY-6586-MCP-LIST-MAP-PARAMS; FEATURE="MCPBackendTools"; ASPECT=ListAndMapParameters; STATUS=TESTED; TEST=tests/test_sonny6586_cli_truth.zig; OWNER=mcp; UPDATED=2026-11-15
+            // SONNY-6586: arrays are LISTs and objects MAPs. SONNY-6647: the
+            // converter geode query --param uses (geode.param_json); a
+            // value nested too deep is invalid params, as before.
+            var value = geode.param_json.jsonToProtoValue(self.allocator, entry.value_ptr.*, 0) catch |err| switch (err) {
+                error.ParamsTooDeep => return GeodeClientError.InvalidParams,
+                else => |e| return e,
+            };
+            errdefer value.deinit(self.allocator);
+            try params.append(self.allocator, .{ .name = name, .value = value });
         }
+        return params;
     }
 
-    fn appendColumnInfo(
-        allocator: std.mem.Allocator,
-        column_names: *std.ArrayList([]const u8),
-        columns_json: *std.json.Array,
-        name: []const u8,
-        col_type: []const u8,
-    ) !void {
-        const owned_name = try allocator.dupe(u8, name);
-        const owned_type = try allocator.dupe(u8, col_type);
+    // CANARY: REQ=REQ-SONNY-6559-MCP-WIRE-DECODE; FEATURE="MCPBackendTools"; ASPECT=FullResultDecode; STATUS=TESTED; TEST=tests/test_sonny6559_mcp_backend.zig; OWNER=mcp; UPDATED=2026-11-14
+    // SONNY-6559 (5, 10): the query is run and its answer decoded as `geode
+    // query` does (geode's own wire schema through query_runner, over the
+    // client library's framed stream). The client library's decoder keeps a
+    // value's scalars only and drops the EXPLAIN/PROFILE payload, so a node,
+    // a list (the schema tool's labels) and every plan came back as null or
+    // as {"columns":[],"rows":[]}.
+    const ProtocolAdapter = struct {
+        client: *zig_client.GeodeClient,
 
-        try column_names.append(allocator, owned_name);
-
-        var col_obj = @as(std.json.ObjectMap, .empty);
-        try col_obj.put(allocator, "name", .{ .string = owned_name });
-        try col_obj.put(allocator, "type", .{ .string = owned_type });
-        try columns_json.append(.{ .object = col_obj });
-    }
-
-    fn appendExecutionResponse(
-        allocator: std.mem.Allocator,
-        exec: zig_client.proto.ExecutionResponse,
-        column_names: *std.ArrayList([]const u8),
-        columns_json: *std.json.Array,
-        rows_json: *std.json.Array,
-        error_obj: *?std.json.ObjectMap,
-    ) !bool {
-        if (exec.err) |err_info| {
-            var obj = @as(std.json.ObjectMap, .empty);
-            try obj.put(allocator, "code", .{ .string = try allocator.dupe(u8, err_info.code) });
-            try obj.put(allocator, "message", .{ .string = try allocator.dupe(u8, err_info.message) });
-            try obj.put(allocator, "type", .{ .string = try allocator.dupe(u8, err_info.error_type) });
-            if (err_info.anchor.len > 0) {
-                try obj.put(allocator, "anchor", .{ .string = try allocator.dupe(u8, err_info.anchor) });
-            }
-            error_obj.* = obj;
-            return false;
+        fn send(proto: *query_runner.ProtocolClient, allocator: std.mem.Allocator, msg: schema.QuicClientMessage) !void {
+            const self: *@This() = @ptrCast(@alignCast(proto.context));
+            var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
+            defer aw.deinit();
+            try protobuf.encode(&aw.writer, allocator, schema.ClientPacket{ .quic = msg });
+            const body = aw.writer.buffer[0..aw.writer.end];
+            const framed = try allocator.alloc(u8, body.len + 4);
+            defer allocator.free(framed);
+            std.mem.writeInt(u32, framed[0..4], @intCast(body.len), .big);
+            @memcpy(framed[4..], body);
+            try self.client.sendRawFramed(framed);
         }
 
-        if (exec.schema) |schema| {
-            for (schema.columns.items) |col| {
-                try appendColumnInfo(allocator, column_names, columns_json, col.name, col.col_type);
-            }
+        fn read(proto: *query_runner.ProtocolClient, allocator: std.mem.Allocator, timeout_secs: u32) !schema.QuicServerMessage {
+            const self: *@This() = @ptrCast(@alignCast(proto.context));
+            const body = self.client.receiveRawFrame(allocator, @as(u64, timeout_secs) * std.time.ms_per_s) catch |err| switch (err) {
+                error.ReceiveTimeout => return error.Timeout,
+                else => return err,
+            };
+            defer allocator.free(body);
+            var reader: std.Io.Reader = .fixed(body);
+            const packet = try protobuf.decode(schema.ServerPacket, &reader, allocator);
+            return packet.quic orelse error.InvalidMessage;
         }
+    };
 
-        if (exec.page) |page| {
-            for (page.rows.items) |row| {
-                var row_obj = @as(std.json.ObjectMap, .empty);
-                for (row.values.items, 0..) |value, idx| {
-                    if (idx >= column_names.items.len) {
-                        const fallback = try std.fmt.allocPrint(allocator, "col_{d}", .{idx + 1});
-                        try appendColumnInfo(allocator, column_names, columns_json, fallback, "UNKNOWN");
-                    }
-                    try row_obj.put(allocator, column_names.items[idx], try protoValueToJson(allocator, value));
-                }
-                try rows_json.append(.{ .object = row_obj });
-            }
-            return !page.final;
-        }
-
-        return exec.schema != null;
-    }
-
-    fn collectQueryJson(self: *Self) ![]u8 {
+    /// The result as JSON: {"columns":[{name,type}],"rows":[{column:value}]},
+    /// with "error":{"code","message"} when the statement failed and
+    /// "explain"/"profile" (the plan `geode query --format json` prints)
+    /// for EXPLAIN/PROFILE.
+    fn resultJson(self: *Self, result: *const query_results.ResultAccumulator) ![]u8 {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
+        const a = arena.allocator();
 
-        const arena_allocator = arena.allocator();
-        var column_names = std.ArrayList([]const u8).empty;
-        var columns_json = std.json.Array.init(arena_allocator);
-        var rows_json = std.json.Array.init(arena_allocator);
-        var error_obj: ?std.json.ObjectMap = null;
-        var timeout_ms: u64 = 30_000;
-
-        while (true) {
-            var response = self.client.receiveProto(timeout_ms) catch |err| {
-                self.resetClient() catch {};
-                return mapTransportError(err);
-            };
-            defer response.deinit(self.allocator);
-
-            const expect_more = if (response.execute) |exec|
-                try appendExecutionResponse(
-                    arena_allocator,
-                    exec,
-                    &column_names,
-                    &columns_json,
-                    &rows_json,
-                    &error_obj,
-                )
-            else if (response.pull) |pull|
-                if (pull.response) |exec|
-                    try appendExecutionResponse(
-                        arena_allocator,
-                        exec,
-                        &column_names,
-                        &columns_json,
-                        &rows_json,
-                        &error_obj,
-                    )
-                else
-                    false
-            else
-                return GeodeClientError.InvalidResponse;
-
-            if (!expect_more) break;
-            timeout_ms = 5_000;
+        var root: std.json.ObjectMap = .empty;
+        var columns = std.json.Array.init(a);
+        for (result.columns.items) |col| {
+            var obj: std.json.ObjectMap = .empty;
+            try obj.put(a, "name", .{ .string = col.name });
+            try obj.put(a, "type", .{ .string = col.type });
+            try columns.append(.{ .object = obj });
         }
-
-        var result_obj = @as(std.json.ObjectMap, .empty);
-        try result_obj.put(arena_allocator, "columns", .{ .array = columns_json });
-        try result_obj.put(arena_allocator, "rows", .{ .array = rows_json });
-        if (error_obj) |obj| {
-            try result_obj.put(arena_allocator, "error", .{ .object = obj });
+        var rows = std.json.Array.init(a);
+        if (result.rows_json) |rj| {
+            for (rj.items) |row| {
+                var obj: std.json.ObjectMap = .empty;
+                for (row.items, 0..) |value, idx| {
+                    const key = if (idx < result.columns.items.len) result.columns.items[idx].name else try std.fmt.allocPrint(a, "col_{d}", .{idx + 1});
+                    try obj.put(a, key, value);
+                }
+                try rows.append(.{ .object = obj });
+            }
         }
-
-        const encoded = try std.json.Stringify.valueAlloc(arena_allocator, std.json.Value{ .object = result_obj }, .{});
-        return try self.allocator.dupe(u8, encoded);
+        try root.put(a, "columns", .{ .array = columns });
+        try root.put(a, "rows", .{ .array = rows });
+        if (result.result_kind != .rows) {
+            if (result.result_payload) |payload| {
+                const plan = std.json.parseFromSliceLeaky(std.json.Value, a, payload, .{}) catch std.json.Value{ .string = payload };
+                try root.put(a, if (result.result_kind == .explain) "explain" else "profile", plan);
+            }
+        }
+        if (result.indicatesFailure()) {
+            var err_obj: std.json.ObjectMap = .empty;
+            try err_obj.put(a, "code", .{ .string = if (result.has_error) result.error_status else result.status_class });
+            try err_obj.put(a, "message", .{ .string = result.error_message });
+            try root.put(a, "error", .{ .object = err_obj });
+        }
+        return std.json.Stringify.valueAlloc(self.allocator, std.json.Value{ .object = root }, .{});
     }
 
     pub fn query(self: *Self, gql: []const u8, params: ?[]const u8) ![]u8 {
         try self.ensureConnected();
 
-        var execute = zig_client.proto.ExecuteRequest{
-            .session_id = self.client.session_id,
-            .query = gql,
-            .request_id = try self.client.generateRequestId(),
+        const param_list = try self.parseParamsJson(params);
+        var adapter = ProtocolAdapter{ .client = &self.client };
+        var protocol = query_runner.ProtocolClient{
+            .context = &adapter,
+            .sendClientMessageFn = ProtocolAdapter.send,
+            .readServerMessageFn = ProtocolAdapter.read,
         };
-        defer deinitOwnedExecuteRequest(self.allocator, &execute);
-
-        try self.appendParamsJson(&execute, params);
-
-        self.client.sendProto(.{ .execute = execute }) catch |err| {
+        // collectQuery owns (and frees) the parameter list.
+        var result = query_runner.collectQuery(self.allocator, &protocol, .{
+            .session_id = self.client.session_id,
+            .query_text = gql,
+            .format = "json",
+            .timeout_secs = 30,
+            .params = param_list,
+        }) catch |err| {
             self.resetClient() catch {};
             return mapTransportError(err);
         };
+        defer result.deinit();
+        return self.resultJson(&result);
+    }
 
-        return try self.collectQueryJson();
+    /// `query` on `graph` (the session's graph when null). SONNY-6559 (6):
+    /// a graph name is a GQL identifier ([A-Za-z_][A-Za-z0-9_]*), checked
+    /// by `query_scope` before it is written into the statement.
+    pub fn queryIn(self: *Self, graph: ?[]const u8, gql: []const u8) ![]u8 {
+        const scoped = try geode.query_scope.prependGraphContextIfNeeded(self.allocator, gql, graph);
+        defer if (scoped) |q| self.allocator.free(q);
+        return self.query(scoped orelse gql, null);
     }
 
     pub fn getSchema(self: *Self) ![]u8 {
-        const schema_query =
-            \\MATCH (n)
-            \\WITH DISTINCT labels(n) AS labels
-            \\RETURN labels
-            \\LIMIT 100
-        ;
-        return self.query(schema_query, null);
+        return self.query(schema_labels_query, null);
     }
 
     pub fn explain(self: *Self, gql: []const u8) ![]u8 {
@@ -315,12 +338,10 @@ pub const GeodeClient = struct {
         return self.query(explain_query, null);
     }
 
-    pub fn listCatalogs(self: *Self) ![]u8 {
-        return self.query("SHOW CATALOGS", null);
-    }
-
-    pub fn listGraphs(self: *Self, catalog: ?[]const u8) ![]u8 {
-        _ = catalog;
+    /// SHOW GRAPHS has no catalog scope in geode (SONNY-6552: the ignored
+    /// `catalog` parameter is gone). SONNY-6559 (5): there is no catalogs
+    /// tool: geode has no SHOW CATALOGS, and no catalog object to list.
+    pub fn listGraphs(self: *Self) ![]u8 {
         return self.query("SHOW GRAPHS", null);
     }
 
@@ -373,12 +394,24 @@ test "GeodeClient endpoint parsing" {
 }
 
 test "GeodeClient endpoint parsing with IPv6" {
+    // SONNY-6484: docs/DSN.md requires brackets around an IPv6 host. A bare
+    // `::1` is refused (it used to become host `:` port 1, silently); since
+    // geode-client-zig v0.3.16 by the library's parser, as InvalidDSN.
     const allocator = std.testing.allocator;
 
-    const client = try GeodeClient.init(allocator, "::1");
+    const client = try GeodeClient.init(allocator, "[::1]");
     defer client.deinit();
     try std.testing.expectEqualStrings("::1", client.endpoint);
     try std.testing.expectEqual(@as(u16, 3141), client.port);
+
+    const with_port = try GeodeClient.init(allocator, "quic://[2001:db8::1]:8443/g");
+    defer with_port.deinit();
+    try std.testing.expectEqualStrings("2001:db8::1", with_port.endpoint);
+    try std.testing.expectEqual(@as(u16, 8443), with_port.port);
+
+    for ([_][]const u8{ "::1", "::1:3141", "quic://2001:db8::1" }) |bare| {
+        try std.testing.expectError(error.InvalidDSN, GeodeClient.init(allocator, bare));
+    }
 }
 
 test "GeodeClient isConnected initially false" {

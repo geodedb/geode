@@ -22,13 +22,16 @@ const std = @import("std");
 const graph_store = @import("../graph_store.zig");
 const tokenizer = @import("../index/fts_tokenizer.zig");
 const adapter_mod = @import("../storage/fts_storage_adapter.zig");
+const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 const catalog_mod = @import("../schema/catalog.zig");
 const cluster_replication = @import("../distributed/cluster_replication.zig");
-const raft_snapshot_manager = @import("../distributed/raft_snapshot_manager.zig");
 
 const log = std.log.scoped(.fts_index_ops);
 
 pub const Error = error{
+    /// SONNY-6612 (1): an existing value the validation must check could not
+    /// be read (the cause is logged).
+    StorageReadFailed,
     /// The fulltext index name already exists (and IF NOT EXISTS was absent).
     FulltextIndexExists,
     /// FTS is unavailable on the resolved graph (adapter not initialised).
@@ -117,6 +120,37 @@ pub fn createFulltextIndex(
     };
 }
 
+/// Copies of an index's label and properties into `label_out` / `props_out`,
+/// owned by `allocator`. On an error nothing is left allocated.
+fn dupeSpec(
+    allocator: std.mem.Allocator,
+    label: []const u8,
+    properties: []const []const u8,
+    label_out: *[]const u8,
+    props_out: *[]const []const u8,
+) !void {
+    const owned_label = try allocator.dupe(u8, label);
+    errdefer allocator.free(owned_label);
+    const owned_props = try allocator.alloc([]const u8, properties.len);
+    var filled: usize = 0;
+    errdefer {
+        for (owned_props[0..filled]) |p| allocator.free(p);
+        allocator.free(owned_props);
+    }
+    for (properties, 0..) |p, i| {
+        owned_props[i] = try allocator.dupe(u8, p);
+        filled = i + 1;
+    }
+    label_out.* = owned_label;
+    props_out.* = owned_props;
+}
+
+/// SONNY-6368 test instrumentation: called by `rebuildFulltextIndex` once its
+/// backfill has read the store, while the index is still rebuilding (before
+/// the drain). A test holds the rebuild there to land a write, or an undo,
+/// in its window.
+pub var rebuild_backfilled_hook: ?*const fn (index_name: []const u8) void = null;
+
 /// Spec geode-vectorization-and-reranking: post-bulk-ingest invariant — rebuild
 /// the fulltext engine for `index_name` from current store contents. Resolves
 /// the (label, properties) spec from the schema catalog when available (works
@@ -138,9 +172,10 @@ pub fn rebuildFulltextIndex(
     // Resolve label + properties: catalog first (survives restart — the DDL
     // path always writes this row, see execution.zig:1671), registry fallback
     // for a defensive edge case (mid-transition state with no catalog row).
-    // `properties`/`label` from the catalog branch borrow catalog-owned memory
-    // (alive for the process lifetime); the registry branch dupes with
-    // `allocator` and is freed by `owns_fallback_strings` below.
+    // Both branches dupe with `allocator`, freed by `owns_fallback_strings`
+    // below. SONNY-2795: the catalog branch borrowed the row's strings, which
+    // a concurrent DROP INDEX frees; it now copies them under the catalog
+    // lock.
     var label: []const u8 = undefined;
     var properties: []const []const u8 = undefined;
     var owns_fallback_strings = false;
@@ -155,14 +190,18 @@ pub fn rebuildFulltextIndex(
         // ensureAdvancedVectorIndexForProperty uses to iterate indexes — scan
         // for the row whose `.name` matches and whose `.index_type` is a
         // fulltext index (`table_name` = label, `columns` = properties).
-        const all_indexes = try catalog.listAllIndexes(allocator);
-        defer allocator.free(all_indexes);
-        for (all_indexes) |info| {
-            if (!std.mem.eql(u8, info.name, index_name)) continue;
-            if (!std.mem.startsWith(u8, info.index_type, "fulltext")) continue;
-            label = info.table_name;
-            properties = info.columns;
-            break :resolve;
+        {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            catalog.rwlock.lockSharedUncancelable(io);
+            defer catalog.rwlock.unlockShared(io);
+            var it = catalog.indexes.valueIterator();
+            while (it.next()) |info| {
+                if (!std.mem.eql(u8, info.name, index_name)) continue;
+                if (!std.mem.startsWith(u8, info.index_type, "fulltext")) continue;
+                try dupeSpec(allocator, info.table_name, info.columns, &label, &properties);
+                owns_fallback_strings = true;
+                break :resolve;
+            }
         }
 
         // Registry fallback: scan every (label -> []FtsIndexSpec) list for a
@@ -172,20 +211,7 @@ pub fn rebuildFulltextIndex(
         const entries = try mg.snapshotFtsLabelIndex(arena.allocator());
         for (entries) |entry| {
             if (!std.mem.eql(u8, entry.name, index_name)) continue;
-            const owned_label = try allocator.dupe(u8, entry.label);
-            errdefer allocator.free(owned_label);
-            const owned_props = try allocator.alloc([]const u8, entry.properties.len);
-            var filled: usize = 0;
-            errdefer {
-                for (owned_props[0..filled]) |p| allocator.free(p);
-                allocator.free(owned_props);
-            }
-            for (entry.properties, 0..) |p, i| {
-                owned_props[i] = try allocator.dupe(u8, p);
-                filled = i + 1;
-            }
-            label = owned_label;
-            properties = owned_props;
+            try dupeSpec(allocator, entry.label, entry.properties, &label, &properties);
             owns_fallback_strings = true;
             break :resolve;
         }
@@ -216,23 +242,50 @@ pub fn rebuildFulltextIndex(
         allocator.free(leftover);
     };
 
-    fa.dropIndex(index_name) catch |err| switch (err) {
-        adapter_mod.Error.IndexNotFound => {}, // engine absent (e.g. post-restart) — fine
-        else => return err,
-    };
-    try fa.createIndex(index_name);
-    errdefer fa.dropIndex(index_name) catch {};
-
-    // Snapshot the label's node ids EXACTLY ONCE: this is both backfill's
-    // input and the drain's exclusion set below (see `backfillExistingNodes`'
-    // `node_ids_override` doc comment for why a second independent read
-    // would corrupt that exclusion set).
     const store = graph_store.getGlobalStore(graph_store.global_allocator());
-    const raw_snapshot = store.getNodesByLabel(graph_name, label) orelse &[_]u64{};
-    const snapshot = try allocator.dupe(u64, raw_snapshot);
+    var created = false;
+    errdefer if (created) fa.dropIndex(index_name) catch {};
+    var snapshot: []u64 = &[_]u64{};
     defer allocator.free(snapshot);
 
-    const backfill_count = try backfillExistingNodes(allocator, graph_name, index_name, label, properties, fa, snapshot);
+    // CANARY: REQ=REQ-SONNY-6368-REBUILD-AGAIN; FEATURE="FullText"; ASPECT=RebuildPasses; STATUS=TESTED; TEST=tests/test_sonny6368_index_maintenance.zig; OWNER=fts; UPDATED=2026-11-12
+    // SONNY-6368: one pass per iteration. An undo whose index repair found
+    // this rebuild running asked it to run again
+    // (`FtsStorageAdapter.requestRebuildAgain`): its backfill may have read
+    // the value the undo took back, which no pending id carries (the undo
+    // writes through the store only). Such a pass starts over from the store
+    // with the window still armed; the last pass ends the rebuild
+    // (`finishRebuildPass`). The repair used to be refused and dropped.
+    const backfill_count: usize, const pending: []u64 = while (true) {
+        fa.dropIndex(index_name) catch |err| switch (err) {
+            adapter_mod.Error.IndexNotFound => {}, // engine absent (e.g. post-restart) — fine
+            else => return err,
+        };
+        created = false;
+        try fa.createIndex(index_name);
+        created = true;
+
+        // Snapshot the label's node ids EXACTLY ONCE per pass: this is both
+        // backfill's input and the drain's exclusion set below (see
+        // `backfillExistingNodes`' `node_ids_override` doc comment for why a
+        // second independent read would corrupt that exclusion set).
+        allocator.free(snapshot);
+        snapshot = &[_]u64{};
+        const raw_snapshot = store.getNodesByLabel(graph_name, label) orelse &[_]u64{};
+        snapshot = try allocator.dupe(u64, raw_snapshot);
+
+        const count = try backfillExistingNodes(allocator, graph_name, index_name, label, properties, fa, snapshot);
+        if (rebuild_backfilled_hook) |hook| hook(index_name);
+
+        // Clearing the rebuild flag (on the last pass) allows live writes to
+        // resume while the drain below processes its snapshot. See the drain.
+        const pass = try fa.finishRebuildPass(index_name, allocator);
+        if (!pass.again) break .{ count, pass.pending };
+        // The next pass's backfill reads every queued id's current state.
+        allocator.free(pass.pending);
+    };
+    drained = true;
+    defer allocator.free(pending);
 
     // Drain: reindex every write queued during the window whose id is NOT
     // already covered by the snapshot backfill above just processed.
@@ -257,7 +310,7 @@ pub fn rebuildFulltextIndex(
     try snapshot_set.ensureTotalCapacity(allocator, @intCast(snapshot.len));
     for (snapshot) |nid| snapshot_set.putAssumeCapacity(nid, {});
 
-    // Clearing the rebuild flag allows live writes to resume while this drain
+    // The rebuild flag is clear: live writes resume while this drain
     // processes its snapshot. Both the drain and live create hooks append
     // only if the engine has not indexed the id, under the same writer lock,
     // so a delayed notification cannot double the document's postings.
@@ -267,9 +320,6 @@ pub fn rebuildFulltextIndex(
     // resolution drops ids absent from the live store, so the stale posting
     // is not returned to a caller. Mid-backfill updates retain the documented
     // snapshot-staleness behavior above.
-    const pending = try fa.endRebuild(index_name, allocator);
-    drained = true;
-    defer allocator.free(pending);
     // Task 4 (geode-vectorization-and-reranking): count only drained ids that
     // were ACTUALLY indexed — `indexNodeDocument` returns `false` (not an
     // error) for a node whose id vanished by drain time or that carried no
@@ -292,6 +342,154 @@ pub fn rebuildFulltextIndex(
     return @intCast(backfill_count + drain_count);
 }
 
+// CANARY: REQ=REQ-SONNY-6368-REBUILD-AGAIN; FEATURE="FullText"; ASPECT=RebuildOrRequestAgain; STATUS=TESTED; TEST=tests/test_sonny6368_index_maintenance.zig; OWNER=fts; UPDATED=2026-11-12
+/// SONNY-6368: bring `index_name` up to the store after a change its live
+/// maintenance cannot express (an undo, a removed property): rebuild it, or,
+/// when a rebuild of it is already running, have that rebuild run again from
+/// the store once its pass is done (`FtsStorageAdapter.requestRebuildAgain`)
+/// rather than drop the repair. Returns once one of the two is certain.
+pub fn rebuildOrRequestAgain(
+    allocator: std.mem.Allocator,
+    catalog: *catalog_mod.Catalog,
+    graph_name: []const u8,
+    index_name: []const u8,
+) !void {
+    // A running rebuild that ends between our refusal and our request is
+    // rebuilt by us on the next attempt; the bound only stops a pathological
+    // stream of short rebuilds from holding the caller.
+    var attempts: usize = 0;
+    while (attempts < 16) : (attempts += 1) {
+        _ = rebuildFulltextIndex(allocator, catalog, graph_name, index_name) catch |err| switch (err) {
+            adapter_mod.Error.RebuildInProgress => {
+                const adapter = graph_store.getGlobalAdapter() orelse return Error.FulltextUnavailable;
+                const mg = adapter.lookupManagedGraph(graph_name) catch return Error.FulltextUnavailable;
+                const fa = mg.fts_adapter orelse return Error.FulltextUnavailable;
+                if (try fa.requestRebuildAgain(index_name)) return;
+                continue;
+            },
+            else => return err,
+        };
+        return;
+    }
+    return adapter_mod.Error.RebuildInProgress;
+}
+
+// CANARY: REQ=REQ-SONNY-6368-REMOVE-MAINTENANCE; FEATURE="FullText"; ASPECT=RemovedTextRebuildQueue; STATUS=TESTED; TEST=tests/test_sonny6368_index_maintenance.zig; OWNER=fts; UPDATED=2026-11-12
+/// SONNY-6368: the full-text indexes whose node lost indexed text (a
+/// committed `REMOVE n.prop`) and so must be rebuilt: the engine cannot take
+/// one property's postings out of a document (append-only; a tombstone hides
+/// the node for good, and a later SET could not bring it back). A REMOVE
+/// queues the index (`queueRebuildForRemovedText`); the statement's end
+/// rebuilds each queued index once (`flushQueuedRebuilds`), so `MATCH (d:Doc)
+/// REMOVE d.body` costs one O(nodes of the label) rebuild, not one per row.
+/// Whoever ends a statement first takes the queue: every entry is rebuilt
+/// after the REMOVE that queued it. `queue_mutex` is a leaf lock: held only
+/// to add or take entries, never across a rebuild.
+const QueuedRebuild = struct { graph: []u8, index: []u8 };
+const queue_allocator = std.heap.smp_allocator;
+var queue_mutex: std.Io.Mutex = .init;
+var queued_rebuilds: std.ArrayListUnmanaged(QueuedRebuild) = .empty;
+var queued_count: std.atomic.Value(usize) = .init(0);
+
+/// SONNY-6368: node of `labels` in `graph_name` lost its text in `property`
+/// (the caller saw a non-empty string there): queue every full-text index
+/// covering one of the labels over that property for a rebuild at the end
+/// of the statement. Never fails the write; an index that cannot be queued
+/// is logged (it keeps answering for the removed text until rebuilt).
+pub fn queueRebuildForRemovedText(graph_name: []const u8, labels: []const []const u8, property: []const u8) void {
+    const adapter = graph_store.getGlobalAdapter() orelse return;
+    const mg = adapter.lookupManagedGraph(graph_name) catch return;
+    const fa = mg.fts_adapter orelse return;
+    armLabelRegistry(adapter, mg, fa, graph_name); // SONNY-6591
+    for (labels) |label| {
+        const specs = mg.coveringFtsIndexes(label) orelse continue;
+        for (specs) |spec| {
+            for (spec.properties) |p| {
+                if (!std.mem.eql(u8, p, property)) continue;
+                queueRebuild(graph_name, spec.name) catch |err| {
+                    log.err("fulltext index '{s}' could not be queued for a rebuild after a REMOVE: {}; it answers for the removed text until rebuilt", .{ spec.name, err });
+                };
+                break;
+            }
+        }
+    }
+}
+
+// CANARY: REQ=REQ-SONNY-6421-REMOVE-LABEL-MAINTENANCE; FEATURE="FullText"; ASPECT=RemovedLabelRebuildQueue; STATUS=TESTED; TEST=tests/test_sonny6421_index_maintenance.zig; OWNER=fts; UPDATED=2026-11-12
+/// SONNY-6421: node `node_id` of `graph_name` left `label` (REMOVE n:L):
+/// queue every full-text index on `label` that holds text of the node (a
+/// non-empty string in one of its properties) for a rebuild at the end of
+/// the statement, as `queueRebuildForRemovedText` does for a removed
+/// property. Call it after the label is removed: the properties stay. Never
+/// fails the write.
+pub fn queueRebuildForRemovedLabel(store: *graph_store.GraphStore, graph_name: []const u8, node_id: u64, label: []const u8) void {
+    const adapter = graph_store.getGlobalAdapter() orelse return;
+    const mg = adapter.lookupManagedGraph(graph_name) catch return;
+    const fa = mg.fts_adapter orelse return;
+    armLabelRegistry(adapter, mg, fa, graph_name); // SONNY-6591
+    const specs = mg.coveringFtsIndexes(label) orelse return;
+    for (specs) |spec| {
+        for (spec.properties) |p| {
+            // SONNY-6612 (1): a value that cannot be read may be text the
+            // index holds: rebuild (it read as absent and the index kept it).
+            const pv = (store.getNodePropertyOrError(node_id, p) catch graph_store.PropertyValue{ .String = "unreadable" }) orelse continue;
+            if (pv != .String or pv.String.len == 0) continue;
+            queueRebuild(graph_name, spec.name) catch |err| {
+                log.err("fulltext index '{s}' could not be queued for a rebuild after a REMOVE of its label: {}; it holds the node's text until rebuilt (searches skip the node)", .{ spec.name, err });
+            };
+            break;
+        }
+    }
+}
+
+fn queueRebuild(graph_name: []const u8, index_name: []const u8) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    queue_mutex.lockUncancelable(io);
+    defer queue_mutex.unlock(io);
+    for (queued_rebuilds.items) |q| {
+        if (std.mem.eql(u8, q.graph, graph_name) and std.mem.eql(u8, q.index, index_name)) return;
+    }
+    const g = try queue_allocator.dupe(u8, graph_name);
+    errdefer queue_allocator.free(g);
+    const i = try queue_allocator.dupe(u8, index_name);
+    errdefer queue_allocator.free(i);
+    try queued_rebuilds.append(queue_allocator, .{ .graph = g, .index = i });
+    _ = queued_count.fetchAdd(1, .release);
+}
+
+/// SONNY-6368: rebuild every queued index (`queueRebuildForRemovedText`).
+/// Called at the end of each outermost statement (`execution`), still under
+/// the graph lock it holds; a rebuild takes no graph lock. A rebuild already
+/// running for an index runs again instead (`rebuildOrRequestAgain`).
+pub fn flushQueuedRebuilds(catalog: *catalog_mod.Catalog) void {
+    if (queued_count.load(.acquire) == 0) return;
+    var taken: std.ArrayListUnmanaged(QueuedRebuild) = .empty;
+    {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        queue_mutex.lockUncancelable(io);
+        defer queue_mutex.unlock(io);
+        taken = queued_rebuilds;
+        queued_rebuilds = .empty;
+        queued_count.store(0, .release);
+    }
+    defer {
+        for (taken.items) |q| {
+            queue_allocator.free(q.graph);
+            queue_allocator.free(q.index);
+        }
+        taken.deinit(queue_allocator);
+    }
+    var arena = std.heap.ArenaAllocator.init(queue_allocator);
+    defer arena.deinit();
+    for (taken.items) |q| {
+        rebuildOrRequestAgain(arena.allocator(), catalog, q.graph, q.index) catch |err| switch (err) {
+            // Dropped since it was queued: nothing left to answer for.
+            Error.IndexNotFound => {},
+            else => log.err("fulltext index '{s}' could not be rebuilt after a REMOVE: {}; it answers for the removed text until rebuilt", .{ q.index, err }),
+        };
+    }
+}
+
 /// GAP-0922: scan existing nodes of `label` and reject the fulltext index if
 /// every present value of every indexed property is non-string. Returns
 /// cleanly (allowing the index) when the label has no nodes, or when at least
@@ -308,7 +506,10 @@ pub fn validateTextProperty(
     var saw_any_value = false;
     for (node_ids) |node_id| {
         for (properties) |prop| {
-            const pv = store.getNodeProperty(node_id, prop) orelse continue;
+            const pv = (store.getNodePropertyOrError(node_id, prop) catch |err| {
+                log.err("fulltext index validation could not read a node's value: {}", .{err});
+                return error.StorageReadFailed;
+            }) orelse continue;
             switch (pv) {
                 .String => return, // at least one string value → text index is meaningful
                 .Null => {},
@@ -330,8 +531,8 @@ pub fn validateTextProperty(
 /// here (this function doing its own `getNodesByLabel` call) could observe a
 /// DIFFERENT (longer) id list than the caller's snapshot if a write raced in
 /// between the two reads, corrupting the drain's "already covered by
-/// backfill" check. `createFulltextIndex` and `rebuildAllFulltextIndexes`
-/// pass `null` (unchanged behavior — no drain phase follows their backfill).
+/// backfill" check. `createFulltextIndex` passes
+/// `null` (unchanged behavior — no drain phase follows their backfill).
 ///
 /// Returns the count of nodes actually submitted to `fa.indexNode`
 /// SUCCESSFULLY — nodes carrying `label` are NOT all counted; a node with no
@@ -388,7 +589,7 @@ fn backfillExistingNodes(
         }
 
         for (properties) |prop| {
-            const pv = store.getNodeProperty(node_id, prop) orelse continue;
+            const pv = (try store.getNodePropertyOrError(node_id, prop)) orelse continue;
             const text = switch (pv) {
                 .String => |s| s,
                 else => continue, // only string is indexable for FTS (skip Int/Float/Bool/Null/...)
@@ -470,6 +671,77 @@ pub fn dropFulltextIndex(
 /// A4b: the kind of node write that triggered maintenance.
 pub const FtsWriteOp = enum { create, upsert, update, delete };
 
+// CANARY: REQ=REQ-SONNY-6591-FTS-REGISTRY-AFTER-RESTART; FEATURE="FullText"; ASPECT=RegistryArmedFromCatalog; STATUS=TESTED; TEST=tests/test_sonny6591_fts_write_paths.zig; OWNER=fts; UPDATED=2026-11-15
+/// SONNY-6591: fill `mg`'s label -> fulltext index registry from the catalog
+/// and open each index's engine, once per opened graph.
+///
+/// The registry every maintenance hook reads (`coveringFtsIndexes`) lives in
+/// memory and was filled only by CREATE INDEX and `rebuildFulltextIndex`. A
+/// restart left it empty while the catalog still recorded the index and its
+/// engine re-opened on the first search, so after a restart no write reached
+/// the index: CREATE, SET and MERGE indexed nothing, DELETE left the node's
+/// postings, and REMOVE queued no rebuild. The catalog row (written by every
+/// CREATE INDEX, removed by DROP INDEX) is the durable record; the hooks call
+/// this first, so the first write after a restart finds the index.
+///
+/// One atomic load once armed. Until the catalog exists, or while an engine
+/// that is on disk cannot be opened, the graph stays unarmed and the next
+/// hook tries again. A catalog row whose engine is not on this graph (no
+/// directory: `IndexNotFound`, e.g. mid-rebuild, which re-arms the index
+/// itself) is skipped. The catalog lock is held only to copy the rows; no
+/// graph lock is taken (callers may hold one: graph locks are below the
+/// catalog in the lock order).
+fn armLabelRegistry(
+    adapter: *graph_storage_adapter.StorageAdapter,
+    mg: *graph_storage_adapter.ManagedGraph,
+    fa: *adapter_mod.FtsStorageAdapter,
+    graph_name: []const u8,
+) void {
+    if (mg.fts_registry_armed.load(.acquire)) return;
+    const execution = @import("../execution.zig");
+    const catalog = if (execution.getActiveContext()) |ctx| ctx.catalog else (execution.getCatalogInstanceIfPresent() orelse return);
+
+    var arena = std.heap.ArenaAllocator.init(adapter.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Row = struct { name: []const u8, label: []const u8, properties: []const []const u8 };
+    var rows: std.ArrayListUnmanaged(Row) = .empty;
+    {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        catalog.rwlock.lockSharedUncancelable(io);
+        defer catalog.rwlock.unlockShared(io);
+        var it = catalog.indexes.valueIterator();
+        while (it.next()) |info| {
+            if (!std.mem.startsWith(u8, info.index_type, "fulltext")) continue;
+            if (!catalog_mod.rowInGraph(info.graph, graph_name)) continue;
+            var row: Row = .{ .name = undefined, .label = undefined, .properties = undefined };
+            dupeSpec(a, info.table_name, info.columns, &row.label, &row.properties) catch return;
+            row.name = a.dupe(u8, info.name) catch return;
+            rows.append(a, row) catch return;
+        }
+    }
+
+    var complete = true;
+    for (rows.items) |row| {
+        if (fa.getIndex(row.name) == null) {
+            fa.openIndex(row.name) catch |err| switch (err) {
+                adapter_mod.Error.IndexNotFound => continue,
+                adapter_mod.Error.IndexExists => {}, // opened by a concurrent search
+                else => {
+                    log.warn("fulltext index '{s}' could not be opened for write maintenance: {}; writes do not reach it until it opens", .{ row.name, err });
+                    complete = false;
+                    continue;
+                },
+            };
+        }
+        mg.addFtsLabelIndex(adapter.allocator, row.label, row.name, row.properties) catch |err| {
+            log.warn("fulltext index '{s}' could not be registered for write maintenance: {}", .{ row.name, err });
+            complete = false;
+        };
+    }
+    if (complete) mg.fts_registry_armed.store(true, .release);
+}
+
 /// A4b: keep fulltext indexes current after a single-node write. CHEAP-EXITS
 /// when no fulltext index covers any of `labels` (the dominant case → near-zero
 /// overhead for non-FTS graphs).
@@ -521,6 +793,7 @@ pub fn maintainFulltextOnWrite(
 
     const mg = adapter.lookupManagedGraph(gname) catch return;
     const fa = mg.fts_adapter orelse return; // no FTS on this graph → free exit
+    armLabelRegistry(adapter, mg, fa, gname); // SONNY-6591: one atomic load once armed
 
     // De-dup index names across labels so a node carrying two labels both
     // covered by the same index is maintained exactly once (otherwise `.create`
@@ -747,13 +1020,13 @@ fn indexNodeDocument(
 }
 
 // ===========================================================================
-// Raft apply / snapshot-install FTS maintenance (cluster FTS symmetry,
-// 2026-06-10 audit slice 3 — see tests/test_fts_apply_symmetry.zig)
+// Raft apply FTS maintenance (cluster FTS symmetry, 2026-06-10 audit slice
+// 3 — see tests/test_fts_apply_symmetry.zig)
 // ===========================================================================
 //
-// The raft apply path (src/distributed/cluster_replication.zig) and the
-// snapshot installer (src/distributed/raft_snapshot_manager.zig) mutate the
-// store directly, bypassing the executor's `maintainFulltextOnWrite` call
+// The raft apply path (src/distributed/cluster_replication.zig) mutates the
+// store directly (a Raft snapshot restore swaps in the leader's files, the
+// fulltext indexes with them, SONNY-6636), bypassing the executor's `maintainFulltextOnWrite` call
 // sites — so a follower's fulltext indexes silently diverged from the leader.
 // Those modules can NOT @import this file (they are compiled in module roots
 // where the executor's deps aren't mapped), so they expose callback seams and
@@ -767,13 +1040,39 @@ fn indexNodeDocument(
 // owning-thread note on `maintainFulltextOnWrite` above describes the
 // historical assert that this config disables.
 
-/// Register the FTS maintenance wrappers on the raft apply + snapshot-install
-/// seams. Idempotent (re-registering installs the same function pointers).
+/// Register the FTS maintenance wrappers on the raft apply seam. Idempotent (re-registering installs the same function pointers).
 /// Called once at server startup (src/server/main.zig) and from in-process
 /// apply tests that exercise FTS.
 pub fn registerFtsApplyHook() void {
     cluster_replication.setFtsApplyHook(&ftsApplyMaintenanceHook);
-    raft_snapshot_manager.setFtsSnapshotRebuildHook(&ftsSnapshotRebuildHook);
+    cluster_replication.setFtsApplyTextHooks(.{ .removed = &ftsApplyRemovedTextHook, .flush = &ftsApplyFlushHook });
+}
+
+// CANARY: REQ=REQ-SONNY-6433-FOLLOWER-FTS-REBUILD; FEATURE="FullText"; ASPECT=ApplyRemovedTextRebuild; STATUS=TESTED; TEST=tests/test_sonny6433_follower_fts_rebuild.zig; OWNER=fts; UPDATED=2026-11-12
+/// SONNY-6433: an applied entry took the text in `key` away from a node
+/// (see `cluster_replication.FtsApplyTextHooks`): queue the covering indexes
+/// for a rebuild, as the executor's SET and REMOVE do.
+fn ftsApplyRemovedTextHook(
+    store: *graph_store.GraphStore,
+    graph_name: []const u8,
+    node_id: u64,
+    key: []const u8,
+) void {
+    const global = graph_store.getCurrentGlobalStore() orelse return;
+    if (store != global) return;
+    const node = store.getNodePtr(node_id) orelse return;
+    queueRebuildForRemovedText(graph_name, node.labels, key);
+}
+
+/// SONNY-6433: the end of an applied entry: rebuild what it queued
+/// (`flushQueuedRebuilds`), on the apply thread, as the executor does at a
+/// statement's end. Needs the catalog (the indexes' definitions); without
+/// one there is no index to rebuild.
+fn ftsApplyFlushHook(store: *graph_store.GraphStore) void {
+    const global = graph_store.getCurrentGlobalStore() orelse return;
+    if (store != global) return;
+    const catalog = @import("../execution.zig").getCatalogInstanceIfPresent() orelse return;
+    flushQueuedRebuilds(catalog);
 }
 
 /// Apply-path wrapper: resolve the node's labels from the store and run the
@@ -807,87 +1106,4 @@ fn ftsApplyMaintenanceHook(
     maintainFulltextOnWrite(arena.allocator(), graph_name, node_id, node_ptr.labels, write_op) catch |err| {
         log.warn("fts maintain (raft apply, {s}) failed for node {d}: {}", .{ @tagName(op), node_id, err });
     };
-}
-
-/// Snapshot-install wrapper: drop + recreate + re-backfill every catalogued
-/// fulltext index from the restored store. Never fails the install.
-///
-/// PRECONDITION: no concurrent searches — see `rebuildAllFulltextIndexes`.
-fn ftsSnapshotRebuildHook(store: *graph_store.GraphStore) void {
-    const global = graph_store.getCurrentGlobalStore() orelse return;
-    if (store != global) return;
-
-    var arena = std.heap.ArenaAllocator.init(graph_store.global_allocator());
-    defer arena.deinit();
-
-    rebuildAllFulltextIndexes(arena.allocator()) catch |err| {
-        log.warn("fts snapshot rebuild failed: {}", .{err});
-    };
-}
-
-/// Rebuild EVERY catalogued fulltext index on every open graph: drop the
-/// engine (on-disk tree included) + cached facade, recreate a fresh engine,
-/// and re-backfill from the CURRENT store contents. The label→index registry
-/// is left intact (it is the catalog being rebuilt from).
-///
-/// Why drop+recreate instead of incremental repair: a snapshot install wipes
-/// and rewrites the whole store, and fts-storage tombstones are permanent per
-/// doc_id (docs/bugs/2026-06-07-fts-search-returns-zero-results-at-runtime.md)
-/// — a node deleted pre-snapshot and restored by the snapshot would stay
-/// invisible without a fresh engine. Cost: O(total indexed nodes) — accepted;
-/// snapshot install is already a full-store rewrite. Per-index failures are
-/// logged and skipped so one broken index cannot wedge the install.
-///
-/// PRECONDITION: no concurrent searches — installSnapshotData currently has
-/// NO production caller (reportSnapshot wiring pending); before wiring
-/// InstallSnapshot into raft_consensus, the facade/engine drop-recreate here
-/// must be made safe against concurrent QUIC-worker searches (unlocked
-/// fts_facades map + engine deinit race).
-pub fn rebuildAllFulltextIndexes(scratch: std.mem.Allocator) !void {
-    const adapter = graph_store.getGlobalAdapter() orelse return;
-
-    const graph_names = try adapter.listOpenGraphNames(scratch);
-    for (graph_names) |gname| {
-        const mg = adapter.lookupManagedGraph(gname) catch continue;
-        const fa = mg.fts_adapter orelse continue; // no FTS on this graph
-
-        const entries = mg.snapshotFtsLabelIndex(scratch) catch |err| {
-            log.warn("fts snapshot rebuild: registry copy failed for graph '{s}': {}", .{ gname, err });
-            continue;
-        };
-
-        // De-dup by index name (the registry is keyed per label; CREATE INDEX
-        // registers one label per index, but stay defensive).
-        var seen: std.StringHashMapUnmanaged(void) = .empty;
-        defer seen.deinit(scratch);
-
-        for (entries) |entry| {
-            const gop = try seen.getOrPut(scratch, entry.name);
-            if (gop.found_existing) continue;
-
-            // Facade borrows the engine — drop it before the engine.
-            mg.dropFulltextFacade(adapter.allocator, entry.name);
-
-            fa.dropIndex(entry.name) catch |err| switch (err) {
-                adapter_mod.Error.IndexNotFound => {}, // never opened — fine
-                else => {
-                    log.warn("fts snapshot rebuild: drop '{s}' on '{s}' failed: {}", .{ entry.name, gname, err });
-                    continue;
-                },
-            };
-            fa.createIndex(entry.name) catch |err| {
-                log.warn("fts snapshot rebuild: recreate '{s}' on '{s}' failed: {}", .{ entry.name, gname, err });
-                continue;
-            };
-
-            _ = backfillExistingNodes(scratch, gname, entry.name, entry.label, entry.properties, fa, null) catch |err| {
-                log.warn("fts snapshot rebuild: backfill '{s}' on '{s}' failed: {}", .{ entry.name, gname, err });
-                continue;
-            };
-
-            fa.flush(entry.name) catch |err| {
-                log.warn("fts snapshot rebuild: flush '{s}' on '{s}' failed: {}", .{ entry.name, gname, err });
-            };
-        }
-    }
 }

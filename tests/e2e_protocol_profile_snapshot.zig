@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("profile_test_util.zig");
 
@@ -13,6 +14,8 @@ fn structuralSignature(allocator: std.mem.Allocator, line: []const u8) ![]u8 {
 const EXPECTED_PREFIX = "{\"profile_version\":0,\"ops\":[{\"op\":\"NodeScan\",\"phase\":\"SCAN\"";
 
 test "protocol: PROFILE structural snapshot" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const out = try util.runProfile(testing.allocator, "PROFILE RETURN 1 AS x LIMIT 1", null);
     defer testing.allocator.free(out);
     // Ensure profile_version matches snapshot expectation before signature compare (fast fail for version bump)

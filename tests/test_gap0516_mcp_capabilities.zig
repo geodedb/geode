@@ -147,16 +147,26 @@ test "GAP-0516: implemented subset (tools/resources/prompts list) still works" {
     }
 }
 
-// NOTE: `completion/complete` is intentionally NOT exercised through the full
-// mcp.Server.processMessage path here. The pinned mcp library (v0.1.7) leaks
-// the stringified `params` JSON on that dispatch branch (mcp.zig ~3004:
-// `json.stringify(self.allocator, p)` with no matching free, unlike the
-// callTool branch which has a `defer ... free`). Driving it under
-// std.testing.allocator would fail the leak detector on an upstream bug
-// rather than a Geode regression. The completion handler's own contract
-// (returns the "[]" empty-provider body, spec §4.4) is covered leak-free by
-// the inline `completeHandler returns empty JSON array` test in
-// src/mcp/server.zig.
+// `completion/complete` runs through the full processMessage path under the
+// strict allocator: mcp v0.1.22 (SONNY-6531) frees the `params` JSON it
+// stringifies for the handler and the handler's result (v0.1.7 to v0.1.21
+// leaked the params, so this was skipped here). The CompleteResult shape is
+// tests/test_sonny6544_mcp_completion.zig.
+test "GAP-0516: completion/complete is an implemented success (spec §4.4)" {
+    const allocator = std.testing.allocator;
+    const server = try initTestServer(allocator);
+    defer server.deinit();
+    try handshake(server, allocator);
+
+    const req =
+        \\{"jsonrpc":"2.0","id":20,"method":"completion/complete","params":{"ref":{"type":"ref/prompt","name":"find_nodes"},"argument":{"name":"label","value":""}}}
+    ;
+    const resp = (try dispatch(server, allocator, req)) orelse
+        return error.UnexpectedNullResponse;
+    defer allocator.free(resp);
+    try std.testing.expect(std.mem.indexOf(u8, resp, "\"result\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, resp, "-32601") == null);
+}
 
 test "GAP-0516: logging/setLevel is a tolerated success (spec §7.2)" {
     const allocator = std.testing.allocator;
@@ -190,7 +200,7 @@ test "GAP-0516: known upstream advertisement caveat is pinned" {
     defer allocator.free(resp);
 
     // CAVEAT (documented in docs/MCP_SERVER.md and src/mcp/server.zig):
-    // the pinned `mcp` library (v0.1.7) hardcodes
+    // the pinned `mcp` library (v0.1.22) hardcodes
     // resources.subscribe:true in its initialize response and exposes
     // no ServerOptions field to override it. Geode's handler still
     // answers -32601 (asserted by the dispatch tests above), so the

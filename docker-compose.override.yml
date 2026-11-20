@@ -7,10 +7,9 @@ services:
       context: .
       dockerfile: Dockerfile
       target: runtime
-    environment:
-      # Override LOG_LEVEL to debug for development
-      - LOG_LEVEL=debug
-      - RUST_BACKTRACE=1
+    # Debug logging is --log-level debug (below): geode reads no LOG_LEVEL,
+    # and RUST_BACKTRACE means nothing to it (it is not written in Rust).
+    # SONNY-6435.
     volumes:
       # Mount source code for development
       - ./src:/home/geode/src:ro
@@ -33,4 +32,6 @@ services:
       - "/certs/server.crt"
       - "--key"
       - "/certs/server.key"
+      - "--log-level"
+      - "debug"
     # QUIC-only transport with TLS certificates

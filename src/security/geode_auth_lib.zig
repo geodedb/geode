@@ -1,5 +1,5 @@
 // (Removed duplicated preamble section)
-// CANARY: REQ=REQ-0005; FEATURE="Security Requirements"; ASPECT=Security; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-0005; FEATURE="Security Requirements"; ASPECT=Security; STATUS=IMPL; OWNER=security; UPDATED=2026-11-14
 // Clean reconstructed auth.zig with consolidated definitions (RBAC, ABAC, RLS, Sessions, MFA Policies)
 const std = @import("std");
 const build_options = @import("build_options");
@@ -222,6 +222,39 @@ pub const User = struct {
     lockout_until: i64 = 0, // epoch millis; 0 = not locked
 };
 
+// CANARY: REQ=REQ-SONNY-6600-RECOVERY-CODE-DIGESTS; FEATURE="MFA recovery code"; ASPECT=DigestAtRest; STATUS=TESTED; TEST=tests/test_sonny6600_mfa.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6600: how `User.recovery_codes` holds a code: "sha256$" and the
+/// lower-case hex of the code's SHA-256 (the auth library's
+/// `hashScratchCode`; recovery codes are 160-bit random values, so no KDF
+/// is needed). Never the code itself.
+pub const recovery_code_digest_prefix = "sha256$";
+pub const recovery_code_stored_len = recovery_code_digest_prefix.len + 64;
+
+pub fn recoveryCodeStoredForm(code: []const u8) [recovery_code_stored_len]u8 {
+    var digest = ext_mfa.hashScratchCode(code);
+    defer crypto_backend.secureZero(&digest);
+    return recoveryCodeStoredFormFromDigest(digest);
+}
+
+/// SONNY-6609: the stored form of a code given its digest (the security
+/// graph holds the digests, `MfaRecoveryCodes`).
+pub fn recoveryCodeStoredFormFromDigest(digest: [32]u8) [recovery_code_stored_len]u8 {
+    var out: [recovery_code_stored_len]u8 = undefined;
+    @memcpy(out[0..recovery_code_digest_prefix.len], recovery_code_digest_prefix);
+    const hex = std.fmt.bytesToHex(digest, .lower);
+    @memcpy(out[recovery_code_digest_prefix.len..], &hex);
+    return out;
+}
+
+fn isRecoveryCodeStoredForm(stored: []const u8) bool {
+    if (stored.len != recovery_code_stored_len) return false;
+    if (!std.mem.startsWith(u8, stored, recovery_code_digest_prefix)) return false;
+    for (stored[recovery_code_digest_prefix.len..]) |c| {
+        if (!std.ascii.isDigit(c) and !(c >= 'a' and c <= 'f')) return false;
+    }
+    return true;
+}
+
 pub const Role = struct {
     id: RoleId,
     name: []const u8,
@@ -286,7 +319,7 @@ pub const Operation = enum { select, insert, update, delete, all };
 pub const RowLevelPolicy = struct { id: PolicyId, name: []const u8, table: []const u8, operation: Operation, using_clause: []const u8, check_clause: ?[]const u8, roles: []const RoleId, enabled: bool };
 
 // ---- MFA Admin Policy ----
-// CANARY: REQ=REQ-GQL-MFA-003; FEATURE="MFA admin policy"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_003_MfaPolicyEval|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAllRoles|TestCANARY_REQ_GQL_MFA_POLICY_001_MatchAnyRole; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-MFA-003; FEATURE="MFA admin policy"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_mfa_policies.zig; OWNER=security; UPDATED=2026-11-12
 pub const MfaScope = enum { user, role, attribute };
 pub const MfaConditionType = enum {
     match_any_role,
@@ -323,7 +356,7 @@ pub const Session = struct {
     // High-assurance / step-up metadata. Null when no recent MFA elevation.
     last_mfa_ts: ?i64, // timestamp of last successful MFA event applied to this session
     elevation_expires_at: ?i64, // boundary after which high-assurance privileges lapse
-    // CANARY: REQ=REQ-GQL-MFA-007; FEATURE="Session step-up metadata"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow; OWNER=security; UPDATED=2025-09-26
+    // CANARY: REQ=REQ-GQL-MFA-007; FEATURE="Session step-up metadata"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-11-14
 };
 // CANARY: REQ=REQ-AUTH-POLICY-002; FEATURE="Enhanced Password Policy"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_002_PassphrasePolicy; OWNER=security; UPDATED=2025-09-30
 pub const PasswordPolicy = struct {
@@ -362,20 +395,46 @@ pub const PasswordPolicy = struct {
             break :blk if (parsed < 2) 2 else parsed;
         } else 3;
 
+        // SONNY-6331: no limit above what a password can meet (256
+        // characters hold at most 128 words); a larger setting meant no
+        // password was accepted.
         return .{
-            .min_length = min_length,
-            .max_length = 256,
+            .min_length = @min(min_length, max_password_length),
+            .max_length = max_password_length,
             .require_uppercase = true,
             .require_lowercase = true,
             .require_digit = false, // Optional for passphrases
             .require_special = false, // Optional for passphrases
             .allow_spaces = true,
             .require_passphrase = true,
-            .min_words = min_words,
+            .min_words = @min(min_words, max_password_words),
             .max_age_days = 90,
             .history_count = 5,
         };
     }
+
+    /// SONNY-6331: the rule a password broke.
+    pub const Violation = enum {
+        too_short,
+        too_long,
+        missing_uppercase,
+        missing_lowercase,
+        missing_digit,
+        contains_spaces,
+        too_few_words,
+    };
+
+    /// The error a refused password is answered with, one per rule
+    /// (SQLSTATE 22000 on the wire, with `message` as its text).
+    pub const PolicyError = error{
+        PasswordTooShort,
+        PasswordTooLong,
+        PasswordMissingUppercase,
+        PasswordMissingLowercase,
+        PasswordMissingDigit,
+        PasswordContainsSpaces,
+        PasswordNotPassphrase,
+    };
 
     // CANARY: REQ=REQ-AUTH-POLICY-005; FEATURE="Unified Password Policy Validation"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_bug731_password_policy.zig; OWNER=security; UPDATED=2026-07-31
     /// Validate a candidate password against this policy.
@@ -393,66 +452,155 @@ pub const PasswordPolicy = struct {
     /// this. See docs/@BUGS_731.md bug 4.
     ///
     /// The message wording is deliberately stable — it is quoted verbatim in
-    /// docs and in operator-facing error output.
+    /// docs and in operator-facing error output. SONNY-6331: it names the
+    /// configured limit (GEODE_PASSWORD_MIN_LENGTH / _MIN_WORDS), not the
+    /// default, and never contains the password.
     pub fn validate(self: PasswordPolicy, password: []const u8) ?[]const u8 {
-        if (password.len < self.min_length) return "Password too short (minimum 20 characters)";
-        if (password.len > self.max_length) return "Password too long (maximum 256 characters)";
+        const v = self.check(password) orelse return null;
+        return self.message(v);
+    }
 
-        if (self.require_uppercase) {
-            var found = false;
-            for (password) |c| {
-                if (std.ascii.isUpper(c)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return "Password must contain at least one uppercase letter";
-        }
-
-        if (self.require_lowercase) {
-            var found = false;
-            for (password) |c| {
-                if (std.ascii.isLower(c)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return "Password must contain at least one lowercase letter";
-        }
-
-        if (self.require_digit) {
-            var found = false;
-            for (password) |c| {
-                if (std.ascii.isDigit(c)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return "Password must contain at least one digit";
-        }
-
-        if (!self.allow_spaces) {
-            for (password) |c| {
-                if (c == ' ') return "Password must not contain spaces";
-            }
-        }
-
-        if (self.require_passphrase) {
-            var word_count: usize = 0;
-            var in_word = false;
-            for (password) |c| {
-                if (c == ' ') {
-                    in_word = false;
-                } else {
-                    if (!in_word) word_count += 1;
-                    in_word = true;
-                }
-            }
-            if (word_count < self.min_words) return "Password must be a passphrase with at least 3 words";
-        }
-
+    // CANARY: REQ=REQ-SONNY-6331-ONE-PASSWORD-POLICY; FEATURE="Unified Password Policy Validation"; ASPECT=PolicyCheck; STATUS=TESTED; TEST=tests/test_sonny6331_password_policy_paths.zig; OWNER=security; UPDATED=2026-11-12
+    /// The first rule `password` breaks, or null when it meets the policy.
+    pub fn check(self: PasswordPolicy, password: []const u8) ?Violation {
+        if (password.len < self.min_length) return .too_short;
+        if (password.len > self.max_length) return .too_long;
+        if (self.require_uppercase and !containsWhere(password, std.ascii.isUpper)) return .missing_uppercase;
+        if (self.require_lowercase and !containsWhere(password, std.ascii.isLower)) return .missing_lowercase;
+        if (self.require_digit and !containsWhere(password, std.ascii.isDigit)) return .missing_digit;
+        if (!self.allow_spaces and std.mem.indexOfScalar(u8, password, ' ') != null) return .contains_spaces;
+        if (self.require_passphrase and countPassphraseWords(password) < self.min_words) return .too_few_words;
         return null;
     }
+
+    /// `check` as an error (`PolicyError`), for the paths that set a password.
+    pub fn enforce(self: PasswordPolicy, password: []const u8) PolicyError!void {
+        const v = self.check(password) orelse return;
+        return errorOf(v);
+    }
+
+    pub fn errorOf(v: Violation) PolicyError {
+        return switch (v) {
+            .too_short => error.PasswordTooShort,
+            .too_long => error.PasswordTooLong,
+            .missing_uppercase => error.PasswordMissingUppercase,
+            .missing_lowercase => error.PasswordMissingLowercase,
+            .missing_digit => error.PasswordMissingDigit,
+            .contains_spaces => error.PasswordContainsSpaces,
+            .too_few_words => error.PasswordNotPassphrase,
+        };
+    }
+
+    /// The rule a `PolicyError` (also `SecurityManager.validatePassword`'s
+    /// errors of the same names) stands for; null for any other error.
+    pub fn violationOf(err: anyerror) ?Violation {
+        return switch (err) {
+            error.PasswordTooShort => .too_short,
+            error.PasswordTooLong => .too_long,
+            error.PasswordMissingUppercase => .missing_uppercase,
+            error.PasswordMissingLowercase => .missing_lowercase,
+            error.PasswordMissingDigit => .missing_digit,
+            error.PasswordContainsSpaces => .contains_spaces,
+            error.PasswordNotPassphrase => .too_few_words,
+            else => null,
+        };
+    }
+
+    /// The operator-facing text of a broken rule, with this policy's limits.
+    /// A static string: never the password.
+    pub fn message(self: PasswordPolicy, v: Violation) []const u8 {
+        return switch (v) {
+            .too_short => too_short_messages[@min(self.min_length, max_password_length)],
+            .too_long => too_long_messages[@min(self.max_length, max_password_length)],
+            .missing_uppercase => "Password must contain at least one uppercase letter",
+            .missing_lowercase => "Password must contain at least one lowercase letter",
+            .missing_digit => "Password must contain at least one digit",
+            .contains_spaces => "Password must not contain spaces",
+            .too_few_words => too_few_words_messages[@min(self.min_words, max_password_words)],
+        };
+    }
+
+    // CANARY: REQ=REQ-SONNY-6331-ONE-PASSWORD-POLICY; FEATURE="Unified Password Policy Validation"; ASPECT=GeneratedPasswordsComply; STATUS=TESTED; TEST=tests/test_sonny6331_password_policy_paths.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6331: a random password that meets this policy, written into
+    /// `out` (which must hold `max_password_length` bytes). Words of eight
+    /// characters (an uppercase letter, a lowercase letter, six lowercase
+    /// letters or digits; about 40 bits each), as many as the length and word
+    /// limits need. The generated passwords (first-boot admin, `geode user
+    /// --generate-password`, `user_create`'s placeholder) were hex strings that
+    /// the policy refused.
+    pub fn generate(self: PasswordPolicy, out: []u8) ![]const u8 {
+        const word_len = 8;
+        const tail = "abcdefghijklmnopqrstuvwxyz0123456789";
+        var len: usize = 0;
+        var words: usize = 0;
+        while (len < self.min_length or words < self.min_words) {
+            const need: usize = if (words == 0) word_len else word_len + 1;
+            if (len + need > @min(out.len, self.max_length)) return error.PolicyUnsatisfiable;
+            if (words > 0) {
+                out[len] = ' ';
+                len += 1;
+            }
+            var raw: [word_len]u8 = undefined;
+            try crypto_backend.Csprng.bytes(&raw);
+            out[len] = 'A' + raw[0] % 26;
+            out[len + 1] = 'a' + raw[1] % 26;
+            for (raw[2..], 2..) |r, i| out[len + i] = tail[r % tail.len];
+            len += word_len;
+            words += 1;
+        }
+        const pw = out[0..len];
+        std.debug.assert(self.check(pw) == null);
+        return pw;
+    }
+
+    fn containsWhere(s: []const u8, comptime pred: fn (u8) bool) bool {
+        for (s) |c| if (pred(c)) return true;
+        return false;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6359-ONE-WORD-COUNT; FEATURE="Unified Password Policy Validation"; ASPECT=WordCount; STATUS=TESTED; TEST=tests/test_sonny6359_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+    /// The words of a passphrase: runs of characters other than a space.
+    /// SONNY-6359: the one definition; SecurityManager.validatePassword
+    /// counted runs of letters and digits, so `Alpha-Beta-Gamma` was three
+    /// words to it and one to the policy.
+    pub fn countPassphraseWords(password: []const u8) usize {
+        var word_count: usize = 0;
+        var in_word = false;
+        for (password) |c| {
+            if (c == ' ') {
+                in_word = false;
+            } else {
+                if (!in_word) word_count += 1;
+                in_word = true;
+            }
+        }
+        return word_count;
+    }
+};
+
+/// The longest password any policy accepts, and the most words it holds.
+pub const max_password_length: usize = 256;
+pub const max_password_words: usize = max_password_length / 2;
+
+const too_short_messages = blk: {
+    @setEvalBranchQuota(200_000);
+    var msgs: [max_password_length + 1][]const u8 = undefined;
+    for (&msgs, 0..) |*m, n| m.* = std.fmt.comptimePrint("Password too short (minimum {d} characters)", .{n});
+    break :blk msgs;
+};
+
+const too_long_messages = blk: {
+    @setEvalBranchQuota(200_000);
+    var msgs: [max_password_length + 1][]const u8 = undefined;
+    for (&msgs, 0..) |*m, n| m.* = std.fmt.comptimePrint("Password too long (maximum {d} characters)", .{n});
+    break :blk msgs;
+};
+
+const too_few_words_messages = blk: {
+    @setEvalBranchQuota(200_000);
+    var msgs: [max_password_words + 1][]const u8 = undefined;
+    for (&msgs, 0..) |*m, n| m.* = std.fmt.comptimePrint("Password must be a passphrase with at least {d} words", .{n});
+    break :blk msgs;
 };
 
 // ---- Audit ----
@@ -629,6 +777,37 @@ pub fn externalPasswordPersistenceOwned() bool {
 }
 
 // ---- SecurityManager ----
+// CANARY: REQ=REQ-SONNY-2410-SECURITY-MANAGER-LOCKING; FEATURE="SecurityManagerThreadSafety"; ASPECT=ReentrantLock; STATUS=TESTED; TEST=tests/test_sonny2410_security_manager_locking.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-2410: a mutex the owning thread may take again (each `lock` paired
+/// with an `unlock`). Per instance: two managers on one thread lock
+/// independently.
+pub const ReentrantMutex = struct {
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
+    /// The holding thread's id; 0 when free (no thread has id 0).
+    owner: std.atomic.Value(std.Thread.Id) = std.atomic.Value(std.Thread.Id).init(0),
+    /// Written only by the holder.
+    depth: u32 = 0,
+
+    pub fn lock(self: *ReentrantMutex) void {
+        const me = std.Thread.getCurrentId();
+        if (self.owner.load(.acquire) == me) {
+            self.depth += 1;
+            return;
+        }
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        self.owner.store(me, .release);
+        self.depth = 1;
+    }
+
+    pub fn unlock(self: *ReentrantMutex) void {
+        std.debug.assert(self.depth > 0 and self.owner.load(.acquire) == std.Thread.getCurrentId());
+        self.depth -= 1;
+        if (self.depth != 0) return;
+        self.owner.store(0, .release);
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    }
+};
+
 pub const SecurityManager = struct {
     const Self = @This();
     allocator: Allocator,
@@ -645,7 +824,7 @@ pub const SecurityManager = struct {
     audit_log: AuditLog,
     password_policy: PasswordPolicy,
     elevation_ttl_ms: i64 = 5 * 60 * 1000, // default 5 minutes; configurable
-    /// SONNY-2394: serializes the credential entry points -- `authenticate`,
+    /// SONNY-2394: serialized the credential entry points -- `authenticate`,
     /// `authenticateWithMFA` and `updatePassword`. One SecurityManager is
     /// shared by every connection thread (server_init), and these paths mutate
     /// shared state with no other synchronization: a user's single-use
@@ -653,9 +832,19 @@ pub const SecurityManager = struct {
     /// counters, the `sessions` map and the `audit_log` entries. Concurrent MFA
     /// recovery-code redemption crashed on the unsynchronized audit-log /
     /// session-map growth (DebugAllocator: "Double free detected") and could
-    /// redeem one code twice. Not re-entrant: the three bodies never call each
-    /// other.
-    auth_mu: std.Io.Mutex = std.Io.Mutex.init,
+    /// redeem one code twice.
+    ///
+    /// SONNY-2410: every public method that reads or changes the users,
+    /// roles, permissions, role memberships, sessions, policies, MFA cache or
+    /// audit log takes it (`init`, `initEmpty` and `deinit` excepted: nothing
+    /// else holds the manager then). Re-entrant on one thread, so a locked
+    /// method may call another (`createUser` -> `createUserDetailed` ->
+    /// `hashPassword`). It is held across the auth-graph persistence
+    /// callbacks, as `updatePassword` already held it. Pointers the manager
+    /// answers (`createRole`, `createPermission`) point into its maps and
+    /// are moved by the next create on any thread: read them at once, or
+    /// only where no other thread changes the manager.
+    auth_mu: ReentrantMutex = .{},
     // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-001; FEATURE="AuthGraphManager Integration"; ASPECT=SecurityManager; STATUS=TESTED; TEST="SecurityManager runtime mutations persist through AGM wiring (GAP-0514 P3)"; OWNER=security; UPDATED=2026-06-11
     // Opaque pointer to AuthGraphManager for runtime mutation persistence (set by server_init).
     // Uses anyopaque because geode_auth_lib cannot import auth_graph_manager (circular dep).
@@ -746,6 +935,8 @@ pub const SecurityManager = struct {
         auth_version: u64,
         attributes_json: ?[]const u8,
     ) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         var attrs = std.StringHashMap([]const u8).init(self.allocator);
         errdefer {
             var it = attrs.iterator();
@@ -771,27 +962,39 @@ pub const SecurityManager = struct {
                     var it = p.value.object.iterator();
                     while (it.next()) |entry| {
                         if (entry.value_ptr.* != .string) continue;
-                        try attrs.put(
-                            try self.allocator.dupe(u8, entry.key_ptr.*),
-                            try self.allocator.dupe(u8, entry.value_ptr.string),
-                        );
+                        // SONNY-6614: a copy the map did not take is freed.
+                        const k = try self.allocator.dupe(u8, entry.key_ptr.*);
+                        errdefer self.allocator.free(k);
+                        const v = try self.allocator.dupe(u8, entry.value_ptr.string);
+                        errdefer self.allocator.free(v);
+                        try attrs.put(k, v);
                     }
                 }
             }
         }
 
+        // SONNY-6614: each copy is freed when a later step fails (they were
+        // made inside the struct literal and leaked).
+        const username_copy = try self.allocator.dupe(u8, username);
+        errdefer self.allocator.free(username_copy);
+        const email_copy = try self.allocator.dupe(u8, email);
+        errdefer self.allocator.free(email_copy);
+        const hash_copy = try self.allocator.dupe(u8, password_hash);
+        errdefer self.allocator.free(hash_copy);
+        const secret_copy: ?[]const u8 = if (mfa_secret) |sec| try self.allocator.dupe(u8, sec) else null;
+        errdefer if (secret_copy) |c| self.allocator.free(c);
         const user = User{
             .id = id,
-            .username = try self.allocator.dupe(u8, username),
-            .email = try self.allocator.dupe(u8, email),
-            .password_hash = try self.allocator.dupe(u8, password_hash),
+            .username = username_copy,
+            .email = email_copy,
+            .password_hash = hash_copy,
             .created_at = compat_milliTimestamp(),
             .updated_at = compat_milliTimestamp(),
             .last_login = null,
             .is_active = is_active,
             .is_superuser = is_superuser,
             .mfa_enabled = mfa_enabled,
-            .mfa_secret = if (mfa_secret) |s| try self.allocator.dupe(u8, s) else null,
+            .mfa_secret = secret_copy,
             .attributes = attrs,
             .password_reset_required = password_reset_required,
             .auth_version = @max(@as(u64, 1), auth_version),
@@ -925,18 +1128,24 @@ pub const SecurityManager = struct {
     // ---- MFA Policies ----
 
     pub fn addMfaPolicy(self: *Self, p: MfaAdminPolicy) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         try self.mfa_policies.append(self.allocator, p);
         self.mfa_require_cache.clearRetainingCapacity();
         try self.audit_log.logMfaPolicyAdded(p.id, p.enabled);
     }
     // Backwards-compatible simple evaluation (no session/env context). Uses current time and null session.
     pub fn evaluateMfaPolicies(self: *Self, u: *User) bool {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         return self.evaluateMfaPoliciesAdvanced(u, null, compat_milliTimestamp());
     }
 
     // Extended evaluation considering dynamic conditions (time window, risk, reauth interval).
-    // CANARY: REQ=REQ-GQL-MFA-POLICY-001; FEATURE="MfaPolicyEngine"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_POLICY_001_TimeWindow|TestCANARY_REQ_GQL_MFA_POLICY_001_RiskScoreMin|TestCANARY_REQ_GQL_MFA_POLICY_001_ReauthInterval; OWNER=security; UPDATED=2025-09-26
+    // CANARY: REQ=REQ-GQL-MFA-POLICY-001; FEATURE="MfaPolicyEngine"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_mfa_policies.zig; OWNER=security; UPDATED=2026-11-12
     pub fn evaluateMfaPoliciesAdvanced(self: *Self, u: *User, session: ?*Session, now_ms: i64) bool {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         if (self.mfa_policies.items.len == 0) return false;
         // Dynamic conditions invalidate cache; detect presence.
         var has_dynamic = false;
@@ -1046,10 +1255,14 @@ pub const SecurityManager = struct {
 
     // ---- ABAC ----
     pub fn createABACPolicy(self: *Self, policy: ABACPolicy) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         try self.abac_policies.append(self.allocator, policy);
         try self.audit_log.logPolicyCreated(policy.id, policy.name);
     }
     pub fn evaluateABACPolicies(self: *Self, context: *SecurityContext, resource: []const u8, action: Action) !bool {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         var allow = false;
         var explicit_deny = false;
         for (self.abac_policies.items) |policy| {
@@ -1114,10 +1327,14 @@ pub const SecurityManager = struct {
 
     // ---- RLS ----
     pub fn createRowLevelPolicy(self: *Self, policy: RowLevelPolicy) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         try self.row_policies.append(self.allocator, policy);
         try self.audit_log.logRowPolicyCreated(policy.id, policy.name);
     }
     pub fn applyRowLevelSecurity(self: *Self, user_id: UserId, query: []const u8, table: []const u8) ![]const u8 {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const roles_list = self.rbac.user_roles.get(user_id) orelse return query;
         var applicable = std.ArrayList(RowLevelPolicy).init(self.allocator);
         defer applicable.deinit();
@@ -1160,6 +1377,8 @@ pub const SecurityManager = struct {
 
     // ---- Sessions ----
     pub fn createSession(self: *Self, user_id: UserId) ![]const u8 {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         var raw: [32]u8 = undefined;
         std.Io.Threaded.global_single_threaded.io().random(&raw);
         const enc = std.base64.url_safe_no_pad.Encoder;
@@ -1187,6 +1406,8 @@ pub const SecurityManager = struct {
     /// Unknown identifiers fail closed (classified as write => step-up required).
     /// CANARY: REQ=REQ-GQL-MFA-008; FEATURE="Session step-up requirement"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_gap0884_stepup_classification.zig; OWNER=security; UPDATED=2026-06-10
     pub fn requireStepUp(self: *Self, token: []const u8, action: []const u8) bool {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const s = self.sessions.get(token) orelse return true; // unknown session => demand step-up / re-auth
         const now = compat_milliTimestamp();
         if (s.elevation_expires_at) |exp| {
@@ -1202,14 +1423,18 @@ pub const SecurityManager = struct {
 
     /// Marks the session as having completed a successful step-up (MFA) for a bounded lifetime.
     /// lifetime_ms: duration the elevation should remain valid.
-    /// CANARY: REQ=REQ-GQL-MFA-009; FEATURE="Session step-up mark"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow; OWNER=security; UPDATED=2025-09-26
+    /// CANARY: REQ=REQ-GQL-MFA-009; FEATURE="Session step-up mark"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-11-14
     pub fn markStepUp(self: *Self, token: []const u8, lifetime_ms: i64) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         var s = self.sessions.getPtr(token) orelse return error.InvalidSession;
         const now = compat_milliTimestamp();
         s.last_mfa_ts = now;
         s.elevation_expires_at = now + lifetime_ms;
     }
     pub fn validateSession(self: *Self, token: []const u8) !UserId {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const s = self.sessions.get(token) orelse return error.InvalidSession;
         if (compat_milliTimestamp() > s.expires_at) {
             _ = self.sessions.remove(token);
@@ -1220,6 +1445,8 @@ pub const SecurityManager = struct {
 
     // ---- Authorization ----
     pub fn authorize(self: *Self, user_id: UserId, resource: []const u8, action: Action) !bool {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const user = self.users.getPtr(user_id) orelse return error.UserNotFound;
         if (user.is_superuser) return true;
         if (self.rbac.hasPermission(user_id, resource, action)) return true;
@@ -1233,6 +1460,8 @@ pub const SecurityManager = struct {
 
     // ---- Role & Permission Mgmt ----
     pub fn createRole(self: *Self, name: []const u8, description: []const u8) !*Role {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const id = @as(RoleId, @intCast(self.roles.count() + 1));
         // GAP-0220 FIX: Use try for proper error propagation
         const role = Role{ .id = id, .name = try self.allocator.dupe(u8, name), .description = try self.allocator.dupe(u8, description), .permissions = try std.ArrayList(PermissionId).initCapacity(self.allocator, 0), .created_at = compat_milliTimestamp(), .is_system = false, .priority = 100, .parent_role = null };
@@ -1240,6 +1469,8 @@ pub const SecurityManager = struct {
         return self.roles.getPtr(id).?;
     }
     pub fn assignRole(self: *Self, user_id: UserId, role_id: RoleId) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         _ = self.users.get(user_id) orelse return error.UserNotFound;
         _ = self.roles.get(role_id) orelse return error.RoleNotFound;
         const entry = try self.rbac.user_roles.getOrPut(user_id);
@@ -1258,6 +1489,8 @@ pub const SecurityManager = struct {
         try self.audit_log.logRoleAssigned(user_id, role_id);
     }
     pub fn revokeRole(self: *Self, user_id: UserId, role_id: RoleId) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const roles_list = self.rbac.user_roles.getPtr(user_id) orelse return error.UserHasNoRoles;
         for (roles_list.items, 0..) |rid, i| {
             if (rid == role_id) {
@@ -1277,12 +1510,16 @@ pub const SecurityManager = struct {
         return error.RoleNotAssigned;
     }
     pub fn createPermission(self: *Self, name: []const u8, resource: []const u8, action: Action) !*Permission {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const id = @as(PermissionId, @intCast(self.permissions.count() + 1));
         const perm = Permission{ .id = id, .name = try self.allocator.dupe(u8, name), .resource = try self.allocator.dupe(u8, resource), .action = action, .conditions = null, .created_at = compat_milliTimestamp() };
         try self.permissions.put(id, perm);
         return self.permissions.getPtr(id).?;
     }
     pub fn grantPermission(self: *Self, role_id: RoleId, perm_id: PermissionId) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const role = self.roles.getPtr(role_id) orelse return error.RoleNotFound;
         const perm = self.permissions.get(perm_id) orelse return error.PermissionNotFound;
         for (role.permissions.items) |p| if (p == perm_id) return;
@@ -1298,6 +1535,8 @@ pub const SecurityManager = struct {
     // CANARY: REQ=REQ-AUTH-HASH-001; FEATURE="Argon2id Password Hashing"; ASPECT=PostQuantumSecurity; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_HASH_001_Argon2id; OWNER=security; UPDATED=2025-10-16
     // Delegates to the canonical standalone hashPasswordArgon2id after policy validation.
     pub fn hashPassword(self: *Self, password: []const u8) ![]const u8 {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         // CANARY: REQ=REQ-AUTH-POLICY-008; FEATURE="Pre-Hash Password Validation"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_008_PreHashValidation; OWNER=security; UPDATED=2025-09-30
         // Validate password against policy before hashing
         try self.validatePasswordAgainstCurrentPolicy(password);
@@ -1319,13 +1558,6 @@ pub const SecurityManager = struct {
     /// Uses std.crypto.timing_safe.eql to prevent compiler optimisation of the comparison.
     fn constantTimeEqual32(a: *const [32]u8, b: *const [32]u8) bool {
         return crypto_backend.timingSafeEql(a, b);
-    }
-
-    /// Constant-time comparison for 64-byte hex-encoded hashes. GAP-0440.
-    /// Uses std.crypto.timing_safe.eql to prevent compiler optimisation of the comparison.
-    fn constantTimeEqual64(a: *const [64]u8, b: []const u8) bool {
-        if (b.len != 64) return false;
-        return crypto_backend.timingSafeEql(a, b[0..64]);
     }
 
     fn verifyPassword(self: *Self, password: []const u8, stored_hash: []const u8) !bool {
@@ -1363,27 +1595,9 @@ pub const SecurityManager = struct {
     /// Accounts verified via this path should be flagged for password_reset_required
     /// to force migration to Argon2id on next login.
     fn verifyBlake2bLegacy(self: *Self, password: []const u8, stored_hash: []const u8) !bool {
-        // FIPS: BLAKE2b is not FIPS-approved — fail closed under -Dfips
-        if (build_options.fips) {
-            log.err("password verification unavailable under FIPS: BLAKE2b is not a FIPS-approved primitive", &.{});
-            return error.FipsUnsupported;
-        }
-        const salt = "geode-salt-secure-v2";
-        var hasher = std.crypto.hash.blake2.Blake2b256.init(.{});
-        hasher.update(password);
-        hasher.update(salt);
-        var digest: [32]u8 = undefined;
-        hasher.final(&digest);
-
-        // Convert to hex
-        const hex_chars = "0123456789abcdef";
-        var computed_hex: [64]u8 = undefined;
-        for (digest, 0..) |byte, i| {
-            computed_hex[i * 2] = hex_chars[byte >> 4];
-            computed_hex[i * 2 + 1] = hex_chars[byte & 0xf];
-        }
-
-        const matches = constantTimeEqual64(&computed_hex, stored_hash);
+        // SONNY-6367: the one legacy BLAKE2b verifier (the wire login uses it
+        // too); FIPS fails closed there.
+        const matches = try verifyPasswordBlake2bLegacy(password, stored_hash);
         if (matches) {
             // Flag for migration: legacy Blake2b accounts must re-hash with Argon2id
             self.audit_log.append(.password_migration_needed, 0, "Legacy Blake2b hash verified — account should migrate to Argon2id", .{}) catch |err| {
@@ -1404,6 +1618,8 @@ pub const SecurityManager = struct {
     // Create user helper
     // CANARY: REQ=REQ-GQL-AUTH-001; FEATURE="User creation"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_AUTH_001_CreateUser; OWNER=security; UPDATED=2025-09-26
     pub fn createUserDetailed(self: *Self, username: []const u8, email: []const u8, password: []const u8, is_superuser: bool) !UserId {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const id = @as(UserId, @intCast(self.users.count() + 1));
         const attrs = std.StringHashMap([]const u8).init(self.allocator);
         const hash = try self.hashPassword(password);
@@ -1435,10 +1651,14 @@ pub const SecurityManager = struct {
     }
     // Backwards compatible wrapper (previous signature without explicit is_superuser; defaults false). Some tests call createUser(username,email,password)
     pub fn createUser(self: *Self, username: []const u8, email: []const u8, password: []const u8) !UserId {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         return self.createUserDetailed(username, email, password, false);
     }
     // CANARY: REQ=REQ-AUTH-POLICY-003; FEATURE="Enhanced Password Validation"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_003_PassphraseValidation; OWNER=security; UPDATED=2025-09-30
     pub fn validatePassword(self: *Self, password: []const u8) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         if (password.len < self.password_policy.min_length) return error.PasswordTooShort;
         if (password.len > self.password_policy.max_length) return error.PasswordTooLong;
 
@@ -1492,30 +1712,11 @@ pub const SecurityManager = struct {
 
         // Passphrase validation
         if (self.password_policy.require_passphrase) {
-            const word_count = self.countWords(password);
+            const word_count = PasswordPolicy.countPassphraseWords(password);
             if (word_count < self.password_policy.min_words) {
                 return error.PasswordNotPassphrase;
             }
         }
-    }
-
-    fn countWords(self: *Self, text: []const u8) usize {
-        _ = self;
-        var word_count: usize = 0;
-        var in_word = false;
-
-        for (text) |c| {
-            if (std.ascii.isAlphanumeric(c)) {
-                if (!in_word) {
-                    word_count += 1;
-                    in_word = true;
-                }
-            } else {
-                in_word = false;
-            }
-        }
-
-        return word_count;
     }
 
     // CANARY: REQ=REQ-AUTH-DEFAULT-001; FEATURE="Default User Creation"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_DEFAULT_001_DefaultUser; OWNER=security; UPDATED=2025-09-30
@@ -1647,12 +1848,16 @@ pub const SecurityManager = struct {
 
     // Check if a user requires password reset
     pub fn requiresPasswordReset(self: *Self, user_id: UserId) !bool {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const user = self.users.get(user_id) orelse return error.UserNotFound;
         return user.password_reset_required;
     }
 
     // Force password reset for a user
     pub fn forcePasswordReset(self: *Self, user_id: UserId) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         const user = self.users.getPtr(user_id) orelse return error.UserNotFound;
         user.password_reset_required = true;
         user.updated_at = compat_milliTimestamp();
@@ -1660,7 +1865,9 @@ pub const SecurityManager = struct {
     }
 
     /// Look up a user's ID by username. Returns null if no matching user found.
-    pub fn getUserIdByUsername(self: *const Self, username: []const u8) ?UserId {
+    pub fn getUserIdByUsername(self: *Self, username: []const u8) ?UserId {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         var it = self.users.iterator();
         while (it.next()) |entry| {
             if (std.mem.eql(u8, entry.value_ptr.username, username)) {
@@ -1672,9 +1879,8 @@ pub const SecurityManager = struct {
 
     // Update password and clear reset requirement
     pub fn updatePassword(self: *Self, user_id: UserId, new_password: []const u8) !void {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.auth_mu.lockUncancelable(io);
-        defer self.auth_mu.unlock(io);
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         return self.updatePasswordLocked(user_id, new_password);
     }
 
@@ -1721,6 +1927,8 @@ pub const SecurityManager = struct {
     }
     // CANARY: REQ=REQ-AUTH-POLICY-005; FEATURE="Password Policy Validation Before Hashing"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_005_PreHashValidation; OWNER=security; UPDATED=2025-09-30
     pub fn validatePasswordAgainstCurrentPolicy(self: *Self, password: []const u8) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         // Pre-hash validation against current policy
         try self.validatePassword(password);
     }
@@ -1728,6 +1936,8 @@ pub const SecurityManager = struct {
     // Check if stored password hash meets current policy requirements
     // CANARY: REQ=REQ-AUTH-POLICY-006; FEATURE="Post-Authentication Policy Check"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_006_PostAuthPolicyCheck; OWNER=security; UPDATED=2025-09-30
     pub fn checkStoredPasswordMeetsCurrentPolicy(self: *Self, _: *User, password: []const u8) bool {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         // Since we can't reverse the hash, we validate the plaintext password
         // that was just successfully authenticated against current policy
         self.validatePassword(password) catch return false;
@@ -1739,9 +1949,8 @@ pub const SecurityManager = struct {
     // If MFA required, returns error.MFARequired after logging issuance.
     // CANARY: REQ=REQ-GQL-AUTH-002; FEATURE="Password authentication"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_AUTH_002_AuthPassword; OWNER=security; UPDATED=2025-09-26
     pub fn authenticate(self: *Self, username: []const u8, password: []const u8) ![]const u8 {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.auth_mu.lockUncancelable(io);
-        defer self.auth_mu.unlock(io);
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         return self.authenticateLocked(username, password);
     }
 
@@ -1856,10 +2065,164 @@ pub const SecurityManager = struct {
     // Enhanced to allow either a TOTP code (code param) or a recovery code (if code==0 and recovery_code provided).
     // Recovery codes are single-use; upon successful use it is removed and audited.
     // CANARY: REQ=REQ-GQL-AUTH-004; FEATURE="MFA recovery code"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_AUTH_004_Recovery|TestCANARY_REQ_GQL_MFA_007_RecoverySingleUse; OWNER=security; UPDATED=2025-09-26
+    /// SONNY-6600: replace `user_id`'s recovery codes with `codes`, held as
+    /// digests (`recoveryCodeStoredForm`), never in plaintext.
+    pub fn setRecoveryCodes(self: *Self, user_id: UserId, codes: []const []const u8) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
+        const user = self.users.getPtr(user_id) orelse return error.UserNotFound;
+        var list = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (list.items) |c| self.allocator.free(c);
+            list.deinit(self.allocator);
+        }
+        try list.ensureTotalCapacity(self.allocator, codes.len);
+        for (codes) |c| {
+            const form = recoveryCodeStoredForm(c);
+            list.appendAssumeCapacity(try self.allocator.dupe(u8, &form));
+        }
+        if (user.recovery_codes) |*old| {
+            for (old.items) |c| self.allocator.free(c);
+            old.deinit(self.allocator);
+        }
+        user.recovery_codes = list;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6609-SM-MFA-HYDRATION; FEATURE="MFA authentication"; ASPECT=StoredMfaStateLoaded; STATUS=TESTED; TEST=tests/test_sonny6609_mfa_at_rest.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6609: load a user's stored MFA state (startup,
+    /// `auth_startup_hydration.hydrateSecurityManagerMfa`): its TOTP secret
+    /// (plaintext, opened from the security graph; null: none) and its
+    /// recovery codes, from their digests. It was hydrated with the secret
+    /// only, so no stored recovery code could be redeemed.
+    pub fn loadMfaState(self: *Self, user_id: UserId, secret: ?[]const u8, digests: []const [32]u8) !void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
+        const user = self.users.getPtr(user_id) orelse return error.UserNotFound;
+        const secret_copy: ?[]const u8 = if (secret) |sec| try self.allocator.dupe(u8, sec) else null;
+        errdefer if (secret_copy) |c| {
+            crypto_backend.secureZero(@constCast(c));
+            self.allocator.free(c);
+        };
+        var list = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (list.items) |c| self.allocator.free(c);
+            list.deinit(self.allocator);
+        }
+        try list.ensureTotalCapacity(self.allocator, digests.len);
+        for (digests) |d| {
+            const form = recoveryCodeStoredFormFromDigest(d);
+            list.appendAssumeCapacity(try self.allocator.dupe(u8, &form));
+        }
+        if (user.mfa_secret) |old| {
+            crypto_backend.secureZero(@constCast(old));
+            self.allocator.free(old);
+        }
+        user.mfa_secret = secret_copy;
+        if (user.recovery_codes) |*old| {
+            for (old.items) |c| self.allocator.free(c);
+            old.deinit(self.allocator);
+        }
+        user.recovery_codes = list;
+    }
+
+    fn userIdByNameLocked(self: *Self, username: []const u8) ?UserId {
+        var it = self.users.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.username, username)) return entry.key_ptr.*;
+        }
+        return null;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6619-SM-FOLLOWS-MFA; FEATURE="MFA authentication"; ASPECT=SecurityManagerMfaCurrent; STATUS=TESTED; TEST=tests/test_sonny6619_mfa_limits.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6619: `username`'s MFA state after geode.auth.mfa_setup: the new
+    /// secret and recovery codes (digests), MFA off. No such user: nothing.
+    pub fn loadMfaStateByName(self: *Self, username: []const u8, secret: ?[]const u8, digests: []const [32]u8, enabled: bool) !void {
+        const id = blk: {
+            self.auth_mu.lock();
+            defer self.auth_mu.unlock();
+            break :blk self.userIdByNameLocked(username) orelse return;
+        };
+        try self.loadMfaState(id, secret, digests);
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
+        if (self.users.getPtr(id)) |u| u.mfa_enabled = enabled;
+    }
+
+    /// SONNY-6619: `username`'s MFA flag after mfa_enable / mfa_disable.
+    pub fn setMfaEnabledByName(self: *Self, username: []const u8, enabled: bool) void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
+        const id = self.userIdByNameLocked(username) orelse return;
+        if (self.users.getPtr(id)) |u| u.mfa_enabled = enabled;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6619-SM-REMOVE-USER; FEATURE="AuthGraphManager Integration"; ASPECT=DroppedUserRemoved; STATUS=TESTED; TEST=tests/test_sonny6619_mfa_limits.zig|tests/test_sonny6614_auth_residuals.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6619: remove `username` (DROP USER) with everything held for
+    /// it: its record (password hash, MFA secret zeroed, recovery codes,
+    /// attributes), its role memberships, its sessions. SONNY-6614 cleared
+    /// the MFA state only and left the user. No such user: nothing to do.
+    pub fn removeUserByName(self: *Self, username: []const u8) void {
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
+        const id = self.userIdByNameLocked(username) orelse return;
+        var kv = self.users.fetchRemove(id) orelse return;
+        const user = &kv.value;
+        self.allocator.free(user.username);
+        self.allocator.free(user.email);
+        crypto_backend.secureZero(@constCast(user.password_hash));
+        self.allocator.free(user.password_hash);
+        if (user.mfa_secret) |sec| {
+            crypto_backend.secureZero(@constCast(sec));
+            self.allocator.free(sec);
+        }
+        if (user.recovery_codes) |*codes| {
+            for (codes.items) |c| self.allocator.free(c);
+            codes.deinit(self.allocator);
+        }
+        var attr_it = user.attributes.iterator();
+        while (attr_it.next()) |attr| {
+            self.allocator.free(attr.key_ptr.*);
+            self.allocator.free(attr.value_ptr.*);
+        }
+        user.attributes.deinit();
+        if (self.rbac.user_roles.fetchRemove(id)) |r| {
+            var roles = r.value;
+            roles.deinit(self.allocator);
+        }
+        // Its sessions, removed in place (SONNY-6623: they were collected
+        // into an allocated list first, and an allocation failure left them).
+        // A removal never grows or rehashes the map, so each pass finds the
+        // next one from the start, and nothing here can fail.
+        while (true) {
+            var sit = self.sessions.iterator();
+            const key = while (sit.next()) |e| {
+                if (e.value_ptr.user_id == id) break e.key_ptr.*;
+            } else break;
+            const skv = self.sessions.fetchRemove(key).?;
+            if (skv.value.ip_address) |ip| self.allocator.free(ip);
+            if (skv.value.user_agent) |ua| self.allocator.free(ua);
+            self.allocator.free(skv.key);
+        }
+    }
+
+    /// SONNY-6600: convert codes still held in plaintext (stored before
+    /// codes were digested) to their stored form, zeroing the plaintext.
+    /// Caller holds auth_mu.
+    fn digestPlaintextRecoveryCodes(self: *Self, codes: *std.ArrayList([]const u8)) !void {
+        for (codes.items) |*stored| {
+            if (isRecoveryCodeStoredForm(stored.*)) continue;
+            const form = recoveryCodeStoredForm(stored.*);
+            const owned = try self.allocator.dupe(u8, &form);
+            const old = stored.*;
+            stored.* = owned;
+            crypto_backend.secureZero(@constCast(old));
+            self.allocator.free(old);
+        }
+    }
+
     pub fn authenticateWithMFA(self: *Self, username: []const u8, password: []const u8, code: u32, recovery_code: ?[]const u8) ![]const u8 {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        self.auth_mu.lockUncancelable(io);
-        defer self.auth_mu.unlock(io);
+        self.auth_mu.lock();
+        defer self.auth_mu.unlock();
         return self.authenticateWithMFALocked(username, password, code, recovery_code);
     }
 
@@ -1908,17 +2271,26 @@ pub const SecurityManager = struct {
         if (recovery_code) |rc| {
             // Attempt recovery code path first if provided.
             if (user.recovery_codes) |*codes| {
-                var idx: usize = 0;
-                while (idx < codes.items.len) : (idx += 1) {
-                    if (std.mem.eql(u8, codes.items[idx], rc)) {
-                        // Remove the single-use code. SONNY-2394: free it too
-                        // -- the removed string used to be discarded (leaked
-                        // once per redemption).
-                        self.allocator.free(codes.orderedRemove(idx));
-                        try self.audit_log.logMfaRecoveryCodeUsed(user.id);
-                        used_recovery = true;
-                        break;
-                    }
+                // SONNY-6600: codes are held as digests (a code still held
+                // in plaintext is converted here) and the presented code's
+                // digest is compared with every stored one in constant time,
+                // with no early exit (it was std.mem.eql on the plaintext).
+                // Under auth_mu, so a code is redeemed once.
+                try self.digestPlaintextRecoveryCodes(codes);
+                const presented = recoveryCodeStoredForm(rc);
+                var matched: ?usize = null;
+                for (codes.items, 0..) |stored, idx| {
+                    const eq = stored.len == presented.len and
+                        std.crypto.timing_safe.eql([recovery_code_stored_len]u8, stored[0..recovery_code_stored_len].*, presented); // fips-exempt: non-security (timing-safe compare of two SHA-256 digests)
+                    if (eq and matched == null) matched = idx;
+                }
+                if (matched) |idx| {
+                    // Remove the single-use code. SONNY-2394: free it too
+                    // -- the removed string used to be discarded (leaked
+                    // once per redemption).
+                    self.allocator.free(codes.orderedRemove(idx));
+                    try self.audit_log.logMfaRecoveryCodeUsed(user.id);
+                    used_recovery = true;
                 }
             }
             if (!used_recovery and code == 0) {
@@ -1993,7 +2365,9 @@ pub fn hashPasswordArgon2id(allocator: Allocator, password: []const u8) ![]const
         log.err("Argon2id hashing failed", &.{
             Attr.string("error", @errorName(err)),
         });
-        return error.HashingFailed;
+        // SONNY-6598: out of memory stays OutOfMemory (a transient fault the
+        // caller may retry); anything else is HashingFailed.
+        return if (err == error.OutOfMemory) error.OutOfMemory else error.HashingFailed;
     };
 
     // Encode as PHC string format: $argon2id$v=19$m=19456,t=2,p=1$salt$hash
@@ -2021,12 +2395,80 @@ pub fn hashPasswordArgon2id(allocator: Allocator, password: []const u8) ![]const
     );
 }
 
+// SONNY-6378: bounds on the parameters of a stored Argon2id hash. A stored
+// hash is untrusted input; without bounds a corrupt `t` (up to 2^32-1
+// passes) or `m` (up to 4 TiB) made every login against it burn CPU or
+// memory. The bounds admit the hashes Geode writes (m=19456, t=2, p=1) and
+// RFC 9106's second recommended option (m=64 MiB, t=3, p=4).
+pub const argon2_max_t: u32 = 10;
+pub const argon2_max_m_kib: u32 = 256 * 1024;
+pub const argon2_max_p: u24 = 16;
+
+/// The static salt of the legacy BLAKE2b password format.
+const legacy_blake2b_salt = "geode-salt-secure-v2";
+
+/// SONNY-6367: whether `stored_hash` is in the legacy BLAKE2b format: 64 hex
+/// digits (BLAKE2b-256 of the password followed by a static salt), the format
+/// `geode user import --algorithm blake2b` and `geode.auth.user_import(...,
+/// 'blake2b')` take for migration.
+pub fn isLegacyBlake2bHash(stored_hash: []const u8) bool {
+    if (stored_hash.len != 64) return false;
+    for (stored_hash) |c| {
+        if (!std.ascii.isHex(c)) return false;
+    }
+    return true;
+}
+
+// CANARY: REQ=REQ-SONNY-6367-BLAKE2B-LOGIN; FEATURE="AdminUserImport"; ASPECT=LegacyBlake2bVerify; STATUS=TESTED; TEST=tests/test_sonny6367_offline_user_cli.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6367: verify `password` against a legacy BLAKE2b hash
+/// (`isLegacyBlake2bHash`; hex digits of either case), comparing the digests
+/// in constant time. The wire login verified only Argon2id, so a user
+/// imported with a BLAKE2b hash could never log in. `error.FipsUnsupported`
+/// under FIPS (BLAKE2b is not a FIPS-approved primitive);
+/// `error.InvalidHashFormat` for any other format.
+pub fn verifyPasswordBlake2bLegacy(password: []const u8, stored_hash: []const u8) !bool {
+    if (build_options.fips) {
+        log.err("password verification unavailable under FIPS: BLAKE2b is not a FIPS-approved primitive", &.{});
+        return error.FipsUnsupported;
+    }
+    if (!isLegacyBlake2bHash(stored_hash)) return error.InvalidHashFormat;
+    var expected: [32]u8 = undefined;
+    _ = std.fmt.hexToBytes(&expected, stored_hash) catch return error.InvalidHashFormat;
+    var hasher = std.crypto.hash.blake2.Blake2b256.init(.{});
+    hasher.update(password);
+    hasher.update(legacy_blake2b_salt);
+    var digest: [32]u8 = undefined;
+    hasher.final(&digest);
+    return crypto_backend.timingSafeEql(&digest, &expected);
+}
+
 /// Canonical Argon2id password verification against PHC format strings.
 /// Parses the PHC string to extract parameters, salt, and expected hash,
 /// then re-derives the hash and compares using constant-time equality.
 ///
-/// Supports any valid Argon2id PHC string (not just OWASP params), enabling
-/// verification of hashes created with different parameter sets during migration.
+/// Supports Argon2id PHC strings with parameters other than the OWASP ones
+/// Geode writes, enabling verification of hashes created with different
+/// parameter sets during migration, within the bounds below.
+///
+/// SONNY-6598: three outcomes. `true` (match), `false` (mismatch), or an
+/// error: `error.InvalidHashFormat` for a stored string it cannot use (not
+/// an Argon2id v=19 PHC string, unparseable or out-of-bounds parameters, a
+/// salt or hash that is not hex of the right length), and the KDF's own
+/// error (`error.OutOfMemory`, ...) when the server could not run it. Both
+/// used to be `false`, so a server-side fault read as a wrong password.
+// CANARY: REQ=REQ-SONNY-6598-VERIFY-THREE-OUTCOMES; FEATURE="AuthOutcomeClassification"; ASPECT=Argon2idVerifyErrors; STATUS=TESTED; TEST=tests/test_sonny6598_verify_outcomes.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6600: one PHC parameter, `<key>=<decimal>`: no sign, no leading
+/// zero, no other character; a value that does not fit T is refused.
+fn phcParam(comptime T: type, field: ?[]const u8, comptime key: []const u8) error{InvalidHashFormat}!T {
+    const f = field orelse return error.InvalidHashFormat;
+    if (!std.mem.startsWith(u8, f, key ++ "=")) return error.InvalidHashFormat;
+    const digits = f[key.len + 1 ..];
+    if (digits.len == 0) return error.InvalidHashFormat;
+    if (digits.len > 1 and digits[0] == '0') return error.InvalidHashFormat;
+    for (digits) |c| if (!std.ascii.isDigit(c)) return error.InvalidHashFormat;
+    return std.fmt.parseInt(T, digits, 10) catch error.InvalidHashFormat;
+}
+
 pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_string: []const u8) !bool {
     // FIPS: Argon2id is not FIPS-approved — fail closed under -Dfips
     if (build_options.fips) {
@@ -2034,54 +2476,60 @@ pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_st
         return error.FipsUnsupported;
     }
     // Parse PHC string: $argon2id$v=19$m=19456,t=2,p=1$salt$hash
+    // CANARY: REQ=REQ-SONNY-6600-STRICT-PHC; FEATURE="Canonical Argon2id Hashing"; ASPECT=StrictPhcParse; STATUS=TESTED; TEST=tests/test_sonny6600_auth_outcomes.zig; OWNER=security; UPDATED=2026-11-15
+    // SONNY-6600: strictly. Exactly five '$'-separated fields after the
+    // leading '$', the parameters exactly m, t, p in that order (the order
+    // the Argon2 PHC encoding fixes), each `key=` and a decimal value with
+    // no sign and no leading zero, and nothing after the hash. Anything else
+    // is InvalidHashFormat (an unusable stored credential, SONNY-6598). A
+    // parameter without '=' or with an unknown key was skipped, a missing
+    // one defaulted, and data after the hash ignored.
     var parts = std.mem.splitScalar(u8, phc_string, '$');
 
-    _ = parts.next(); // Empty before first $
-    const alg = parts.next() orelse return false;
-    if (!std.mem.eql(u8, alg, "argon2id")) return false;
+    const lead = parts.next() orelse return error.InvalidHashFormat;
+    if (lead.len != 0) return error.InvalidHashFormat;
+    const alg = parts.next() orelse return error.InvalidHashFormat;
+    if (!std.mem.eql(u8, alg, "argon2id")) return error.InvalidHashFormat;
 
-    const version = parts.next() orelse return false;
-    if (!std.mem.eql(u8, version, "v=19")) return false;
+    const version = parts.next() orelse return error.InvalidHashFormat;
+    if (!std.mem.eql(u8, version, "v=19")) return error.InvalidHashFormat;
 
-    const params_str = parts.next() orelse return false;
-    // Parse params: m=19456,t=2,p=1
+    const params_str = parts.next() orelse return error.InvalidHashFormat;
+    const salt_hex = parts.next() orelse return error.InvalidHashFormat;
+    const hash_hex = parts.next() orelse return error.InvalidHashFormat;
+    if (parts.next() != null) return error.InvalidHashFormat;
+
+    // SONNY-6374: a stored hash is untrusted input. An unparseable or
+    // out-of-range parameter refuses the hash, and `p` is parsed straight
+    // into Argon2's u24 lane count: a corrupt p above 2^24-1 panicked the
+    // @intCast below in safe builds.
     var param_parts = std.mem.splitScalar(u8, params_str, ',');
-    var m: u32 = 19456;
-    var t: u32 = 2;
-    var p: u32 = 1;
+    const m = try phcParam(u32, param_parts.next(), "m");
+    const t = try phcParam(u32, param_parts.next(), "t");
+    const p = try phcParam(u24, param_parts.next(), "p");
+    if (param_parts.next() != null) return error.InvalidHashFormat;
 
-    while (param_parts.next()) |param| {
-        var kv = std.mem.splitScalar(u8, param, '=');
-        const key = kv.next() orelse continue;
-        const value = kv.next() orelse continue;
-
-        if (std.mem.eql(u8, key, "m")) {
-            m = std.fmt.parseInt(u32, value, 10) catch 19456;
-        } else if (std.mem.eql(u8, key, "t")) {
-            t = std.fmt.parseInt(u32, value, 10) catch 2;
-        } else if (std.mem.eql(u8, key, "p")) {
-            p = std.fmt.parseInt(u32, value, 10) catch 1;
-        }
-    }
-
-    const salt_hex = parts.next() orelse return false;
-    const hash_hex = parts.next() orelse return false;
+    // SONNY-6378: refuse out-of-bounds parameters before running Argon2.
+    // Argon2 needs at least 8 KiB of memory per lane.
+    if (t < 1 or t > argon2_max_t) return error.InvalidHashFormat;
+    if (p < 1 or p > argon2_max_p) return error.InvalidHashFormat;
+    if (m > argon2_max_m_kib or m < 8 * @as(u32, p)) return error.InvalidHashFormat;
 
     // Decode salt from hex
-    if (salt_hex.len != 32) return false; // 16 bytes = 32 hex chars
+    if (salt_hex.len != 32) return error.InvalidHashFormat; // 16 bytes = 32 hex chars
     var salt: [16]u8 = undefined;
     for (0..16) |i| {
-        const hi = std.fmt.charToDigit(salt_hex[i * 2], 16) catch return false;
-        const lo = std.fmt.charToDigit(salt_hex[i * 2 + 1], 16) catch return false;
+        const hi = std.fmt.charToDigit(salt_hex[i * 2], 16) catch return error.InvalidHashFormat;
+        const lo = std.fmt.charToDigit(salt_hex[i * 2 + 1], 16) catch return error.InvalidHashFormat;
         salt[i] = @as(u8, hi) * 16 + @as(u8, lo);
     }
 
     // Decode expected hash from hex
-    if (hash_hex.len != 64) return false; // 32 bytes = 64 hex chars
+    if (hash_hex.len != 64) return error.InvalidHashFormat; // 32 bytes = 64 hex chars
     var expected_hash: [32]u8 = undefined;
     for (0..32) |i| {
-        const hi = std.fmt.charToDigit(hash_hex[i * 2], 16) catch return false;
-        const lo = std.fmt.charToDigit(hash_hex[i * 2 + 1], 16) catch return false;
+        const hi = std.fmt.charToDigit(hash_hex[i * 2], 16) catch return error.InvalidHashFormat;
+        const lo = std.fmt.charToDigit(hash_hex[i * 2 + 1], 16) catch return error.InvalidHashFormat;
         expected_hash[i] = @as(u8, hi) * 16 + @as(u8, lo);
     }
 
@@ -2089,7 +2537,7 @@ pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_st
     const argon2_params = std.crypto.pwhash.argon2.Params{
         .t = t,
         .m = m,
-        .p = @intCast(p),
+        .p = p,
     };
 
     var computed_hash: [32]u8 = undefined;
@@ -2101,7 +2549,13 @@ pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_st
         argon2_params,
         .argon2id,
         std.Io.Threaded.global_single_threaded.io(),
-    ) catch return false;
+    ) catch |err| return switch (err) {
+        // Parameters Argon2 refuses come from the stored hash.
+        error.WeakParameters, error.OutputTooLong => error.InvalidHashFormat,
+        // The server could not run the KDF (out of memory, a thread or I/O
+        // error): no verdict.
+        else => err,
+    };
 
     // Constant-time comparison to prevent timing attacks
     return crypto_backend.timingSafeEql(&computed_hash, &expected_hash);

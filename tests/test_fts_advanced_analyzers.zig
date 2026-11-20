@@ -155,7 +155,7 @@ const MockLanguageAnalyzer = struct {
     }
 };
 
-// CANARY: REQ=REQ-GQL-FTS-ADV-002; FEATURE="Advanced Text Analyzers"; ASPECT=TESTING; STATUS=TESTED; TEST=geodetestlab/specs/fulltext_search_basic.yml; TEST=TestCANARY_Advanced_Text_Analyzers; OWNER=search; UPDATED=2025-10-04
+// CANARY: REQ=REQ-GQL-FTS-ADV-002; FEATURE="Advanced Text Analyzers"; ASPECT=TESTING; STATUS=IMPL; TEST=geodetestlab/specs/fulltext_search_basic.yml; TEST=TestCANARY_Advanced_Text_Analyzers; OWNER=search; UPDATED=2026-11-14
 test "Advanced Text Analyzers: Simple analyzer" {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();

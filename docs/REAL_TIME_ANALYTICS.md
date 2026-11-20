@@ -2,7 +2,17 @@
 
 ## Overview
 
-The Real-time Analytics & Streaming Integration system provides comprehensive real-time analysis capabilities for Geode, combining change data capture (CDC), machine learning embeddings, pattern detection, and anomaly detection into a unified analytics platform. This system enables enterprise-grade real-time insights, predictive analytics, and intelligent monitoring of graph database operations.
+The real-time analytics module (`src/analytics/real_time.zig`, exported as
+`geode.analytics.real_time`) is a library: an event queue with batch
+processing, pattern detection, anomaly detection and ML-embedding hooks, for
+a program that builds a `RealTimeAnalyticsEngine` and queues events into it.
+
+> **Status (SONNY-6593).** `geode serve` does not start this engine, so it
+> analyses no server operation. Change data capture is not an input: the
+> server captures no writes (SONNY-6570; capture is SONNY-6572), and
+> `CDCAnalyticsIntegration.handleCDCEvent` ignores the event it is given
+> (see [CDC Integration](#cdc-integration)). The rest of this document
+> describes the library's API.
 
 ## Architecture
 
@@ -83,7 +93,7 @@ pub const AnalyticsValue = union(enum) {
 
 ### Event Processing Pipeline
 
-1. **Event Ingestion**: Events queued from CDC, ML operations, or direct API calls
+1. **Event Ingestion**: Events the embedding program queues (`queueEvent`); nothing in the server queues any
 2. **Batch Processing**: Events processed in configurable batches for efficiency
 3. **Pattern Analysis**: Each event analyzed for pattern matching
 4. **Anomaly Detection**: Statistical analysis for anomaly identification
@@ -216,6 +226,12 @@ pub fn detectAnomaly(self: *AnomalyDetector, event: *const AnalyticsEvent) !Anom
 
 ## CDC Integration
 
+> A server captures no changes (SONNY-6570; capture is SONNY-6572), so no
+> CDC event reaches this integration from a write. `CDCAnalyticsIntegration`
+> takes an event handed to it directly, and does not read it:
+> `convertCDCEvent` queues a `node_creation` event whose only property is
+> `source: "cdc"`, whatever the event held (SONNY-6593).
+
 ### Change Data Capture Integration
 
 #### CDC Event Processing
@@ -233,10 +249,10 @@ pub const CDCAnalyticsIntegration = struct {
 
 #### Event Conversion
 
-- **CDC to Analytics**: Convert CDC events to analytics events
-- **Property Mapping**: Map CDC properties to analytics properties
-- **Timestamp Preservation**: Maintain temporal ordering
-- **Metadata Enhancement**: Add analytics-specific metadata
+- **CDC to Analytics**: every event becomes one `node_creation` analytics
+  event with the property `source: "cdc"`. The CDC event's type, entity,
+  properties and timestamp are not read (no property mapping, and the
+  analytics event's timestamp is when it was converted).
 
 ### Real-time Streaming
 

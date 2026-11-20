@@ -384,6 +384,8 @@ test "e2e_timeseries: GQL function integration" {
 }
 
 test "e2e_timeseries: performance benchmark" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // The insertMany / sampleBy / valueBefore / last calls below all run
     // unconditionally so the timeseries store is regression-covered
     // everywhere (any allocator/encoding/path bug surfaces as an error

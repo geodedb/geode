@@ -66,12 +66,16 @@ const Allocator = std.mem.Allocator;
 const raft_consensus = @import("raft_consensus.zig");
 const RaftNode = raft_consensus.RaftNode;
 const graph_store = @import("../graph_store.zig");
+const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
+// SONNY-6487: the shared host:port grammar.
+const host_port = @import("../client/host_port.zig");
 const dist_schema = @import("distributed_schema");
 const protobuf = @import("protobuf");
 const fd = protobuf.fd;
 const quic = @import("transport/quic");
 const pooled = @import("transport/thread_pool");
-const NonceTracker = @import("nonce_tracker.zig").NonceTracker;
+const nonce_tracker_mod = @import("nonce_tracker.zig");
+const NonceTracker = nonce_tracker_mod.NonceTracker;
 
 const cluster_auth = @import("cluster_auth.zig");
 const raft_apply = @import("raft_apply.zig");
@@ -552,35 +556,6 @@ fn PrefixedStream(comptime Inner: type) type {
     };
 }
 
-const ReplicationPayload = struct {
-    shard_id: u64 = 0,
-    snapshot: []const u8 = "",
-
-    pub const _desc_table = .{
-        .shard_id = fd(1, .{ .scalar = .uint64 }),
-        .snapshot = fd(2, .{ .scalar = .bytes }),
-    };
-
-    pub fn deinit(self: *ReplicationPayload, allocator: std.mem.Allocator) void {
-        protobuf.deinit(allocator, self);
-    }
-};
-
-/// SEC-D012: Minimal join response that does not leak full cluster topology.
-const JoinResponsePayload = struct {
-    assigned_node_id: u64 = 0,
-    node_count: u32 = 0,
-    success: bool = false,
-
-    pub const _desc_table = .{
-        .assigned_node_id = fd(1, .{ .scalar = .uint64 }),
-        .node_count = fd(2, .{ .scalar = .uint32 }),
-        .success = fd(3, .{ .scalar = .bool }),
-    };
-
-    pub fn deinit(_: *@This(), _: Allocator) void {}
-};
-
 /// SEC-D009: Replay protection guard for Raft frames.
 const ReplayGuard = struct {
     mutex: std.Io.Mutex = std.Io.Mutex.init,
@@ -624,84 +599,6 @@ const ReplayGuard = struct {
         }
         self.entries.put(key, now) catch return true; // allow on OOM
         return true;
-    }
-};
-
-const NodeInfoProto = struct {
-    id: u64 = 0,
-    endpoint: []const u8 = "",
-
-    pub const _desc_table = .{
-        .id = fd(1, .{ .scalar = .uint64 }),
-        .endpoint = fd(2, .{ .scalar = .string }),
-    };
-
-    pub fn deinit(self: *NodeInfoProto, allocator: std.mem.Allocator) void {
-        protobuf.deinit(allocator, self);
-    }
-};
-
-const TxnMetadata = struct {
-    client_id: []const u8 = "",
-    timestamp: i64 = 0,
-    msg_type: MessageType = .READ,
-
-    pub const _desc_table = .{
-        .client_id = fd(1, .{ .scalar = .string }),
-        .timestamp = fd(2, .{ .scalar = .int64 }),
-        .msg_type = fd(3, .{ .@"enum" = {} }),
-    };
-
-    pub fn deinit(self: *TxnMetadata, allocator: std.mem.Allocator) void {
-        protobuf.deinit(allocator, self);
-    }
-};
-
-const TopologyNode = struct {
-    id: u64 = 0,
-    endpoint: []const u8 = "",
-    state: []const u8 = "",
-
-    pub const _desc_table = .{
-        .id = fd(1, .{ .scalar = .uint64 }),
-        .endpoint = fd(2, .{ .scalar = .string }),
-        .state = fd(3, .{ .scalar = .string }),
-    };
-
-    pub fn deinit(self: *TopologyNode, allocator: std.mem.Allocator) void {
-        protobuf.deinit(allocator, self);
-    }
-};
-
-const TopologyShard = struct {
-    id: u64 = 0,
-    primary_node: u64 = 0,
-    replica_count: u32 = 0,
-    size_bytes: u64 = 0,
-
-    pub const _desc_table = .{
-        .id = fd(1, .{ .scalar = .uint64 }),
-        .primary_node = fd(2, .{ .scalar = .uint64 }),
-        .replica_count = fd(3, .{ .scalar = .uint32 }),
-        .size_bytes = fd(4, .{ .scalar = .uint64 }),
-    };
-
-    pub fn deinit(self: *TopologyShard, allocator: std.mem.Allocator) void {
-        protobuf.deinit(allocator, self);
-    }
-};
-
-const TopologyPayload = struct {
-    nodes: std.ArrayList(TopologyNode),
-    shards: std.ArrayList(TopologyShard),
-
-    pub const _desc_table = .{
-        .nodes = fd(1, .{ .repeated = .{ .submessage = {} } }),
-        .shards = fd(2, .{ .repeated = .{ .submessage = {} } }),
-    };
-
-    pub fn deinit(self: *TopologyPayload, allocator: std.mem.Allocator) void {
-        protobuf.deinit(allocator, self);
     }
 };
 
@@ -792,7 +689,6 @@ pub const ClusterCoordinator = struct {
     raft_pool: ?*pooled.ThreadPool = null,
     network_pool: ?*pooled.ThreadPool = null,
     health_pool: ?*pooled.ThreadPool = null,
-    replication_pool: ?*pooled.ThreadPool = null,
     connection_pool: ?*pooled.ThreadPool = null,
     /// Dedicated polling thread for the intra-cluster QUIC endpoint.
     /// `accept()` blocks on `accepted.items.len > 0` via a CV — connections
@@ -823,6 +719,15 @@ pub const ClusterCoordinator = struct {
     // CLAUDE.md tier table the same way the timeseries store lock does.
     inbound_conns: std.ArrayList(*InboundConnRecord) = .empty,
     inbound_conns_mutex: std.Io.Mutex = std.Io.Mutex.init,
+
+    /// SONNY-6456: guards `cluster_state.nodes` and `cluster_state.shards`,
+    /// which the health loop, the inbound raft workers (liveness stamps) and
+    /// shard forwarding share. A LEAF lock like `inbound_conns_mutex`: brief
+    /// holds, and no other geode lock is ever acquired while it is held (take
+    /// raft state such as `role()` before it). Entries are never removed from
+    /// `nodes` and an entry's `endpoint` never changes, so an endpoint slice
+    /// read under the lock stays valid after it is released.
+    cluster_state_mutex: std.Io.Mutex = std.Io.Mutex.init,
 
     // Helper to access replication map
     fn replication_map(self: *ClusterCoordinator) std.AutoHashMap(u64, []u64) {
@@ -1038,6 +943,20 @@ pub const ClusterCoordinator = struct {
         // before the raft node starts ticking.
         raft_apply.setGlobalStore(store);
         raft.apply_callback = &raft_apply.applyCallbackFn;
+        // SONNY-6622: a snapshot this node installs replaces the store's
+        // contents before any entry after it applies.
+        raft.snapshot_restore_callback = &raft_apply.restoreSnapshotCallbackFn;
+        // SONNY-6631: the graphs an entry's apply writes are hydrated
+        // without `inner_mutex` when the entry enters the log, and here for
+        // the entries a restarted node replays (nothing received them in
+        // this process): the apply under `inner_mutex` then scans nothing.
+        raft.prehydrate_callback = &raft_apply.prehydrateForApply;
+        raft.prehydrateUnapplied();
+        // SONNY-6636 (b): the node snapshots its store past a threshold
+        // (GEODE_RAFT_SNAPSHOT_ENTRIES / GEODE_RAFT_SNAPSHOT_BYTES) and
+        // compacts its Raft log there.
+        raft.snapshot_create_callback = &raft_apply.createSnapshotCallbackFn;
+        raft.snapshot_policy = raft_consensus.SnapshotPolicy.fromEnv(allocator);
 
         // GAP-0870: register the applied-membership view and the 2PC
         // coordinator so committed config_change / txn_prepare / txn_decide
@@ -1066,16 +985,37 @@ pub const ClusterCoordinator = struct {
         idem_dedup.* = cluster_replication.IdempotencyDedup.init(allocator);
         errdefer idem_dedup.deinit();
         raft_apply.setGlobalIdempotencyDedup(idem_dedup);
+        // SONNY-6636 (b): the keys the compacted entries recorded come back
+        // from this node's own snapshot; the replay rebuilds the rest. A
+        // snapshot that cannot be read refuses the start (a retried
+        // statement would otherwise be applied twice).
+        // SONNY-6665: raft v0.2.6 persists a snapshot received from the
+        // leader before the store is restored from it; a node that stopped
+        // in between has a Raft log compacted past what its store reflects
+        // (raft_store.index, which a restore and this node's own snapshots
+        // record), and restores it now, before any entry after it replays.
+        if (try raft.localSnapshotData(allocator)) |snap_data| {
+            defer allocator.free(snap_data);
+            const point = raft.snapshotPoint();
+            if (point.index > raft_apply.storeRaftIndex() and raft_apply.isRestorableSnapshot(snap_data)) {
+                log.warn("raft: the store is behind this node's Raft snapshot (stopped before restoring it); restoring it now", &.{
+                    Attr.uint("snapshot_index", point.index),
+                    Attr.uint("store_raft_index", raft_apply.storeRaftIndex()),
+                });
+                try raft_apply.restoreSnapshotCallbackFn(allocator, snap_data, point.index, point.term);
+            } else {
+                try raft_apply.seedFromLocalSnapshot(snap_data);
+            }
+        }
 
         var cluster_state = try initClusterState(allocator);
         // Task A5 (2026-05-25 plan): seed cluster_state.nodes from PeerConfig
         // so the network transport's findNodeEndpoint() lookup works from
         // t=0.  Without this bridge, sendToNode(peer_id) always returns
-        // error.NodeNotFound because cluster_state.nodes only gets populated
-        // by inbound JOIN_CLUSTER messages — but the leader hasn't been
-        // elected yet, so no node has joined yet, so the address book is
-        // empty, so RequestVote can't be sent, so no leader is ever
-        // elected.  The "host:port" endpoint format matches what
+        // error.NodeNotFound because nothing else populates
+        // cluster_state.nodes (there is no dynamic join; SONNY-6459 removed
+        // the never-called JOIN_CLUSTER handler), so the address book stays
+        // empty, RequestVote can't be sent, and no leader is ever elected.  The "host:port" endpoint format matches what
         // findNodeEndpoint() (this file, search "lastIndexOf") expects.
         errdefer {
             for (cluster_state.nodes.items) |*node| {
@@ -1087,7 +1027,9 @@ pub const ClusterCoordinator = struct {
             cluster_state.replication_map.deinit();
         }
         for (config.peers) |pc| {
-            const ep = try std.fmt.allocPrint(allocator, "{s}:{d}", .{ pc.address, pc.port });
+            // SONNY-6487: an IPv6 peer is `[addr]:port`, so the dial path
+            // can split it back.
+            const ep = try host_port.formatAlloc(allocator, pc.address, pc.port);
             errdefer allocator.free(ep);
             try cluster_state.nodes.append(allocator, .{
                 .id = pc.id,
@@ -1145,6 +1087,10 @@ pub const ClusterCoordinator = struct {
 
     pub fn deinit(self: *ClusterCoordinator) void {
         self.stop();
+        // SONNY-6667: nothing ticks or steps the node now; its restore and
+        // snapshot threads, which use the store and the apply targets freed
+        // below (the idempotency table), end before any of them is freed.
+        self.raft.quiesce();
         // RC-A: `stop()` has joined every worker + the health loop, so no thread
         // can still touch the inbound registry. Free any record a worker left
         // behind (defensive — the normal path deregisters on exit) and release the
@@ -1281,6 +1227,12 @@ pub const ClusterCoordinator = struct {
             var qt_config = quic.QuicTransport.Config{
                 .address = self.listen_address,
                 .port = self.cluster_port,
+                // SONNY-6456: this listener IS the raft listener in production
+                // (`raft_consensus.Transport.listen` is never called), so it
+                // must carry the dead-connection reap: an inbound connection
+                // whose peer vanished without CONNECTION_CLOSE is closed after
+                // GEODE_RAFT_DEAD_CONN_REAP_MS (default 30 s; 0 disables).
+                .dead_conn_reap_ms = raft_consensus.Transport.serverDeadConnReapMs(self.allocator),
             };
             if (self.cert_path.len > 0) qt_config.cert_path = self.cert_path;
             if (self.key_path.len > 0) qt_config.key_path = self.key_path;
@@ -1342,11 +1294,6 @@ pub const ClusterCoordinator = struct {
             self.health_pool.?.deinit();
             self.health_pool = null;
         }
-        self.replication_pool = try startLoopPool(self, runReplicationLoop);
-        errdefer {
-            self.replication_pool.?.deinit();
-            self.replication_pool = null;
-        }
     }
 
     pub fn stop(self: *ClusterCoordinator) void {
@@ -1381,10 +1328,6 @@ pub const ClusterCoordinator = struct {
         if (self.health_pool) |pool| {
             pool.deinit();
             self.health_pool = null;
-        }
-        if (self.replication_pool) |pool| {
-            pool.deinit();
-            self.replication_pool = null;
         }
         if (self.connection_pool) |pool| {
             pool.deinit();
@@ -1480,28 +1423,40 @@ pub const ClusterCoordinator = struct {
                     Attr.uint("active", self.active_connections.load(.acquire)),
                     Attr.uint("max", self.max_connections),
                 });
-                // Connection will be cleaned up when it goes out of scope
+                // SONNY-6456: close and untrack it (it used to stay tracked).
+                self.network_transport.quic_server.?.destroyConnection(conn);
                 continue;
             }
 
-            if (self.connection_pool) |pool| {
-                const ctx = try self.allocator.create(ConnectionTaskCtx);
-                errdefer self.allocator.destroy(ctx);
-                ctx.* = .{
-                    .allocator = self.allocator,
-                    .coordinator = self,
-                    .conn = conn,
-                    // RC-A: stamp the idle clock at ACCEPT, not at worker
-                    // acquisition — a queued conn (no free worker yet) still ages.
-                    .accepted_ms = compat_milliTimestamp(),
-                };
-                if (!pool.submit(.{
-                    .context = @ptrCast(ctx),
-                    .callback = runConnectionTask,
-                })) {
-                    self.allocator.destroy(ctx);
-                    log.warn("Connection pool saturated, dropping cluster connection", &.{});
-                }
+            // SONNY-6459: an accepted connection nobody will handle is closed
+            // and untracked here; it used to stay tracked by the listener
+            // (with no pool), or end this loop and stay tracked (when the
+            // task context could not be allocated).
+            const pool = self.connection_pool orelse {
+                log.warn("Cluster connection accepted with no connection pool; closing it", &.{});
+                self.network_transport.quic_server.?.destroyConnection(conn);
+                continue;
+            };
+            const ctx = self.allocator.create(ConnectionTaskCtx) catch {
+                log.err("Out of memory for a cluster connection task; closing the connection", &.{});
+                self.network_transport.quic_server.?.destroyConnection(conn);
+                continue;
+            };
+            ctx.* = .{
+                .allocator = self.allocator,
+                .coordinator = self,
+                .conn = conn,
+                // RC-A: stamp the idle clock at ACCEPT, not at worker
+                // acquisition — a queued conn (no free worker yet) still ages.
+                .accepted_ms = compat_milliTimestamp(),
+            };
+            if (!pool.submit(.{
+                .context = @ptrCast(ctx),
+                .callback = runConnectionTask,
+            })) {
+                self.allocator.destroy(ctx);
+                log.warn("Connection pool saturated, dropping cluster connection", &.{});
+                self.network_transport.quic_server.?.destroyConnection(conn);
             }
         }
     }
@@ -1520,16 +1475,11 @@ pub const ClusterCoordinator = struct {
         };
 
         while (!self.shutdown.load(.acquire)) {
-            for (self.cluster_state.nodes.items) |*node| {
-                if (node.id == self.node_id) continue;
-
-                const health_status = try self.checkNodeHealth(node);
-                try self.updateHealthStatus(node.id, health_status);
-
-                if (health_status == .unhealthy) {
-                    try self.handleNodeFailure(node.id);
-                }
-            }
+            // SONNY-6456: a failed pass is logged; it must not end the loop
+            // (which also drives the inbound-occupancy sweep below).
+            self.healthPass() catch |err| {
+                log.err("cluster health pass failed", &.{Attr.string("error", @errorName(err))});
+            };
 
             // RC-A: independent inbound-pool occupancy sweep. Frees worker slots
             // pinned by zombie half-open inbound conns so a rebuilt leader conn
@@ -1541,12 +1491,75 @@ pub const ClusterCoordinator = struct {
         }
     }
 
-    fn replicationLoop(self: *ClusterCoordinator) !void {
-        while (!self.shutdown.load(.acquire)) {
-            if (self.raft.state == .leader) {
-                try self.performReplication();
+    /// One health-check pass over the peers in `cluster_state.nodes`. A peer
+    /// is failed over once, when it turns unhealthy, and is active again when
+    /// it is heard from. SONNY-6451: nothing in the pass adds to or removes
+    /// from `cluster_state.nodes` (the slice iterated here).
+    ///
+    /// SONNY-6456: a peer's `last_heartbeat` is the last time an
+    /// authenticated raft frame from it arrived (`noteHeardFrom`), so
+    /// "unhealthy" means "not heard from within the threshold". A peer is
+    /// failed over only when this node expects to hear from it
+    /// (`expectsTrafficFrom`): a follower of a known leader hears only from
+    /// that leader, so its silence about the other followers says nothing. A
+    /// failover error is logged and the pass goes on to the next peer.
+    fn healthPass(self: *ClusterCoordinator) !void {
+        // Raft state first: `cluster_state_mutex` is a leaf lock.
+        const r = self.role();
+        const leader_id = self.raft.leaderId();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.cluster_state_mutex.lockUncancelable(io);
+        defer self.cluster_state_mutex.unlock(io);
+        for (self.cluster_state.nodes.items) |*node| {
+            if (node.id == self.node_id) continue;
+
+            const health_status = try self.checkNodeHealth(node);
+            try self.updateHealthStatus(node.id, health_status);
+
+            if (health_status == .unhealthy) {
+                if (node.state == .failed) continue;
+                if (!expectsTrafficFrom(r, leader_id, self.node_id, node.id)) continue;
+                self.handleNodeFailure(node.id) catch |err| {
+                    log.err("Failover for a failed node did not complete", &.{
+                        Attr.uint("node_id", node.id),
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
+            } else if (node.state == .failed) {
+                node.state = .active;
+                log.info("Node is active again", &.{Attr.uint("node_id", node.id)});
             }
-            compat_sleepNs(100 * std.time.ns_per_ms);
+        }
+    }
+
+    /// SONNY-6456: whether a node in raft state `r` that knows `leader_id`
+    /// should be hearing from `peer`. A leader or candidate gets a response
+    /// to every frame it sends each peer; a follower of a known leader hears
+    /// only from that leader; with no known leader, every peer is expected
+    /// to be campaigning or answering.
+    pub fn expectsTrafficFrom(r: raft_consensus.State, leader_id: ?u64, self_id: u64, peer: u64) bool {
+        if (r == .leader or r == .candidate) return true;
+        const l = leader_id orelse return true;
+        if (l == self_id) return true;
+        return l == peer;
+    }
+
+    /// SONNY-6456: record that an authenticated raft frame from `node_id`
+    /// arrived at `now_ms` (the health monitor's liveness signal).
+    ///
+    /// SONNY-6459: also the raft peer's `last_contact` (SHOW CLUSTER STATUS
+    /// `last_contact_ms`), which was set once at startup and never again.
+    /// `raft.peers` is fixed after init; the field is written and read
+    /// atomically (no lock: SHOW CLUSTER STATUS reads it from query threads).
+    fn noteHeardFrom(self: *ClusterCoordinator, node_id: u64, now_ms: i64) void {
+        for (self.raft.peers) |*peer| {
+            if (peer.id == node_id) @atomicStore(i64, &peer.last_contact, now_ms, .monotonic);
+        }
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.cluster_state_mutex.lockUncancelable(io);
+        defer self.cluster_state_mutex.unlock(io);
+        for (self.cluster_state.nodes.items) |*node| {
+            if (node.id == node_id) node.last_heartbeat = now_ms;
         }
     }
 
@@ -1610,13 +1623,6 @@ pub const ClusterCoordinator = struct {
         };
     }
 
-    fn runReplicationLoop(ctx: *anyopaque) void {
-        const self: *ClusterCoordinator = @ptrCast(@alignCast(ctx));
-        self.replicationLoop() catch |err| {
-            log.err("Replication loop failed", &.{Attr.string("error", @errorName(err))});
-        };
-    }
-
     fn runConnectionTask(ctx: *anyopaque) void {
         const task_ctx: *ConnectionTaskCtx = @ptrCast(@alignCast(ctx));
         const accepted_ms = task_ctx.accepted_ms;
@@ -1624,6 +1630,13 @@ pub const ClusterCoordinator = struct {
         task_ctx.coordinator.handleQuicConnection(task_ctx.conn, accepted_ms) catch |err| {
             log.err("Cluster connection handler failed", &.{Attr.string("error", @errorName(err))});
         };
+        // SONNY-6456: give the connection back to the listener. Without this
+        // the handler released its worker but the wrapper stayed in the
+        // listener's tracked list for the life of the process and no
+        // CONNECTION_CLOSE ever reached the peer (a reaped or abandoned
+        // connection was never closed by this side). `stop()` joins this pool
+        // before it frees the server, so the server is live here.
+        task_ctx.coordinator.network_transport.quic_server.?.destroyConnection(task_ctx.conn);
     }
 
     /// RC-A: register an inbound connection in the live occupancy registry,
@@ -1817,7 +1830,17 @@ pub const ClusterCoordinator = struct {
             // byte of a 4-byte big-endian length prefix and fed into
             // the existing raft frame reader.  We peek by reading
             // exactly one byte first, then dispatch.
-            self.dispatchInboundStream(stream) catch |err| {
+            const watch: InboundStreamWatch = .{ .conn = conn, .rec = rec, .idle_deadline_ms = idle_deadline_ms };
+            self.dispatchInboundStream(stream, &watch) catch |err| {
+                if (err == error.InboundStreamAbandoned) {
+                    // SONNY-6451: release the worker. Close the connection
+                    // too, so a sender that is still alive (a quiet peer,
+                    // not a dead one) sees it end and reconnects instead of
+                    // writing into a connection nobody reads any more.
+                    conn.destroyStream(stream);
+                    conn.requestShutdown(quic.app_error.server_teardown);
+                    return;
+                }
                 log.debug("dispatchInboundStream error", &.{
                     Attr.string("error", @errorName(err)),
                 });
@@ -1832,11 +1855,38 @@ pub const ClusterCoordinator = struct {
         }
     }
 
+    /// SONNY-6451: what a handler parked on a quiet multiplexed raft stream
+    /// watches, so that it gives the stream (and its worker) up.
+    const InboundStreamWatch = struct {
+        conn: *quic.QuicConnection,
+        /// The handler's RC-A occupancy record (null on OOM at register).
+        rec: ?*InboundConnRecord,
+        /// The RC1 inbound idle deadline.
+        idle_deadline_ms: i64,
+    };
+
+    /// SONNY-6451: true when a handler parked on a quiet inbound raft stream
+    /// must give it up: the coordinator is stopping, the connection is gone,
+    /// the RC-A sweeper asked for the worker back, or no frame has arrived for
+    /// the RC1 idle deadline. A sender that dies without FIN or
+    /// CONNECTION_CLOSE (a killed or force-exited process, a blackholed old
+    /// IP) leaves its stream open, and the vendor `readStream` answers
+    /// `WouldBlock` for it forever, so without this the handler kept its
+    /// worker for the life of the process.
+    fn inboundStreamAbandoned(self: *ClusterCoordinator, watch: *const InboundStreamWatch, last_frame_ms: i64) bool {
+        if (self.shutdown.load(.acquire)) return true;
+        if (watch.conn.isDrained()) return true;
+        if (watch.rec) |r| {
+            if (r.reap_requested.load(.acquire)) return true;
+        }
+        return shouldReapIdleInboundConnection(compat_milliTimestamp(), last_frame_ms, watch.idle_deadline_ms);
+    }
+
     /// Peek the first byte on `stream` and dispatch to either the
     /// raft frame reader (existing behaviour) or the cluster RPC
     /// handler (A3e, this commit).  See the `CLUSTER_RPC_MAGIC`
     /// comment for the wire format and rationale.
-    fn dispatchInboundStream(self: *ClusterCoordinator, stream: *quic.QuicStream) !void {
+    fn dispatchInboundStream(self: *ClusterCoordinator, stream: *quic.QuicStream, watch: *const InboundStreamWatch) !void {
         var first: [1]u8 = undefined;
         readExactCluster(stream, first[0..]) catch |err| {
             // EndOfStream means the peer FIN'd before sending any
@@ -1857,12 +1907,12 @@ pub const ClusterCoordinator = struct {
         // small adapter that prepends the byte we already consumed
         // and feed it into the existing raft frame reader.
         var prefix = PrefixedStream(*quic.QuicStream){ .inner = stream, .prefix = first[0], .have_prefix = true };
-        try self.dispatchRaftFrameFromAdaptedStream(&prefix);
+        try self.dispatchRaftFrameFromAdaptedStream(&prefix, watch);
     }
 
     /// Run the cluster RPC request/response cycle on `stream`.  The
     /// magic byte has already been consumed by the caller.  Reads the
-    /// request payload, dispatches via `handleClusterMessage`, then
+    /// request payload, dispatches via `handleClusterRpcLocal`, then
     /// writes a length-prefixed Response back on the same stream.
     fn handleClusterRpcOnStream(self: *ClusterCoordinator, stream: *quic.QuicStream) !void {
         const payload = try readClusterRpcBodyAfterMagic(self.allocator, stream);
@@ -1905,7 +1955,7 @@ pub const ClusterCoordinator = struct {
     }
 
     /// Inbound cluster RPC handler executed on the *target* node.
-    /// This must NOT re-enter `forwardToShard` / `handleShardQuery`
+    /// This must NOT re-enter `forwardToShard`
     /// — the originator has already routed the message to us.
     ///
     /// Today this only handles READ messages; writes / 2PC reuse
@@ -1915,8 +1965,9 @@ pub const ClusterCoordinator = struct {
     /// arriving on this path are rejected with ERR so the originator
     /// surfaces a clear failure rather than silently no-op'ing. The
     /// dead pre-A3e leave/replicate/failover stubs were removed
-    /// (GAP-0889); `handleJoinCluster` is retained for the planned
-    /// dynamic-join wire-up but has no caller on this path yet.
+    /// (GAP-0889), and the never-called, uncompilable `handleJoinCluster`
+    /// and topology serializer (SONNY-6459): membership is the static
+    /// peer list.
     fn handleClusterRpcLocal(self: *ClusterCoordinator, msg: Message) !Response {
         switch (msg.msg_type) {
             .READ => return self.executeLocalRead(msg),
@@ -1954,7 +2005,7 @@ pub const ClusterCoordinator = struct {
         stream.finish() catch {};
     }
 
-    fn dispatchRaftFrameFromAdaptedStream(self: *ClusterCoordinator, prefix: anytype) !void {
+    fn dispatchRaftFrameFromAdaptedStream(self: *ClusterCoordinator, prefix: anytype, watch: *const InboundStreamWatch) !void {
         // 2026-06-08 raft multiplexed streams: a peer now sends ALL raft frames
         // over ONE long-lived bidi stream (bounded per-peer stream usage, so
         // heartbeats/votes are never dropped on OutOfStreams under write load).
@@ -1970,17 +2021,27 @@ pub const ClusterCoordinator = struct {
         // torn-down-then-re-queued stream_id would otherwise be dropped as a
         // duplicate, wedging replication). The sender allocates a fresh
         // stream_id when it reopens after a real error, so reopen is unaffected.
+        //
+        // SONNY-6451: the park is bounded. `inboundStreamAbandoned` ends it
+        // (error.InboundStreamAbandoned: the handler releases its worker and
+        // closes the connection) on shutdown, a gone connection, an RC-A
+        // sweeper request, or no frame for the RC1 idle deadline. Each frame
+        // restamps the RC-A record so the sweeper never flags a live stream.
+        var last_frame_ms = compat_milliTimestamp();
         while (true) {
             const frame_res = raft_consensus.readRaftFrame(self.allocator, prefix) catch |err| switch (err) {
                 error.EndOfStream => return, // peer closed/reopened the stream — normal
                 error.WouldBlock => {
                     // Stream still open, just momentarily idle. Re-park.
+                    if (self.inboundStreamAbandoned(watch, last_frame_ms)) return error.InboundStreamAbandoned;
                     compat_sleepNs(2 * std.time.ns_per_ms);
                     continue;
                 },
                 else => return err,
             };
             defer frame_res.deinit(self.allocator);
+            last_frame_ms = compat_milliTimestamp();
+            if (watch.rec) |r| r.last_activity_ms.store(last_frame_ms, .release);
             self.applyDecodedRaftFrame(frame_res) catch |err| {
                 // A single bad/late frame must not tear the whole stream down;
                 // log and keep reading (raft re-sends on its own cadence).
@@ -2009,7 +2070,18 @@ pub const ClusterCoordinator = struct {
         // nonces and rejects any duplicate.  Combined with the per-RPC
         // TLS handshake (SEC-D011) and the cluster_token gate
         // (SEC-D001) this gives cryptographic replay protection.
-        if (!self.raft_nonce_tracker.checkAndRecord(frame_res.nonce)) {
+        // SONNY-6600: a nonce the tracker cannot record (out of memory) is
+        // still dropped (fail closed), but logged and counted as the error
+        // it is, not as a replay attack.
+        const fresh = self.raft_nonce_tracker.checkAndRecord(frame_res.nonce) catch |err| {
+            _ = nonce_tracker_mod.record_errors_total.fetchAdd(1, .monotonic);
+            log.err("Raft frame dropped: its nonce could not be recorded for the replay check (a server-side error, not a replay)", &.{
+                Attr.uint("from", frame_res.from),
+                Attr.string("error", @errorName(err)),
+            });
+            return;
+        };
+        if (!fresh) {
             log.warn("Raft frame rejected: replay or missing nonce", &.{
                 Attr.uint("from", frame_res.from),
                 Attr.uint("nonce", frame_res.nonce),
@@ -2059,6 +2131,9 @@ pub const ClusterCoordinator = struct {
         // that peer yet (built lazily on first send) — it can never cause a
         // false eviction of a healthy peer.
         const now_inbound_ms = compat_milliTimestamp();
+        // SONNY-6456: any authenticated frame (request or response) proves its
+        // sender is alive now — the health monitor's liveness signal.
+        self.noteHeardFrom(frame_res.from, now_inbound_ms);
         if (raft_consensus.frameProvesOurOutboundDelivered(frame_res.body)) {
             self.raft_transport.notePeerProgress(frame_res.from, now_inbound_ms);
         } else {
@@ -2091,6 +2166,9 @@ pub const ClusterCoordinator = struct {
             }
         }
 
+        // SONNY-6567 (6b), SONNY-6631: `handleMessage` hydrates the graphs
+        // of the entries an AppendEntries carries before it takes
+        // `inner_mutex` (`RaftNode.prehydrate_callback`).
         self.raft.handleMessage(frame_res.from, frame_res.body) catch |e| {
             log.err("Raft handleMessage error", &.{
                 Attr.string("error", @errorName(e)),
@@ -2098,47 +2176,20 @@ pub const ClusterCoordinator = struct {
         };
     }
 
-    fn handleClusterMessage(self: *ClusterCoordinator, msg: Message) !Response {
-        // Route based on message type
-        return self.handleShardQuery(msg);
-    }
-
-    fn handleJoinCluster(self: *ClusterCoordinator, msg: Message) !Response {
-        // SEC-D002: Always validate cluster token before revealing topology.
-        // Reject join requests without valid token regardless of whether env var is set.
-        if (!cluster_auth.validateClusterToken(msg.auth_token)) {
-            log.warn("JOIN_CLUSTER rejected: invalid or missing cluster token", &.{
-                Attr.string("client_id", msg.client_id orelse "unknown"),
-            });
-            return Response{
-                .status = .ERR,
-                .data = null,
-            };
-        }
-
-        if (self.raft.state != .leader) {
-            return Response{
-                .status = .REDIRECT,
-                .leader_id = self.cluster_state.leader_node,
-            };
-        }
-
-        const node_info = try parseNodeInfo(self.allocator, msg.data orelse return error.InvalidNodeInfo);
-        try self.cluster_state.nodes.append(node_info);
-
-        // Trigger rebalancing
-        try self.rebalanceShards();
-
-        return Response{
-            .status = .OK,
-            .data = try self.serializeMinimalJoinResponse(node_info.id),
-        };
-    }
-
     fn handleNodeFailure(self: *ClusterCoordinator, failed_node: u64) !void {
         log.warn("Node detected as failed", &.{
             Attr.uint("node_id", failed_node),
         });
+
+        // SONNY-6451: mark the peer failed in place. It used to be
+        // swapRemove'd here, under healthPass's iteration of this same list
+        // (the pass then read the slot swapRemove left `undefined` as a node,
+        // id 0xAAAAAAAAAAAAAAAA), which also dropped its endpoint from the
+        // address book for good and leaked the entry. A failed peer that
+        // comes back must still be reachable.
+        for (self.cluster_state.nodes.items) |*node| {
+            if (node.id == failed_node) node.state = .failed;
+        }
 
         if (!self.failover_config.auto_failover) return;
 
@@ -2170,15 +2221,6 @@ pub const ClusterCoordinator = struct {
                 self.allocator.free(shard.replica_nodes);
             }
             shard.replica_nodes = new_replicas;
-        }
-
-        // Update cluster state
-        for (self.cluster_state.nodes.items, 0..) |*node, i| {
-            if (node.id == failed_node) {
-                node.state = .failed;
-                _ = self.cluster_state.nodes.swapRemove(i);
-                break;
-            }
         }
 
         // Trigger re-replication to maintain replication factor
@@ -2261,40 +2303,6 @@ pub const ClusterCoordinator = struct {
         }
     }
 
-    fn performReplication(self: *ClusterCoordinator) !void {
-        for (self.cluster_state.shards.items) |shard| {
-            if (shard.primary_node != self.node_id) continue;
-
-            for (shard.replica_nodes) |replica| {
-                try self.replicateShardToNode(shard.id, replica);
-            }
-        }
-    }
-
-    fn replicateShardToNode(self: *ClusterCoordinator, shard_id: u64, node_id: u64) !void {
-        // Checkpoint adapter storage before snapshotting.
-        try self.store.saveToFile();
-        // Serialize all nodes and edges as JSON-lines for replication.
-        const snapshot = try self.store.serializeSnapshot(self.allocator);
-
-        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 256);
-        defer aw.deinit();
-        const payload_msg = ReplicationPayload{
-            .shard_id = shard_id,
-            .snapshot = snapshot,
-        };
-        try protobuf.encode(&aw.writer, self.allocator, payload_msg);
-        const payload = try self.allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
-        defer self.allocator.free(payload);
-
-        const msg = Message{
-            .msg_type = .REPLICATE_DATA,
-            .data = payload,
-        };
-
-        try self.sendToNode(node_id, msg);
-    }
-
     // Helper functions
     // NOTE: `Peer` is a module-level type in raft_consensus.zig (not nested
     // inside RaftNode), so the qualified reference is `raft_consensus.Peer`,
@@ -2310,9 +2318,9 @@ pub const ClusterCoordinator = struct {
                 .id = config.id,
                 .endpoint = try allocator.dupe(u8, config.address),
                 .port = config.port,
-                .alive = true,
-                .last_contact = compat_milliTimestamp(),
-                .rpc_client = null,
+                // SONNY-6463: 0 = never heard from (SHOW CLUSTER STATUS
+                // reports NULL until the first authenticated frame).
+                .last_contact = 0,
             };
         }
         return peers;
@@ -2336,6 +2344,14 @@ pub const ClusterCoordinator = struct {
     }
 
     fn findNodeEndpoint(self: *ClusterCoordinator, node_id: u64) ![]const u8 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.cluster_state_mutex.lockUncancelable(io);
+        defer self.cluster_state_mutex.unlock(io);
+        return self.findNodeEndpointLocked(node_id);
+    }
+
+    /// `findNodeEndpoint` for a caller holding `cluster_state_mutex`.
+    fn findNodeEndpointLocked(self: *ClusterCoordinator, node_id: u64) ![]const u8 {
         for (self.cluster_state.nodes.items) |node| {
             if (node.id == node_id) return node.endpoint;
         }
@@ -2462,131 +2478,6 @@ pub const ClusterCoordinator = struct {
         });
     }
 
-    // CANARY: REQ=REQ-DIST-CLUSTER-003; FEATURE="DistributedCluster"; ASPECT=Rebalance; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
-    fn rebalanceShards(self: *ClusterCoordinator) !void {
-        const node_count = self.cluster_state.nodes.items.len;
-        if (node_count == 0) {
-            log.warn("No nodes available for rebalancing", &.{});
-            return;
-        }
-
-        log.info("Rebalancing shards across nodes", &.{
-            Attr.uint("node_count", node_count),
-        });
-
-        // Calculate target shards per node
-        const shard_count = self.cluster_state.shards.items.len;
-        const target_per_node = (shard_count + node_count - 1) / node_count; // Round up
-
-        // Count current shards per node
-        var shards_per_node = std.AutoHashMap(u64, usize).init(self.allocator);
-        defer shards_per_node.deinit();
-
-        for (self.cluster_state.shards.items) |shard| {
-            const entry = try shards_per_node.getOrPut(shard.primary_node);
-            if (!entry.found_existing) {
-                entry.value_ptr.* = 0;
-            }
-            entry.value_ptr.* += 1;
-        }
-
-        // Find overloaded and underloaded nodes
-        var moves_needed: usize = 0;
-        for (self.cluster_state.nodes.items) |node| {
-            const current = shards_per_node.get(node.id) orelse 0;
-            if (current > target_per_node) {
-                moves_needed += current - target_per_node;
-            }
-        }
-
-        log.info("Rebalance analysis", &.{
-            Attr.uint("shard_count", shard_count),
-            Attr.uint("node_count", node_count),
-            Attr.uint("target_per_node", target_per_node),
-            Attr.uint("moves_needed", moves_needed),
-        });
-    }
-
-    // CANARY: REQ=REQ-DIST-CLUSTER-004; FEATURE="DistributedCluster"; ASPECT=Topology; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
-    fn serializeClusterTopology(self: *ClusterCoordinator) ![]const u8 {
-        var nodes = std.ArrayList(TopologyNode).init(self.allocator);
-        defer nodes.deinit(self.allocator);
-
-        for (self.cluster_state.nodes.items) |node| {
-            try nodes.append(self.allocator, TopologyNode{
-                .id = node.id,
-                .endpoint = node.endpoint,
-                .state = @tagName(node.state),
-            });
-        }
-
-        var shards = std.ArrayList(TopologyShard).init(self.allocator);
-        defer shards.deinit(self.allocator);
-
-        for (self.cluster_state.shards.items) |shard| {
-            try shards.append(self.allocator, TopologyShard{
-                .id = shard.id,
-                .primary_node = shard.primary_node,
-                .replica_count = @intCast(shard.replica_nodes.len),
-                .size_bytes = shard.size_bytes,
-            });
-        }
-
-        const payload = TopologyPayload{
-            .nodes = nodes,
-            .shards = shards,
-        };
-
-        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 256);
-        defer aw.deinit();
-        try protobuf.encode(&aw.writer, self.allocator, payload);
-        const body = aw.writer.buffer[0..aw.writer.end];
-        return self.allocator.dupe(u8, body);
-    }
-
-    /// SEC-D012: Build a minimal join response that reveals only the assigned
-    /// node ID, the current node count, and a success flag -- no topology.
-    fn serializeMinimalJoinResponse(self: *ClusterCoordinator, assigned_id: u64) ![]const u8 {
-        const payload = JoinResponsePayload{
-            .assigned_node_id = assigned_id,
-            .node_count = @intCast(self.cluster_state.nodes.items.len),
-            .success = true,
-        };
-        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 64);
-        defer aw.deinit();
-        try protobuf.encode(&aw.writer, self.allocator, payload);
-        return self.allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
-    }
-
-    fn parseNodeInfo(allocator: Allocator, data: []const u8) !NodeInfo {
-        var reader: std.Io.Reader = .fixed(data);
-        var parsed = protobuf.decode(NodeInfoProto, &reader, allocator) catch |e| {
-            log.warn("parseNodeInfo protobuf error", &.{
-                Attr.string("error", @errorName(e)),
-            });
-            return error.InvalidNodeInfo;
-        };
-        defer parsed.deinit(allocator);
-
-        const endpoint_val = if (parsed.endpoint.len > 0) parsed.endpoint else "unknown:0";
-        const endpoint_copy = try allocator.dupe(u8, endpoint_val);
-        return NodeInfo{
-            .id = parsed.id,
-            .endpoint = endpoint_copy,
-            .state = .joining,
-            .role = .follower,
-            .capacity = .{
-                .cpu_cores = 8,
-                .memory_gb = 16,
-                .storage_gb = 100,
-                .network_mbps = 1000,
-                .current_load = 0.0,
-            },
-            .last_heartbeat = compat_milliTimestamp(),
-            .metadata = std.StringHashMap([]const u8).init(allocator),
-        };
-    }
-
     // === Public Raft proposal API (Task A3d of 2026-05-25 plan) ===
     //
     // These methods promote internal `raft.*` accessors to the public
@@ -2611,6 +2502,10 @@ pub const ClusterCoordinator = struct {
     ///
     /// Thread-safe: takes `self.raft.inner_mutex` internally.
     pub fn proposeWrite(self: *ClusterCoordinator, command: raft_consensus.Command) !u64 {
+        // SONNY-6547 (4): the graph the entry's apply writes is hydrated
+        // here, on the proposing thread, before `inner_mutex` is taken: the
+        // apply would otherwise hydrate it under `inner_mutex`.
+        raft_apply.prehydrateForApply(command);
         return self.raft.proposeCommand(command);
     }
 
@@ -2673,7 +2568,17 @@ pub const ClusterCoordinator = struct {
                 // Commit not confirmed in budget — a genuine unknown.
                 .commit_unknown_timeout => return error.Timeout,
                 // Still within budget and not yet committed — keep polling.
-                .keep_waiting => compat_sleepNs(2 * std.time.ns_per_ms),
+                // SONNY-6541 (1): unless this thread holds the lock of a
+                // graph a Raft drop_graph apply waits for: that apply holds
+                // the node's `inner_mutex`, so no commit advances until this
+                // thread lets go. The outcome is unknown (Timeout); the entry
+                // comes after the drop, and its writes to the graph are
+                // refused when it applies. SONNY-6622: likewise a thread
+                // holding the store lock while a snapshot restore waits for it.
+                .keep_waiting => {
+                    if (graph_storage_adapter.threadMustYieldToReplicatedApply()) return error.Timeout;
+                    compat_sleepNs(2 * std.time.ns_per_ms);
+                },
             }
         }
     }
@@ -2695,9 +2600,9 @@ pub const ClusterCoordinator = struct {
     // CANARY: REQ=REQ-GQL-020; FEATURE="Cluster QUIC Messaging"; ASPECT=SendToNode; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     pub fn sendToNode(self: *ClusterCoordinator, node_id: u64, msg: Message) !void {
         const endpoint = try self.findNodeEndpoint(node_id);
-        const colon_idx = std.mem.lastIndexOf(u8, endpoint, ":") orelse return error.InvalidAddress;
-        const host = endpoint[0..colon_idx];
-        const port = try std.fmt.parseInt(u16, endpoint[colon_idx + 1 ..], 10);
+        const peer = host_port.split(endpoint, null) catch return error.InvalidAddress;
+        const host = peer.host;
+        const port = peer.port;
 
         var client = quic.QuicClient.init(self.allocator);
         defer client.deinit();
@@ -2706,20 +2611,8 @@ pub const ClusterCoordinator = struct {
         // cluster_auth.isInsecureModeAllowed() chokepoint so release builds
         // refuse the flag automatically.  The old envFlagEnabled path would
         // honour the env var in any build mode.
-        const allow_insecure = cluster_auth.isInsecureModeAllowed();
-        if (allow_insecure) {
-            log.warn("SECURITY WARNING: Cluster TLS verification disabled via GEODE_CLUSTER_INSECURE (Debug build only)", &.{});
-            _ = client.connectInsecure(host, port, true) catch |err| return err;
-        } else {
-            const ca_path = getEnvVarOwned(self.allocator, "GEODE_CLUSTER_CA_CERT") catch null;
-            defer if (ca_path) |p| self.allocator.free(p);
-
-            if (ca_path) |path| {
-                try client.connectEx(host, port, path, null, null);
-            } else {
-                try client.connect(host, port);
-            }
-        }
+        // SONNY-6453: one cluster dial configuration (cluster_auth.dialClusterPeer).
+        try cluster_auth.dialClusterPeer(&client, host, port);
         _ = client.waitForHandshake(10) catch |err| return err;
 
         var stream = try client.openStream(true);
@@ -2748,164 +2641,6 @@ pub const ClusterCoordinator = struct {
     // were removed. The live RPC dispatch (`handleClusterRpcLocal`)
     // rejects LEAVE_CLUSTER / REPLICATE_DATA / FAILOVER_REQUEST with ERR
     // so originators see a clear failure instead of a lying no-op ack.
-
-    fn handleShardQuery(self: *ClusterCoordinator, msg: Message) !Response {
-        // CANARY: REQ=REQ-GQL-2PC-005; FEATURE="Distributed Query Processing"; ASPECT=Distributed; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
-
-        // Determine if this is a read-only or write query
-        const is_write = try self.isWriteQuery(msg);
-
-        if (!is_write) {
-            // Simple read query - route to appropriate shard
-            const shard_id = try self.determineTargetShard(msg);
-            return self.forwardToShard(shard_id, msg);
-        }
-
-        // Distributed write using 2PC
-        const affected_shards = try self.determineAffectedShards(msg);
-
-        // Generate transaction ID
-        const xid = try self.generateTransactionId();
-
-        // Phase 1: Prepare
-        var prepare_votes = std.ArrayList(bool).init(self.allocator);
-        defer prepare_votes.deinit();
-
-        const write_set = try self.serializeWriteSet(msg);
-        defer self.allocator.free(write_set);
-        const metadata = try self.serializeMetadata(msg);
-        defer self.allocator.free(metadata);
-
-        for (affected_shards) |shard_id| {
-            const prepare_msg = raft_consensus.TxnPrepare{
-                .xid = xid,
-                .shard_id = shard_id,
-                .write_set = write_set,
-                .metadata = metadata,
-            };
-
-            // Send prepare through Raft consensus
-            const vote = try self.sendPrepareToShard(shard_id, prepare_msg);
-            try prepare_votes.append(vote);
-        }
-
-        // Check if all shards voted to commit
-        var can_commit = true;
-        for (prepare_votes.items) |vote| {
-            if (!vote) {
-                can_commit = false;
-                break;
-            }
-        }
-
-        // Phase 2: Decide
-        const decide_msg = raft_consensus.TxnDecide{
-            .xid = xid,
-            .commit = can_commit,
-        };
-
-        for (affected_shards) |shard_id| {
-            try self.sendDecideToShard(shard_id, decide_msg);
-        }
-
-        return Response{
-            .status = if (can_commit) .OK else .ABORTED,
-            .data = try std.fmt.allocPrint(self.allocator, "Transaction {} {s}", .{ xid, if (can_commit) "committed" else "aborted" }),
-        };
-    }
-
-    fn isWriteQuery(self: *ClusterCoordinator, msg: Message) !bool {
-        _ = self;
-        // Parse message to determine if it's a write operation
-        // For now, simple heuristic based on message type
-        return msg.msg_type == .WRITE or msg.msg_type == .DELETE or msg.msg_type == .UPDATE;
-    }
-
-    fn determineTargetShard(self: *ClusterCoordinator, msg: Message) !u64 {
-        // Hash-based sharding for reads
-        const key = msg.key orelse return error.MissingKey;
-        const hash = std.hash.Fnv1a_64.hash(key);
-        return hash % self.cluster_state.shards.items.len;
-    }
-
-    fn determineAffectedShards(self: *ClusterCoordinator, msg: Message) ![]u64 {
-        // For writes, determine all affected shards
-        var shards = std.ArrayList(u64).init(self.allocator);
-
-        // Simple case: single shard
-        const primary_shard = try self.determineTargetShard(msg);
-        try shards.append(primary_shard);
-
-        // Add replica shards if configured
-        if (self.replication_map.get(primary_shard)) |replicas| {
-            for (replicas) |replica| {
-                try shards.append(replica);
-            }
-        }
-
-        return shards.toOwnedSlice();
-    }
-
-    fn generateTransactionId(self: *ClusterCoordinator) !u64 {
-        // Generate unique transaction ID
-        const timestamp: u64 = @intCast(compat_milliTimestamp());
-        const node_part = self.node_id << 48;
-        const counter = self.incrementTxCounter();
-        return node_part | (timestamp << 16) | counter;
-    }
-
-    fn incrementTxCounter(self: *ClusterCoordinator) u16 {
-        _ = self;
-        // Thread-safe counter increment (simplified)
-        const counter = struct {
-            var value: std.atomic.Atomic(u16) = std.atomic.Atomic(u16).init(0);
-        };
-        return counter.value.fetchAdd(1, .Monotonic);
-    }
-
-    fn serializeWriteSet(self: *ClusterCoordinator, msg: Message) ![]const u8 {
-        const write_set = msg.data orelse return error.MissingWriteSet;
-        var reader: std.Io.Reader = .fixed(write_set);
-        var decoded = protobuf.decode(dist_schema.TwoPhaseMessage, &reader, self.allocator) catch |err| {
-            log.err("Invalid 2PC write set payload", &.{Attr.string("error", @errorName(err))});
-            return error.InvalidWriteSet;
-        };
-        defer decoded.deinit(self.allocator);
-        return self.allocator.dupe(u8, write_set);
-    }
-
-    fn serializeMetadata(self: *ClusterCoordinator, msg: Message) ![]const u8 {
-        const metadata = TxnMetadata{
-            .client_id = msg.client_id orelse "",
-            .timestamp = compat_milliTimestamp(),
-            .msg_type = msg.msg_type,
-        };
-        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 128);
-        defer aw.deinit();
-        try protobuf.encode(&aw.writer, self.allocator, metadata);
-        const body = aw.writer.buffer[0..aw.writer.end];
-        return self.allocator.dupe(u8, body);
-    }
-
-    fn sendPrepareToShard(self: *ClusterCoordinator, shard_id: u64, prepare: raft_consensus.TxnPrepare) !bool {
-        _ = shard_id;
-        // Send prepare message through Raft
-        const command = raft_consensus.Command{ .txn_prepare = prepare };
-        _ = try self.raft.proposeCommand(command);
-
-        // Wait for response (simplified - in production would be async)
-        if (self.raft.pending_responses.get(prepare.xid)) |response| {
-            return response.prepare_result orelse false;
-        }
-        return false;
-    }
-
-    fn sendDecideToShard(self: *ClusterCoordinator, shard_id: u64, decide: raft_consensus.TxnDecide) !void {
-        _ = shard_id;
-        // Send decide message through Raft
-        const command = raft_consensus.Command{ .txn_decide = decide };
-        _ = try self.raft.proposeCommand(command);
-    }
 
     // CANARY: REQ=REQ-DIST-CLUSTER-FORWARD-SHARD; FEATURE="DistributedCluster"; ASPECT=ForwardToShard; STATUS=TESTED; TEST=tests/test_cluster_forward_to_shard.zig; OWNER=distributed; UPDATED=2026-05-26
     //
@@ -2945,23 +2680,25 @@ pub const ClusterCoordinator = struct {
     fn forwardToShard(self: *ClusterCoordinator, shard_id: u64, msg: Message) !Response {
         // Find the shard descriptor.  Returns ShardNotFound if no
         // shard with this id is currently in `cluster_state.shards`.
-        const shard = self.findShard(shard_id) orelse return error.ShardNotFound;
+        // SONNY-6456: pick the target under `cluster_state_mutex` (the health
+        // loop rewrites shards on failover); do the I/O after releasing it.
+        const target: ?u64 = blk: {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.cluster_state_mutex.lockUncancelable(io);
+            defer self.cluster_state_mutex.unlock(io);
+            const shard = self.findShard(shard_id) orelse return error.ShardNotFound;
+            if (self.ownsShard(shard)) break :blk null;
+            break :blk self.pickReachableShardOwner(shard) orelse return error.NoReachableShardOwner;
+        };
 
         // Local short-circuit.  When this coordinator already owns
         // the shard, executing through `executeLocalRead` is
         // equivalent to the over-the-wire path — but we save the
         // round-trip and avoid bouncing the message through the
-        // intra-cluster QUIC listener.  This deliberately bypasses
-        // `handleClusterMessage` / `handleShardQuery` because those
-        // would recompute the target shard and could loop back into
-        // `forwardToShard`.
-        if (self.ownsShard(shard)) {
-            return self.executeLocalRead(msg);
-        }
+        // intra-cluster QUIC listener.
+        const target_node = target orelse return self.executeLocalRead(msg);
 
-        // Pick a target node.  Primary first, then replicas in order.
-        const target_node = self.pickReachableShardOwner(shard) orelse return error.NoReachableShardOwner;
-
+        // Target node: primary first, then replicas in order.
         return self.sendClusterRpcToNode(target_node, msg);
     }
 
@@ -2998,8 +2735,9 @@ pub const ClusterCoordinator = struct {
         return null;
     }
 
+    /// Caller holds `cluster_state_mutex`.
     fn hasEndpoint(self: *ClusterCoordinator, node_id: u64) bool {
-        _ = self.findNodeEndpoint(node_id) catch return false;
+        _ = self.findNodeEndpointLocked(node_id) catch return false;
         return true;
     }
 
@@ -3010,27 +2748,15 @@ pub const ClusterCoordinator = struct {
     /// call `Response.deinit(allocator)` to free it.
     fn sendClusterRpcToNode(self: *ClusterCoordinator, target_node: u64, msg: Message) !Response {
         const endpoint = try self.findNodeEndpoint(target_node);
-        const colon_idx = std.mem.lastIndexOf(u8, endpoint, ":") orelse return error.InvalidAddress;
-        const host = endpoint[0..colon_idx];
-        const port = try std.fmt.parseInt(u16, endpoint[colon_idx + 1 ..], 10);
+        const peer = host_port.split(endpoint, null) catch return error.InvalidAddress;
+        const host = peer.host;
+        const port = peer.port;
 
         var client = quic.QuicClient.init(self.allocator);
         defer client.deinit();
 
-        const allow_insecure = cluster_auth.isInsecureModeAllowed();
-        if (allow_insecure) {
-            log.warn("SECURITY WARNING: Cluster RPC TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
-            _ = client.connectInsecure(host, port, true) catch |err| return err;
-        } else {
-            const ca_path = getEnvVarOwned(self.allocator, "GEODE_CLUSTER_CA_CERT") catch null;
-            defer if (ca_path) |p| self.allocator.free(p);
-
-            if (ca_path) |path| {
-                try client.connectEx(host, port, path, null, null);
-            } else {
-                try client.connect(host, port);
-            }
-        }
+        // SONNY-6453: one cluster dial configuration (cluster_auth.dialClusterPeer).
+        try cluster_auth.dialClusterPeer(&client, host, port);
         _ = client.waitForHandshake(10) catch |err| return err;
 
         var stream = try client.openStream(true);
@@ -3157,6 +2883,10 @@ pub const testing_surface = struct {
     ) !TestingResponse {
         return coord.forwardToShard(shard_id, msg);
     }
+    /// One pass of the health loop (SONNY-6451 item 2).
+    pub fn healthPass(coord: *ClusterCoordinator) !void {
+        return coord.healthPass();
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -3180,25 +2910,6 @@ test "Message struct carries auth_token field" {
 test "Message auth_token defaults to empty" {
     const msg = Message{};
     try testing.expectEqualStrings("", msg.auth_token);
-}
-
-test "SEC-D012: minimal join response has no topology" {
-    // JoinResponsePayload must carry exactly 3 fields: assigned_node_id, node_count, success.
-    // It must NOT contain endpoint, shard, or any other topology detail.
-    const info = @typeInfo(JoinResponsePayload);
-    const fields = info.@"struct".fields;
-    try testing.expectEqual(@as(usize, 3), fields.len);
-
-    // Verify the exact field names
-    try testing.expectEqualStrings("assigned_node_id", fields[0].name);
-    try testing.expectEqualStrings("node_count", fields[1].name);
-    try testing.expectEqualStrings("success", fields[2].name);
-
-    // Verify defaults are safe (no information leak)
-    const payload = JoinResponsePayload{};
-    try testing.expectEqual(@as(u64, 0), payload.assigned_node_id);
-    try testing.expectEqual(@as(u32, 0), payload.node_count);
-    try testing.expectEqual(false, payload.success);
 }
 
 test "SEC-D009: ReplayGuard rejects duplicate within window" {

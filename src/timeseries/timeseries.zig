@@ -60,8 +60,8 @@ pub const StoreConfig = struct {
     /// GAP-0865 (e): optional AES-256-GCM key for engine-level TDE of every
     /// on-disk timeseries artefact (WAL records, segment blocks TSSEG003,
     /// manifest TSMNF002). Fail-closed on reopen with a wrong/missing key.
-    /// Wire from `GEODE_TS_TDE=1` + `GEODE_TDE_KEY` via
-    /// `encryptionKeyFromEnv()`.
+    /// Wire from `GEODE_TDE_KEY` via `encryptionKeyFromEnv()` (SONNY-6590: on
+    /// whenever the key is set; `GEODE_TS_TDE=0` opts out).
     encryption_key: ?[32]u8 = null,
 };
 
@@ -92,16 +92,31 @@ pub fn retentionMsFromEnv() ?i64 {
     return days * std.time.ms_per_day;
 }
 
-/// Read the timeseries TDE key. Opt-in via `GEODE_TS_TDE=1` (or `true`);
-/// when enabled the 32-byte key comes from `GEODE_TDE_KEY` (64 hex chars,
-/// the same variable the rest of geode's TDE uses). FAIL-CLOSED: when
-/// `GEODE_TS_TDE` is set but the key is missing/invalid this returns an
-/// error rather than silently writing plaintext.
-pub fn encryptionKeyFromEnv() error{InvalidTsTdeKey}!?[32]u8 {
-    const flag = std.c.getenv("GEODE_TS_TDE") orelse return null;
-    const fs = std.mem.span(flag);
-    const enabled = std.mem.eql(u8, fs, "1") or std.ascii.eqlIgnoreCase(fs, "true");
-    if (!enabled) return null;
+// CANARY: REQ=REQ-SONNY-6590-TS-TDE-DEFAULT; FEATURE="TimeSeriesTDE"; ASPECT=OnWithTdeKey; STATUS=TESTED; TEST=tests/test_sonny6590_tde_side_files.zig; OWNER=security; UPDATED=2026-11-15
+/// Read the timeseries TDE key: the 32-byte key from `GEODE_TDE_KEY` (64 hex
+/// chars, the variable the rest of geode's TDE uses).
+///
+/// SONNY-6590: time-series encryption follows `GEODE_TDE_KEY`. With the key
+/// set, time-series data is encrypted unless `GEODE_TS_TDE` is explicitly
+/// `0`/`false` (plaintext time-series beside an encrypted graph store, logged
+/// at ERROR on every open; the only use is reading a store written in
+/// plaintext before this change, see `Store.initWithConfig`). It used to be
+/// opt-in (`GEODE_TS_TDE=1`), so a server with only `GEODE_TDE_KEY` wrote
+/// time-series values in plaintext. FAIL-CLOSED: `GEODE_TS_TDE=1` without a
+/// valid key, or any other `GEODE_TS_TDE` value, is an error.
+pub fn encryptionKeyFromEnv() error{ InvalidTsTdeKey, InvalidTsTdeSetting }!?[32]u8 {
+    const key_set = if (std.c.getenv("GEODE_TDE_KEY")) |k| std.mem.span(k).len != 0 else false;
+    if (std.c.getenv("GEODE_TS_TDE")) |flag| {
+        const fs = std.mem.span(flag);
+        if (std.mem.eql(u8, fs, "0") or std.ascii.eqlIgnoreCase(fs, "false")) {
+            if (key_set) std.log.scoped(.timeseries).err("GEODE_TS_TDE=0 with GEODE_TDE_KEY set: time-series data is written and read in PLAINTEXT beside the encrypted graph store (SONNY-6590). Use it only to export a time-series store written before TDE covered time-series, then unset it", .{});
+            return null;
+        }
+        if (!(std.mem.eql(u8, fs, "1") or std.ascii.eqlIgnoreCase(fs, "true"))) {
+            std.log.scoped(.timeseries).err("GEODE_TS_TDE must be 1/true or 0/false; refusing to guess whether time-series data is encrypted", .{});
+            return error.InvalidTsTdeSetting;
+        }
+    } else if (!key_set) return null;
 
     const key_env = std.c.getenv("GEODE_TDE_KEY") orelse {
         std.log.scoped(.timeseries).err("GEODE_TS_TDE is set but GEODE_TDE_KEY is missing", .{});
@@ -118,6 +133,47 @@ pub fn encryptionKeyFromEnv() error{InvalidTsTdeKey}!?[32]u8 {
         return error.InvalidTsTdeKey;
     };
     return key;
+}
+
+/// SONNY-6590: where an empty plaintext store is moved before it is deleted.
+const discarded_store_suffix = ".plaintext-discard";
+
+fn removeDiscardedStore(allocator: std.mem.Allocator, data_dir: []const u8) !void {
+    const discard = try std.fmt.allocPrint(allocator, "{s}{s}", .{ data_dir, discarded_store_suffix });
+    defer allocator.free(discard);
+    try std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), discard);
+}
+
+/// SONNY-6590: `data_dir` holds a time-series store written in plaintext
+/// (before time-series encryption followed `GEODE_TDE_KEY`) and the server
+/// now runs with the key. Every graph gets a time-series store when it is
+/// created, so this is every graph of an existing TDE deployment, nearly all
+/// of them empty. An empty store is replaced: moved aside (one rename, so a
+/// crash leaves either the old store or none) and deleted; the caller then
+/// creates an encrypted one. A store that holds points is not migrated (the
+/// engine cannot list its series) and the open fails with
+/// `error.TimeseriesNotEncrypted`: the server will not keep plaintext data
+/// under the key, and will not drop it either.
+fn replaceEmptyPlaintextStore(allocator: std.mem.Allocator, engine_config: ts_storage.engine.Config, pool: *thread_pool.ThreadPool) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var plain_config = engine_config;
+    plain_config.encryption_key = null;
+    const points: u64 = blk: {
+        var eng = try ts_storage.engine.Engine.init(allocator, plain_config, pool);
+        defer eng.deinit();
+        var n: u64 = eng.active_mem.load(.acquire).point_count.load(.acquire);
+        for (eng.man.segments.items) |seg| n += @max(seg.point_count, 1);
+        break :blk n;
+    };
+    // The caller logs it (the server's startup, or the graph open).
+    if (points != 0) return error.TimeseriesNotEncrypted;
+    const discard = try std.fmt.allocPrint(allocator, "{s}{s}", .{ engine_config.data_dir, discarded_store_suffix });
+    defer allocator.free(discard);
+    try removeDiscardedStore(allocator, engine_config.data_dir);
+    try std.Io.Dir.cwd().rename(engine_config.data_dir, std.Io.Dir.cwd(), discard, io);
+    try removeDiscardedStore(allocator, engine_config.data_dir);
+    try std.Io.Dir.cwd().createDirPath(io, engine_config.data_dir);
+    std.log.scoped(.timeseries).info("replaced the empty plaintext time-series store '{s}' with an encrypted one (SONNY-6590)", .{engine_config.data_dir});
 }
 
 /// Minimum interval between opportunistic retention passes triggered from
@@ -170,7 +226,9 @@ pub const Store = struct {
         // to the legacy degrade-to-memory behaviour.
         return initDurable(allocator, config) catch |err| switch (config.durability) {
             .fail_closed => err,
-            .best_effort => blk: {
+            // SONNY-6590: plaintext data under the TDE key is never papered
+            // over with an in-memory store.
+            .best_effort => if (err == error.TimeseriesNotEncrypted) err else blk: {
                 std.log.scoped(.timeseries).warn(
                     "timeseries engine open failed ({s}); best_effort configured — degrading to non-persistent in-memory store",
                     .{@errorName(err)},
@@ -213,6 +271,8 @@ pub const Store = struct {
         // closes the trap where a brand-new server silently degraded to a
         // memory-only store because nothing ever created the subdirectory.
         try std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), data_dir_owned);
+        // SONNY-6590: an empty plaintext store being replaced when a crash hit.
+        if (config.encryption_key != null) try removeDiscardedStore(allocator, data_dir_owned);
 
         const engine_config = ts_storage.engine.Config{
             .data_dir = data_dir_owned,
@@ -228,7 +288,27 @@ pub const Store = struct {
         const engine_ptr = try allocator.create(ts_storage.engine.Engine);
         errdefer allocator.destroy(engine_ptr);
 
-        engine_ptr.* = try ts_storage.engine.Engine.init(allocator, engine_config, pool_ptr);
+        // SONNY-6590 / SONNY-6615: timeseries-storage 0.2.21 refuses, and
+        // leaves untouched, a ts.wal it cannot decode (0.2.20 truncated it
+        // to nothing, losing every point not yet flushed). Without the key,
+        // an encrypted store is TimeseriesNeedsTdeKey. Under the key, a store
+        // in plaintext (manifest, segment or WAL) goes to the empty-store
+        // replacement, which refuses it (TimeseriesNotEncrypted) when it
+        // holds points. WalAuthFailed (another key) and WalCorrupted
+        // (mid-log damage) pass through as themselves and never reach the
+        // replacement, which deletes.
+        engine_ptr.* = ts_storage.engine.Engine.init(allocator, engine_config, pool_ptr) catch |err| blk: {
+            if (config.encryption_key == null) {
+                if (err == error.WalEncryptionMismatch) return error.TimeseriesNeedsTdeKey;
+                return err;
+            }
+            const plaintext = err == error.UnexpectedPlaintextManifest or
+                err == error.UnexpectedPlaintextSegment or
+                err == error.WalEncryptionMismatch;
+            if (!plaintext) return err;
+            try replaceEmptyPlaintextStore(allocator, engine_config, pool_ptr);
+            break :blk try ts_storage.engine.Engine.init(allocator, engine_config, pool_ptr);
+        };
         // Engine.init succeeded; assume it took ownership of data_dir_owned.
         data_dir_owned_for_errdefer = null;
         errdefer {
@@ -259,6 +339,12 @@ pub const Store = struct {
         self.series_cache.deinit();
 
         if (self.engine) |eng| {
+            // CANARY: REQ=REQ-SONNY-6619-TS-WAL-DIR-RELEASE; FEATURE="Timeseries"; ASPECT=WalDirHandleClosed; STATUS=TESTED; TEST=tests/test_sonny6619_offline.zig; OWNER=storage; UPDATED=2026-11-15
+            // CANARY: REQ=REQ-SONNY-6615-TS-WAL-DIR-OWNER; FEATURE="Timeseries"; ASPECT=WalDirClosedOnce; STATUS=TESTED; TEST=tests/test_sonny6615_ts_wal_dir_close.zig; OWNER=storage; UPDATED=2026-11-15
+            // timeseries-storage >= 0.2.22 closes the WAL directory that
+            // `Engine.init` opened (SONNY-6619 / SONNY-6623). geode must not
+            // close it again: the number is free by then and may already be
+            // another thread's descriptor on the same directory (SONNY-6615).
             eng.deinit();
             self.allocator.free(eng.config.data_dir);
             self.allocator.destroy(eng);
@@ -1072,19 +1158,19 @@ test "ts: timeBucketAvg — boundary: point exactly at bucket start" {
 test "ts: persist-restart-query via StoreConfig" {
     const allocator = std.testing.allocator;
 
-    const pid = if (@import("builtin").os.tag == .linux) std.os.linux.getpid() else 0;
+    // SONNY-6348: a private, randomly named directory (std.testing.tmpDir,
+    // under .zig-cache/tmp), not a predictable /tmp/geode_ts_persist_<pid>
+    // that was deleted and recreated whoever owned it.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
     var path_buf: [128]u8 = undefined;
-    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/geode_ts_persist_{d}", .{pid}) catch unreachable;
+    const test_dir = try std.fmt.bufPrint(&path_buf, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
     const tio = std.Io.Threaded.global_single_threaded.io();
-    // Ensure a clean directory exists for this PID's persistence test —
     // ts_storage.engine.Engine.init requires both the parent data_dir AND
     // its internal /timeseries subdir to exist before construction.
-    std.Io.Dir.cwd().deleteTree(tio, test_dir) catch {};
-    try std.Io.Dir.cwd().createDirPath(tio, test_dir);
     var ts_subdir_buf: [192]u8 = undefined;
-    const ts_subdir = std.fmt.bufPrint(&ts_subdir_buf, "{s}/timeseries", .{test_dir}) catch unreachable;
+    const ts_subdir = try std.fmt.bufPrint(&ts_subdir_buf, "{s}/timeseries", .{test_dir});
     try std.Io.Dir.cwd().createDirPath(tio, ts_subdir);
-    defer std.Io.Dir.cwd().deleteTree(tio, test_dir) catch {};
 
     const key = SeriesKey{ .device_id = 7, .metric = "voltage" };
 

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-032; FEATURE="Constraints"; ASPECT=CascadePerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_032_CascadePerf; OWNER=engine; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-032; FEATURE="Constraints"; ASPECT=CascadePerf; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_032_CascadePerf; OWNER=engine; UPDATED=2026-11-14
 
 // Placeholder benchmark simulating cascade deletes: parent -> multiple children arrays.
 // Measures time to remove parent and logically mark children removed.

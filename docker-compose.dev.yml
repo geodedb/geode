@@ -12,7 +12,7 @@ services:
         USER_UID: ${USER_UID:-1000}
         USER_GID: ${USER_GID:-1000}
         USERNAME: ${USERNAME:-dev}
-        ZIG_VERSION: "0.15.1"
+        ZIG_VERSION: "0.16.0"
     image: geode-dev:latest
     container_name: geode-dev
     hostname: geode-dev
@@ -51,18 +51,15 @@ services:
     environment:
       # Development environment
       - GEODE_ENV=development
-      - LOG_LEVEL=debug
-      - RUST_BACKTRACE=1
-      # Service connections
-      - VAULT_ADDR=http://vault:8200
-      - VAULT_TOKEN=${VAULT_TOKEN:?set VAULT_TOKEN in .env}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
-      - S3_ENDPOINT=${S3_ENDPOINT:-http://minio:9000}
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env}
-      - S3_SECRET_KEY=${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
-      - S3_BUCKET=geode-dev-backups
-      # FIPS mode
-      - FIPS_MODE=enabled
+      # geode reads no LOG_LEVEL (run it with --log-level debug), no
+      # RUST_BACKTRACE (it is not written in Rust), no VAULT_* (no KMS
+      # provider reads Vault) and no REDIS_URL (it has no Redis cache).
+      # SONNY-6435.
+      # geode reads no S3_* variable: backups are local files written by
+      # `geode backup create` (SONNY-6290); copy them to object storage yourself
+      # (scripts/init-minio.sh sets up the MinIO bucket). SONNY-6430.
+      # FIPS: geode reads no FIPS_MODE; FIPS is the -Dfips=true build, whose
+      # OpenSSL provider reads OPENSSL_CONF. SONNY-6435.
       - OPENSSL_CONF=/opt/openssl-fips/ssl/openssl.cnf
       # Build optimization
       - ZIG_LOCAL_CACHE_DIR=/workspace/zig-cache
@@ -76,79 +73,9 @@ services:
       # Debug ports
       - "9999:9999/tcp"   # Debug port
       - "4000:4000/tcp"   # LSP server
-    depends_on:
-      vault:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    # SONNY-6442: no Vault, MinIO or Redis: geode uses none of them (no KMS
+    # provider reads Vault, backups are local files, there is no Redis cache).
     command: /bin/bash
-
-  # HashiCorp Vault - Development Mode
-  vault:
-    image: hashicorp/vault:2.2
-    container_name: geode-dev-vault
-    restart: unless-stopped
-    ports:
-      - "8200:8200"
-    environment:
-      VAULT_ADDR: 'http://0.0.0.0:8200'
-      VAULT_DEV_ROOT_TOKEN_ID: '${VAULT_TOKEN:?set VAULT_TOKEN in .env}'
-      VAULT_DEV_LISTEN_ADDRESS: '0.0.0.0:8200'
-    cap_add:
-      - IPC_LOCK
-    command: server -dev
-    healthcheck:
-      test: ["CMD", "vault", "status"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    networks:
-      - geode-dev-network
-
-  # MinIO - S3-Compatible Storage
-  minio:
-    image: minio/minio:latest
-    container_name: geode-dev-minio
-    restart: unless-stopped
-    ports:
-      - "9000:9000"  # API
-      - "9001:9001"  # Console
-    environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
-      MINIO_PROMETHEUS_AUTH_TYPE: public
-    volumes:
-      - minio-dev-data:/data
-    command: server /data --console-address ":9001"
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    networks:
-      - geode-dev-network
-
-  # Redis - Caching Layer
-  redis:
-    image: redis:8-alpine
-    container_name: geode-dev-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    command: redis-server --requirepass ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
-    volumes:
-      - redis-dev-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-    networks:
-      - geode-dev-network
 
   # Prometheus - Metrics Collection (Optional)
   prometheus:
@@ -203,10 +130,6 @@ services:
 
 volumes:
   # Persistent data volumes
-  minio-dev-data:
-    driver: local
-  redis-dev-data:
-    driver: local
   prometheus-dev-data:
     driver: local
   grafana-dev-data:

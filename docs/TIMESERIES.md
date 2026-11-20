@@ -44,7 +44,7 @@ behavior as `CALL geode.fts.search`).
 | Downsampling | ✅ | `CALL geode.ts.bucket_avg` / `sample_by` (read-only) |
 | Durability | ✅ | WAL-first writes; survives restart AND hard kill; fail-closed open on corruption (GAP-0865) |
 | Retention | ✅ | opt-in `GEODE_TS_RETENTION_DAYS`; expired segments deleted from disk (GAP-0865c) |
-| TDE at rest | ✅ | opt-in `GEODE_TS_TDE=1` + `GEODE_TDE_KEY`; AES-256-GCM over WAL/segments/manifest (GAP-0865e) |
+| TDE at rest | ✅ | on whenever `GEODE_TDE_KEY` is set (SONNY-6590; `GEODE_TS_TDE=0` opts out, logged); AES-256-GCM over WAL/segments/manifest (GAP-0865e) |
 | Backup/restore | ✅ | timeseries trees included in backup artifacts; round-trip verified (GAP-0865d) |
 | Inclusive range | ✅ | `range` is inclusive `[start_ts, end_ts]` in both in-memory and durable paths |
 | Concurrent ingest | ✅ | Store is mutex-guarded for the QUIC worker pool (leaf-tier lock) |
@@ -78,7 +78,7 @@ Note the integer literals: `value` is `72`, **not** `72.0` (see
 A read-only user **cannot** run these — they are classified as mutating, so they
 require write privilege.
 
-```gql
+```text
 -- One point → YIELD inserted (count of points written)
 CALL geode.ts.insert(device_id, metric, ts, value) YIELD inserted;
 
@@ -97,7 +97,7 @@ CALL geode.ts.insert_many(1, 'cpu.load', [[1010, 73], [1020, 71], [1030, 75]]);
 
 These classify read-only — a read-only user can query but not ingest.
 
-```gql
+```text
 -- All points in [start_ts, end_ts] (inclusive) → rows of (ts, value)
 CALL geode.ts.range(device_id, metric, start_ts, end_ts) YIELD ts, value;
 
@@ -168,16 +168,24 @@ A float (`f64`) value lane is a deferred, explicit follow-up.
   `Store.runRetention()`. Granularity is whole segments — a segment that
   straddles the cutoff is kept until it fully expires. Default: retention
   disabled (nothing is ever deleted implicitly).
-- **TDE (GAP-0865e):** opt-in via `GEODE_TS_TDE=1` + `GEODE_TDE_KEY` (the
-  same 64-hex-char key the rest of geode's TDE uses). The engine encrypts
-  every on-disk artefact with AES-256-GCM: WAL records, segment blocks
-  (TSSEG003), and the manifest (TSMNF002), with per-context AAD domain
-  separation. Reopening with a wrong or missing key fails closed.
-  **Limitation:** there is no in-place migration — enabling TDE over an
-  existing plaintext timeseries directory fails closed
-  (`error.UnexpectedPlaintextSegment`); start from a fresh directory or
-  restore through backup. Setting `GEODE_TS_TDE=1` without a valid key is an
-  error (never silently plaintext).
+- **TDE (GAP-0865e, SONNY-6590):** on whenever `GEODE_TDE_KEY` is set (the
+  same 64-hex-char key the rest of geode's TDE uses). Until SONNY-6590 it was
+  opt-in (`GEODE_TS_TDE=1` as well), so a server with `GEODE_TDE_KEY` alone
+  wrote time-series values in plaintext. `GEODE_TS_TDE=0` (or `false`) opts
+  out, logged at ERROR on every start; it exists to read and export a store
+  written in plaintext before. The engine encrypts every on-disk artefact
+  with AES-256-GCM: WAL records, segment blocks (TSSEG003), and the manifest
+  (TSMNF002), with per-context AAD domain separation. Reopening with a wrong
+  or missing key fails closed. A plaintext store opened under the key is
+  replaced by an encrypted one when it is empty; one holding data is
+  refused (`TimeseriesNotEncrypted`, also under
+  `GEODE_TS_DURABILITY=best_effort`) and left as it is: there is no
+  in-place migration (the engine cannot list a store's series). The
+  server-wide store then stops startup; a graph's store refuses the graph.
+  See docs/TDE_FILE_LEVEL_ENCRYPTION.md ("Time-series") for the export
+  steps. Setting `GEODE_TS_TDE=1` without a valid key, or `GEODE_TS_TDE` to
+  anything but `1`/`true`/`0`/`false`, is an error (never silently
+  plaintext).
 - **Backup/restore (GAP-0865d):** the backup engine archives every top-level
   entry under the data dir recursively, which includes the server-wide
   `{data_dir}/timeseries/` tree and every per-graph

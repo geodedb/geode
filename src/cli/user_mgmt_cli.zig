@@ -44,6 +44,7 @@ const cli_auth = @import("cli_auth_helpers.zig");
 const AuthGraphManager = cli_auth.AuthGraphManager;
 const auth_graph_manager_mod = @import("auth_graph_manager");
 const geode_auth = @import("geode_auth");
+const geode = @import("geode");
 
 // CANARY: REQ=REQ-USER-CREATE-PASSWORD-001; FEATURE="CLI Password Security"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/gap_153_154_password_security.yml; OWNER=cli; UPDATED=2026-02-24
 // GAP-0154 FIX: Production builds require explicit passwords or generate random ones
@@ -97,9 +98,72 @@ fn printUserUsage() void {
     printOut("      (a live server). Use ALTER USER ... SET PASSWORD over the wire, or pass --force.\n", .{});
 }
 
+// CANARY: REQ=REQ-SONNY-6602-MFA-CLI-HONESTY; FEATURE="MFA authentication"; ASPECT=OfflineCliWarning; STATUS=TESTED; TEST=tests/test_sonny6602_mfa_cli.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6602: MFA is not enforced at login (HELLO never asks for a code;
+/// SONNY-6604), and nothing redeems the recovery codes mfa-setup prints.
+/// mfa-setup, mfa enable and their help say so.
+const mfa_not_enforced_note =
+    \\Warning: MFA is not enforced at login yet (SONNY-6604). HELLO does not ask
+    \\for a TOTP code or a recovery code, so enrolling or enabling MFA protects
+    \\no login, and nothing redeems the recovery codes (they are stored only as
+    \\SHA-256 digests).
+    \\
+;
+
+// CANARY: REQ=REQ-SONNY-6614-OFFLINE-MFA-LIMIT; FEATURE="MFA authentication"; ASPECT=OfflineAttemptLimit; STATUS=TESTED; TEST=tests/test_sonny6614_offline_verify.zig|tests/test_sonny6619_offline.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6614 / SONNY-6619: before an offline command checks a TOTP code
+/// (`mfa-verify`, `mfa enable --code`), apply the online limit
+/// (geode.auth.mfa_verify: 5 failures, a 5-minute lockout, reset on
+/// success), kept in the sealed MfaAttempts record (each run of the
+/// command is a new process). Refuses (exits) a locked-out user; counts the
+/// attempt and saves it BEFORE the code is checked, so an attempt that
+/// cannot be counted is refused unchecked and an interrupted run leaves it
+/// counted. The caller resets the count after a code that verifies
+/// (`mgr.storage.setMfaAttempts(id, .{})`, saved with the command).
+fn beginOfflineMfaAttempt(allocator: std.mem.Allocator, mgr: anytype, user_id: u64, username: []const u8) void {
+    const geode_auth_dispatch = geode.auth_dispatch;
+    const now_ms = compat_milliTimestamp();
+    const stored_prev = mgr.mfaAttempts(user_id) catch |err| {
+        std.debug.print("Error: the stored MFA attempt record could not be read ({s}); the code was not checked\n", .{@errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    const prev = stored_prev orelse @TypeOf(mgr.storage).MfaAttemptState{};
+    if (now_ms < prev.lockout_until_ms) {
+        std.debug.print("Error: too many failed MFA verifications for '{s}': locked out for {d} more seconds\n", .{ username, @divTrunc(prev.lockout_until_ms - now_ms + 999, 1000) });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+    const counted = prev.fail_count +| 1;
+    mgr.storage.setMfaAttempts(user_id, .{
+        .fail_count = counted,
+        .lockout_until_ms = if (counted >= geode_auth_dispatch.mfa_max_attempts) now_ms + geode_auth_dispatch.mfa_lockout_ms else 0,
+    }) catch |err| {
+        std.debug.print("Error: the attempt could not be counted ({s}); the code was not checked\n", .{@errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    cli_auth.sealAndSaveNow(allocator, mgr) catch |err| {
+        std.debug.print("Error: the attempt could not be saved ({s}); the code was not checked\n", .{@errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
+/// SONNY-6609: a user's TOTP secret in plaintext (the store holds it
+/// sealed), into `buf`; exits with an error when it has none or it does not
+/// open.
+fn openStoredMfaSecret(mgr: anytype, key: *const [32]u8, record: anytype, buf: []u8) []const u8 {
+    const stored = record.getMFASecret() orelse {
+        std.debug.print("Error: User '{s}' has no MFA secret. Run 'geode user mfa-setup' first.\n", .{record.getUsername()});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    return @TypeOf(mgr.*).openMfaSecretWithKey(key, record.id, stored, buf) catch |err| {
+        std.debug.print("Error: the stored MFA secret of '{s}' could not be opened ({s}); was the store sealed with another HMAC key?\n", .{ record.getUsername(), @errorName(err) });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
 fn printMfaSetupHelp() void {
     printOut("Usage: geode user mfa-setup <username> [options]\n", .{});
     printOut("Generate MFA secret and recovery codes for a user.\n", .{});
+    printOut("{s}", .{mfa_not_enforced_note});
     printOut("\nOptions:\n", .{});
     printOut("  --show-uri        Show provisioning URI for authenticator apps\n", .{});
     printOut("  --show-recovery   Show recovery codes\n", .{});
@@ -118,8 +182,9 @@ fn printMfaVerifyHelp() void {
 fn printMfaToggleHelp() void {
     printOut("Usage: geode user mfa <enable|disable> <username> [options]\n", .{});
     printOut("Enable or disable MFA for a user.\n", .{});
+    printOut("{s}", .{mfa_not_enforced_note});
     printOut("\nOptions:\n", .{});
-    printOut("  --code <code>     TOTP code for verification (enable only)\n", .{});
+    printOut("  --code <code>     TOTP code for verification (required to enable)\n", .{});
     printOut("  --help, -h        Show this help\n", .{});
     printOut("\nExamples:\n", .{});
     printOut("  geode user mfa enable alice --code 123456\n", .{});
@@ -130,7 +195,7 @@ fn printRoleUsage() void {
     printOut("geode role - Role management commands\n", .{});
     printOut("Usage: geode role <command> [options]\n", .{});
     printOut("Commands:\n", .{});
-    printOut("  create <rolename> [description] [--permissions <perm1,perm2>]\n", .{});
+    printOut("  create <rolename> [description]\n", .{});
     printOut("  list                              List all roles\n", .{});
     printOut("  delete <rolename>\n", .{});
     printOut("  show <rolename>\n", .{});
@@ -163,14 +228,85 @@ fn hasHelpFlag(argv: [][:0]u8, start_idx: usize) bool {
     return false;
 }
 
-fn requirePasswordStrong(password: []const u8) bool {
-    return cli_auth.isPasswordStrong(password);
+/// Exits with the password-policy rule `password` breaks, if any. Names the
+/// rule (`PasswordPolicy.validate`'s reason), never the password. SONNY-6271:
+/// every caller used to print "min 8 chars, letters and numbers", the rule
+/// this CLI enforced before it adopted the unified passphrase policy.
+fn requirePasswordPolicy(password: []const u8) void {
+    if (cli_auth.passwordPolicyError(password)) |reason| {
+        std.debug.print("Error: password does not meet policy requirements: {s}\n", .{reason});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
 }
 
-/// GAP-0154 FIX: Generate a cryptographically secure random password
-/// Returns a 32-character hex string (16 random bytes converted to hex)
-fn generateSecurePassword() ![32]u8 {
+/// GAP-0154 FIX: Generate a cryptographically secure random password that
+/// meets the password policy (SONNY-6331).
+fn generateSecurePassword() !cli_auth.GeneratedPassword {
     return cli_auth.generateSecurePassword();
+}
+
+// CANARY: REQ=REQ-SONNY-6358-OFFLINE-PASSWORD-HASH; FEATURE="OfflineAuthStoreSafety"; ASPECT=HashBeforeStore; STATUS=TESTED; TEST=tests/test_sonny6358_offline_password_hash.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6358: the `password_hash` an offline command stores for
+/// `password`: the server's Argon2id PHC string
+/// (`geode_auth.hashPasswordArgon2id`). `user create` and `user update
+/// --password` stored the password itself, in the clear, and no login could
+/// match it. Exits when it cannot hash (FIPS builds have no Argon2id).
+/// Caller frees.
+fn hashPasswordOrExit(allocator: std.mem.Allocator, password: []const u8) []const u8 {
+    return geode_auth.hashPasswordArgon2id(allocator, password) catch |err| {
+        std.debug.print("Error: could not hash the password ({s}); nothing was changed\n", .{@errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
+/// SONNY-6358: set an existing user's stored password hash through the seam
+/// the server's password changes use (`AuthGraphManager.updateUserPassword`:
+/// the record, its HMAC and the chain seal, the forced-reset flag cleared and
+/// the auth version moved on), signed with the key the chain verified with.
+fn setStoredPasswordOrExit(allocator: std.mem.Allocator, mgr: *AuthGraphManager, user_id: u64, username: []const u8, password_hash: []const u8) void {
+    const key = cli_auth.changeKey(allocator) catch |err| {
+        std.debug.print("Error: no HMAC key to seal the password change for user '{s}' with ({s}); password NOT changed\n", .{ username, @errorName(err) });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    _ = mgr.updateUserPassword(&key, user_id, password_hash) catch |err| {
+        std.debug.print("Error: failed to persist the new password for user '{s}': {s} — password NOT changed\n", .{ username, @errorName(err) });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
+/// SONNY-6367: exit, before anything is changed, unless `role` names a
+/// built-in role. A custom role carries no privileges (SONNY-6292), so it
+/// cannot be given to a user; the offline commands stored a role node of any
+/// name and reported it assigned.
+fn requireBuiltinRoleOrExit(role: []const u8) void {
+    if (cli_auth.builtinRoleName(role) != null) return;
+    std.debug.print("Error: '{s}' is not a built-in role (admin, readwrite, user, readonly). A custom role carries no privileges, so it cannot be given to a user; grant per-graph privileges over the wire instead (GRANT READ | WRITE | SCHEMA | ALL ON GRAPH <g> TO <user>). Nothing was changed\n", .{role});
+    std.process.exit(@intFromEnum(ExitCode.general_error));
+}
+
+/// SONNY-6369: exit, before anything is changed, when `username` is a
+/// superuser and `role` is not admin (it would never take effect).
+fn requireRoleTakesEffectOrExit(mgr: *AuthGraphManager, username: []const u8, role: []const u8) void {
+    cli_auth.requireRoleTakesEffect(mgr, username, role) catch {
+        std.debug.print("Error: '{s}' is a superuser: a superuser always holds the admin role, so the role '{s}' would never take effect. Nothing was changed\n", .{ username, role });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
+/// SONNY-6367: give a stored user the built-in role `role` (see
+/// `cli_auth.assignBuiltinRole`), or exit saying it was not given.
+fn assignRoleOrExit(allocator: std.mem.Allocator, mgr: *AuthGraphManager, username: []const u8, role: []const u8) void {
+    cli_auth.assignBuiltinRole(allocator, mgr, username, role) catch |err| {
+        std.debug.print("Error: could not give user '{s}' the role '{s}': {s} — the role was NOT assigned\n", .{ username, role, @errorName(err) });
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
+/// SONNY-6367: the role the server resolves for `record` at login
+/// (`role_resolver.resolveRoleFromGraph`: its built-in HAS_ROLE edge, admin
+/// for a superuser, else none). `user list` printed "user" for everyone.
+fn storedRoleName(mgr: *AuthGraphManager, record: anytype) []const u8 {
+    return geode.security.role_resolver.resolveRoleFromGraph(mgr.storage.store, record).toString();
 }
 
 /// Extract --data-dir from argv (returns null if not found)
@@ -184,13 +320,15 @@ fn extractDataDir(argv: [][:0]u8) ?[]const u8 {
     return null;
 }
 
-/// Resolve the data dir the offline auth store will be opened from, mirroring
-/// `initCliAuthManager`'s fallback chain (explicit --data-dir, then
-/// GEODE_DATA_DIR, then the packaged default).
-fn resolveDataDir(data_dir: ?[]const u8) []const u8 {
-    if (data_dir) |d| return d;
-    if (std.c.getenv("GEODE_DATA_DIR")) |p| return std.mem.span(p);
-    return "/var/lib/geode";
+/// Resolve the data dir the offline auth store will be opened from:
+/// `initCliAuthManager`'s chain (SONNY-6345: `cli_auth.resolveCliDataDir`,
+/// the server's default directory when there is no --data-dir).
+/// Caller owns the result.
+fn resolveDataDir(allocator: std.mem.Allocator, data_dir: ?[]const u8) []const u8 {
+    return cli_auth.resolveCliDataDir(allocator, data_dir) catch {
+        std.debug.print("Error: out of memory resolving the data directory\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
 }
 
 fn hasFlag(argv: [][:0]u8, flag: []const u8) bool {
@@ -206,6 +344,8 @@ fn subcommandMutatesAuthStore(subcommand: []const u8) bool {
         "create",      "import",          "delete",         "update",
         "assign-role", "disable",         "enable",         "mfa",
         "mfa-setup",   "change-password", "reset-password",
+        // SONNY-6614: it stores its attempt count.
+        "mfa-verify",
     };
     for (mutating) |m| {
         if (std.mem.eql(u8, subcommand, m)) return true;
@@ -293,7 +433,8 @@ fn guardOfflineAuthStoreWrite(
     subcommand: []const u8,
     force: bool,
 ) void {
-    const resolved = resolveDataDir(data_dir);
+    const resolved = resolveDataDir(allocator, data_dir);
+    defer allocator.free(resolved);
     const holder = findDataDirHolderPid(allocator, resolved) orelse return;
 
     std.debug.print(
@@ -382,6 +523,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         var password: ?[]const u8 = null;
         var password_is_default = true;
         var role: []const u8 = "user";
+        var role_given = false;
         var generate_password = false;
 
         var i = subcmd_idx + 3;
@@ -403,6 +545,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                     std.process.exit(@intFromEnum(ExitCode.usage_error));
                 }
                 role = argv[i + 1];
+                role_given = true;
                 i += 1;
             } else if (!std.mem.startsWith(u8, argv[i], "--") and password == null and i == subcmd_idx + 3) {
                 // Allow password as positional 3rd arg for backward compatibility
@@ -411,8 +554,10 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             }
         }
 
+        requireBuiltinRoleOrExit(role);
+
         // GAP-0154 FIX: Production build password handling
-        var generated_pw: [32]u8 = undefined;
+        var generated_pw: cli_auth.GeneratedPassword = .{};
         const final_password: []const u8 = blk: {
             if (password) |pw| {
                 // Explicit password provided
@@ -420,44 +565,38 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                     std.debug.print("Error: password cannot be empty\n", .{});
                     std.process.exit(@intFromEnum(ExitCode.general_error));
                 }
-                if (!requirePasswordStrong(pw)) {
-                    std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.general_error));
-                }
+                requirePasswordPolicy(pw);
                 break :blk pw;
             }
             if (generate_password) {
                 // Generate random password
                 generated_pw = try generateSecurePassword();
-                std.debug.print("Generated password: {s}\n", .{generated_pw});
-                break :blk &generated_pw;
+                std.debug.print("Generated password: {s}\n", .{generated_pw.slice()});
+                break :blk generated_pw.slice();
             }
             // All builds require explicit password
             std.debug.print("Error: --password or --generate-password is required\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
 
+        // SONNY-6358: stored as the server stores it, never the password.
+        const password_hash = hashPasswordOrExit(allocator, final_password);
+        defer allocator.free(password_hash);
+
         // Check if user already exists
-        if (mgr.storage.getUserByUsername(username) != null) {
+        if (mgr.storage.getUserByUsername(username)) |existing| {
             // Update existing user
-            var it = mgr.storage.user_cache.iterator();
-            while (it.next()) |entry| {
-                if (std.mem.eql(u8, entry.value_ptr.getUsername(), username)) {
-                    try mgr.storage.updateUser(entry.key_ptr.*, email, final_password, null, null, null);
-                    break;
-                }
-            }
+            try mgr.storage.updateUser(existing.id, email, null, null, null, null);
+            setStoredPasswordOrExit(allocator, &mgr, existing.id, username, password_hash);
+            if (role_given) assignRoleOrExit(allocator, &mgr, username, role);
         } else {
             // Create new user via storage
             const user_id = mgr.next_user_id;
             mgr.next_user_id += 1;
-            try mgr.storage.persistUser(user_id, username, email, final_password, "");
-            // Ensure role exists in graph store
-            if (mgr.storage.getRoleByName(role) == null) {
-                const role_id = mgr.next_user_id;
-                mgr.next_user_id += 1;
-                mgr.storage.persistRole(role_id, role, "assigned at user creation", 0, 0, false) catch {};
-            }
+            try mgr.storage.persistUser(user_id, username, email, password_hash, "");
+            // SONNY-6367: the role (`user` when none is given, as CREATE
+            // USER gives); a role node used to be stored and never assigned.
+            assignRoleOrExit(allocator, &mgr, username, role);
         }
         printOut("User '{s}' created successfully\n", .{username});
         return;
@@ -530,6 +669,8 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
 
+        requireBuiltinRoleOrExit(role);
+
         if (mgr.storage.getUserByUsername(username) != null) {
             std.debug.print("Error: user '{s}' already exists; import refuses to overwrite\n", .{username});
             std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -541,11 +682,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.debug.print("Error: failed to import user '{s}': {s}\n", .{ username, @errorName(err) });
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
-        if (mgr.storage.getRoleByName(role) == null) {
-            const role_id = mgr.next_user_id;
-            mgr.next_user_id += 1;
-            mgr.storage.persistRole(role_id, role, "assigned at user import", 0, 0, false) catch {};
-        }
+        assignRoleOrExit(allocator, &mgr, username, role);
         printOut("User '{s}' imported successfully ({s} hash)\n", .{ username, algorithm });
         return;
     }
@@ -558,8 +695,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         printOut("Users:\n", .{});
         var it = mgr.storage.userIterator();
         while (it.next()) |record| {
-            // Find associated role (default to "user")
-            printOut("- {s} (role: user)\n", .{record.getUsername()});
+            printOut("- {s} (role: {s})\n", .{ record.getUsername(), storedRoleName(&mgr, record.*) });
         }
         if (mgr.storage.user_cache.count() == 0) {
             printOut("  (no users)\n", .{});
@@ -581,11 +717,24 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             printOut("User: {s}\nEmail: {s}\nRole: {s}\nStatus: {s}\n", .{
                 u.getUsername(),
                 u.getEmail(),
-                if (u.is_superuser) "admin" else "user",
+                storedRoleName(&mgr, u),
                 if (u.is_active) "active" else "disabled",
             });
+            // CANARY: REQ=REQ-SONNY-6609-USER-SHOW-MFA; FEATURE="MFA authentication"; ASPECT=UserShowMfaState; STATUS=TESTED; TEST=tests/test_sonny6609_mfa_at_rest_scan.zig; OWNER=security; UPDATED=2026-11-15
+            // SONNY-6609: the MFA state (it printed none). No login reads it
+            // yet (SONNY-6604).
+            const on = if (u.mfa_enabled) "enabled" else "disabled";
+            if (u.getMFASecret() != null) {
+                const digests = mgr.mfaRecoveryDigests(allocator, u.id) catch null;
+                defer if (digests) |d| allocator.free(d);
+                printOut("MFA: {s} (enrolled, {d} recovery codes; not enforced at login yet, SONNY-6604)\n", .{ on, if (digests) |d| d.len else 0 });
+            } else {
+                printOut("MFA: {s} (not enrolled)\n", .{on});
+            }
         } else {
-            printOut("User: {s}\nEmail: unknown\nRole: user\nStatus: active\n", .{username});
+            // SONNY-6367: it printed made-up details and exited 0.
+            std.debug.print("Error: user '{s}' not found\n", .{username});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
         }
         return;
     }
@@ -600,21 +749,18 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             printOut("geode user delete - Delete a user\n\nUsage: geode user delete <username>\n\nDeletes the specified user from the local user store.\n", .{});
             return;
         }
-        // Find user by username and remove
-        var found = false;
-        var it = mgr.storage.user_cache.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.value_ptr.getUsername(), username)) {
-                mgr.storage.removeUser(entry.key_ptr.*) catch {};
-                found = true;
-                break;
-            }
-        }
-        if (found) {
-            printOut("User '{s}' deleted\n", .{username});
-        } else {
-            std.debug.print("Error: user '{s}' not found\n", .{username});
+        // SONNY-6352: a removal that fails is reported (it was dropped, and
+        // the user reported deleted while it stayed stored).
+        const outcome = cli_auth.removeUserByName(&mgr, username) catch |err| {
+            std.debug.print("Error: failed to delete user '{s}': {s} — the user was NOT deleted\n", .{ username, @errorName(err) });
             std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        switch (outcome) {
+            .removed => printOut("User '{s}' deleted\n", .{username}),
+            .not_found => {
+                std.debug.print("Error: user '{s}' not found\n", .{username});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            },
         }
         return;
     }
@@ -655,23 +801,24 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             }
         }
 
-        if (new_password) |pw| {
-            if (!requirePasswordStrong(pw)) {
-                std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
+        if (new_password) |pw| requirePasswordPolicy(pw);
+        if (new_role) |nr| {
+            requireBuiltinRoleOrExit(nr);
+            // SONNY-6369: before anything is changed.
+            requireRoleTakesEffectOrExit(&mgr, username, nr);
         }
 
         if (mgr.storage.getUserByUsername(username)) |existing| {
-            try mgr.storage.updateUser(existing.id, new_email, new_password, null, null, null);
-            // If role change requested, ensure the new role exists
-            if (new_role) |nr| {
-                if (mgr.storage.getRoleByName(nr) == null) {
-                    const role_id = mgr.next_user_id;
-                    mgr.next_user_id += 1;
-                    mgr.storage.persistRole(role_id, nr, "assigned via user update", 0, 0, false) catch {};
-                }
+            if (new_email != null) try mgr.storage.updateUser(existing.id, new_email, null, null, null, null);
+            // SONNY-6358: the hash, through the resealing seam.
+            if (new_password) |pw| {
+                const password_hash = hashPasswordOrExit(allocator, pw);
+                defer allocator.free(password_hash);
+                setStoredPasswordOrExit(allocator, &mgr, existing.id, username, password_hash);
             }
+            // SONNY-6367: assigned (a role node used to be stored and never
+            // given to the user).
+            if (new_role) |nr| assignRoleOrExit(allocator, &mgr, username, nr);
         } else {
             // User doesn't exist - create
             if (new_password == null) {
@@ -679,13 +826,13 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             const pw = new_password.?;
-            if (!requirePasswordStrong(pw)) {
-                std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
+            // SONNY-6358: stored as the server stores it, never the password.
+            const password_hash = hashPasswordOrExit(allocator, pw);
+            defer allocator.free(password_hash);
             const user_id = mgr.next_user_id;
             mgr.next_user_id += 1;
-            try mgr.storage.persistUser(user_id, username, new_email orelse "unknown@example.com", pw, "");
+            try mgr.storage.persistUser(user_id, username, new_email orelse "unknown@example.com", password_hash, "");
+            assignRoleOrExit(allocator, &mgr, username, new_role orelse "user");
         }
         printOut("User '{s}' updated\n", .{username});
         return;
@@ -698,13 +845,14 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         }
         const username = argv[subcmd_idx + 1];
         const role = argv[subcmd_idx + 2];
-        // Ensure role exists in graph store
-        if (mgr.storage.getRoleByName(role) == null) {
-            const role_id = mgr.next_user_id;
-            mgr.next_user_id += 1;
-            try mgr.storage.persistRole(role_id, role, "custom role", 0, 0, false);
+        requireBuiltinRoleOrExit(role);
+        if (mgr.storage.getUserByUsername(username) == null) {
+            std.debug.print("Error: user '{s}' not found; no role was assigned\n", .{username});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
         }
-        // Note: full role assignment via graph edges would need HAS_ROLE edge creation
+        // SONNY-6367: the HAS_ROLE edge, as ALTER USER ... SET ROLE stores
+        // it (only a role node was stored, and success printed).
+        assignRoleOrExit(allocator, &mgr, username, role);
         printOut("Assigned role '{s}' to user '{s}'\n", .{ role, username });
         return;
     }
@@ -715,35 +863,52 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         const username = argv[subcmd_idx + 1];
-        // List permissions from graph store
-        printOut("Permissions for {s}: ", .{username});
-        var first = true;
-        var it = mgr.storage.permissionIterator();
-        while (it.next()) |record| {
-            if (!first) printOut(", ", .{});
-            // Output permission names in lowercase to match CLI conventions
-            const name = record.getName();
-            var lower_buf: [256]u8 = undefined;
-            const lower_name = if (name.len <= lower_buf.len)
-                std.ascii.lowerString(lower_buf[0..name.len], name)
-            else
-                name;
-            printOut("{s}", .{lower_name});
-            first = false;
+        // CANARY: REQ=REQ-SONNY-6647-USER-PERMISSIONS; FEATURE="OfflineAuthStoreSafety"; ASPECT=PermissionsAreGraphGrants; STATUS=TESTED; TEST=tests/test_sonny6647_user_permissions.zig; OWNER=security; UPDATED=2026-11-15
+        // SONNY-6647: the user's role and its per-graph grants (the
+        // GraphGrant records GRANT ... ON GRAPH stores and the server
+        // enforces). It listed every stored Permission record, whoever's
+        // (records no authorization path reads), and invented "read" (or
+        // "admin, read, write, query") for a user with none, or no user.
+        const u = mgr.storage.getUserByUsername(username) orelse {
+            std.debug.print("Error: user '{s}' does not exist\n", .{username});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        const uid = (try mgr.findUserIdByName(username)) orelse {
+            std.debug.print("Error: user '{s}' does not exist\n", .{username});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        printOut("User: {s}\nRole: {s}\n", .{ username, storedRoleName(&mgr, u) });
+        const grants = try mgr.listGraphGrantsForUser(allocator, uid);
+        defer allocator.free(grants);
+        if (grants.len == 0) {
+            printOut("Grants: no per-graph grants\n", .{});
+            return;
         }
-        if (first) {
-            // No permissions found; show default role-based permissions
-            if (mgr.storage.getUserByUsername(username)) |u| {
-                if (u.is_superuser) {
-                    printOut("admin, read, write, query", .{});
-                } else {
-                    printOut("read", .{});
-                }
-            } else {
-                printOut("read", .{});
+        const Grant = @TypeOf(grants[0]);
+        std.mem.sort(Grant, grants, {}, struct {
+            fn lessThan(_: void, x: Grant, y: Grant) bool {
+                const order = std.mem.order(u8, x.getGraphName(), y.getGraphName());
+                return order == .lt or (order == .eq and x.action < y.action);
             }
+        }.lessThan);
+        printOut("Grants:\n", .{});
+        var i: usize = 0;
+        while (i < grants.len) {
+            const graph = grants[i].getGraphName();
+            printOut("  {s}: ", .{graph});
+            var first = true;
+            while (i < grants.len and std.mem.eql(u8, grants[i].getGraphName(), graph)) : (i += 1) {
+                const name = switch (grants[i].action) {
+                    0 => "READ",
+                    1 => "WRITE",
+                    2 => "SCHEMA",
+                    else => "UNKNOWN",
+                };
+                printOut("{s}{s}", .{ if (first) "" else ", ", name });
+                first = false;
+            }
+            printOut("\n", .{});
         }
-        printOut("\n", .{});
         return;
     }
 
@@ -754,9 +919,12 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         const username = argv[subcmd_idx + 1];
-        if (mgr.storage.getUserByUsername(username)) |existing| {
-            try mgr.storage.updateUser(existing.id, null, null, enable, null, null);
-        }
+        // SONNY-6367: a missing user is an error (it printed success).
+        const existing = mgr.storage.getUserByUsername(username) orelse {
+            std.debug.print("Error: user '{s}' not found; nothing was {s}\n", .{ username, if (enable) "enabled" else "disabled" });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        try mgr.storage.updateUser(existing.id, null, null, enable, null, null);
         printOut("User '{s}' {s}\n", .{ username, if (enable) "enabled" else "disabled" });
         return;
     }
@@ -803,9 +971,27 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         };
         defer enrollment.deinit(allocator);
 
-        // Update user's MFA state in graph store
+        // CANARY: REQ=REQ-SONNY-6608-MFA-CLI-ENROLL; FEATURE="MFA authentication"; ASPECT=OfflineEnrollStored; STATUS=TESTED; TEST=tests/test_sonny6608_mfa_restart.zig; OWNER=security; UPDATED=2026-11-15
+        // SONNY-6608: the secret is stored with MFA off (`geode user mfa
+        // enable --code` turns it on once a code verifies), and the recovery
+        // codes as SHA-256 digests (`hashScratchCode`, as SONNY-6600). It
+        // turned MFA on before any code was verified and stored no code.
         if (mgr.storage.getUserByUsername(username)) |existing| {
-            try mgr.storage.updateUser(existing.id, null, null, null, true, enrollment.secret_base32);
+            var digests: [@TypeOf(mgr.storage).max_mfa_recovery_codes][32]u8 = undefined;
+            if (enrollment.scratch_codes.len > digests.len) {
+                std.debug.print("Error: MFA enrollment issued too many recovery codes\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            for (enrollment.scratch_codes, 0..) |code, ci| digests[ci] = ext_mfa.hashScratchCode(code);
+            // SONNY-6609: stored sealed under the store's HMAC key.
+            const key = cli_auth.changeKey(allocator) catch |err| {
+                std.debug.print("Error: no HMAC key to seal the MFA secret with ({s}); nothing was changed\n", .{@errorName(err)});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            };
+            var sealed_buf: [@TypeOf(mgr.storage).mfa_secret_field_len]u8 = undefined;
+            const sealed = try @TypeOf(mgr).sealMfaSecret(&key, existing.id, enrollment.secret_base32, &sealed_buf);
+            try mgr.storage.updateUser(existing.id, null, null, null, false, sealed);
+            try mgr.storage.setMfaRecoveryDigests(existing.id, digests[0..enrollment.scratch_codes.len]);
         }
 
         // Output secret
@@ -827,9 +1013,9 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             printOut("  {s}\n", .{code});
         }
 
-        if (show_recovery) {
-            printOut("\nStore these recovery codes securely. Each can only be used once.\n", .{});
-        }
+        // SONNY-6602: --show-recovery added "Each can only be used once";
+        // nothing redeems them.
+        printOut("\n{s}", .{mfa_not_enforced_note});
 
         return;
     }
@@ -868,10 +1054,15 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
 
-        const secret = existing.getMFASecret() orelse {
-            std.debug.print("Error: User '{s}' has no MFA secret. Run 'geode user mfa-setup' first.\n", .{username});
+        const read_key = cli_auth.readKey(allocator) catch |err| {
+            std.debug.print("Error: no HMAC key to open the MFA secret with ({s})\n", .{@errorName(err)});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
+        var secret_buf: [64]u8 = undefined;
+        defer std.crypto.secureZero(u8, &secret_buf);
+        const secret = openStoredMfaSecret(&mgr, &read_key, existing, &secret_buf);
+
+        beginOfflineMfaAttempt(allocator, &mgr, existing.id, username);
 
         const code_str = token.?;
         if (code_str.len != 6) {
@@ -895,6 +1086,8 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
 
+        // Verified: the count starts again (saved by deinitAndSaveCliAuth).
+        try mgr.storage.setMfaAttempts(existing.id, .{});
         printOut("MFA token verified for {s}\n", .{username});
         return;
     }
@@ -927,6 +1120,18 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             }
         }
 
+        // SONNY-6608: an action other than enable / disable is refused (it
+        // disabled MFA), and enable needs --code: it turned MFA on with no
+        // proof the user holds the authenticator.
+        if (!enable and !std.mem.eql(u8, action, "disable")) {
+            std.debug.print("Error: user mfa requires <enable|disable> <username>, not '{s}'\n", .{action});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+        if (enable and code == null) {
+            std.debug.print("Error: user mfa enable requires --code <6-digit TOTP code> from the user's authenticator; MFA was not enabled\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+
         // Verify user exists
         const existing = mgr.storage.getUserByUsername(username) orelse {
             std.debug.print("Error: User '{s}' does not exist. Create user first.\n", .{username});
@@ -936,36 +1141,35 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         // Validate TOTP code format when enabling with --code
         if (enable and code != null) {
             const code_str = code.?;
-            // Validate code format: must be exactly 6 numeric digits
-            if (code_str.len != 6) {
-                std.debug.print("Error: invalid code format - must be exactly 6 digits\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
-            var all_digits = true;
-            for (code_str) |c| {
-                if (c < '0' or c > '9') {
-                    all_digits = false;
-                    break;
-                }
-            }
-            if (!all_digits) {
-                std.debug.print("Error: invalid code format - must contain only digits\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            }
             if (!flags_mod.global().mfa.enabled()) {
                 std.debug.print("Error: MFA is disabled. Set GEODE_ENABLE_MFA=1 to enable.\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
 
-            const secret = existing.getMFASecret() orelse {
-                std.debug.print("Error: User '{s}' has no MFA secret. Run 'geode user mfa-setup' first.\n", .{username});
+            // SONNY-6609: the stored secret is sealed.
+            const enable_key = cli_auth.changeKey(allocator) catch |err| {
+                std.debug.print("Error: no HMAC key to open the MFA secret with ({s}); MFA was not enabled\n", .{@errorName(err)});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             };
+            var secret_buf: [64]u8 = undefined;
+            defer std.crypto.secureZero(u8, &secret_buf);
+            const secret = openStoredMfaSecret(&mgr, &enable_key, existing, &secret_buf);
+            // SONNY-6619: the code counts against the attempt limit, as
+            // mfa-verify's (it had none: an unlimited guessing route).
+            beginOfflineMfaAttempt(allocator, &mgr, existing.id, username);
 
-            const code_int = std.fmt.parseInt(u32, code_str, 10) catch {
-                std.debug.print("Error: invalid code format\n", .{});
+            // SONNY-6623: a malformed code is a wrong code: checked after it
+            // is counted (it was refused first, uncounted), as mfa-verify and
+            // the online mfa_verify / mfa_enable do.
+            var all_digits = code_str.len == 6;
+            for (code_str) |c| {
+                if (c < '0' or c > '9') all_digits = false;
+            }
+            if (!all_digits) {
+                std.debug.print("Error: invalid code format - must be exactly 6 digits\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
-            };
+            }
+            const code_int = std.fmt.parseInt(u32, code_str, 10) catch unreachable; // six digits
 
             const timestamp_ms = @as(u64, @intCast(compat_milliTimestamp()));
             const valid = ext_mfa.verifyCode(allocator, secret, timestamp_ms, code_int, mfa_policy.codeConfig(30, 6, 1)) catch {
@@ -977,6 +1181,8 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 std.debug.print("Error: invalid code - TOTP verification failed\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
+            // SONNY-6619: verified, the count starts again.
+            try mgr.storage.setMfaAttempts(existing.id, .{});
         }
         try mgr.storage.updateUser(existing.id, null, null, null, enable, null);
 
@@ -984,6 +1190,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         // Users should use 'mfa-setup' command for initial MFA configuration with real secret
         if (enable) {
             printOut("MFA enabled for {s}.\n", .{username});
+            printOut("{s}", .{mfa_not_enforced_note});
         } else {
             printOut("MFA disabled for {s}.\n", .{username});
         }
@@ -1012,24 +1219,25 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             }
         }
         // GAP-0154 FIX: Require explicit new password
-        var generated_pw: [32]u8 = undefined;
+        var generated_pw: cli_auth.GeneratedPassword = .{};
         const final_new: []const u8 = blk: {
             if (new_pw) |pw| {
                 break :blk pw;
             }
+            // SONNY-6271: the generated secret was 32 hex digits, which the
+            // passphrase policy refuses, so the check below refused every
+            // --generate-password. SONNY-6331: it is generated to meet the
+            // policy (`PasswordPolicy.generate`).
             if (generate_password) {
                 generated_pw = try generateSecurePassword();
-                std.debug.print("Generated password: {s}\n", .{generated_pw});
-                break :blk &generated_pw;
+                std.debug.print("Generated password: {s}\n", .{generated_pw.slice()});
+                break :blk generated_pw.slice();
             }
             std.debug.print("Error: --new-password is required\n", .{});
             std.debug.print("Use --new-password <password> or --generate-password\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
-        if (!requirePasswordStrong(final_new)) {
-            std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        }
+        requirePasswordPolicy(final_new);
         // Verify old password if provided. Bug 731 (adjacent finding): this
         // used to compare Blake2(stored_field) against Blake2(plaintext), which
         // only ever matched when the stored field WAS the plaintext — see the
@@ -1037,7 +1245,13 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         if (old_pw) |old| {
             if (mgr.storage.getUserByUsername(username)) |existing| {
                 const stored = existing.getPasswordHash();
-                const ok = geode_auth.verifyPasswordArgon2id(allocator, old, stored) catch false;
+                // SONNY-6367: the login's verifier (a BLAKE2b import too).
+                // SONNY-6598: a check that could not run (an unusable
+                // stored hash, out of memory) is not "incorrect".
+                const ok = geode.user_management.verifyPassword(old, stored) catch |err| {
+                    std.debug.print("Error: the old password could not be checked ({s}); password NOT changed\n", .{@errorName(err)});
+                    std.process.exit(@intFromEnum(ExitCode.general_error));
+                };
                 if (!ok) {
                     std.debug.print("Error: old password is incorrect\n", .{});
                     std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -1058,7 +1272,9 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         // stale, so the next server start failed `verifyChain` with
         // error.AuthChainTampered. Go through the same resealing seam
         // reset-password uses (which also clears password_reset_required).
-        var kr = auth_graph_manager_mod.AuthGraphManager.resolveHmacKey(allocator, resolveDataDir(data_dir)) catch {
+        const kr_dir = resolveDataDir(allocator, data_dir);
+        defer allocator.free(kr_dir);
+        var kr = auth_graph_manager_mod.AuthGraphManager.resolveHmacKey(allocator, kr_dir) catch {
             std.debug.print("Error: could not resolve HMAC key (set GEODE_AUTH_HMAC_KEY/GEODE_TDE_KEY or place .geode_hmac_key in the data dir)\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -1090,24 +1306,25 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             }
         }
         // GAP-0154 FIX: Require explicit new password
-        var generated_pw: [32]u8 = undefined;
+        var generated_pw: cli_auth.GeneratedPassword = .{};
         const final_new: []const u8 = blk: {
             if (new_pw) |pw| {
                 break :blk pw;
             }
+            // SONNY-6271: the generated secret was 32 hex digits, which the
+            // passphrase policy refuses, so the check below refused every
+            // --generate-password. SONNY-6331: it is generated to meet the
+            // policy (`PasswordPolicy.generate`).
             if (generate_password) {
                 generated_pw = try generateSecurePassword();
-                std.debug.print("Generated password: {s}\n", .{generated_pw});
-                break :blk &generated_pw;
+                std.debug.print("Generated password: {s}\n", .{generated_pw.slice()});
+                break :blk generated_pw.slice();
             }
             std.debug.print("Error: --new-password is required\n", .{});
             std.debug.print("Use --new-password <password> or --generate-password\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
-        if (!requirePasswordStrong(final_new)) {
-            std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        }
+        requirePasswordPolicy(final_new);
         // Review-0016 Important-2: `reset-password` is the DOCUMENTED escape
         // hatch for the fail-closed admin-bootstrap refusal (see
         // auth_init_cli.zig and the [startup] breadcrumbs). It used to print
@@ -1134,9 +1351,10 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         // never get re-signed, and the next server start fails with
         // error.AuthChainTampered (verifyChain at server_init.zig:314).
         // `resolveDataDir` mirrors initCliAuthManager's data_dir fallback so
-        // .geode_hmac_key is found at the default /var/lib/geode location when
+        // .geode_hmac_key is found in the default data directory when
         // --data-dir is omitted.
-        const resolved_data_dir: ?[]const u8 = resolveDataDir(data_dir);
+        const resolved_data_dir = resolveDataDir(allocator, data_dir);
+        defer allocator.free(resolved_data_dir);
         var kr = auth_graph_manager_mod.AuthGraphManager.resolveHmacKey(allocator, resolved_data_dir) catch {
             std.debug.print("Error: could not resolve HMAC key (set GEODE_AUTH_HMAC_KEY/GEODE_TDE_KEY or place .geode_hmac_key in the data dir)\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -1176,8 +1394,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
 pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Help / missing-subcommand checks BEFORE opening the auth store —
     // these paths must not require any disk I/O (graph_storage_adapter
-    // would otherwise attempt to open /var/lib/geode and fail noisily
-    // for any user without that path's permissions).
+    // would otherwise open the default data directory).
     if (start_idx + 1 >= argv.len) {
         std.debug.print("Error: missing role subcommand\n", .{});
         printRoleUsage();
@@ -1218,23 +1435,31 @@ pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         var description: []const u8 = "Role created via CLI";
         var description_is_default = true;
 
+        // SONNY-6560: `--permissions` was documented and skipped (the
+        // permissions were never stored); it is refused as unknown
+        // (option_check). A role's privileges are granted with
+        // `geode grant` / GRANT ... ON GRAPH.
         var i = start_idx + 3;
         while (i < argv.len) : (i += 1) {
             if (!std.mem.startsWith(u8, argv[i], "--") and description_is_default) {
                 description = argv[i];
                 description_is_default = false;
-            } else if (std.mem.eql(u8, argv[i], "--permissions") and i + 1 < argv.len) {
-                // Permissions are stored separately in graph; skip for role node
-                i += 1;
             }
         }
 
-        // Check if role already exists
-        if (mgr.storage.getRoleByName(rolename) == null) {
-            const role_id = mgr.next_user_id;
-            mgr.next_user_id += 1;
-            try mgr.storage.persistRole(role_id, rolename, description, 0, 0, false);
-        }
+        // SONNY-6367: under a new role id, as CREATE ROLE stores it
+        // (`AuthGraphManager.createRole`, idempotent). It took `next_user_id`
+        // (the next *user* id) as the role id, which can be an existing
+        // role's id: that role's record was overwritten, and the users given
+        // it held the new role instead.
+        const key = cli_auth.changeKey(allocator) catch |err| {
+            std.debug.print("Error: no HMAC key to seal the new role with ({s}); role NOT created\n", .{@errorName(err)});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        _ = mgr.createRole(&key, rolename, description) catch |err| {
+            std.debug.print("Error: failed to create role '{s}': {s} — role NOT created\n", .{ rolename, @errorName(err) });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
         printOut("Role '{s}' created successfully\n", .{rolename});
         return;
     } else if (std.mem.eql(u8, subcommand, "list")) {
@@ -1263,12 +1488,12 @@ pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         const rolename = argv[start_idx + 2];
-        var deleted = false;
-        if (mgr.storage.getRoleByName(rolename)) |role| {
-            mgr.storage.removeRole(role.id) catch {};
-            deleted = true;
-        }
-        printOut("Role '{s}' {s}\n", .{ rolename, if (deleted) "deleted" else "not found (noop)" });
+        // SONNY-6352: a removal that fails is reported (it was dropped).
+        const outcome = cli_auth.removeRoleByName(&mgr, rolename) catch |err| {
+            std.debug.print("Error: failed to delete role '{s}': {s} — the role was NOT deleted\n", .{ rolename, @errorName(err) });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        printOut("Role '{s}' {s}\n", .{ rolename, if (outcome == .removed) "deleted" else "not found (noop)" });
         return;
     } else if (std.mem.eql(u8, subcommand, "show")) {
         if (hasHelpFlag(argv, start_idx + 2)) {

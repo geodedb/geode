@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 
 // Zig 0.16 compat: std.time.milliTimestamp removed; use clock_gettime(REALTIME).
@@ -97,6 +98,8 @@ test "Role-Based Access Control (RBAC)" {
 }
 
 test "Attribute-Based Access Control (ABAC)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var security_manager = try auth.SecurityManager.init(allocator);
@@ -178,6 +181,8 @@ test "Attribute-Based Access Control (ABAC)" {
 }
 
 test "Row-Level Security (RLS) policies" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var rls_engine = try rls.RLSEngine.init(allocator);
@@ -289,6 +294,8 @@ test "Row-Level Security (RLS) policies" {
 }
 
 test "Temporal constraints in RLS policies" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var rls_engine = try rls.RLSEngine.init(allocator);
@@ -508,6 +515,8 @@ test "RLS policy cache performance" {
 }
 
 test "Multi-tenant row isolation" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var rls_engine = try rls.RLSEngine.init(allocator);

@@ -37,22 +37,23 @@
 //   4. a genuine non-timeout failure still exits 1, so code 4 keeps its
 //      meaning.
 //
-// This is a subprocess e2e lane: it spawns a real `./zig-out/bin/geode serve`
-// and drives the real `./zig-out/bin/geode query` against it, so nothing here
-// can pass by mocking the wire. Structure, skip semantics and the bounded
-// hand-rolled waitpid loop mirror tests/test_cli_batch_mode.zig.
+// This is a subprocess e2e lane: it spawns a real `geode serve` and drives the
+// real `geode query` against it (this build's executable, geode_test_bin), so
+// nothing here can pass by mocking the wire. Structure, skip semantics and
+// the bounded hand-rolled waitpid loop mirror tests/test_cli_batch_mode.zig.
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const testing = std.testing;
 
 const linux = std.os.linux;
 const posix = std.posix;
 
-const binary_path = "./zig-out/bin/geode";
+const binary_path = geode_test_bin.geode_exe;
 const ready_marker = "[startup] server ready";
 const admin_username = "geode";
-const admin_password = "GeodeTestPassword123!";
+const admin_password = "Geode Test Password Passphrase 123";
 
 const ready_deadline_ms: i64 = 120_000;
 const cli_deadline_ms: i64 = 120_000;
@@ -339,7 +340,7 @@ const DeadPortFixture = struct {
         const io_fs = std.Io.Threaded.global_single_threaded.io();
         std.Io.Dir.cwd().access(io_fs, binary_path, .{}) catch {
             std.debug.print(
-                "geode binary missing at {s}; run `zig build` first to populate zig-out/bin\n",
+                "geode binary missing at {s}; build it with `zig build`\n",
                 .{binary_path},
             );
             return null;
@@ -369,6 +370,8 @@ const DeadPortFixture = struct {
         argv[1] = "-c";
         argv[2] = cmd;
         return spawnProc(self.gpa, self.aa(), self.io(), argv, &.{
+            // SONNY-6782: a release build refuses --insecure without this acknowledgement.
+            .{ .key = "GEODE_ALLOW_INSECURE_TLS", .value = "1" },
             .{ .key = "GEODE_LOG_LEVEL", .value = "warn" },
         });
     }
@@ -485,7 +488,7 @@ fn setUpWithGrpc(gpa: std.mem.Allocator, tag: []const u8, port: u16, grpc_port: 
     const io_fs = std.Io.Threaded.global_single_threaded.io();
     std.Io.Dir.cwd().access(io_fs, binary_path, .{}) catch {
         std.debug.print(
-            "geode binary missing at {s}; run `zig build` first to populate zig-out/bin\n",
+            "geode binary missing at {s}; build it with `zig build`\n",
             .{binary_path},
         );
         return null;
@@ -970,6 +973,8 @@ fn countFromJson(transcript: []const u8) ?u64 {
 //    silently re-submit the statement.
 // ---------------------------------------------------------------------
 test "geode query over gRPC reports a client timeout without re-submitting the statement" {
+    // SONNY-6782: the server serves plaintext gRPC (the CLI's only gRPC mode) in Debug only.
+    if (builtin.mode != .Debug) return error.SkipZigTest;
     const gpa = testing.allocator;
     var fx = (try setUpWithGrpc(gpa, "grpctmo", 23984, 23985)) orelse return error.SkipZigTest;
     defer fx.deinit();
@@ -1103,6 +1108,8 @@ test "geode query over gRPC reports a client timeout without re-submitting the s
 //    path, and a genuine statement error must not become a timeout.
 // ---------------------------------------------------------------------
 test "geode query over gRPC still exits 0 for a fast query and never claims a timeout" {
+    // SONNY-6782: the server serves plaintext gRPC (the CLI's only gRPC mode) in Debug only.
+    if (builtin.mode != .Debug) return error.SkipZigTest;
     const gpa = testing.allocator;
     var fx = (try setUpWithGrpc(gpa, "grpcok", 23986, 23987)) orelse return error.SkipZigTest;
     defer fx.deinit();

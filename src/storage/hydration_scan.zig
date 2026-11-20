@@ -34,13 +34,31 @@
 //! (`gs.pager.Pager.readPage`) already performs the exact per-page
 //! decryption (TDE) and CRC32C validation the pool's miss path uses, so a
 //! direct positional read is byte-identical to a pool miss. Correctness
-//! versus DIRTY pool pages is handled explicitly: before scanning, each
-//! shard snapshots its pool's dirty (file, page) set under the pool mutex
-//! and routes exactly those pages through `buffer_pool.pin` (the set is
-//! empty in practice: engine open ends with recovery flush + fresh
-//! checkpoint, and geode's write paths hydrate a graph BEFORE its first
-//! write, so no write can dirty this graph's pages while its hydration
-//! scan runs — `ensureGraphHydrated`'s entry mutex serializes them).
+//! versus pool pages newer than the disk is handled explicitly: before
+//! scanning, each shard snapshots its pool's RESIDENT (file, page) set under
+//! the pool mutex and routes exactly those pages through `buffer_pool.pin`
+//! (a cache hit, so the pool's content is not evicted; bounded by the pool's
+//! capacity, not the store's size). SONNY-6597: resident, not just dirty: a
+//! checkpoint flush or a dirty eviction clears the frame's dirty flag under
+//! the pool mutex and then DROPS the mutex for the write, so a snapshot of
+//! the dirty set taken in that window saw the page clean and the scan read
+//! the older disk image (a node created since the last checkpoint missing --
+//! a false DataCorruption that quarantined a healthy graph -- or a property
+//! hydrated with its old value). A page is newer than the disk only while it
+//! is resident (eviction tears the frame down after its write), so the
+//! resident set covers the window without depending on how graph-storage
+//! sequences its flushes.
+//! Writes CAN run during the scan (SONNY-6523 item 6 corrected the claim
+//! that they cannot): the executor's writes hydrate the graph first and wait
+//! on `ensureGraphHydrated`'s entry mutex, but the shard-locked bulk writers
+//! (the reserved-id insert behind the CREATE and MERGE fast paths and group
+//! commit) write the engine record first and reach the hydration chokepoint
+//! only for their in-memory insert, and nothing makes the hydration wait for
+//! them. A page such a write first loads into the pool after the snapshot
+//! is read as it is on disk; the live-count check allows one missing record
+//! per node write in flight (`ManagedGraph.node_census_writers`, SONNY-6472
+//! item 4 / SONNY-6492 item 2), and the write's own resident-product inserts
+//! are idempotent with the hydration's.
 //!
 //! The module produces per-shard accumulations (`ShardAccum`) that the
 //! GraphStore merges (core inserts shard-major on one thread, independent
@@ -182,7 +200,7 @@ pub const ShardAccum = struct {
 /// GEODE_DISABLE_HYDRATION_LIVE_COUNT_CHECK=1 lets an operator hydrate a store
 /// whose manifest counts are known to be wrong (e.g. to salvage what is left
 /// of a damaged graph). Read per shard scan, a cold path.
-fn liveCountCheckDisabled() bool {
+pub fn liveCountCheckDisabled() bool {
     const raw_z = std.c.getenv("GEODE_DISABLE_HYDRATION_LIVE_COUNT_CHECK") orelse return false;
     const raw = std.mem.span(raw_z);
     return std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true") or std.mem.eql(u8, raw, "yes");
@@ -200,51 +218,63 @@ pub const ScanOptions = struct {
     /// `graph_store.INTERNAL_NODE_ID_PROPERTY_KEY` (passed in to keep this
     /// module free of geode-side imports).
     internal_id_key: []const u8,
+    /// SONNY-6492 (2): the graph's count of node creates and deletes in
+    /// flight (`ManagedGraph.node_census_writers`), set by
+    /// `StorageAdapter.hydrationStreamScanShard`. The live-record check
+    /// allows one record per writer in flight, as the unlabeled scan does.
+    node_census_writers: ?*const std.atomic.Value(u32) = null,
 };
 
-const DirtyKey = u64;
+const PageKey = u64;
 
-fn dirtyKey(file_id: gs.types.FileId, page_id: u64) DirtyKey {
+fn pageKey(file_id: gs.types.FileId, page_id: u64) PageKey {
     return (@as(u64, @intFromEnum(file_id)) << 56) | (page_id & ((@as(u64, 1) << 56) - 1));
 }
 
-/// Snapshot of one shard pool's DIRTY (file, page) set, taken once under the
-/// pool mutex before the scan passes. See the module doc for why this is
-/// sound (no writer can dirty this graph's pages mid-hydration).
-const DirtySet = struct {
-    map: std.AutoHashMapUnmanaged(DirtyKey, void) = .empty,
+// CANARY: REQ=REQ-SONNY-6597-HYDRATION-FLUSH-RACE; FEATURE="StorageIntegrity"; ASPECT=ResidentPagesThroughPool; STATUS=TESTED; TEST=tests/test_sonny6597_hydration_flush_race.zig; OWNER=storage; UPDATED=2026-11-15
+/// Snapshot of one shard pool's RESIDENT (file, page) set, taken once under
+/// the pool mutex before the scan passes; the scan reads these pages through
+/// the pool. SONNY-6597: every valid frame, not only the dirty ones. A
+/// checkpoint flush (`flushAllParallel`, `writeFrameBytes`) or a dirty
+/// eviction clears `dirty` under the pool mutex and drops the mutex for the
+/// write, so a page in that window is clean in the pool and older on disk.
+/// The frame stays valid and in the page table until its write is done, so
+/// it is in this set; a pin of an evicting frame waits for the write and
+/// reloads the page from disk. See the module doc for writes after the
+/// snapshot.
+const PoolPageSet = struct {
+    map: std.AutoHashMapUnmanaged(PageKey, void) = .empty,
 
-    fn collect(self: *DirtySet, alloc: Allocator, pool: *gs.buffer_pool.BufferPool) !void {
+    fn collect(self: *PoolPageSet, alloc: Allocator, pool: *gs.buffer_pool.BufferPool) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         pool.mutex.lockUncancelable(io);
         defer pool.mutex.unlock(io);
         for (pool.frames[0..pool.capacity]) |*frame| {
             if (!frame.valid) continue;
-            if (!frame.dirty) continue;
-            try self.map.put(alloc, dirtyKey(frame.file_id, frame.page_id), {});
+            try self.map.put(alloc, pageKey(frame.file_id, frame.page_id), {});
         }
     }
 
-    fn contains(self: *const DirtySet, file_id: gs.types.FileId, page_id: u64) bool {
+    fn contains(self: *const PoolPageSet, file_id: gs.types.FileId, page_id: u64) bool {
         if (self.map.size == 0) return false;
-        return self.map.contains(dirtyKey(file_id, page_id));
+        return self.map.contains(pageKey(file_id, page_id));
     }
 };
 
 /// Sequential page reader for one store file of one shard. Reads via the
 /// pager (decrypt + checksum, byte-identical to a pool miss) except for
-/// pages present in the dirty snapshot, which are copied through the pool.
+/// pages resident in the pool at the snapshot, which are copied through it.
 const PageReader = struct {
     pager: *gs.pager.Pager,
     pool: *gs.buffer_pool.BufferPool,
     file_id: gs.types.FileId,
-    dirty: *const DirtySet,
+    pool_pages: *const PoolPageSet,
     buf: []u8, // page_size bytes, reused across reads
 
     /// Read `page_id` into `buf` and return it. The returned slice is only
     /// valid until the next call.
     fn read(self: *PageReader, page_id: u64) ![]u8 {
-        if (self.dirty.contains(self.file_id, page_id)) {
+        if (self.pool_pages.contains(self.file_id, page_id)) {
             const frame = try self.pool.pin(self.file_id, page_id);
             defer self.pool.unpin(self.pool.frameIndex(frame), false);
             @memcpy(self.buf, frame.dataSlice());
@@ -265,7 +295,7 @@ const PageReader = struct {
 fn makeReader(
     engine: *gs.engine.GraphEngine,
     file_id: gs.types.FileId,
-    dirty: *const DirtySet,
+    pool_pages: *const PoolPageSet,
     buf: []u8,
 ) !PageReader {
     const pager = engine.file_manager.getPager(file_id) orelse return error.FileNotFound;
@@ -273,7 +303,7 @@ fn makeReader(
         .pager = pager,
         .pool = &engine.buffer_pool,
         .file_id = file_id,
-        .dirty = dirty,
+        .pool_pages = pool_pages,
         .buf = buf,
     };
 }
@@ -294,7 +324,7 @@ const ScanAllocs = struct {
 
 /// Scan ONE shard engine's store files sequentially and accumulate decoded
 /// rows. Read-only against the engine (the only pool interaction is pinning
-/// pages from the dirty snapshot, normally none). Thread-safe versus other
+/// the pages resident at the snapshot, cache hits). Thread-safe versus other
 /// shards: touches only this shard's files/pool.
 pub fn scanShard(
     base_allocator: Allocator,
@@ -317,8 +347,17 @@ pub fn scanShard(
         .scratch = scratch_arena.allocator(),
     };
 
-    var dirty = DirtySet{};
-    try dirty.collect(allocs.scratch, &engine.buffer_pool);
+    // SONNY-6492 (2): the live count and the writers in flight are read
+    // BEFORE the pool-page snapshot. A create counted here either finished
+    // before the snapshot (its record is in a page the snapshot routes
+    // through the pool, or on disk) or is a writer in flight at this read;
+    // read after the snapshot, a create finished in between was counted
+    // while its record was in a page the scan then read from disk.
+    const durable_live_before = @atomicLoad(u64, &engine.manifest.node_count, .seq_cst);
+    const writers_before: u32 = if (opts.node_census_writers) |w| w.load(.seq_cst) else 0;
+
+    var pool_pages = PoolPageSet{};
+    try pool_pages.collect(allocs.scratch, &engine.buffer_pool);
 
     const page_size = engine.buffer_pool.page_size;
     const page_buf = try allocs.scratch.alloc(u8, page_size);
@@ -328,9 +367,8 @@ pub fn scanShard(
     // behind in an arena) and are copied exact-size into the edge arena at the
     // end — the edge phase is the last consumer of the rows array.
     var rows: std.ArrayList(NodeRow) = .empty;
-    const durable_live_before = @atomicLoad(u64, &engine.manifest.node_count, .monotonic);
     {
-        var reader = try makeReader(engine, .nodes, &dirty, page_buf);
+        var reader = try makeReader(engine, .nodes, &pool_pages, page_buf);
         const npp = gs.node.nodesPerPage(page_size);
         const max_node_id = engine.manifest.next_node_id;
         if (max_node_id > 0) {
@@ -370,22 +408,29 @@ pub fn scanShard(
     // the scan: the graph is quarantined and its reads fail closed. The
     // smaller of the counts read before and after the pass is used, so a
     // concurrent delete can never look like a loss.
-    const durable_live = @min(durable_live_before, @atomicLoad(u64, &engine.manifest.node_count, .monotonic));
-    if (rows.items.len < durable_live and !liveCountCheckDisabled()) {
-        std.log.scoped(.hydration_scan).warn("hydration scan found {d} live node record(s) but the shard manifest counts {d}: node pages lost or zeroed -- refusing to hydrate from partial data", .{ rows.items.len, durable_live });
+    // SONNY-6492 (2): less one record per node create or delete in flight at
+    // either read, exactly as `StorageAdapter.scanAllNodes` (SONNY-6472 (4)):
+    // the engine counts and writes a node in separate steps. With no writer
+    // in flight the check is exact.
+    const durable_live_after = @atomicLoad(u64, &engine.manifest.node_count, .seq_cst);
+    const writers_after: u32 = if (opts.node_census_writers) |w| w.load(.seq_cst) else 0;
+    const durable_live = @min(durable_live_before, durable_live_after);
+    const slack: u64 = @as(u64, writers_before) + writers_after;
+    if (rows.items.len + slack < durable_live and !liveCountCheckDisabled()) {
+        std.log.scoped(.hydration_scan).warn("hydration scan found {d} live node record(s) but the shard manifest counts {d} ({d} node write(s) in flight): node pages lost or zeroed -- refusing to hydrate from partial data", .{ rows.items.len, durable_live, slack });
         return error.DataCorruption;
     }
 
     // ---- pass 2: adj_out.store (sequential read + in-memory chain walk) -----
     if (opts.include_edges) {
-        try scanAdjacency(allocs, engine, &dirty, page_buf, rows.items);
+        try scanAdjacency(allocs, engine, &pool_pages, page_buf, rows.items);
     }
 
     // ---- pass 3: props.store (node blobs + edge blobs, ascending pages) -----
-    try scanProps(allocs, engine, &dirty, page_buf, rows.items, opts);
+    try scanProps(allocs, engine, &pool_pages, page_buf, rows.items, opts);
 
     // ---- pass 4: var.store label chains (ascending pages per round) ---------
-    try scanLabels(allocs, engine, &dirty, page_buf, rows.items, opts);
+    try scanLabels(allocs, engine, &pool_pages, page_buf, rows.items, opts);
 
     accum.rows = try allocs.edge.dupe(NodeRow, rows.items);
     return accum;
@@ -403,11 +448,11 @@ const AdjBlock = struct {
 fn scanAdjacency(
     allocs: ScanAllocs,
     engine: *gs.engine.GraphEngine,
-    dirty: *const DirtySet,
+    pool_pages: *const PoolPageSet,
     page_buf: []u8,
     rows: []NodeRow,
 ) !void {
-    var reader = try makeReader(engine, .adj_out, dirty, page_buf);
+    var reader = try makeReader(engine, .adj_out, pool_pages, page_buf);
     const page_size = engine.buffer_pool.page_size;
     const block_header_size: u32 = @sizeOf(gs.edge.EdgeBlockHeader);
     // Slab slot directories grow backward from `page_size - tail_reserve`
@@ -623,14 +668,14 @@ fn durableFor(allocs: ScanAllocs, consumer: PropConsumer) Allocator {
 /// into its durable arena immediately.
 const OverflowResolver = struct {
     engine: *gs.engine.GraphEngine,
-    dirty: *const DirtySet,
+    pool_pages: *const PoolPageSet,
     scratch: Allocator,
     reader: ?PageReader = null,
 
     fn resolve(self: *OverflowResolver, stub: gs.property.OverflowStub) ![]u8 {
         if (self.reader == null) {
             const buf = try self.scratch.alloc(u8, self.engine.buffer_pool.page_size);
-            self.reader = try makeReader(self.engine, .var_store, self.dirty, buf);
+            self.reader = try makeReader(self.engine, .var_store, self.pool_pages, buf);
         }
         const reader = &self.reader.?;
         // VarStore.dataCapacity: page minus header/meta and the TDE tag tail.
@@ -665,12 +710,12 @@ const OverflowResolver = struct {
 fn scanProps(
     allocs: ScanAllocs,
     engine: *gs.engine.GraphEngine,
-    dirty: *const DirtySet,
+    pool_pages: *const PoolPageSet,
     page_buf: []u8,
     rows: []NodeRow,
     opts: ScanOptions,
 ) !void {
-    var reader = try makeReader(engine, .props, dirty, page_buf);
+    var reader = try makeReader(engine, .props, pool_pages, page_buf);
     const page_size = engine.buffer_pool.page_size;
     // Slab/legacy directories grow backward from the LOGICAL page end
     // (physical page minus the at-rest-encryption tag tail).
@@ -681,7 +726,7 @@ fn scanProps(
     // scaffolding: scratch.
     var wanted: std.AutoHashMapUnmanaged(u64, std.ArrayList(PendingChain)) = .empty;
 
-    var overflow = OverflowResolver{ .engine = engine, .dirty = dirty, .scratch = allocs.scratch };
+    var overflow = OverflowResolver{ .engine = engine, .pool_pages = pool_pages, .scratch = allocs.scratch };
 
     for (rows, 0..) |*row, ri| {
         if (row.corrupt_skip) continue;
@@ -908,6 +953,14 @@ fn consumeLegacyPage(
 /// node never entered the IdMap, so loop2 skipped it without reading
 /// further). Any other structural failure fails hydration, exactly like the
 /// legacy `try getAllNodeProperties` in loop2.
+/// SONNY-6605: a decode that could not allocate is out of memory, not a
+/// damaged record: reported as DataCorruption it quarantined the graph until
+/// restart (and in resident mode `nodeBlobCorrupt` dropped the node from the
+/// hydration's products). Every other decode error is damage.
+fn decodeError(err: anyerror) error{ OutOfMemory, DataCorruption } {
+    return if (err == error.OutOfMemory) error.OutOfMemory else error.DataCorruption;
+}
+
 fn nodeBlobCorrupt(row: *NodeRow, opts: ScanOptions, saw_internal_id: bool, err: anyerror) anyerror!void {
     if (opts.resident_mode and !saw_internal_id) {
         row.corrupt_skip = true;
@@ -968,9 +1021,9 @@ fn parseEntriesRegion(
             // Decoded into the durable arena below; give the (possibly
             // large) scratch copy back (the arena reclaims its last block).
             defer overflow.scratch.free(real);
-            break :blk gs.property.decode(durable, real) catch return error.DataCorruption;
+            break :blk gs.property.decode(durable, real) catch |err| return decodeError(err);
         } else blk: {
-            const inline_value = gs.property.decode(durable, region[off..]) catch return error.DataCorruption;
+            const inline_value = gs.property.decode(durable, region[off..]) catch |err| return decodeError(err);
             off += inline_value.bytes_read;
             break :blk inline_value;
         };
@@ -1005,13 +1058,13 @@ const VarChunk = struct {
 fn scanLabels(
     allocs: ScanAllocs,
     engine: *gs.engine.GraphEngine,
-    dirty: *const DirtySet,
+    pool_pages: *const PoolPageSet,
     page_buf: []u8,
     rows: []NodeRow,
     opts: ScanOptions,
 ) !void {
     _ = opts;
-    var reader = try makeReader(engine, .var_store, dirty, page_buf);
+    var reader = try makeReader(engine, .var_store, pool_pages, page_buf);
     const page_size = engine.buffer_pool.page_size;
     const cap: u32 = page_size - PAGE_HEADER_SIZE - VAR_META_SIZE;
     const tail_reserve = engine.var_store.tail_reserve;
@@ -1098,7 +1151,7 @@ fn scanLabels(
         // GAP-0062: a slab-headed label ref is a SINGLE run (never a chain).
         if (gs.var_store.isSlabHead(row.label_head)) {
             const blob = var_slab_runs.get(row.label_head) orelse return error.DataCorruption;
-            row.label_ids = decodeLabelIds(allocs.node, blob) catch return error.DataCorruption;
+            row.label_ids = decodeLabelIds(allocs.node, blob) catch |err| return decodeError(err);
             continue;
         }
 
@@ -1111,7 +1164,7 @@ fn scanLabels(
             try blob.appendSlice(allocs.scratch, chunk.data);
             current = chunk.next;
         }
-        row.label_ids = decodeLabelIds(allocs.node, blob.items) catch return error.DataCorruption;
+        row.label_ids = decodeLabelIds(allocs.node, blob.items) catch |err| return decodeError(err);
     }
 }
 

@@ -136,7 +136,6 @@ pub const printer = @import("gql/print.zig");
 // thread stack size.
 pub const stack_guard = @import("stack_guard.zig");
 // GAP-0875: exported for the residual-stubs regression suite (test-gap0875)
-pub const constraint_manager = @import("schema/constraint_manager.zig");
 pub const memory_mapped_io = @import("performance/memory_mapped_io.zig");
 // Re-export conformance profile helpers for CLI/tools
 pub const conformance = @import("conformance.zig");
@@ -153,13 +152,15 @@ pub const cost_explain = @import("planner/cost_explain.zig");
 pub const pagination_calibration = @import("pagination/calibration.zig");
 // Expose structural key utilities for benchmarks (PathCache related)
 pub const planner_structural_key = @import("planner/structural_key.zig");
-// Expose planner pipeline orchestration (synthetic phases + selection integration)
-pub const planner_pipeline = @import("planner/pipeline.zig");
 pub const temporal = @import("temporal.zig");
 // Query analysis helpers (EXPLAIN/PROFILE traits)
 pub const query_traits = @import("query/query_traits.zig");
 pub const planned_read_runtime = @import("execution/planned_read_runtime.zig");
 pub const graph_storage_adapter = @import("storage/graph_storage_adapter.zig");
+/// SONNY-6636: the GEODBAK1 file archive (backups, durable Raft snapshots).
+pub const graph_archive = @import("storage/graph_archive.zig");
+// SONNY-6524: opening a graph whose shard label dictionaries disagree.
+pub const label_dict_divergence = @import("storage/label_dict_divergence.zig");
 // Task 19: per-graph group-commit coordinator.
 pub const group_commit = @import("storage/group_commit.zig");
 // Graph-sharding Phase 1: N-way sharded HashMap wrapper (foundation for
@@ -176,6 +177,8 @@ pub const sharded_store = @import("graph_storage").sharded_store;
 pub const pooled = @import("transport/thread_pool");
 // Re-export evaluator for expression tests and demos
 pub const eval = @import("eval.zig");
+/// SONNY-6637: the shared function operand-count table.
+pub const function_arity = @import("eval/function_arity.zig");
 pub const diagnostics = @import("diagnostics.zig");
 // Re-export type promotion utilities for advanced types roundtrip tests
 pub const type_promotion = @import("eval/type_promotion.zig");
@@ -185,6 +188,13 @@ pub const advanced_types_optimizer = @import("optimizer/advanced_types_optimizer
 // off the legacy in-repo client implementations.
 pub const zig_client = @import("geode_client_zig");
 pub const zig_quic_bridge = @import("client/zig_quic_bridge.zig");
+/// SONNY-6487: the one host:port grammar (docs/DSN.md) every address uses.
+pub const host_port = @import("client/host_port.zig");
+/// SONNY-6544: DSN userinfo (last '@', percent-decoded) and the one
+/// redaction every printed address or DSN goes through.
+pub const dsn_credentials = @import("client/dsn_credentials.zig");
+/// SONNY-6554/6569: the one strict DSN parser (CLI --dsn and the MCP endpoint).
+pub const dsn_params = @import("client/dsn_params.zig");
 // Re-export unicode utilities (normalization, case folding, UTF-16/WTF-8 helpers)
 pub const unicode = @import("unicode/geode_unicode.zig");
 pub const unicode_tables = @import("unicode/unicode_tables.zig");
@@ -213,8 +223,6 @@ pub const types = struct {
     pub const extended = @import("types/extended.zig");
     pub const extended_functions = @import("types/extended_functions.zig");
     pub const numeric_promotion = @import("types/numeric_promotion.zig");
-    pub const int256 = @import("types/i256.zig");
-    pub const hash = @import("types/hash.zig");
     pub const vector = @import("types/vector.zig");
     pub const geographic = @import("types/geographic.zig");
     pub const cryptographic = @import("types/cryptographic.zig");
@@ -222,8 +230,6 @@ pub const types = struct {
 
 // Re-export server graph common types
 pub const graph_common = @import("types/graph_common.zig");
-// Re-export materialized views
-pub const materialized_views = @import("query/materialized_views.zig");
 // GAP-0876: enhanced materialized view manager (exact-match query rewrite,
 // API level). Standalone subsystem — not yet consulted by the execution
 // path; exported so the named regression test
@@ -237,6 +243,8 @@ pub const enhanced_materialized_views = @import("query/enhanced_materialized_vie
 pub const txn_undo_log = @import("txn_undo_log.zig");
 /// SONNY-3348 (round 18): the statement undo record.
 pub const statement_undo = @import("statement_undo.zig");
+/// SONNY-2979: the durable transaction undo log (`txn_undo.wal`).
+pub const txn_durable_undo = @import("txn_durable_undo.zig");
 
 // Machine Learning and Analytics
 pub const ml = struct {
@@ -259,14 +267,10 @@ pub const streaming = struct {
         pub const kafka_wire = @import("streaming/sinks/kafka_wire.zig");
     };
 };
-// Re-export server graph executor for tests needing internal MATCH primitives
-pub const graph_exec = @import("server/graph/exec.zig");
 // Re-export server state for unified binary
 pub const server_state = @import("server/server_state.zig");
 pub const capability_gate = @import("server/capability_gate.zig");
 pub const node_scan_stream = @import("server/node_scan_stream.zig");
-// Re-export server txn/mvcc for unified binary
-pub const server_mvcc = @import("server/txn/mvcc.zig");
 // Note: query_ast_cache is imported directly by server files to avoid circular dependency
 // (it needs ParseOptions/ParseResult which are defined in this file)
 // Re-export query_plan_cache for unified binary
@@ -277,8 +281,6 @@ pub const query_arena = @import("server/query_arena.zig");
 pub const server_flags = @import("server/server_flags.zig");
 // Re-export backup_manager for unified binary
 pub const backup_manager = @import("server/backup_manager.zig");
-// Re-export impl_flagger for unified binary
-pub const impl_flagger = @import("server/flagger_impl_defined.zig");
 // Re-export proto_util for unified binary
 pub const proto_util = @import("server/proto_util.zig");
 // Re-export fd_limit helper so tests can exercise the startup hook directly.
@@ -306,13 +308,11 @@ pub const heap = @import("storage/heap.zig");
 pub const catalog = @import("schema/catalog.zig");
 // Re-export tde_file_encryption for tests
 pub const tde_file_encryption = @import("storage/tde_file_encryption.zig");
+// SONNY-6452: detect/repair stores written in the pre-0.4.12 TDE page envelope.
+pub const tde_page_tail = @import("storage/tde_page_tail.zig");
 
 // Benchmark modules (variance envelopes)
 pub const benchmarks = struct {
-    // Pagination ordered variance benchmark (exposed for variance runner)
-    pub const pagination = @import("benchmarks/pagination_variance.zig");
-    // Pagination execution (streaming page) variance benchmark
-    pub const pagination_execution = @import("benchmarks/pagination_execution_variance.zig");
     // Shared variance configuration helper
     pub const variance_config = @import("benchmarks/variance_config.zig");
 };
@@ -325,11 +325,8 @@ pub const index = struct {
     pub const rtree = @import("rtree_lib");
     pub const hnsw = @import("hnsw_lib");
     pub const interval_tree = @import("index/interval_tree.zig");
-    pub const interval_persist = @import("index/interval_persist.zig");
     pub const jsonb_inverted = @import("index/jsonb_inverted.zig");
-    pub const jsonb_inverted_persist = @import("index/jsonb_inverted_persist.zig");
     pub const domain_trie = @import("index/domain_trie.zig");
-    pub const domain_trie_persist = @import("index/domain_trie_persist.zig");
     pub const fulltext = @import("index/fulltext.zig");
     /// The fts-storage adapter that backs the `fulltext` facade. Re-exported so
     /// callers/tests can construct a `FtsStorageAdapter` + named index and wrap
@@ -358,8 +355,6 @@ pub const net_policy = @import("net_policy.zig");
 // Distributed systems modules
 pub const distributed = struct {
     pub const raft_consensus = @import("distributed/raft_consensus.zig");
-    pub const raft_log_storage = @import("distributed/raft_log_storage.zig");
-    pub const raft_persistent = @import("distributed/raft_persistent.zig");
     pub const raft_snapshot_manager = @import("distributed/raft_snapshot_manager.zig");
     pub const raft_apply = @import("distributed/raft_apply.zig");
     pub const cluster_replication = @import("distributed/cluster_replication.zig");
@@ -373,11 +368,10 @@ pub const distributed = struct {
     /// file-path import that would split cluster_auth.zig across modules.
     pub const cluster_auth = @import("distributed/cluster_auth.zig");
     pub const raft = @import("raft");
-    pub const query_planner = @import("distributed/query_planner.zig");
-    pub const twophase = @import("distributed/twophase.zig");
-    pub const value_convert = @import("distributed/value_convert.zig");
     /// GPS Phase 6 Task 6-3: Principal identity envelope for cluster RPCs.
     pub const principal_envelope = @import("distributed/principal_envelope.zig");
+    /// SEC-D009: the Raft frame replay check (SONNY-6600 regression).
+    pub const nonce_tracker = @import("distributed/nonce_tracker.zig");
 };
 
 // REPL modules
@@ -406,62 +400,24 @@ pub const quic_query_runner = @import("client/quic_query_runner.zig");
 pub const query_runner = @import("client/query_runner.zig");
 pub const query_scope = @import("client/query_scope.zig");
 pub const grpc_query_transport = @import("client/grpc_query_transport.zig");
+// SONNY-6647: JSON to wire values, for geode query --param and the MCP query tool.
+pub const param_json = @import("client/param_json.zig");
+// SONNY-6593: the gRPC RPCs the server registers (geode.proto's service).
+pub const grpc_service_methods = @import("transport/grpc_service_methods.zig");
 // Bug 731 (#2): HELLO-response decode seam shared with src/cli/main.zig so the
 // CLI login ownership contract is reachable from a test binary.
 pub const hello_decode = @import("client/hello_decode.zig");
 
-// Extend planner module
-pub const planner_wcoj = @import("planner/wcoj.zig");
-
-// Graph analytics (lightweight builders and centrality algorithms)
+// An LFU cache; only tests use it (fuzz/targets/lfu_cache_fuzz.zig).
+// SONNY-6511 removed the rest of src/graph/ (37 files no build compiled or
+// ran). SONNY-6540 item 10 removed its standalone Louvain and label
+// propagation, which only tests/e2e_graph_algos_new.zig called: the
+// algo.louvain and algo.labelPropagation procedures run
+// src/execution/centrality_algorithms.zig.
 pub const graph = struct {
-    pub const builders = @import("graph/builders.zig");
-    pub const pagerank = @import("graph/centrality_pagerank.zig");
-    pub const eigenvector = @import("graph/centrality_eigenvector.zig");
-    pub const betweenness = @import("graph/centrality_betweenness.zig");
-    pub const closeness = @import("graph/centrality_closeness.zig");
-    pub const bridge_leverage = @import("graph/centrality_bridge_leverage.zig");
-    pub const grey_cardinal = @import("graph/centrality_grey_cardinal.zig");
-    // Performance-optimized algorithms
-    pub const optimized = @import("graph/centrality_optimized.zig");
-    pub const dfs_iterative = @import("graph/traversal_dfs_iterative.zig");
-    pub const iddfs = @import("graph/traversal_iddfs.zig");
-    pub const topo_kahn = @import("graph/topological_sort_kahn.zig");
-    pub const topo_dfs = @import("graph/topological_sort_dfs.zig");
-    pub const cycle_directed = @import("graph/cycle_detect_directed.zig");
-    pub const cycle_undirected = @import("graph/cycle_detect_undirected.zig");
-    pub const dag_shortest = @import("graph/shortest_dag_path.zig");
-    pub const shortest_dijkstra = @import("graph/shortest_dijkstra.zig");
-    pub const shortest_astar = @import("graph/shortest_astar.zig");
-    pub const shortest_unweighted = @import("graph/shortest_unweighted_bfs_paths.zig");
-    pub const union_find = @import("graph/union_find.zig");
-    pub const strongly_connected_components = @import("graph/strongly_connected_components.zig");
-    pub const community_louvain = @import("graph/community_louvain.zig");
-    pub const community_label_propagation = @import("graph/community_label_propagation.zig");
-    pub const traversal_bfs = @import("graph/traversal_bfs.zig");
-    pub const leiden = @import("graph/leiden.zig");
-    pub const flow = struct {
-        pub const edmonds_karp = @import("graph/flow_edmonds_karp.zig");
-        pub const dinic = @import("graph/flow_dinic.zig");
-        pub const hopcroft_karp = @import("graph/flow_hopcroft_karp.zig");
-    };
     pub const containers = struct {
-        pub const lru = @import("graph/containers/lru.zig");
         pub const lfu = @import("graph/containers/lfu.zig");
-        pub const bloom_filter = @import("graph/containers/bloom_filter.zig");
-        pub const count_min_sketch = @import("graph/containers/count_min_sketch.zig");
-        pub const skiplist = @import("graph/container_skiplist.zig");
-        pub const trie = @import("graph/container_trie.zig");
     };
-    pub const string_search = struct {
-        pub const kmp = @import("graph/string_search_kmp.zig");
-    };
-    // Connectivity and spanning tree algorithms
-    pub const connectivity_kosaraju = @import("graph/connectivity_kosaraju.zig");
-    pub const connectivity_biconnected = @import("graph/connectivity_biconnected.zig");
-    pub const connectivity_bridges_articulation = @import("graph/connectivity_bridges_articulation.zig");
-    pub const spanning_prim = @import("graph/spanning_prim.zig");
-    pub const spanning_kruskal = @import("graph/spanning_kruskal.zig");
 };
 
 // Multitenancy and GPU feature flagger re-exports so tests/benchmarks can import via the geode package
@@ -497,9 +453,8 @@ pub const tenant_quota = @import("security/tenant_quota.zig");
 // GAP-0839: Durable tenant lifecycle registry
 pub const tenant_registry = @import("security/tenant_registry.zig");
 
-// Security modules for enhanced RLS and compliance features
+// Security modules for RLS and compliance features
 pub const security = struct {
-    pub const rls_enhanced = @import("security/rls_enhanced.zig");
     // GAP-0890: policy-enforced key-rotation registry (rotateNow refuses
     // under min_interval; rotateIfDue is the operator-invoked scheduler tick).
     pub const key_rotation = @import("security/key_rotation.zig");
@@ -516,6 +471,8 @@ pub const security = struct {
     pub const authn = @import("security/authn.zig");
     // GPS Phase 2: decision types and central decide() entry point
     pub const gps = @import("security/gps.zig");
+    // SONNY-6341: the FLE roles each user may act under.
+    pub const fle_role_grants = @import("security/fle_role_grants.zig");
     // GPS Phase 2 (Task 2-2): transport-agnostic Principal builder
     pub const principal_derive = @import("security/principal_derive.zig");
     // GPS Phase 4 (Task 4-1): graph-based role resolution (authRoleFromRecord + resolveRoleFromGraph).
@@ -524,6 +481,10 @@ pub const security = struct {
     pub const role_resolver = @import("role_resolver");
     // GPS Phase 4 (Task 4-2): in-memory policy catalog (Policy type + CRUD).
     pub const policy_catalog = @import("security/policy_catalog.zig");
+    /// SONNY-6329: one auth / policy DDL operation at a time.
+    pub const auth_ddl_lock = @import("security/auth_ddl_lock.zig");
+    // SONNY-6586: the per-graph grant rule (online GRANT and offline geode grant).
+    pub const graph_grant_rules = @import("security/graph_grant_rules.zig");
     // GPS Phase 5 (Task 5-4): minimal expression compiler for GPS policy predicates.
     pub const policy_expression = @import("security/policy_expression.zig");
     // GPS Phase 6 (Task 6-1): global monotonic policy version counter for cache invalidation.
@@ -534,12 +495,12 @@ pub const security = struct {
     // auth_graph_manager, which imports geode (circular).  Consumers that need it
     // (server_init.zig, tests) import it as a named build module ("policy_persistence").
 };
-// GAP-0869 (2026-06-10): renamed from `fts_advanced_stub` — the hard-coded
-// corpus phrase/proximity/highlight stubs were deleted; what remains
-// (analyzers, stemming, fuzzy, soundex, synonyms) is real. The real
-// phrase/proximity/highlight live on FullTextIndex (src/index/fulltext.zig),
-// backed by the persisted fts-storage positional postings.
-pub const fts_advanced = @import("fts/advanced.zig");
+// SONNY-6499: `fts_advanced` (src/fts/advanced.zig: analyzers, stemming,
+// fuzzy, soundex, synonyms) and src/fts/bm25.zig were removed: nothing
+// reached them and they did not compile (LanguageAnalyzer.analyze used the
+// removed managed ArrayList API). Full-text search is fts-storage behind
+// FullTextIndex (src/index/fulltext.zig), with the tokenizer in
+// src/index/fts_tokenizer.zig.
 pub const parallel_exec_stub = @import("execution/parallel.zig");
 // GAP-0867 (2026-06-10): renamed from `cbo_api_stub` — the stub APIs were
 // deleted; what remains (StatsRegistry, explainEstimateJSON) is real.
@@ -696,12 +657,20 @@ pub const server = struct {
     // Note: connection_handler imported directly by server files to avoid circular dependency
 };
 
+// CANARY: REQ=REQ-SONNY-6351-PARSE-GQL-DEFAULT; FEATURE="Pagination Legality (US001)"; ASPECT=EmbeddedOrderKeyDefault; STATUS=TESTED; TEST=tests/test_sonny6351_labels_parse_default.zig; OWNER=planner; UPDATED=2026-11-12
+/// Parse `src` with the server's default ORDER BY key policy: a sort key is
+/// any value expression (ISO/IEC 39075:2024 16.16 <order by clause>).
+/// `GEODE_ORDER_KEYS_EXPR` set to anything but empty, `1`, `true` or `on`
+/// selects the opt-in identifier-only policy, read as the server reads it
+/// (`server_init.zig`). SONNY-6351 item 3: the embedded default was the
+/// identifier-only policy unless the variable was set (to any value), so
+/// `ORDER BY n.prop` was a syntax error to an embedded caller and accepted by
+/// the server.
 pub fn parseGql(src: []const u8, allocator: std.mem.Allocator) !ParseResult {
-    // Enforce ident-only ORDER BY keys and forbid function calls unless explicitly relaxed
     const allow_expr = if (getEnvVarOwned(allocator, "GEODE_ORDER_KEYS_EXPR")) |v| blk: {
         defer allocator.free(v);
-        break :blk true;
-    } else |_| false;
+        break :blk v.len == 0 or std.ascii.eqlIgnoreCase(v, "1") or std.ascii.eqlIgnoreCase(v, "true") or std.ascii.eqlIgnoreCase(v, "on");
+    } else |_| true;
     const opts: ParseOptions = if (allow_expr) .{} else .{ .ident_order_only = true, .forbid_orderby_calls = true };
     return parseGqlOptions(src, allocator, opts);
 }
@@ -753,22 +722,51 @@ pub const ParseOutcome = union(enum) {
 /// parser limit is class 54 (program limit exceeded): too many write clauses
 /// in a part (SONNY-3190), too many statements in a request, or more parser
 /// memory than the request may take are 54000; queries nested too deep are
-/// 54001 (statement too complex). Every other refusal is a syntax error,
-/// 42000. The limits' own messages name them (`Parser.max_*`).
+/// 54001 (statement too complex). An undirected edge pattern is 0A000
+/// (feature not supported, SONNY-6433). Every other refusal is a syntax
+/// error, 42000. The limits' own messages name them (`Parser.max_*`).
 pub fn parseErrorCode(err: anyerror) []const u8 {
     return switch (err) {
         error.TooManyWriteClauses, error.TooManyStatements, error.ParseMemoryLimit => "54000",
         error.QueryNestingTooDeep => "54001",
+        // SONNY-6433: an undirected edge pattern (Feature GH02) is a feature
+        // Geode does not support, not a syntax error.
+        error.UndirectedEdgeNotSupported => "0A000",
+        // SONNY-6343: a query shape the parser refuses as unsupported (a
+        // NEXT with no result table to continue from, an inline CALL form);
+        // the parser's message names it.
+        error.UnsupportedQueryShape => "0A000",
         else => "42000",
     };
 }
 
 // Parse but capture parser error details instead of throwing; allocation errors still throw.
+// CANARY: REQ=REQ-SONNY-6543-PARSE-REFUSAL-STATUS; FEATURE="GQLStatus"; ASPECT=CliParseRefusalCode; STATUS=TESTED; TEST=tests/conformance_tests.zig; OWNER=parser; UPDATED=2026-11-16
+/// SONNY-6543: the GQL status a parse refusal is reported with outside the
+/// wire (the gql CLI's JSON diagnostic): the refusal's own SQLSTATE (`code`:
+/// 42000 for a syntax error, 54000 / 54001 for a parser limit), the code the
+/// QUIC and gRPC front ends send, with its message, position and token. The
+/// CLI reported every refusal with the gql library's `syntaxError` code,
+/// 42601 before gql v0.1.22.
+pub fn parseErrorStatus(pe: @FieldType(ParseOutcome, "Err")) gql.status.GqlStatus {
+    var st = gql.status.syntaxError(pe.msg, pe.line, pe.column, @tagName(pe.token));
+    if (pe.code.len == st.sqlstate.len) @memcpy(&st.sqlstate, pe.code);
+    return st;
+}
+
 pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: ParseOptions) !ParseOutcome {
     var arena = std.heap.ArenaAllocator.init(allocator);
     var lx = Lexer{ .src = src };
     var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next(), .strict_order_keys = opts.strict_order_keys, .ident_order_only = opts.ident_order_only, .forbid_orderby_calls = opts.forbid_orderby_calls, .forbid_orderby_paths = opts.forbid_orderby_paths, .ts_extensions = opts.ts_extensions };
     const program = p.parseProgram() catch |parse_err| {
+        // CANARY: REQ=REQ-SONNY-6517-PARSE-OOM; FEATURE="ParserErrors"; ASPECT=OutOfMemoryIdentity; STATUS=TESTED; TEST=tests/test_sonny6517_parse_oom.zig; OWNER=parser; UPDATED=2026-11-13
+        // SONNY-6517 item 1: an allocation failure is OutOfMemory for the
+        // caller (a server answers it as one; the LSP fails the request),
+        // never a refused statement: `parseErrorCode` gave it 42000.
+        if (parse_err == error.OutOfMemory) {
+            arena.deinit();
+            return error.OutOfMemory;
+        }
         const raw_msg = p.last_error orelse "parse error";
         const loc = p.cur.loc;
         const kind = p.cur.kind;
@@ -853,6 +851,9 @@ pub const meta_dispatch = @import("execution/meta_dispatch.zig");
 // drive executeTde("tde.encrypt_page", ...) directly, and util/feature_flags so it
 // can flip the TDE feature flag deterministically without mutating real env.
 pub const storage_dispatch = @import("execution/storage_dispatch.zig");
+// SONNY-6340: re-export audit_dispatch so the regression test drives the
+// audit.* procedure handlers directly.
+pub const audit_dispatch = @import("execution/audit_dispatch.zig");
 pub const util_feature_flags = @import("feature_flags");
 // CANARY: REQ=REQ-MULTI-TENANT-STRICT-001; FEATURE="StrictTenancyMode"; ASPECT=LibExport; STATUS=TESTED; TEST=tests/test_gap0840_strict_tenancy.zig; OWNER=security; UPDATED=2026-06-08
 // GAP-0840: re-export the strict-tenancy decision module so server startup can
@@ -867,12 +868,16 @@ pub const tenancy = @import("execution/tenancy.zig");
 // the notify() call sites.
 pub const schema_change_notifier = @import("execution/schema_change_notifier.zig");
 pub const uuid = @import("uuid");
-// CANARY: REQ=REQ-PERF-WAL-006; FEATURE="WriteAheadLog"; ASPECT=LibExport; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
-// Re-export WAL for server initialization and tests
+// CANARY: REQ=REQ-WAL-HOOKS-001; FEATURE="WAL Persistence Hooks"; ASPECT=LibExport; STATUS=TESTED; TEST=tests/test_wal.zig; OWNER=storage; UPDATED=2026-11-12
+// Re-export the persistence-loop hooks for server initialization and tests
 pub const wal = @import("wal.zig");
 pub const fle_integration = @import("fle_integration.zig");
 pub const fle_commands = @import("admin/fle_commands.zig");
+/// SONNY-6688: migrate a field's existing plaintext to FLE.
+pub const fle_migration = @import("execution/fle_migration.zig");
 pub const fle_key_manager = @import("fle_key_manager");
+// SONNY-6442: the GEODE_MASTER_KEY check-value helper every FLE key path uses.
+pub const fle_master_key_check = @import("keys/master_key_check.zig");
 pub const fle_key_types = @import("fle_key_types");
 
 // User management and authentication
@@ -943,4 +948,87 @@ test "tenant_visibility: inline test root" {
 // log", "savepoint") keeps this block, and with it the file, in discovery.
 test "SONNY-2799 undo log inline test roots" {
     _ = @import("txn_undo_log.zig");
+}
+
+// SONNY-6342: src/security/authn.zig's AuthProvider inline tests entered no
+// test binary (one leaked its API-key result). Named with the
+// "AuthProvider:" filter of `zig build test-sonny6342-authn-inline`, so the
+// filter keeps this block, and with it the file, in discovery.
+test "SONNY-6342 AuthProvider: authn inline test root" {
+    _ = @import("security/authn.zig");
+}
+
+// SONNY-6460: src/exec.zig's inline tests entered no test binary. Named with
+// the "exec.zig:" filter of `zig build test-sonny6460-exec-inline`, so the
+// filter keeps this block, and with it the file, in discovery.
+test "exec.zig: inline test root" {
+    _ = @import("exec.zig");
+}
+
+// SONNY-6494: src/gql/recommendations.zig's inline tests entered no test
+// binary. Named with the "recommendations:" filter of `zig build
+// test-sonny6494-recommendations-inline`, so the filter keeps this block,
+// and with it the file, in discovery.
+test "recommendations: inline test root" {
+    _ = @import("gql/recommendations.zig");
+}
+
+// SONNY-6494: src/client/repl/repl_dispatch.zig's inline tests did not
+// compile on Zig 0.16, and they and repl_parse.zig's ("repl_parse:")
+// entered no test binary. Named with the "repl_dispatch:" filter of
+// `zig build test-sonny6494-inline`.
+test "repl_dispatch: inline test root" {
+    _ = @import("client/repl/repl_dispatch.zig");
+    _ = @import("client/repl/repl_parse.zig");
+}
+
+// SONNY-6494: files of the geode module whose inline tests no step ran (the
+// lib-module steps filter to other names). Named with the "sonny6494-lib:"
+// filter of `zig build test-sonny6494-lib-inline`, which also names each
+// file's tests by their fully qualified prefix (`<path>.test.`).
+// SONNY-6511: the inline tests of geode-module files that did not compile
+// on Zig 0.16 (or ran in no step) and whose code is live or reached by a
+// running test. Named with the "sonny6511-lib:" filter of
+// `zig build test-sonny6511-lib-inline`, which also names each file's tests
+// by their fully qualified prefix (`<path>.test.`).
+test "sonny6511-lib: inline test roots" {
+    _ = @import("security/multi_graph_security.zig");
+    _ = @import("client/quic_query_runner.zig");
+    _ = @import("client/repl/spinner.zig");
+    _ = @import("performance/memory_mapped_io.zig");
+    _ = @import("ml/graph_embeddings.zig");
+    _ = @import("graph/containers/lfu.zig");
+    // SONNY-6517 item 3: the planner's own inline tests.
+    _ = @import("planner.zig");
+}
+
+test "sonny6494-lib: inline test roots" {
+    _ = @import("client/repl/repl_errors.zig");
+    _ = @import("client/repl/repl_history.zig");
+    _ = @import("client/repl/repl_render.zig");
+    _ = @import("client/query_scope.zig");
+    _ = @import("transport/connection_manager.zig");
+    _ = @import("gql/confusable_check.zig");
+    _ = @import("types/numeric_promotion.zig");
+    _ = @import("unicode/confusables.zig");
+    _ = @import("algorithms/drr.zig");
+    _ = @import("algorithms/congestion_newreno.zig");
+    _ = @import("algorithms/loss_recovery.zig");
+    _ = @import("algorithms/timer_heap.zig");
+    _ = @import("algorithms/sharding.zig");
+    _ = @import("client/repl/line_text.zig");
+    _ = @import("distributed/distributed_explain.zig");
+    _ = @import("protocol.zig");
+    _ = @import("optimizer/advanced_types_optimizer.zig");
+    _ = @import("server/server_flags.zig");
+    _ = @import("execution/bulk_ingest.zig");
+    _ = @import("net_policy.zig");
+    _ = @import("gpu/flagger.zig");
+    _ = @import("admin/fle_commands.zig");
+    _ = @import("planner/cost_seed.zig");
+    _ = @import("planner/gpu_ops.zig");
+    _ = @import("planner/calibration.zig");
+    _ = @import("log/logger.zig");
+    _ = @import("security/key_rotation.zig");
+    _ = @import("pagination/calibration.zig");
 }

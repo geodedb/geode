@@ -5,7 +5,7 @@ const cbo = @import("cbo.zig");
 // Advanced cost model with cardinality estimation, selectivity prediction,
 // and histogram-based statistics for accurate query planning.
 //
-// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanCostModelFactors; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_PlanCostModelFactors; BENCH=BenchmarkCANARY_REQ_GQL_024_PlanCostModelVarianceEnvelope; OWNER=planner; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanCostModelFactors; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_024_PlanCostModelFactors; BENCH=BenchmarkCANARY_REQ_GQL_024_PlanCostModelVarianceEnvelope; OWNER=planner; UPDATED=2026-11-14
 
 pub const CostFactors = struct {
     // CPU costs (per tuple)
@@ -541,23 +541,6 @@ pub const CardinalityEstimator = struct {
 
 pub fn estimatePlanCost(root: enumerator.LogicalPlan, factors: CostFactors) f64 {
     return walk(root, factors, 0).cost;
-}
-
-// Apply calibration-adjusted factors (if provided) and return cost.
-pub fn estimateWithCalibration(root: enumerator.LogicalPlan, base: CostFactors, maybe_cal: ?*const @import("cost_calibration.zig").Calibration) f64 {
-    var f = base;
-    if (maybe_cal) |cal| {
-        if (cal.applied) {
-            f.scan_base = cal.factors.scan_base;
-            f.filter_base = cal.factors.filter_base;
-            f.project_base = cal.factors.project_base;
-            f.join_base = cal.factors.join_base;
-            f.aggregate_base = cal.factors.aggregate_base;
-            f.sort_base = cal.factors.sort_base;
-            f.limit_base = cal.factors.limit_base;
-        }
-    }
-    return estimatePlanCost(root, f);
 }
 
 const WalkResult = struct { cost: f64, rows: f64, joins: usize };

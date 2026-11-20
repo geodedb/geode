@@ -1,10 +1,13 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const schema = @import("schema");
 const util = @import("proto_test_util.zig");
 
 pub const ParityResult = struct {
     quic: util.ExecResult,
-    grpc: util.ExecResult,
+    /// SONNY-6782: null outside Debug, where plaintext gRPC is not served
+    /// (`util.grpc_plaintext_served`); the QUIC half still runs.
+    grpc: ?util.ExecResult,
 };
 
 pub const ParityServer = struct {
@@ -31,7 +34,9 @@ pub fn runParityRandom(
 ) !struct { server: ParityServer, result: ParityResult } {
     // Get two random ports
     const quic_port = try util.getRandomPort();
-    const grpc_port = try util.getRandomPort();
+    // SONNY-6301: the gRPC listener is TCP; probe TCP, not UDP.
+    var grpc_port = try util.getRandomTcpPort();
+    while (grpc_port == quic_port) grpc_port = try util.getRandomTcpPort();
 
     const quic_addr = try util.formatAddr(allocator, quic_port);
     errdefer allocator.free(quic_addr);
@@ -42,7 +47,7 @@ pub fn runParityRandom(
 
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr },
         env,
     );
     errdefer server.deinit();
@@ -56,15 +61,19 @@ pub fn runParityRandom(
     var hello_q = try quic_client.hello(allocator, util.defaultUsername(), util.defaultPassword());
     hello_q.deinit(allocator);
 
-    util.progress("Connecting gRPC client...", .{});
-    var grpc_client = try util.GrpcProtoClient.connect(allocator, grpc_addr);
-    defer grpc_client.deinit();
-    var hello_g = try grpc_client.hello(allocator, util.defaultUsername(), util.defaultPassword());
-    hello_g.deinit(allocator);
+    // SONNY-6782: plaintext gRPC is served in Debug only.
+    var grpc_client: ?util.GrpcProtoClient = null;
+    defer if (grpc_client) |*c| c.deinit();
+    if (util.grpc_plaintext_served) {
+        util.progress("Connecting gRPC client...", .{});
+        grpc_client = try util.GrpcProtoClient.connect(allocator, grpc_addr);
+        var hello_g = try grpc_client.?.hello(allocator, util.defaultUsername(), util.defaultPassword());
+        hello_g.deinit(allocator);
+    }
 
     util.progress("Executing query on both transports...", .{});
     const quic_res = try quic_client.executeAndCollect(allocator, query, quic_params, page_size);
-    const grpc_res = try grpc_client.executeAndCollect(allocator, query, grpc_params, page_size);
+    const grpc_res: ?util.ExecResult = if (grpc_client) |*c| try c.executeAndCollect(allocator, query, grpc_params, page_size) else null;
 
     return .{
         .server = .{
@@ -90,7 +99,7 @@ pub fn runParity(
 ) !struct { server: util.ServerHandle, result: ParityResult } {
     const server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr },
         env,
     );
 

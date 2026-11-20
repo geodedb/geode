@@ -187,7 +187,7 @@ pub const RandomWalk = struct {
     /// 1/p for returning to the previous node (distance 0 from prev),
     /// 1 for nodes adjacent to the previous node (distance 1),
     /// 1/q for nodes not adjacent to the previous node (distance 2).
-    pub fn transitionProbability(self: *const RandomWalk, target_node: u64, graph: *const geode.graph_common.GraphStore) f64 {
+    pub fn transitionProbability(self: *const RandomWalk, target_node: u64, graph: *const geode.graph_common.GraphStore) !f64 {
         if (self.previous_node == null) return 1.0;
 
         const prev = self.previous_node.?;
@@ -196,7 +196,7 @@ pub const RandomWalk = struct {
         if (target_node == prev) {
             // Returning to previous node
             return 1.0 / self.p;
-        } else if (graph.hasEdge(prev, target_node)) {
+        } else if (try graph.hasEdge(prev, target_node)) {
             // Target is neighbor of previous node
             return 1.0;
         } else {
@@ -668,7 +668,7 @@ pub fn generateRandomWalk(walk: *RandomWalk, graph: *const geode.graph_common.Gr
 
         var total_prob: f64 = 0.0;
         for (neighbors, 0..) |neighbor, i| {
-            probabilities[i] = walk.transitionProbability(neighbor, graph);
+            probabilities[i] = try walk.transitionProbability(neighbor, graph);
             total_prob += probabilities[i];
         }
 
@@ -1032,11 +1032,18 @@ test "Random walk generation" {
     _ = try graph.createEdge(n3, n1, "CONNECTS");
 
     // Test random walk generation
-    var walk = RandomWalk.init(allocator, n1, 1.0, 1.0);
+    var walk = try RandomWalk.init(allocator, n1, 1.0, 1.0);
     defer walk.deinit();
 
-    try generateRandomWalk(&walk, &graph, 10);
+    var prng = std.Random.DefaultPrng.init(0x6511);
+    try generateRandomWalk(&walk, &graph, 10, prng.random());
 
-    try expect(walk.path.items.len <= 10);
+    // Every node has an out-edge, so the walk runs its full length along
+    // the directed triangle n1 -> n2 -> n3 -> n1.
+    try expect(walk.path.items.len == 10);
     try expect(walk.path.items[0] == n1); // Should start with node 1
+    for (walk.path.items[1..], walk.path.items[0 .. walk.path.items.len - 1]) |next, prev| {
+        const expected: u64 = if (prev == n1) n2 else if (prev == n2) n3 else n1;
+        try expect(next == expected);
+    }
 }

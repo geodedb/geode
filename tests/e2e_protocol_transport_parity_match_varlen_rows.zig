@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
 
@@ -22,11 +24,13 @@ fn extract_rows(allocator: std.mem.Allocator, out: []const u8) ![]u8 {
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity MATCH VarLen Rows"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_MatchVarLenRows; OWNER=engine; UPDATED=2025-09-24
 // Deterministic varlen path slice under ORDER with LIMIT/OFFSET; compares full rows across transports.
 test "protocol: transport parity MATCH varlen rows QUIC (gated)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("transport parity MATCH varlen rows QUIC");
     errdefer util.testFail();
 
     const allocator = std.testing.allocator;
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     // Use a deterministic small synthetic dataset exposed by built-in example loader
     // The query orders by projected names to ensure stable order metadata and rows.
     const q = "MATCH (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name AS a, b.name AS b ORDER BY a, b LIMIT 3 OFFSET 0";

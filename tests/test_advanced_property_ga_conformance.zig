@@ -403,13 +403,16 @@ test "ga advanced runtime indexes populate and vector_knn uses scan and index pa
     }
 
     const manager = index_manager_mod.getGlobalIndexManager() orelse return error.MissingIndexManager;
-    try std.testing.expect(manager.advanced_vector_indexes.contains("vec_idx"));
+    // SONNY-6703: a vector index is keyed by its graph and name.
+    const vec_key = (try manager.findAdvancedVectorIndexForPropertyAlloc(allocator, "embedding")) orelse return error.MissingVectorIndex;
+    defer allocator.free(vec_key);
+    try std.testing.expect(std.mem.endsWith(u8, vec_key, "\x1fvec_idx"));
+    try std.testing.expect(manager.advanced_vector_indexes.contains(vec_key));
     try std.testing.expect(manager.advanced_spatial_indexes.contains("geo_idx"));
     try std.testing.expect(manager.advanced_network_indexes.contains("net_idx"));
     try std.testing.expect(manager.advanced_interval_indexes.contains("range_idx"));
     try std.testing.expect(manager.advanced_jsonb_indexes.contains("doc_idx"));
     try std.testing.expect(manager.advanced_domain_indexes.contains("domain_idx"));
-    try std.testing.expectEqualStrings("vec_idx", manager.findAdvancedVectorIndexForProperty("embedding").?);
 
     {
         var with_index = try h.exec(
@@ -423,7 +426,7 @@ test "ga advanced runtime indexes populate and vector_knn uses scan and index pa
         const data = [_]f32{ 0.95, 0.05 };
         break :vector geode.types.vector.VectorF32{ .dim = data.len, .data = &data };
     };
-    const vector_results = try manager.queryAdvancedVectorIndexWithMetric("vec_idx", vector_query, 2, .cosine);
+    const vector_results = try manager.queryAdvancedVectorIndexWithMetric(vec_key, vector_query, 2, .cosine);
     defer manager.allocator.free(vector_results);
     try std.testing.expectEqual(@as(usize, 2), vector_results.len);
     try std.testing.expectEqual(alpha_id, vector_results[0].node_id);

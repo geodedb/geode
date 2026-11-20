@@ -24,6 +24,7 @@
 // CANARY: REQ=REQ-SONNY-3032-GRPC-SESSION-EXPIRY; FEATURE="GrpcSessionLifetime"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny3032_grpc_session_expiry.zig; OWNER=transport; UPDATED=2026-09-27
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
@@ -77,7 +78,7 @@ test "SONNY-3032: over gRPC a client that begins, writes and walks away: after t
     try testing.expectEqual(@as(usize, 1), fx.countLabel(f.st, "g5", "K"));
     try testing.expect(std.mem.eql(u8, &uuid, &(try ad.lookupManagedGraph("g5")).uuid));
     // The SET is undone as far as the undo log reaches (SONNY-3059).
-    if (f.st.getNodesByLabel("g5", "K")) |ids| std.debug.print("K.v after the timeout: {any}\n", .{f.st.getNodeProperty(ids[0], "v")});
+    if (f.st.getNodesByLabel("g5", "K")) |ids| std.debug.print("K.v after the timeout: {any}\n", .{(try f.st.getNodePropertyOrError(ids[0], "v"))});
 
     // The closed session is gone: its COMMIT fails, a request is refused.
     try testing.expect(!(try fx.commit(ga, b)));
@@ -175,7 +176,7 @@ test "SONNY-3032: over gRPC against a spawned server, --idle-in-transaction-time
     defer allocator.free(grpc_addr);
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr, "--data-dir", data_dir, "--idle-in-transaction-timeout", "400" },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr, "--data-dir", data_dir, "--idle-in-transaction-timeout", "400" },
         util.TestEnv.grpcPlaintext(),
     );
     defer server.deinit();

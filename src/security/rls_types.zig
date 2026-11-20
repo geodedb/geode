@@ -1,5 +1,6 @@
-/// RLS property-level filtering types and engine shared between rls_filter.zig and
-/// procedure_registry.zig. This file must NOT import the `geode` module to avoid
+/// RLS label- and property-level filtering types and THE label-deny engine:
+/// the executor's and (SONNY-2729) the transport post-filter's
+/// (src/server/rls_filter.zig re-exports it). This file must NOT import the `geode` module to avoid
 /// circular module dependencies.
 ///
 /// GAP-0280: These types bridge the rls_core.zig Value incompatibility by working with
@@ -122,13 +123,14 @@ pub const RLSFilterEngine = struct {
         self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        const policy = LabelPolicy{
-            .graph = try self.allocator.dupe(u8, graph),
-            .label = try self.allocator.dupe(u8, label),
-            .deny = true,
-            .username = if (username.len > 0) try self.allocator.dupe(u8, username) else "",
-        };
-        try self.policies.append(self.allocator, policy);
+        // SONNY-3038: nothing kept (or leaked) when an allocation fails.
+        const g = try self.allocator.dupe(u8, graph);
+        errdefer self.allocator.free(g);
+        const l = try self.allocator.dupe(u8, label);
+        errdefer self.allocator.free(l);
+        const u: []const u8 = if (username.len > 0) try self.allocator.dupe(u8, username) else "";
+        errdefer if (u.len > 0) self.allocator.free(u);
+        try self.policies.append(self.allocator, .{ .graph = g, .label = l, .deny = true, .username = u });
     }
 
     /// SONNY-2710: register an allow entry: a permissive policy on `label`
@@ -281,6 +283,45 @@ pub const RLSFilterEngine = struct {
         self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.policies.items.len;
+    }
+
+    /// SONNY-3038: remove one deny entry matching graph+label+username
+    /// exactly (the undo of one `addDenyPolicy`; another identical entry, if
+    /// any, stays). SONNY-2729: moved here from the post-filter's engine.
+    pub fn removeOneDenyPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) void {
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        var i = self.policies.items.len;
+        while (i > 0) {
+            i -= 1;
+            const p = self.policies.items[i];
+            if (p.deny and
+                std.mem.eql(u8, p.graph, graph) and
+                std.mem.eql(u8, p.label, label) and
+                std.mem.eql(u8, p.username, username))
+            {
+                self.allocator.free(p.graph);
+                self.allocator.free(p.label);
+                if (p.username.len > 0) self.allocator.free(p.username);
+                _ = self.policies.orderedRemove(i);
+                return;
+            }
+        }
+    }
+
+    /// True iff at least one deny entry applies to `graph`: the transport
+    /// post-filter's fast-path gate, which skips the snapshot and the row
+    /// scan for a graph with no label denies. SONNY-2729: moved here from
+    /// the post-filter's engine.
+    pub fn hasPoliciesForGraph(self: *Self, graph: []const u8) bool {
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+        for (self.policies.items) |p| {
+            if (!p.deny) continue;
+            if (std.mem.eql(u8, p.graph, graph)) return true;
+        }
+        return false;
     }
 
     // ---- Property policy management ----

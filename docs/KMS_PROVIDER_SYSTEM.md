@@ -8,83 +8,79 @@ Geode provides enterprise-grade Key Management Service (KMS) integration for Tra
 
 **Core Implementation**: `src/security/kms.zig`
 
-- **Provider Types**: Local dev, External KMS, Remote KMS, HashiCorp Vault
+> **Status (SONNY-2441, 2026-11-12):** `KMSProvider` wraps and unwraps data
+> keys with the `external_kms` provider only. The `local_dev` provider was
+> removed (SONNY-6448): its wrapping key was derived from the key id, which
+> every wrapped key carries, so it protected nothing. A
+> `vault_transit`, `aws_kms` or `azure_kv` configuration is accepted by
+> `KMSProvider.init` but `wrapDataKey` / `unwrapDataKey` refuse it with
+> `error.UnsupportedProvider` (Vault is a separate module,
+> `src/security/vault_kms_provider.zig`). The former `remote_kms` provider was
+> removed: its wrap ignored the key it was given and returned one the remote
+> KMS generated, so unwrapping never gave the caller's key back. `KMSProvider`
+> is not used by the server's TDE path; it is library code covered by
+> `zig build test-kms-provider`. The `TDEKeyManager` module that used to sit
+> on top of it was never used by any executable and was removed (SONNY-6298);
+> wiring a KMS into server TDE is tracked as SONNY-6380. The remote KMS client itself
+> (`src/security/kms_remote.zig`) is covered by `zig build test-remote-kms`.
+> It verifies the server's certificate against a CA bundle and refuses to
+> connect without one, binds attestations to the TLS channel, and has no
+> local fallback (`zig build test-sonny6442-kms-channel`). The `external_kms`
+> provider's seeded stand-in compiles into test builds only (SONNY-6442).
+> `KeyRegistry` (`src/security/key_rotation.zig`) has no remote-KMS rotation:
+> `rotateWithRemoteKms` never compiled and was removed (SONNY-6378).
+
+- **Provider Types**: External KMS (wrap/unwrap, test builds only); Vault, AWS and Azure configurations refuse
 - **Envelope Encryption**: AES-256-GCM with JSON metadata serialization
 - **Factory Functions**: Easy provider instantiation with configuration management
 - **Statistics Integration**: Performance tracking and cost estimation
 
 ## Supported KMS Providers
 
-### 1. Local Development Provider (Development Only)
-
-```zig
-var provider = kms.localDevProvider(allocator);
-// Simple XOR-based encryption for development/testing - NOT secure
-```
-
-### 2. External KMS Provider (Deterministic)
+### 1. External KMS Provider (Deterministic)
 
 ```zig  
-var provider = kms.externalKMSProvider(allocator, 0xDEADBEEFCAFEBABE);
-// AES-256-GCM with deterministic behavior for testing and CI
+var provider = try kms.externalKMSProvider(allocator, 0xDEADBEEFCAFEBABE);
+// AES-256-GCM under a seed-derived key, a fresh random nonce per wrap
 ```
 
-### 3. Remote KMS Provider (QUIC-based)
+### 2. HashiCorp Vault configuration
 
 ```zig
-var provider = kms.remoteKMSProvider(allocator, "kms.example.com", 3141, "auth_token");
-// Production KMS over QUIC with authentication and tamper detection
+var provider = try kms.vaultKMSProvider(allocator, "https://vault.example.com", "vault_token", "secret/path");
+// wrapDataKey / unwrapDataKey return error.UnsupportedProvider: KMSProvider
+// has no Vault backend (see the status note above)
 ```
 
-### 4. HashiCorp Vault Provider (Enterprise)
+## TDE-KMS Integration — Not Implemented
 
-```zig
-var provider = kms.vaultKMSProvider(allocator, "https://vault.example.com", "vault_token", "secret/path");
-// Enterprise Vault integration with CLI-based operations
-```
+**Status (2026-11-11, SONNY-6298):** the TDE master key is not obtained from,
+or wrapped by, any KMS provider. This section used to describe a
+`TDEKeyManager` in `src/security/tde_kms_integration.zig`
+(`initializeWithKMS`, KMS-derived data/WAL keys, `rotateKeys`, and the
+`createLocalDevTDE` / `createRemoteKMSTDE` / `createVaultTDE` factories). That
+file was reachable from no executable or test in `build.zig`; it was never
+compiled and was removed, with its uncompiled test
+`tests/test_tde_kms_integration.zig`.
 
-## TDE-KMS Integration
+What the server does:
 
-**Implementation**: `src/security/tde_kms_integration.zig`
-
-### TDEKeyManager: Comprehensive key lifecycle management
-
-```zig
-// Initialize TDE with KMS provider
-var manager = tde_kms.TDEKeyManager.init(allocator);
-try manager.initializeWithKMS(kms.KMSConfig{
-    .provider_type = .vault_transit,
-    .vault_addr = "https://vault.company.com",
-    .auth_token = vault_token,
-    .vault_key_path = "geode/encryption"
-});
-
-// Get derived keys for different encryption domains
-const data_key = try manager.getDataKey();    // For database pages
-const wal_key = try manager.getWALKey();      // For WAL records
-
-// Perform key rotation
-try manager.rotateKeys();
-```
-
-### Factory Functions for Different Configurations
-
-```zig
-// Local development TDE
-var dev_tde = try tde_kms.createLocalDevTDE(allocator);
-
-// External KMS TDE (deterministic for testing)
-var test_tde = try tde_kms.createExternalKMSTDE(allocator, 0xSEED);
-
-// Remote KMS TDE (production QUIC)
-var prod_tde = try tde_kms.createRemoteKMSTDE(allocator, "kms.prod.com", 3141, token);
-
-// HashiCorp Vault TDE (enterprise)
-var vault_tde = try tde_kms.createVaultTDE(allocator, vault_addr, vault_token, key_path);
-
-// Environment variable TDE (legacy)
-var env_tde = try tde_kms.createEnvTDE(allocator);
-```
+- The TDE master key is read from `GEODE_TDE_KEY` (64 hex characters) by
+  `src/security/tde_key_manager.zig`.
+- When `GEODE_KMS_URL` is set, server startup calls
+  `tde_key_manager.configureKMS`, which only checks that the endpoint accepts a
+  TCP connection and refuses to start if it does not. No key is fetched from
+  or wrapped by that endpoint; the startup log says "KMS endpoint reachable",
+  not "KMS configured". A symbolic provider name (`aws`, `azure`, `gcp`,
+  `hashicorp`, `local`) is not an endpoint and no client for it is built in:
+  startup refuses it (SONNY-6348; it used to run a local AES-256-GCM round
+  trip with an ephemeral key and log "KMS configured").
+- Nothing in the server imports `src/security/kms.zig`. The
+  `tde.configure_kms` and `tde.configure_mock_kms` procedures are refused
+  with 0A000 (SONNY-6342, `src/execution/storage_dispatch.zig`), and
+  `tde.test_kms_wrap_unwrap` / `tde.test_kms_attestation` run self-tests in
+  `src/security/tde.zig`, not the providers in `kms.zig`; none of them
+  installs a key into page or WAL encryption.
 
 ## Vault Integration Features
 
@@ -100,6 +96,12 @@ var env_tde = try tde_kms.createEnvTDE(allocator);
 
 ### Production Usage
 
+> **Not wired (2026-11-11, SONNY-6298):** no code reads `GEODE_KMS_PROVIDER`
+> or `GEODE_VAULT_KEY_PATH`, and `geode serve` has no `--kms-provider` flag.
+> The TDE master key comes from `GEODE_TDE_KEY`; see
+> [TDE-KMS Integration](#tde-kms-integration--not-implemented). The commands
+> below do not produce Vault-backed TDE.
+
 ```bash
 # Set Vault environment
 export VAULT_ADDR="https://vault.company.com"
@@ -109,8 +111,8 @@ export VAULT_TOKEN="hvs.CAESI..."
 export GEODE_KMS_PROVIDER="vault"
 export GEODE_VAULT_KEY_PATH="geode/encryption"
 
-# Start Geode with Vault-backed TDE
-./zig-out/bin/geode serve --enable-tde --kms-provider vault
+# There is no --kms-provider option: geode serve refuses it (SONNY-6442).
+./zig-out/bin/geode serve --enable-tde
 ```
 
 ## Security & Compliance Features
@@ -140,15 +142,22 @@ export GEODE_VAULT_KEY_PATH="geode/encryption"
 - **Audit Logging**: All KMS operations logged for compliance
 - **Zero Plaintext**: Master keys never stored in plaintext on disk
 - **Multiple Providers**: Easy migration between KMS systems
-- **Performance**: <5% TDE overhead on OLTP workloads (the validated target: `tests/test_tde_oltp_overhead_threshold.zig`, [BENCHMARK_REPORT.md](../BENCHMARK_REPORT.md))
+- **Performance**: TDE overhead measured by `zig build test-sonny6435-tde-overhead`: about +1% with the default per-commit fsync, about +29% on the commit path without fsync ([TDE_FILE_LEVEL_ENCRYPTION.md](TDE_FILE_LEVEL_ENCRYPTION.md#measured-overhead))
 
 ## Test Coverage & Verification
 
 ### Test Suites
 
-- **`tests/test_kms_provider.zig`**: 11 comprehensive KMS provider test scenarios
-- **`tests/test_tde_kms_integration.zig`**: 9 TDE-KMS integration test scenarios  
-- **`tests/test_vault_kms_provider.zig`**: 6 Vault-specific integration tests
+- `zig build test-remote-kms`, `test-remote-kms-hardening`,
+  `test-sonny2394-kms-client-deadline` and `test-sonny6442-kms-channel`: the
+  remote KMS server and client over real QUIC (`src/security/kms_remote.zig`).
+- `zig build test-gap0890`: key rotation policy and lazy re-wrap.
+- `zig build test-kms-provider` and `test-sonny2441-kms-provider-paths`:
+  `KMSProvider` wrap/unwrap for the `external_kms` provider, and refusal for
+  the others. `test-sonny6448-kms-dead-paths`: there is no `local_dev`
+  provider.
+- `tests/test_vault_kms_provider.zig` and `tests/test_tde_kms_integration.zig`
+  do not exist.
 
 ### Key Test Scenarios
 
@@ -160,6 +169,9 @@ export GEODE_VAULT_KEY_PATH="geode/encryption"
 - **Vault Integration**: Real Vault server testing with live authentication
 
 ## Production Deployment
+
+> **Not wired:** the Vault and `GEODE_KMS_PROVIDER` settings in this section are
+> not read by the server (see [Production Usage](#production-usage)).
 
 ### Vault Configuration
 
@@ -199,7 +211,7 @@ export GEODE_VAULT_KEY_PATH="geode"
 
 - **Key Operations**: <10ms for wrap/unwrap operations
 - **Vault Integration**: <50ms for key retrieval including network latency
-- **TDE Overhead**: <5% TDE overhead on OLTP workloads (validated by `tests/test_tde_oltp_overhead_threshold.zig`)
+- **TDE Overhead**: about +1% with the default per-commit fsync, about +29% on the commit path without fsync (`zig build test-sonny6435-tde-overhead`)
 - **Memory Efficiency**: Minimal key caching with automatic cleanup
 - **Scalability**: Supports thousands of concurrent encrypt/decrypt operations
 
@@ -226,34 +238,11 @@ pub const KMSProvider = struct {
 };
 ```
 
-### TDEKeyManager Interface
-
-```zig
-pub const TDEKeyManager = struct {
-    pub fn init(allocator: std.mem.Allocator) TDEKeyManager;
-    pub fn deinit(self: *TDEKeyManager) void;
-    pub fn initializeWithKMS(self: *TDEKeyManager, kms_config: kms.KMSConfig) !void;
-    pub fn initializeWithEnv(self: *TDEKeyManager) !void;
-    pub fn getDataKey(self: *TDEKeyManager) ![32]u8;
-    pub fn getWALKey(self: *TDEKeyManager) ![32]u8;
-    pub fn rotateKeys(self: *TDEKeyManager) !void;
-    pub fn getStatus(self: *TDEKeyManager) KeyStatus;
-};
-```
-
 ### Factory Functions
 
 ```zig
 // KMS Provider factories
-pub fn localDevProvider(allocator: std.mem.Allocator) KMSProvider;
-pub fn externalKMSProvider(allocator: std.mem.Allocator, seed: u64) KMSProvider;
-pub fn remoteKMSProvider(allocator: std.mem.Allocator, endpoint: []const u8, port: u16, auth_token: ?[]const u8) KMSProvider;
-pub fn vaultKMSProvider(allocator: std.mem.Allocator, vault_addr: []const u8, vault_token: []const u8, key_path: []const u8) KMSProvider;
+pub fn externalKMSProvider(allocator: std.mem.Allocator, seed: u64) !KMSProvider;
+pub fn vaultKMSProvider(allocator: std.mem.Allocator, vault_addr: []const u8, vault_token: []const u8, key_path: []const u8) !KMSProvider;
 
-// TDE factories
-pub fn createLocalDevTDE(allocator: std.mem.Allocator) !TDEKeyManager;
-pub fn createExternalKMSTDE(allocator: std.mem.Allocator, seed: u64) !TDEKeyManager;
-pub fn createRemoteKMSTDE(allocator: std.mem.Allocator, endpoint: []const u8, port: u16, auth_token: ?[]const u8) !TDEKeyManager;
-pub fn createVaultTDE(allocator: std.mem.Allocator, vault_addr: []const u8, vault_token: []const u8, key_path: []const u8) !TDEKeyManager;
-pub fn createEnvTDE(allocator: std.mem.Allocator) !TDEKeyManager;
 ```

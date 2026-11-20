@@ -21,7 +21,7 @@ make build > /dev/null 2>&1 || { echo -e "${RED}Build failed${NC}"; exit 1; }
 
 # Start server
 echo "Starting Geode server..."
-./zig-out/bin/geode serve --data_dir /tmp/geode_index_test_$$ --insecure > /tmp/geode_server_$$.log 2>&1 &
+./zig-out/bin/geode serve --data_dir /tmp/geode_index_test_$$ > /tmp/geode_server_$$.log 2>&1 &
 SERVER_PID=$!
 sleep 2
 

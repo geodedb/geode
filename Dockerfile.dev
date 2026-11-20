@@ -115,8 +115,8 @@ RUN set -ex && \
     echo "$USERNAME ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/$USERNAME && \
     chmod 0440 /etc/sudoers.d/$USERNAME
 
-# Install Zig 0.15.1
-ARG ZIG_VERSION=0.15.2
+# Install Zig (build.zig.zon minimum_zig_version)
+ARG ZIG_VERSION=0.16.0
 RUN ARCH=$(dpkg --print-architecture) && \
     if [ "$ARCH" = "arm64" ]; then \
         ZIG_ARCH="aarch64"; \

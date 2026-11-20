@@ -10,6 +10,9 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 MODE="${1:-singleton}"
+# SONNY-6453: a release geode refuses an unverified connection; verify the
+# server against its CA (a path inside the container).
+CA_CERT="${GEODE_CA_CERT:-/certs/ca.crt}"
 
 echo -e "${GREEN}=== Docker CI Test ($MODE) ===${NC}"
 
@@ -35,7 +38,7 @@ if [[ "$MODE" == "singleton" ]]; then
 
     # Run basic query test
     echo "Testing basic query..."
-    if docker exec geode-singleton geode query "RETURN 1 AS x" --server 127.0.0.1:7567 2>/dev/null | grep -q '"x":1'; then
+    if docker exec geode-singleton geode query "RETURN 1 AS x" --server 127.0.0.1:7567 --ca-cert "$CA_CERT" 2>/dev/null | grep -q '"x":1'; then
         echo -e "${GREEN}PASS: Basic query test${NC}"
     else
         echo -e "${RED}FAIL: Basic query test${NC}"
@@ -66,7 +69,7 @@ elif [[ "$MODE" == "distributed" ]]; then
 
     # Test leader
     echo "Testing leader node..."
-    if docker exec geode-leader geode query "RETURN 1 AS x" --server 127.0.0.1:7567 2>/dev/null | grep -q '"x":1'; then
+    if docker exec geode-leader geode query "RETURN 1 AS x" --server 127.0.0.1:7567 --ca-cert "$CA_CERT" 2>/dev/null | grep -q '"x":1'; then
         echo -e "${GREEN}PASS: Leader query test${NC}"
     else
         echo -e "${RED}FAIL: Leader query test${NC}"

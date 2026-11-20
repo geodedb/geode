@@ -4,7 +4,7 @@ const geode = @import("geode");
 // The build integration requirement ensures generated unicode tables are compiled in and reachable.
 // We validate by calling a representative unicode function (nfcNormalize) on a known decomposed sequence
 // and asserting it returns a normalized form using the shipped tables.
-// CANARY: REQ=REQ-GQL-UNICODE-006; FEATURE="UnicodeBuildIntegration"; ASPECT=BuildStep; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_006_BuildIncludesTables; OWNER=unicode; UPDATED=2025-09-27
+// CANARY: REQ=REQ-GQL-UNICODE-006; FEATURE="UnicodeBuildIntegration"; ASPECT=BuildStep; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_UNICODE_006_BuildIncludesTables; OWNER=unicode; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_GQL_UNICODE_006_BuildIncludesTables" {
     var gpa = std.heap.DebugAllocator(.{}){};

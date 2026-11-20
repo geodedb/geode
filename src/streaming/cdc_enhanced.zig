@@ -70,35 +70,35 @@ const CDCChangeEventJson = struct {
     after: ?[]const u8,
 };
 
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=API; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2025-11-12
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Lifecycle"; ASPECT=API; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_StartStopLifecycle; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Retention; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_Retention; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=API; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Lifecycle"; ASPECT=API; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_StartStopLifecycle; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Retention; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_Retention; OWNER=streaming; UPDATED=2026-11-14
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Ingest; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_Ingest; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStream; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_042_CDC_ChangeStreamPromote; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_ChangeStreamPerf; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamDisabled; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_ChangeStreamDisabled; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformed; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformed; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Ordering; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_Ordering; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=OrderingConcurrency; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_OrderingConcurrency; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamDisabled; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_ChangeStreamDisabled; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformed; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformed; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Ordering; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_Ordering; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=OrderingConcurrency; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_OrderingConcurrency; OWNER=streaming; UPDATED=2026-11-14
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=OrderingPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_OrderingPerf; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=MixedWorkload; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_MixedWorkload; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=AdaptiveFlush; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveFlush; OWNER=streaming; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=AdaptiveBaselinePerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveBaselinePerf; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Telemetry; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_Telemetry; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Telemetry; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_Telemetry; OWNER=streaming; UPDATED=2026-11-14
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=AdaptiveDiffPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=EventCapture; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_EventCapture; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedDiagnostics; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformed; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedLog; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformed; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedLogBuffer; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformedLogBuffer; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=DiagnosticsExport; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_DiagnosticsExport; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ResumeTokenRestart; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_ResumeTokenRestart; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedSnapshotInterval; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedSnapshotIntervalEnv; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedPayloadHash; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedPayloadHash; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedGuardrailWarn; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedGuardrailAbort; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedGuardrailWarnEnv; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedGuardrailAbortEnv; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedSnapshotIntervalEnv; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedSnapshotIntervalEnv; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=BackpressureAdaptive; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_BackpressureAdaptive; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=EventCapture; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_EventCapture; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedDiagnostics; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformed; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedLog; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformed; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedLogBuffer; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformedLogBuffer; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=DiagnosticsExport; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_DiagnosticsExport; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ResumeTokenRestart; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_ResumeTokenRestart; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedSnapshotInterval; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedSnapshotIntervalEnv; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedPayloadHash; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedPayloadHash; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedGuardrailWarn; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedGuardrailAbort; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedGuardrailWarnEnv; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedGuardrailAbortEnv; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedGuardrailEnv; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedSnapshotIntervalEnv; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_MalformedSnapshotIntervalEnv; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=BackpressureAdaptive; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_BackpressureAdaptive; OWNER=streaming; UPDATED=2026-11-14
 const Allocator = std.mem.Allocator;
 
 // Manual JSON helpers removed - using json_lib for all JSON encoding
@@ -253,7 +253,7 @@ pub const CDCEngine = struct {
     worker_pool: ?*pooled.ThreadPool,
     mutex: std.Io.Mutex,
     diag_events: std.ArrayList(DiagEvent), // lifecycle diagnostics (START/STOP)
-    current_txn_id: u64 = 0, // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=TxnAttribution; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2025-09-20
+    current_txn_id: u64 = 0, // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=TxnAttribution; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2026-11-14
     next_sequence: u64 = 1,
     adapt_events_accum: u32 = 0,
     dynamic_batch_size: u32 = 0,
@@ -463,9 +463,9 @@ pub const CDCEngine = struct {
         }
 
         self.is_running = true;
+        // SONNY-6570: a failed start leaves the engine stopped.
+        errdefer self.is_running = false;
         self.start_time_ms = compat_milliTimestamp();
-        // record lifecycle diagnostic
-        self.diag_events.append(self.allocator, .start) catch {}; // Diagnostic - silently ignore OOM
         const pool = try pooled.ThreadPool.init(self.allocator, .{
             .num_threads = 1,
             .queue_capacity = 4,
@@ -476,6 +476,12 @@ pub const CDCEngine = struct {
             .callback = runProcessingLoop,
         });
         self.worker_pool = pool;
+        // CANARY: REQ=REQ-SONNY-6593-CDC-START-LIFECYCLE; FEATURE="CDCControl"; ASPECT=StartRecordedOnSuccessOnly; STATUS=TESTED; TEST=tests/test_sonny6593_cdc_start_lifecycle.zig; OWNER=cdc; UPDATED=2026-11-15
+        // SONNY-6593: the start is recorded once it has happened. It was
+        // recorded before the worker pool, so a start that then failed left
+        // a start event for an engine that never ran. Diagnostic only: an
+        // allocation failure here leaves the engine running, unrecorded.
+        self.diag_events.append(self.allocator, .start) catch {};
     }
 
     pub fn stop(self: *Self) void {
@@ -557,15 +563,32 @@ pub const CDCEngine = struct {
         }
     }
 
+    /// SONNY-6570: the worker sleeps this long at a time between flushes, so
+    /// `stop()` (which joins it) waits at most about this long.
+    const processing_poll_ms: u64 = 50;
+
+    fn workerRunning(self: *Self) bool {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        return self.is_running;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6570-CDC-WORKER-SLEEPS; FEATURE="CDC Engine"; ASPECT=IdleWorkerSleeps; STATUS=TESTED; TEST=tests/test_sonny6570_cdc_honesty.zig; OWNER=streaming; UPDATED=2026-11-15
     fn processingLoop(self: *Self) void {
-        while (self.is_running) {
-            // Sleep fallback for Zig 0.15: use std.time.sleep if available else busy-wait
-            if (@hasDecl(std.time, "sleep")) {
-                std.time.sleep(self.config.flush_interval_ms * 1_000_000);
-            } else {
-                const target = compat_milliTimestamp() + @as(i64, @intCast(self.config.flush_interval_ms));
-                while (compat_milliTimestamp() < target) {}
+        const io = std.Io.Threaded.global_single_threaded.io();
+        while (self.workerRunning()) {
+            // SONNY-6570: sleep until the next flush, in short slices so a
+            // stop is noticed promptly. The loop looked for Zig 0.15's
+            // `std.time.sleep`, which 0.16 does not have, and otherwise
+            // busy-waited: a running engine burned a full core.
+            const target = compat_milliTimestamp() + @as(i64, @intCast(self.config.flush_interval_ms));
+            while (self.workerRunning()) {
+                const left = target - compat_milliTimestamp();
+                if (left <= 0) break;
+                const slice: u64 = @min(@as(u64, @intCast(left)), processing_poll_ms);
+                io.sleep(.fromMilliseconds(@intCast(slice)), .awake) catch {};
             }
+            if (!self.workerRunning()) break;
 
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -647,7 +670,8 @@ pub const CDCEngine = struct {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         const out = try allocator.alloc(DiagEvent, self.diag_events.items.len);
-        std.mem.copy(DiagEvent, out, self.diag_events.items);
+        // SONNY-6593: std.mem.copy is gone in Zig 0.16 (this did not compile).
+        @memcpy(out, self.diag_events.items);
         return out;
     }
 
@@ -1303,9 +1327,13 @@ fn freeEventShallow(allocator: Allocator, ev: *ChangeEvent) void {
 }
 
 // System procedures for CDC control
+// CANARY: REQ=REQ-SONNY-6570-CDC-START-NO-LEAK; FEATURE="CDC Engine"; ASPECT=StartFailureFreesEngine; STATUS=TESTED; TEST=tests/test_sonny6570_cdc_honesty.zig; OWNER=streaming; UPDATED=2026-11-15
+/// SONNY-6570: a failed init or start frees the engine (it leaked).
 pub fn startCDC(allocator: Allocator, config: CDCConfig) !*CDCEngine {
     const engine = try allocator.create(CDCEngine);
+    errdefer allocator.destroy(engine);
     engine.* = try CDCEngine.init(allocator, config);
+    errdefer engine.deinit();
     try engine.start();
     return engine;
 }

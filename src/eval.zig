@@ -23,6 +23,7 @@ const evaluator_adapter = @import("execution/evaluator_adapter.zig");
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-001; FEATURE="Circular Dependency Resolution"; ASPECT=ValueTypesImport; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Import shared value types from value_types.zig module
 const value_types = @import("value_types.zig");
+const query_arena = @import("server/query_arena.zig");
 
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-002; FEATURE="Circular Dependency Resolution"; ASPECT=ErrorTypeReexport; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Re-export EvalError from value_types module for backward compatibility
@@ -49,6 +50,7 @@ fn isPropagatableEvalError(err: EvalError) bool {
         EvalError.InvalidArgs,
         EvalError.MissingParameter,
         EvalError.TimeParse,
+        EvalError.DurationParse,
         // ENG-3922(b): an over-cap vector literal is a genuine invalid argument
         // — `size(vectorf32([ …65536… ]))` must report the limit, not NULL.
         EvalError.VectorTooLarge,
@@ -74,6 +76,10 @@ fn isPropagatableEvalError(err: EvalError) bool {
         // never be swallowed into a NULL that looks like a successful answer.
         EvalError.ReadQueryBudgetExceeded,
         EvalError.ReadQueryCancelled,
+        // SONNY-6327: an FLE read refusal nested in a call is never a NULL.
+        EvalError.SearchNotPermitted,
+        EvalError.FleCatalogUnavailable,
+        EvalError.FleDecryptionFailed,
         EvalError.OutOfMemory,
         => true,
         else => false,
@@ -135,6 +141,17 @@ fn raiseInListTypeError() EvalError {
 /// into NULL, false, 0 or a skipped row (a WHERE, a projection cell, an
 /// aggregate's argument, a subquery) must pass these on instead, or the
 /// query answers as if the rows did not match.
+/// SONNY-6327: an FLE read refusal (the field may not be searched by this
+/// principal, the FLE catalog cannot be loaded, the value does not decrypt).
+/// A predicate that meets one is the query's error, never the row's false:
+/// a row must not be silently dropped (or kept) on an answer FLE refused.
+pub fn isFleReadRefusal(err: anyerror) bool {
+    return switch (err) {
+        error.SearchNotPermitted, error.FleCatalogUnavailable, error.FleDecryptionFailed => true,
+        else => false,
+    };
+}
+
 pub fn isResourceLimitError(err: anyerror) bool {
     return switch (err) {
         error.ExpressionTooDeep,
@@ -337,6 +354,8 @@ const RowScope = struct {
         nodeVisibleOnCopy: *const fn (ptr: *anyopaque, node: *const graph_store.Node) bool,
         stepAllowed: *const fn (ptr: *anyopaque, store: *graph_store.GraphStore, edge: *const graph_store.Edge, next_node_id: u64) bool,
         edgeVisible: *const fn (ptr: *anyopaque, edge: *const graph_store.Edge) bool,
+        tenantVisible: *const fn (ptr: *anyopaque, tag: []const u8) bool,
+        storageTenant: *const fn (ptr: *anyopaque) ?[]const u8,
         deinit: *const fn (ptr: *anyopaque) void,
     };
 
@@ -384,6 +403,20 @@ const RowScope = struct {
         return self.vtable.edgeVisible(self.ptr, edge);
     }
 
+    /// SONNY-2820: may the session see a row tagged `tag`? The MATCH path's
+    /// tenant predicate (`tenant_visibility.passesTenantFilterSlice`,
+    /// hierarchy-aware: a parent sees its descendants' rows).
+    fn tenantVisible(self: RowScope, tag: []const u8) bool {
+        return self.vtable.tenantVisible(self.ptr, tag);
+    }
+
+    /// SONNY-2820: the tenant to hand a storage primitive that filters by
+    /// exact tag (`tenant_visibility.storageTenantFilter`): null when the
+    /// hierarchy lets the session see more than its own tag.
+    fn storageTenant(self: RowScope) ?[]const u8 {
+        return self.vtable.storageTenant(self.ptr);
+    }
+
     fn deinit(self: RowScope) void {
         self.vtable.deinit(self.ptr);
     }
@@ -427,6 +460,7 @@ fn activeContextHasIdentity() bool {
 /// compiles it (and the RLS modules it needs).
 fn beginHopRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]const u8) std.mem.Allocator.Error!RowScope {
     const match_operations = @import("execution/match_operations.zig");
+    const tenant_visibility = @import("execution/tenant_visibility.zig");
     const Impl = struct {
         allocator: std.mem.Allocator,
         rls_row: std.StringHashMap(@import("rls").Value),
@@ -462,6 +496,12 @@ fn beginHopRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]
             defer self.rls_row.clearRetainingCapacity();
             return self.hop.edgeVisible(edge);
         }
+        fn tenantVisible(ptr: *anyopaque, tag: []const u8) bool {
+            return tenant_visibility.passesTenantFilterSlice(tag, from(ptr).hop.filter_tenant);
+        }
+        fn storageTenant(ptr: *anyopaque) ?[]const u8 {
+            return tenant_visibility.storageTenantFilter(from(ptr).hop.filter_tenant);
+        }
         fn deinit(ptr: *anyopaque) void {
             const self = from(ptr);
             // The scope's teardown first: it frees the verdict cache and ends
@@ -478,6 +518,8 @@ fn beginHopRowScope(allocator: std.mem.Allocator, graph: []const u8, tenant: ?[]
             .nodeVisibleOnCopy = nodeVisibleOnCopy,
             .stepAllowed = stepAllowed,
             .edgeVisible = edgeVisible,
+            .tenantVisible = tenantVisible,
+            .storageTenant = storageTenant,
             .deinit = deinit,
         };
     };
@@ -538,11 +580,15 @@ const truthy = value_types.truthy;
 // Phase 6 M6.1: Import type promotion module for type conversion and validation utilities
 const type_promotion = @import("eval/type_promotion.zig");
 const value_order = @import("execution/value_order.zig");
+const temporal_ops = @import("eval/temporal_ops.zig");
+const canonical_string = @import("unicode/canonical_string.zig");
 const decimal_text = @import("types/decimal_text.zig");
 
 // CANARY: REQ=REQ-EVAL-REFACTOR-001; FEATURE="EvalExpr Refactoring"; ASPECT=CallHandlersImport; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-30
 // Import call handlers module for function call evaluation helpers
 const call_handlers = @import("eval/call_handlers.zig");
+const function_arity = @import("eval/function_arity.zig");
+const value_utilities = @import("execution/value_utilities.zig");
 // GAP-0537: dedicated handler modules extracted from the fallback .Call branch
 const ts_call_handlers = @import("eval/ts_call_handlers.zig");
 const quantifier_call_handlers = @import("eval/quantifier_call_handlers.zig");
@@ -644,6 +690,34 @@ fn floatPower(base: f64, exp: i64) EvalError!Value {
     return decimalFromF64(result);
 }
 
+// CANARY: REQ=REQ-SONNY-6596-APPROXIMATE-ARITHMETIC; FEATURE="NumericValueExpression"; ASPECT=ApproximateOperands; STATUS=TESTED; TEST=tests/test_sonny6596_approximate_literal.zig; OWNER=eval; UPDATED=2026-11-15
+/// SONNY-6596: the operands of a dyadic arithmetic operator as f64 when one
+/// of them is approximate (REAL or DOUBLE) and the other a number: ISO/IEC
+/// 39075:2024 20.21 <numeric value expression>, SR 2: then the result is
+/// approximate (Geode's DOUBLE). Null otherwise (both exact, or a
+/// non-number), and the exact arms decide.
+fn approximateOperands(l: Value, r: Value) ?[2]f64 {
+    const a = value_order.numberOf(l) orelse return null;
+    const b = value_order.numberOf(r) orelse return null;
+    if (a != .float and b != .float) return null;
+    return .{ numberAsF64(a), numberAsF64(b) };
+}
+
+fn numberAsF64(n: value_order.Number) f64 {
+    return switch (n) {
+        .float => |f| f,
+        .exact => |e| @as(f64, @floatFromInt(e.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(e.scale)),
+    };
+}
+
+/// An approximate result: a DOUBLE, or 22003 when it is not a finite number
+/// (20.21 GR 4: a result out of the type's range is a numeric value out of
+/// range).
+fn approximateResult(f: f64) EvalError!Value {
+    if (!std.math.isFinite(f)) return EvalError.NumericOutOfRange;
+    return .{ .Double = f };
+}
+
 pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) EvalError!Value {
     return switch (op) {
         .And => and3(l, r),
@@ -701,20 +775,15 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const sum = std.math.add(i128, lc, rc) catch return EvalError.DecimalOverflow;
                 break :blk .{ .Decimal = .{ .coeff = sum, .scale = maxs } };
             }
+            if (approximateOperands(l, r)) |p| break :blk try approximateResult(p[0] + p[1]);
             // CANARY: REQ=REQ-DATE-INTERVAL-001; FEATURE="DateIntervalArithmetic"; ASPECT=Addition; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
-            // Date + Interval: Add months and days from interval to date
-            // Date + Interval (either order): the months, the day clamped to
-            // the target month, then the days. SONNY-2769: the month and day
-            // arithmetic was i32 and aborted the server past it
-            // (`DATE '2026-01-01' + duration('P2147483647D')`); a date past the
-            // day range is 22003.
-            if ((l == .Date and r == .Interval) or (l == .Interval and r == .Date)) {
-                const date = if (l == .Date) l.Date else r.Date;
-                const interval = if (l == .Interval) l.Interval else r.Interval;
-                const days = @import("types/datetime.zig").Date.addMonthsDays(date.days_since_epoch, interval.months, interval.days) catch
-                    return EvalError.IntegerOverflow;
-                break :blk .{ .Date = .{ .days_since_epoch = days } };
-            }
+            // An instant (date, time, zoned time, local or zoned datetime)
+            // plus a duration, in either order, and a duration plus a
+            // duration (SONNY-2797; only Date + Interval was implemented):
+            // the months, the day clamped to the target month, then the
+            // day-to-second part. SONNY-2769: a result past the range is
+            // 22003.
+            if (try temporal_ops.evalTemporal(.Add, l, r)) |v| break :blk v;
             return EvalError.TypeMismatch;
         },
         .Sub => blk2: {
@@ -737,14 +806,11 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const diff = std.math.sub(i128, lc, rc) catch return EvalError.DecimalOverflow;
                 break :blk2 .{ .Decimal = .{ .coeff = diff, .scale = maxs } };
             }
+            if (approximateOperands(l, r)) |p| break :blk2 try approximateResult(p[0] - p[1]);
             // CANARY: REQ=REQ-DATE-INTERVAL-002; FEATURE="DateIntervalArithmetic"; ASPECT=Subtraction; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
-            // Date - Interval: Subtract months and days from interval
-            if (l == .Date and r == .Interval) {
-                // SONNY-2769: see Date + Interval.
-                const days = @import("types/datetime.zig").Date.addMonthsDays(l.Date.days_since_epoch, -@as(i64, r.Interval.months), -@as(i64, r.Interval.days)) catch
-                    return EvalError.IntegerOverflow;
-                break :blk2 .{ .Date = .{ .days_since_epoch = days } };
-            }
+            // An instant minus a duration, a duration minus a duration, and
+            // the duration between two instants of one type (SONNY-2797).
+            if (try temporal_ops.evalTemporal(.Sub, l, r)) |v| break :blk2 v;
             return EvalError.TypeMismatch;
         },
         .Mul => blk3: {
@@ -767,6 +833,9 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const prod = std.math.mul(i128, ld.coeff, rd.coeff) catch return EvalError.DecimalOverflow;
                 break :blk3 .{ .Decimal = .{ .coeff = prod, .scale = res_scale } };
             }
+            if (approximateOperands(l, r)) |p| break :blk3 try approximateResult(p[0] * p[1]);
+            // A duration times a number, either order (SONNY-2797).
+            if (try temporal_ops.evalTemporal(.Mul, l, r)) |v| break :blk3 v;
             return EvalError.TypeMismatch;
         },
         .Div => blk4: {
@@ -803,6 +872,13 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
 
                 break :blk4 .{ .Decimal = .{ .coeff = quotient, .scale = @intCast(result_scale) } };
             }
+            if (approximateOperands(l, r)) |p| {
+                // 20.21 GR 3: a zero divisor is 22012.
+                if (p[1] == 0) return EvalError.DivisionByZero;
+                break :blk4 try approximateResult(p[0] / p[1]);
+            }
+            // A duration divided by a number (SONNY-2797).
+            if (try temporal_ops.evalTemporal(.Div, l, r)) |v| break :blk4 v;
             return EvalError.TypeMismatch;
         },
         .Mod => blk_mod: {
@@ -829,6 +905,10 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 const base: f64 = @as(f64, @floatFromInt(l.Decimal.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(l.Decimal.scale));
                 break :blk_pow try floatPower(base, r.Int);
             }
+            if (approximateOperands(l, r)) |p| {
+                if (p[0] == 0 and p[1] < 0) return EvalError.DivisionByZero;
+                break :blk_pow try approximateResult(std.math.pow(f64, p[0], p[1]));
+            }
             return EvalError.TypeMismatch;
         },
         .Eq, .Ne, .Lt, .Le, .Gt, .Ge => blk5: {
@@ -842,32 +922,26 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             if (exactNumber(l)) |a| {
                 if (exactNumber(r)) |b| break :blk5 .{ .Bool = cmpToBool(op, @intCast(value_order.compareNumbers(a, b))) };
             }
-            // Float-promoted numeric comparison. The arm set above covers the
-            // EXACT integer/decimal pairings; there was no float branch at all,
-            // so any comparison touching a Real/Double fell through to
-            // TypeMismatch — and after a3d4726d made avg() always produce
-            // Double, `WITH avg(x) AS a WHERE a > k` silently emptied (the
-            // post-WITH filter swallows eval errors into row exclusion).
-            // Promote to f64 only when a float is actually involved, so the
-            // exact arms keep integer/decimal comparisons precise.
-            if (l == .Real or l == .Double or r == .Real or r == .Double) {
-                if (numericValueAsF64(l)) |lf| {
-                    if (numericValueAsF64(r)) |rf| {
-                        break :blk5 .{ .Bool = switch (op) {
-                            .Eq => lf == rf,
-                            .Ne => lf != rf,
-                            .Lt => lf < rf,
-                            .Le => lf <= rf,
-                            .Gt => lf > rf,
-                            .Ge => lf >= rf,
-                            else => false,
-                        } };
-                    }
+            // CANARY: REQ=REQ-SONNY-2807-EXACT-NUMERIC-EQUALITY; FEATURE="ValueOrdering"; ASPECT=OneNumericEqualityRule; STATUS=TESTED; TEST=tests/test_sonny2807_exact_numeric_equality.zig; OWNER=eval; UPDATED=2026-11-13
+            // A comparison touching a REAL or a DOUBLE. SONNY-2807: by exact
+            // numerical value too (ISO/IEC 39075:2024 19.3 GR 3a: numbers
+            // "are compared with respect to their numerical values"), as
+            // GROUP BY, DISTINCT, ORDER BY, an inline map, MERGE and the exact
+            // index seek compare them (value_order). The exact operand was
+            // converted to f64, so DOUBLE 0.1 = DECIMAL 0.1 was TRUE (the
+            // double is 0.1000000000000000055...) and past 2^53 an integer
+            // equalled the double nearest it, while the same two values were
+            // two GROUP BY groups and an inline map told them apart. NaN keeps
+            // IEEE 754 semantics: it is equal to, and ordered against, nothing.
+            if (value_order.numberOf(l)) |a| {
+                if (value_order.numberOf(r)) |b| {
+                    if (isNanNumber(a) or isNanNumber(b)) break :blk5 .{ .Bool = op == .Ne };
+                    break :blk5 .{ .Bool = cmpToBool(op, @intCast(value_order.compareNumbers(a, b))) };
                 }
             }
             if (l == .Str and r == .Str) {
                 // Unicode-aware comparison: normalize both operands to NFC then compare byte-wise.
-                // CANARY: REQ=REQ-GQL-UNICODE-009; FEATURE="UnicodeEval"; ASPECT=CompareNfc; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_009_EvalCompareNfc; OWNER=unicode; UPDATED=2025-09-27
+                // CANARY: REQ=REQ-GQL-UNICODE-009; FEATURE="UnicodeEval"; ASPECT=CompareNfc; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_UNICODE_009_EvalCompareNfc; OWNER=unicode; UPDATED=2026-11-14
                 //
                 // PERF: NFC normalization is the IDENTITY for pure-ASCII input, so when BOTH
                 // operands are ASCII we compare the raw bytes directly — no allocator, no
@@ -887,12 +961,10 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                     // BOTH to NFC (a non-ASCII string may normalize to a different form, so we
                     // must never shortcut unless BOTH operands are ASCII).
                     if (@import("builtin").is_test) nfc_fallback_count += 1;
-                    const unicode = @import("unicode/geode_unicode.zig");
-                    const ln = unicode.nfcNormalize(alloc, l.Str) catch return EvalError.Unsupported;
-                    defer alloc.free(ln);
-                    const rn = unicode.nfcNormalize(alloc, r.Str) catch return EvalError.Unsupported;
-                    defer alloc.free(rn);
-                    break :nfc_blk std.mem.order(u8, ln, rn);
+                    // SONNY-3055: full UAX #15 NFC (canonical_string), the
+                    // form every key, index and equality shares. The helper
+                    // here knew two characters (é and É).
+                    break :nfc_blk canonical_string.order(alloc, l.Str, r.Str) catch return EvalError.OutOfMemory;
                 };
                 return .{ .Bool = switch (op) {
                     .Eq => ord == .eq,
@@ -904,14 +976,16 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                     else => false,
                 } };
             }
+            // CANARY: REQ=REQ-SONNY-6282-INT-STRING-EQUALITY; FEATURE="ComparisonPredicate"; ASPECT=NeverEqual; STATUS=TESTED; TEST=tests/test_sonny6282_int_string_equality.zig; OWNER=eval; UPDATED=2026-11-13
+            // SONNY-6282: an integer and a string are never equal. They were
+            // compared by their text, so `WHERE n.id = 1` matched an id '1'
+            // that the inline map `{id: 1}` does not. ISO/IEC 39075:2024
+            // 19.3 GR 1: they are not essentially comparable values; as
+            // universally comparable values (Feature GA04) `=` is False
+            // (NOTE 307). `<` and the other orderings stay refused.
             if ((l == .Str and r == .Int) or (l == .Int and r == .Str)) {
                 if (op != .Eq and op != .Ne) return EvalError.TypeMismatch;
-                var bufL: [64]u8 = undefined;
-                var bufR: [64]u8 = undefined;
-                const ls = try stringify(l, &bufL);
-                const rs = try stringify(r, &bufR);
-                const eq = std.mem.eql(u8, ls, rs);
-                return .{ .Bool = if (op == .Eq) eq else !eq };
+                return .{ .Bool = op == .Ne };
             }
 
             // Advanced Types Ordering
@@ -998,6 +1072,26 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 return Value{ .Null = {} };
             }
 
+            // CANARY: REQ=REQ-SONNY-738-EQUALITY-CONSISTENCY; FEATURE="ComparisonPredicate"; ASPECT=ListsRecordsUniversal; STATUS=TESTED; TEST=tests/test_sonny738_equality_consistency.zig; OWNER=eval; UPDATED=2026-11-13
+            // SONNY-738: lists element by element and records field by field
+            // (ISO/IEC 39075:2024 19.3 GR 1)b)ii)-iii)), each pair by this
+            // `=`: `[1] = [1.0]` is True, `[NULL] = [NULL]` Unknown. They
+            // compared representations (eqVals), and a stored list (an
+            // extended list) against a list value was a type mismatch.
+            if (op == .Eq or op == .Ne) {
+                if (try listEquality(alloc, l, r) orelse try recordEquality(alloc, l, r)) |eq| {
+                    break :blk5 if (op == .Eq or eq == .Null) eq else .{ .Bool = !eq.Bool };
+                }
+                // Character strings of different representations (a TEXT, a
+                // VARCHAR, a string) compare by their characters, as
+                // DISTINCT and GROUP BY key them.
+                if (charString(l)) |ls| {
+                    if (charString(r)) |rs| {
+                        if (std.meta.activeTag(l) != std.meta.activeTag(r)) break :blk5 try evalBinary(alloc, op, .{ .Str = ls }, .{ .Str = rs });
+                    }
+                }
+            }
+
             // Generic equality for same types (UUID=UUID, Date=Date, etc.)
             if ((op == .Eq or op == .Ne) and std.meta.activeTag(l) == std.meta.activeTag(r)) {
                 const isEqual = eqVals(l, r);
@@ -1013,6 +1107,17 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
             // Node/Edge Eq/Ne are handled by the same-tag `eqVals` branch above,
             // which now compares by ID (value_types.eqVals). Ordering operators
             // on graph elements are not defined, so they land here.
+            //
+            // SONNY-738: two values that are not essentially comparable (a
+            // number and a Boolean, a date and a string, a number and a
+            // list, ...) are never equal: `=` False, `<>` True, as SONNY-6282
+            // made them for an integer and a string (ISO/IEC 39075:2024 19.3
+            // GR 1)a)i), Feature GA04, NOTE 307). `=` raised a type mismatch,
+            // which WHERE turned into an error on one path and a dropped row
+            // on another, so `WHERE n.k <> true` dropped an integer too, and
+            // the inline property map and MERGE found them unequal. `<` and
+            // the other orderings stay refused.
+            if (op == .Eq or op == .Ne) break :blk5 .{ .Bool = op == .Ne };
             return EvalError.TypeMismatch;
         },
         .Concat => blk6: {
@@ -1204,10 +1309,16 @@ fn applyUnary(op: ast.UnaryOp, v: Value) EvalError!Value {
         .Neg => return switch (v) {
             .Int => |i| .{ .Int = std.math.negate(i) catch return EvalError.IntegerOverflow },
             .Decimal => |d| .{ .Decimal = .{ .coeff = std.math.negate(d.coeff) catch return EvalError.DecimalOverflow, .scale = d.scale, .orig_scale = d.orig_scale } },
+            // SONNY-6596: every number has a monadic minus (ISO/IEC
+            // 39075:2024 20.21); `-1.5E0` is a DOUBLE.
+            .SmallInt => |i| .{ .SmallInt = std.math.negate(i) catch return EvalError.IntegerOverflow },
+            .BigInt => |i| .{ .BigInt = std.math.negate(i) catch return EvalError.IntegerOverflow },
+            .Real => |f| .{ .Real = -f },
+            .Double => |f| .{ .Double = -f },
             else => EvalError.TypeMismatch,
         },
         .Pos => return switch (v) {
-            .Int, .Decimal => v,
+            .Int, .Decimal, .SmallInt, .BigInt, .Real, .Double => v,
             else => EvalError.TypeMismatch,
         },
     }
@@ -1354,11 +1465,14 @@ fn projectValue(allocator: std.mem.Allocator, source: Value, fields: []const []c
             .Node => |node| blk_node: {
                 // Try to get the property from the node
                 const val = node.properties.get(field) orelse break :blk_node Value{ .Null = {} };
+                // SONNY-6327: a string through the FLE read policy.
+                if (val == .String) break :blk_node Value{ .Str = try fleReadEntity(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", field, val.String, node.id, node.tenant_id) };
                 break :blk_node property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} };
             },
             .Edge => |edge| blk_edge: {
                 // Try to get the property from the edge
                 const val = edge.properties.get(field) orelse break :blk_edge Value{ .Null = {} };
+                if (val == .String) break :blk_edge Value{ .Str = try fleReadEntity(allocator, .edge, edge.label, field, val.String, edge.id, edge.tenant_id) };
                 break :blk_edge property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} };
             },
             // ExtValue types don't support property access
@@ -1512,6 +1626,11 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
             const lowercase_fn = lowercase_name_buf[0..fn_name_len];
 
+            // SONNY-6637 item 3: the operand count, once, from the shared
+            // table, before any handler runs (the statement check refuses it
+            // first, `scope_check.checkCallArity`).
+            try function_arity.check(function_name, call.args.len);
+
             // Try math functions (abs, sqrt, ceil, floor, round, sin, cos, tan, etc.)
             if (try call_handlers.evalMathFunction(allocator, lowercase_fn, call.args, env)) |result| {
                 break :blk_call result;
@@ -1573,15 +1692,12 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             const eval_ext = @import("eval_extended.zig");
 
             // Initialize registry
-            var registry = eval_ext.initFunctionRegistry(allocator) catch {
-                break :blk_call .{ .Null = {} };
-            };
+            // SONNY-6518: an allocation failure is the statement's (it was NULL).
+            var registry = eval_ext.initFunctionRegistry(allocator) catch return EvalError.OutOfMemory;
             defer registry.deinit();
 
             // Convert function name to lowercase for lookup
-            var lowercase_name = allocator.alloc(u8, function_name.len) catch {
-                break :blk_call .{ .Null = {} };
-            };
+            var lowercase_name = allocator.alloc(u8, function_name.len) catch return EvalError.OutOfMemory;
             defer allocator.free(lowercase_name);
 
             for (function_name, 0..) |c, i| {
@@ -1604,9 +1720,7 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // Look up function in extended registry
             if (registry.get(lowercase_name)) |func| {
                 // Convert arguments from AST to ExtValue
-                var args = allocator.alloc(eval_ext.ExtValue, call.args.len) catch {
-                    break :blk_call .{ .Null = {} };
-                };
+                var args = allocator.alloc(eval_ext.ExtValue, call.args.len) catch return EvalError.OutOfMemory;
                 defer allocator.free(args);
                 var initialized_args: usize = 0;
                 defer {
@@ -1624,23 +1738,31 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     // short-circuits the whole call to NULL instead of raising
                     // the error the bare call now raises. Only the same
                     // "genuine invalid input" error set the func-result handler
-                    // below propagates is re-raised; anything else (benign)
-                    // still collapses to NULL to preserve NULL-propagation.
-                    const arg_value = evalExpr(allocator, arg.*, env) catch |err| {
-                        if (isPropagatableEvalError(err)) return err;
-                        break :blk_call .{ .Null = {} };
-                    };
-                    args[i] = valueToExtValue(allocator, arg_value) catch {
-                        break :blk_call .{ .Null = {} };
-                    };
+                    // below propagates was re-raised. SONNY-6518: every error
+                    // an argument raises is the statement's (ISO/IEC
+                    // 39075:2024 19.1 GR 1); NULL propagation is a NULL
+                    // argument's, not a failed one's.
+                    const arg_value = try evalExpr(allocator, arg.*, env);
+                    args[i] = valueToExtValue(allocator, arg_value) catch |err| return builtinError(err);
                     initialized_args += 1;
+                }
+                // SONNY-6555 item 4: a NULL argument gives NULL, as the
+                // standard's own functions answer a null operand (ISO/IEC
+                // 39075:2024 20.22 GR 1 b, 5 a, 6 a); the extension
+                // functions raised 22G03 for one. The function still runs, so an operand
+                // count it refuses is refused whatever the operands hold.
+                var has_null = false;
+                for (args) |a| {
+                    if (a == .Null) has_null = true;
                 }
 
                 // Call the extended function and handle validation errors
                 if (func(allocator, args)) |result| {
+                    if (has_null) break :blk_call .{ .Null = {} };
                     // Convert result back to eval.Value
                     break :blk_call extValueToValue(result);
                 } else |err| {
+                    if (has_null and err != error.WrongArgumentCount and err != error.OutOfMemory) break :blk_call .{ .Null = {} };
                     // Propagate validation errors instead of converting to null
                     const err_name = @errorName(err);
                     if (std.mem.eql(u8, err_name, "InvalidIpAddress")) {
@@ -1687,8 +1809,8 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                         // type error so the caller gets a diagnostic.
                         return EvalError.TypeMismatch;
                     }
-                    // For other errors, fall back to null
-                    break :blk_call .{ .Null = {} };
+                    // SONNY-6518: any other error is raised (it was NULL).
+                    return builtinError(err);
                 }
             }
 
@@ -1701,6 +1823,12 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     error.ReadQueryBudgetExceeded => return EvalError.ReadQueryBudgetExceeded,
                     error.ReadQueryCancelled => return EvalError.ReadQueryCancelled,
                     error.OutOfMemory => return EvalError.OutOfMemory,
+                    // SONNY-6327: an FLE read refusal inside a builtin
+                    // (`properties(r)`, `toUpper(n.ssn)`) is the query's,
+                    // not a NULL.
+                    error.SearchNotPermitted => return EvalError.SearchNotPermitted,
+                    error.FleCatalogUnavailable => return EvalError.FleCatalogUnavailable,
+                    error.FleDecryptionFailed => return EvalError.FleDecryptionFailed,
                     else => {},
                 }
                 // Propagate validation errors instead of converting to null
@@ -1727,6 +1855,11 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     // (datetime('garbage'), duration('garbage')) is a data
                     // exception, not a silent NULL.
                     return EvalError.TimeParse;
+                } else if (std.mem.eql(u8, err_name, "DurationParse")) {
+                    return EvalError.DurationParse;
+                } else if (std.mem.eql(u8, err_name, "IntervalFieldOverflow")) {
+                    // SONNY-6499: a duration component past its range (22015).
+                    return EvalError.IntervalFieldOverflow;
                 } else if (std.mem.eql(u8, err_name, "InvalidArgs")) {
                     // Wrong arity on a resolved basic function is a caller
                     // error (22023), not a silent NULL.
@@ -1741,8 +1874,8 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     // refused for want of the session's row visibility.
                     return EvalError.EvaluatorNotInitialized;
                 }
-                // For other errors, fall back to null
-                break :blk_call .{ .Null = {} };
+                // SONNY-6518: any other error is raised (it was NULL).
+                return builtinError(err);
             };
 
             if (result) |val| {
@@ -1754,6 +1887,12 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // silently yield NULL, which is what made every missing vector
             // function (distance/similarity/euclidean/knn) look "implemented but
             // returning null". Raise the undefined_function diagnostic instead.
+            // CANARY: REQ=REQ-SONNY-6555-FUNCTION-ARITY; FEATURE="BuiltinFunctions"; ASPECT=WrongArgumentCount; STATUS=TESTED; TEST=tests/test_sonny6555_function_arity.zig; OWNER=eval; UPDATED=2026-11-14
+            // SONNY-6555 item 5: a function Geode has (its catalogue, the
+            // one SHOW FUNCTIONS lists) that no handler took is called with
+            // a number of arguments it does not take (each one takes the
+            // arities it implements): 42000, not 42883.
+            if (@import("gql/language_metadata.zig").findFunction(lowercase_name) != null) return EvalError.WrongArgumentCount;
             return EvalError.UnknownFunction;
         },
         .In => |iv| {
@@ -1806,37 +1945,19 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         // strings only (`1.5 IN (MATCH ... RETURN 1.5)` was false, and NOT IN
         // kept rows it should drop), and a NULL value was NULL even for an
         // empty result, where `NULL IN []` is FALSE.
+        // SONNY-6525: the subquery runs on the row `env` holds (a correlated
+        // one per row; an uncorrelated one once per statement).
         .InSubquery => |isq| {
             const v = try evalExpr(allocator, isq.value.*, env);
-            var result = (try getExecutionCallbacks()).executeQueryWithEnv(allocator, isq.subquery.*, env) catch |err| {
-                return switch (err) {
-                    error.OutOfMemory => error.OutOfMemory,
-                    // SONNY-3251: a limit keeps its identity (54001, 53200,
-                    // 57014), not 0A000.
-                    error.ExpressionTooDeep => error.ExpressionTooDeep,
-                    error.ReadQueryBudgetExceeded => error.ReadQueryBudgetExceeded,
-                    error.ReadQueryCancelled => error.ReadQueryCancelled,
-                    else => error.Unsupported,
-                };
-            };
+            var result = (try getExecutionCallbacks()).runSubquery(allocator, isq.subquery, env) catch |err| return subqueryError(err);
             defer result.deinit(allocator);
-            return inRows(allocator, v, result.rows);
+            return inRows(allocator, v, result.result.rows);
         },
         .NotInSubquery => |nisq| {
             const v = try evalExpr(allocator, nisq.value.*, env);
-            var result = (try getExecutionCallbacks()).executeQueryWithEnv(allocator, nisq.subquery.*, env) catch |err| {
-                return switch (err) {
-                    error.OutOfMemory => error.OutOfMemory,
-                    // SONNY-3251: a limit keeps its identity (54001, 53200,
-                    // 57014), not 0A000.
-                    error.ExpressionTooDeep => error.ExpressionTooDeep,
-                    error.ReadQueryBudgetExceeded => error.ReadQueryBudgetExceeded,
-                    error.ReadQueryCancelled => error.ReadQueryCancelled,
-                    else => error.Unsupported,
-                };
-            };
+            var result = (try getExecutionCallbacks()).runSubquery(allocator, nisq.subquery, env) catch |err| return subqueryError(err);
             defer result.deinit(allocator);
-            return switch (try inRows(allocator, v, result.rows)) {
+            return switch (try inRows(allocator, v, result.result.rows)) {
                 .Bool => |b| .{ .Bool = !b },
                 else => .{ .Null = {} },
             };
@@ -1870,27 +1991,17 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // Borrowed string pointers from the graph store become stale when
             // result rows are cached across allocator lifetimes (e.g. PULL
             // serialization reads results built during RUN_GQL).
+            // SONNY-6449: a property read is borrowed, as a member read is
+            // (`memberOfValue`); what it copies is the statement's scratch.
+            const lent = lentValueAllocator(allocator);
             switch (object) {
                 .Node => |node| {
                     if (node.properties.get(pa.property)) |val| {
                         const result = switch (val) {
-                            .String => |s| blk: {
-                                const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
-                                const checked_value = fle_integration.checkPropertyAccess(
-                                    allocator,
-                                    type_name,
-                                    pa.property,
-                                    s,
-                                    node.id,
-                                ) catch |err| {
-                                    if (err == error.SearchNotPermitted) {
-                                        return EvalError.SearchNotPermitted;
-                                    }
-                                    break :blk Value{ .Str = try allocator.dupe(u8, s) };
-                                };
-                                break :blk Value{ .Str = try allocator.dupe(u8, checked_value) };
-                            },
-                            .ExtValue => |ext| property_codec.extValueToProjectedValue(allocator, ext) catch return EvalError.OutOfMemory,
+                            // SONNY-6327: the shared FLE read policy; a
+                            // decrypt failure is an error (never the bytes).
+                            .String => |s| Value{ .Str = try fleReadMemberView(lent, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", pa.property, s, node.id, node.tenant_id) },
+                            .ExtValue => |ext| property_codec.extValueToProjectedValue(lent, ext) catch return EvalError.OutOfMemory,
                             else => property_codec.propertyValueToValue(val),
                         };
                         break :blk_property result;
@@ -1899,8 +2010,11 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 .Edge => |edge| {
                     if (edge.properties.get(pa.property)) |val| {
                         const result: Value = switch (val) {
-                            .String => |s| .{ .Str = try allocator.dupe(u8, s) },
-                            .ExtValue => |ext| property_codec.extValueToProjectedValue(allocator, ext) catch return EvalError.OutOfMemory,
+                            // SONNY-6327: an edge's string goes through the
+                            // same FLE read policy as a node's (it was
+                            // returned as stored: ciphertext, to everyone).
+                            .String => |s| .{ .Str = try fleReadMemberView(lent, .edge, edge.label, pa.property, s, edge.id, edge.tenant_id) },
+                            .ExtValue => |ext| property_codec.extValueToProjectedValue(lent, ext) catch return EvalError.OutOfMemory,
                             else => property_codec.propertyValueToValue(val),
                         };
                         break :blk_property result;
@@ -1915,23 +2029,19 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         .Case => |c| {
             // ISO 3VL semantics
             if (c.operand) |op_ptr| {
+                // SONNY-738: ISO/IEC 39075:2024 20.7 SR: a simple CASE is the
+                // searched CASE `WHEN CO = WO`, so a WHEN is taken only when
+                // `=` is True. It compared representations (`CASE 1 WHEN 1.0`
+                // took the ELSE, while `1 = 1.0` is True) and took
+                // `CASE NULL WHEN NULL`, where `=` is Unknown.
                 const opv = try evalExpr(allocator, op_ptr.*, env);
-                var saw_null_match = false;
                 for (c.whens) |w| {
                     const whenv = try evalExpr(allocator, w.when.*, env);
-                    if (isNull(opv) or isNull(whenv)) {
-                        // NULL = x yields NULL; track if any potential match is unknown
-                        if (isNull(opv) and isNull(whenv)) {
-                            // NULL = NULL treated as true in our eqVals; but in searched context, this is a match
-                            return evalExpr(allocator, w.then_expr.*, env);
-                        }
-                        saw_null_match = true;
-                        continue;
-                    }
-                    if (eqVals(opv, whenv)) return evalExpr(allocator, w.then_expr.*, env);
+                    const hit = try evalBinary(allocator, .Eq, opv, whenv);
+                    if (hit == .Bool and hit.Bool) return evalExpr(allocator, w.then_expr.*, env);
                 }
                 if (c.else_expr) |ep| return evalExpr(allocator, ep.*, env);
-                return if (saw_null_match) Value{ .Null = {} } else Value{ .Null = {} };
+                return Value{ .Null = {} };
             } else {
                 for (c.whens) |w| {
                     const cond = try evalExpr(allocator, w.when.*, env);
@@ -1986,7 +2096,14 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.ymlEMENTED; OWNER=eval; UPDATED=2025-12-23
         // Handle bare list comprehension: [x IN list WHERE condition | x.property]
         .ListComprehension => |comp| blk_lc: {
-            const source_val = try evalExpr(allocator, comp.source.*, env);
+            // SONNY-6449, SONNY-6437 item 2: a comprehension's list, and
+            // everything evaluated to build it (its source, its WHERE, each
+            // element), is lent to the caller as a member read is: it is the
+            // statement's scratch (`lentValueAllocator`), never the caller's
+            // to free. It leaked its source and result lists on every
+            // projection path.
+            const lent = lentValueAllocator(allocator);
+            const source_val = try evalExpr(lent, comp.source.*, env);
 
             const source_list = switch (source_val) {
                 .List => |l| l,
@@ -2012,7 +2129,7 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 
                 // Check filter condition if present
                 if (comp.filter) |filter| {
-                    const filter_result = try evalExpr(allocator, filter.*, new_env);
+                    const filter_result = try evalExpr(lent, filter.*, new_env);
                     const matches = switch (filter_result) {
                         .Bool => |b| b,
                         .Null => false,
@@ -2024,14 +2141,14 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 
                 // Evaluate map expression if present, otherwise use the item itself
                 const result_val = if (comp.map) |map_expr|
-                    try evalExpr(allocator, map_expr.*, new_env)
+                    try evalExpr(lent, map_expr.*, new_env)
                 else
                     item;
 
-                try result_list.append(allocator, result_val);
+                try result_list.append(lent, result_val);
             }
 
-            break :blk_lc Value{ .List = try result_list.toOwnedSlice(allocator) };
+            break :blk_lc Value{ .List = try result_list.toOwnedSlice(lent) };
         },
         .BitLit => |b| blk_bit: {
             const bit_literal = if (std.mem.startsWith(u8, b, "B'")) b else std.fmt.allocPrint(allocator, "B'{s}'", .{b}) catch break :blk_bit Value{ .Null = {} };
@@ -2049,9 +2166,25 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
         .Map => |props| blk_map: {
             // Create a map from properties
             var map = std.StringHashMap(Value).init(allocator);
-            for (props) |prop| {
+            for (props, 0..) |prop, i| {
                 const val = try evalExpr(allocator, prop.value.*, env);
-                try map.put(prop.key, val);
+                // CANARY: REQ=REQ-SONNY-3148-WRITE-LEAKS; FEATURE="WriteStatementOwnership"; ASPECT=RepeatedMapKey; STATUS=TESTED; TEST=tests/test_sonny3148_write_leaks.zig; OWNER=eval; UPDATED=2026-11-15
+                // SONNY-3148: a later property of the same key replaces the
+                // earlier value, and what the earlier value's expression
+                // allocated is freed (`map.put` dropped it). Only what it
+                // allocated: a borrowed value (a property, a parameter) is
+                // left (`value_utilities.freeEvaluatedValue`).
+                const slot = try map.getOrPut(prop.key);
+                if (slot.found_existing) {
+                    var j = i;
+                    while (j > 0) {
+                        j -= 1;
+                        if (!std.mem.eql(u8, props[j].key, prop.key)) continue;
+                        value_utilities.freeEvaluatedValue(allocator, props[j].value.*, slot.value_ptr.*);
+                        break;
+                    }
+                }
+                slot.value_ptr.* = val;
             }
             break :blk_map Value{ .Map = map };
         },
@@ -2133,6 +2266,72 @@ fn evalExprNode(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
     };
 }
 
+// CANARY: REQ=REQ-SONNY-6327-FLE-READ-POLICY; FEATURE="FieldLevelEncryption"; ASPECT=EvalReadSites; STATUS=TESTED; TEST=tests/test_sonny6327_fle_read_gaps.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6327: a node's or edge's stored string read as one property
+/// (`n.p`, `r.p`, in RETURN, WHERE, ORDER BY, aggregates) goes through the
+/// shared FLE read policy (`fle_integration.readStoredString`), as an
+/// evaluator error: `fleReadMemberView`.
+// CANARY: REQ=REQ-SONNY-6433-MEMBER-READ-BORROWED; FEATURE="ExpressionEvaluator"; ASPECT=MemberReadOwnership; STATUS=TESTED; TEST=tests/test_sonny2653_planned_read_ext_read_leak.zig; OWNER=eval; UPDATED=2026-11-12
+// CANARY: REQ=REQ-SONNY-6449-MEMBER-READ-OWNERSHIP; FEATURE="ExpressionEvaluator"; ASPECT=LentValues; STATUS=TESTED; TEST=tests/test_sonny6449_projection_value_ownership.zig; OWNER=eval; UPDATED=2026-11-12
+/// SONNY-6433, SONNY-6449: the FLE read of a member access
+/// (`memberOfValue`, `.PropertyAccess`): the stored bytes themselves when
+/// the policy passes them unchanged (no FLE field, or a field the principal
+/// reads in plaintext); a decrypted or redacted string is allocated on
+/// `allocator`, which callers pass as `lentValueAllocator`. Either way the
+/// value is borrowed (`value_utilities.evaluatesFresh`).
+fn fleReadMemberView(allocator: std.mem.Allocator, kind: fle_integration.EntityKind, type_name: []const u8, field: []const u8, stored: []const u8, id: u64, record_tenant: []const u8) EvalError![]const u8 {
+    return fle_integration.readStoredString(allocator, kind, type_name, field, stored, id, record_tenant) catch |err| fleEvalError(err);
+}
+
+/// SONNY-6449: the allocator of a value the evaluator lends its caller
+/// rather than gives it: a member read's copy (a decrypted or redacted
+/// string, a list or another extended value) and a list comprehension's
+/// list. It is the statement's scratch arena, which every executor entry
+/// point installs (`query_arena.StatementScratch`) and which outlives every
+/// row of the statement, so a lent value is never freed by a caller and
+/// never leaks, whether the caller projects it, copies it (the final
+/// projection, GAP-0535), compares it (ORDER BY, DISTINCT, GROUP BY) or
+/// drops it. Evaluated outside any executor entry point (no scratch arena)
+/// it is `allocator`'s, and is not freed.
+fn lentValueAllocator(allocator: std.mem.Allocator) std.mem.Allocator {
+    if (t_nothing_lent) return allocator;
+    return query_arena.currentScratchAllocator() orelse allocator;
+}
+
+/// SONNY-6449: set while `evalExprNothingLent` runs.
+threadlocal var t_nothing_lent: bool = false;
+
+/// SONNY-6449: `evalExpr`, with nothing lent from the scratch arena
+/// (`lentValueAllocator`): a member read's copy and a list comprehension's
+/// list are `allocator`'s, as everything else the evaluation allocates is.
+/// For a caller whose cells own every value that is not its input's: the
+/// engine-direct node scan (`node_scan_stream.buildRow`) copies a string that
+/// points into its node and frees every other cell with the result
+/// (`property_value_codec.freeValue`), so a lent value was freed with the
+/// wrong allocator (an "Invalid free" that aborted the server on an
+/// encrypted field's read).
+pub fn evalExprNothingLent(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!Value {
+    const previous = t_nothing_lent;
+    t_nothing_lent = true;
+    defer t_nothing_lent = previous;
+    return evalExpr(allocator, e, env);
+}
+
+/// SONNY-6327: the same, for a whole-entity read (`properties()`, map
+/// projection): a field the principal may not read is "[REDACTED]".
+fn fleReadEntity(allocator: std.mem.Allocator, kind: fle_integration.EntityKind, type_name: []const u8, field: []const u8, stored: []const u8, id: u64, record_tenant: []const u8) EvalError![]u8 {
+    return fle_integration.readStoredStringForEntity(allocator, kind, type_name, field, stored, id, record_tenant) catch |err| fleEvalError(err);
+}
+
+fn fleEvalError(err: fle_integration.FleReadError) EvalError {
+    return switch (err) {
+        error.SearchNotPermitted => EvalError.SearchNotPermitted,
+        error.FleCatalogUnavailable => EvalError.FleCatalogUnavailable,
+        error.FleDecryptionFailed => EvalError.FleDecryptionFailed,
+        error.OutOfMemory => EvalError.OutOfMemory,
+    };
+}
+
 // CANARY: REQ=REQ-SONNY-3181-EVAL-CHAINS; FEATURE="ExpressionEvaluator"; ASPECT=MemberOfValue; STATUS=TESTED; TEST=tests/test_sonny3181_expr_chain_cap.zig; OWNER=eval; UPDATED=2026-09-27
 /// Member access `.field` on an evaluated `target`: a node's or an edge's
 /// property (FLE-checked), a map entry, a structured (JSON) member, a
@@ -2145,25 +2344,10 @@ fn memberOfValue(allocator: std.mem.Allocator, target: Value, field: []const u8)
         const node = target.Node;
         if (node.properties.get(field)) |val| {
             const result = switch (val) {
-                .String => |s| blk: {
-                    // For string properties, check FLE permissions
-                    const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
-                    const checked_value = fle_integration.checkPropertyAccess(
-                        allocator,
-                        type_name,
-                        field,
-                        s,
-                        node.id,
-                    ) catch |err| {
-                        if (err == error.SearchNotPermitted) {
-                            return EvalError.SearchNotPermitted;
-                        }
-                        // For other errors, fall back to original value
-                        break :blk Value{ .Str = s };
-                    };
-                    break :blk Value{ .Str = checked_value };
-                },
-                else => property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} },
+                // SONNY-6327: the shared FLE read policy (a decrypt failure
+                // is an error; it fell back to the stored bytes).
+                .String => |s| Value{ .Str = try fleReadMemberView(lentValueAllocator(allocator), .node, if (node.labels.len > 0) node.labels[0] else "Unknown", field, s, node.id, node.tenant_id) },
+                else => property_codec.propertyValueToProjectedValue(lentValueAllocator(allocator), val) catch Value{ .Null = {} },
             };
             return result;
         }
@@ -2174,25 +2358,11 @@ fn memberOfValue(allocator: std.mem.Allocator, target: Value, field: []const u8)
         const edge = target.Edge;
         if (edge.properties.get(field)) |val| {
             const result = switch (val) {
-                .String => |s| blk: {
-                    // For string properties, check FLE permissions
-                    const type_name = edge.label;
-                    const checked_value = fle_integration.checkPropertyAccess(
-                        allocator,
-                        type_name,
-                        field,
-                        s,
-                        edge.id,
-                    ) catch |err| {
-                        if (err == error.SearchNotPermitted) {
-                            return EvalError.SearchNotPermitted;
-                        }
-                        // For other errors, fall back to original value
-                        break :blk Value{ .Str = s };
-                    };
-                    break :blk Value{ .Str = checked_value };
-                },
-                else => property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} },
+                // SONNY-6327: the edge's record identity ("edge_<id>", as the
+                // write side encrypts it; it used the node form, so nothing
+                // decrypted and the stored bytes were returned).
+                .String => |s| Value{ .Str = try fleReadMemberView(lentValueAllocator(allocator), .edge, edge.label, field, s, edge.id, edge.tenant_id) },
+                else => property_codec.propertyValueToProjectedValue(lentValueAllocator(allocator), val) catch Value{ .Null = {} },
             };
             return result;
         }
@@ -2210,93 +2380,19 @@ fn memberOfValue(allocator: std.mem.Allocator, target: Value, field: []const u8)
         return extracted;
     }
 
-    // Handle direct Date value property access (from date() function)
-    if (target == .Date) {
-        const datetime_module = @import("types/datetime.zig");
-        const ymd = datetime_module.Date.dateFromDays(target.Date.days_since_epoch);
+    // CANARY: REQ=REQ-SONNY-2796-TEMPORAL-FIELDS; FEATURE="DateTimeFunctions"; ASPECT=FieldsBefore1970; STATUS=TESTED; TEST=tests/test_sonny2796_temporal_fields.zig; OWNER=datetime; UPDATED=2026-11-13
+    // The fields of a date, a time, a zoned time, a local or a zoned datetime
+    // (plain or extended form). SONNY-2796: a zoned datetime's time of day
+    // was @rem of its microseconds since the epoch, negative before 1970
+    // (`datetime('1969-12-31T23:30:15Z').hour` was -1, `.minute` -30), and a
+    // local datetime or a plain zoned datetime (`timestamp()`,
+    // `timestamptz()`) and a zoned time had no fields (NULL).
+    if (temporalField(target, field)) |v| return v;
 
-        if (std.mem.eql(u8, field, "year")) {
-            return Value{ .Int = ymd.year };
-        } else if (std.mem.eql(u8, field, "month")) {
-            return Value{ .Int = ymd.month };
-        } else if (std.mem.eql(u8, field, "day")) {
-            return Value{ .Int = ymd.day };
-        }
-    }
-
-    // Handle direct Time value property access (from time() function)
-    if (target == .Time) {
-        const hours = @divFloor(target.Time.micros_since_midnight, 3600_000_000);
-        const minutes = @divFloor(@rem(target.Time.micros_since_midnight, 3600_000_000), 60_000_000);
-        const seconds = @divFloor(@rem(target.Time.micros_since_midnight, 60_000_000), 1_000_000);
-
-        if (std.mem.eql(u8, field, "hour")) {
-            return Value{ .Int = @intCast(hours) };
-        } else if (std.mem.eql(u8, field, "minute")) {
-            return Value{ .Int = @intCast(minutes) };
-        } else if (std.mem.eql(u8, field, "second")) {
-            return Value{ .Int = @intCast(seconds) };
-        }
-    }
-
-    // If target is an ExtValue, handle datetime property access
+    // If target is an ExtValue, handle JSON member access
     if (target == .ExtValue) {
         const ext = target.ExtValue;
         switch (ext) {
-            .TimestampTZ => |ts| {
-                // Extract date and time components from timestamp
-                const days = @divFloor(ts.micros_since_epoch_utc, 24 * 3600 * 1_000_000);
-                const time_micros = @rem(ts.micros_since_epoch_utc, 24 * 3600 * 1_000_000);
-
-                // Get date components
-                const datetime_module = @import("types/datetime.zig");
-                const date = datetime_module.Date{ .days_since_epoch = @intCast(days) };
-                const ymd = datetime_module.Date.dateFromDays(date.days_since_epoch);
-
-                // Get time components
-                const hours = @divFloor(time_micros, 3600_000_000);
-                const minutes = @divFloor(@rem(time_micros, 3600_000_000), 60_000_000);
-                const seconds = @divFloor(@rem(time_micros, 60_000_000), 1_000_000);
-
-                if (std.mem.eql(u8, field, "year")) {
-                    return Value{ .Int = ymd.year };
-                } else if (std.mem.eql(u8, field, "month")) {
-                    return Value{ .Int = ymd.month };
-                } else if (std.mem.eql(u8, field, "day")) {
-                    return Value{ .Int = ymd.day };
-                } else if (std.mem.eql(u8, field, "hour")) {
-                    return Value{ .Int = @intCast(hours) };
-                } else if (std.mem.eql(u8, field, "minute")) {
-                    return Value{ .Int = @intCast(minutes) };
-                } else if (std.mem.eql(u8, field, "second")) {
-                    return Value{ .Int = @intCast(seconds) };
-                }
-            },
-            .Date => |d| {
-                const datetime_module = @import("types/datetime.zig");
-                const ymd = datetime_module.Date.dateFromDays(d.days_since_epoch);
-
-                if (std.mem.eql(u8, field, "year")) {
-                    return Value{ .Int = ymd.year };
-                } else if (std.mem.eql(u8, field, "month")) {
-                    return Value{ .Int = ymd.month };
-                } else if (std.mem.eql(u8, field, "day")) {
-                    return Value{ .Int = ymd.day };
-                }
-            },
-            .Time => |t| {
-                const hours = @divFloor(t.micros_since_midnight, 3600_000_000);
-                const minutes = @divFloor(@rem(t.micros_since_midnight, 3600_000_000), 60_000_000);
-                const seconds = @divFloor(@rem(t.micros_since_midnight, 60_000_000), 1_000_000);
-
-                if (std.mem.eql(u8, field, "hour")) {
-                    return Value{ .Int = @intCast(hours) };
-                } else if (std.mem.eql(u8, field, "minute")) {
-                    return Value{ .Int = @intCast(minutes) };
-                } else if (std.mem.eql(u8, field, "second")) {
-                    return Value{ .Int = @intCast(seconds) };
-                }
-            },
             // CANARY: REQ=REQ-MAP-PROP-003; FEATURE="MapProperties"; ASPECT=JsonMemberAccess; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
             // Handle member access on JSON strings (map properties stored as JSON)
             .Json => |json_str| {
@@ -2796,7 +2892,7 @@ fn scanVectorKnnBatched(
         // ENG-3954/#874 race discipline. Only enabled for the node cache — the
         // edge scan stays resident-only (documented Phase-1 asymmetry below).
         if (comptime hydrate) {
-            _ = cache.getOrHydratePtr(id) catch null;
+            _ = cache.getOrHydratePtr(id) catch |err| return value_types.storageReadFailed(err); // SONNY-6621
         }
 
         // EVERYTHING that touches the entry's interior stays inside the guard:
@@ -2880,10 +2976,20 @@ const KnnScanScope = struct {
     /// exactly as before.
     rls_may_deny: bool = false,
 
+    // CANARY: REQ=REQ-SONNY-2820-KNN-TENANT-HIERARCHY; FEATURE="VectorKnn"; ASPECT=HierarchyAwareTenantScope; STATUS=TESTED; TEST=tests/test_sonny6338_tenant_visibility_consistency.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-2820: the tenant half is the MATCH path's predicate. An exact
+    /// tag admits at once (no hierarchy lookup, the common case); any other
+    /// tag is asked of the row scope (`passesTenantFilterSlice`: a parent
+    /// sees its descendants' rows). knn() compared the tags exactly, so a
+    /// parent tenant missed every child row MATCH returns. Without a row
+    /// scope (the evaluator was never set up) the hierarchy is out of reach,
+    /// and the exact test stands (it can only under-fetch).
     fn admits(self: KnnScanScope, entry_graph: []const u8, entry_tenant: []const u8) bool {
         if (!std.mem.eql(u8, entry_graph, self.graph)) return false;
         const tid = self.tenant orelse return true;
-        return std.mem.eql(u8, entry_tenant, tid);
+        if (std.mem.eql(u8, entry_tenant, tid)) return true;
+        const row = self.row orelse return false;
+        return row.tenantVisible(entry_tenant);
     }
 
     fn admitsNode(self: KnnScanScope, node: *const graph_store.Node) bool {
@@ -3008,6 +3114,9 @@ const KnnScanResult = struct {
     /// True when at least one IN-SCOPE row supplied the property (whether or
     /// not it coerced to a vector). See geode#877 (c).
     property_seen: bool,
+    /// SONNY-2820: may the session's scope hide a row (a tenant scope, or an
+    /// RLS policy that may deny it one)? See `evalVectorKnn`.
+    scope_restricts: bool = false,
 };
 
 // geode#875 RC-6: a test-only counter of how many times the brute-force
@@ -3170,6 +3279,7 @@ fn scanVectorKnn(
     return .{
         .value = try vectorCandidatesToList(allocator, candidates.items, k),
         .property_seen = property_seen,
+        .scope_restricts = scope.restrictsNodes(),
     };
 }
 
@@ -3201,7 +3311,7 @@ fn evalVectorScalarFunction(
         .distance, .similarity => 3,
         .euclidean, .manhattan => 2,
     };
-    if (args.len < 2 or args.len > max_args) return error.InvalidArgs;
+    if (args.len < 2 or args.len > max_args) return error.WrongArgumentCount;
 
     const lhs_value = try evalExpr(allocator, args[0].*, env);
     const rhs_value = try evalExpr(allocator, args[1].*, env);
@@ -3272,20 +3382,29 @@ fn vectorCosineSimilarity(allocator: std.mem.Allocator, lhs_value: Value, rhs_va
 }
 
 fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) EvalError!Value {
-    if (args.len != 4) return error.InvalidArgs;
+    if (args.len != 4) return error.WrongArgumentCount;
 
     const property_value = try evalExpr(allocator, args[0].*, env);
+    const query_value = try evalExpr(allocator, args[1].*, env);
+    const k_value = try evalExpr(allocator, args[2].*, env);
+    const metric_value = try evalExpr(allocator, args[3].*, env);
+    // SONNY-6645 item 4: a NULL operand is NULL (ISO/IEC 39075:2024 20.22
+    // GR 1 b); it was 22G03.
+    if (property_value == .Null or query_value == .Null or k_value == .Null or metric_value == .Null) {
+        // What an operand's expression allocated (a list literal) is freed:
+        // nothing below reads it.
+        for (args, [_]Value{ property_value, query_value, k_value, metric_value }) |arg, value| value_utilities.freeEvaluatedValue(allocator, arg.*, value);
+        return .{ .Null = {} };
+    }
     const property_name = switch (property_value) {
         .Str => |text| text,
         .Text => |text| text,
         else => return error.TypeMismatch,
     };
 
-    const query_value = try evalExpr(allocator, args[1].*, env);
     const query_vec = try valueToVectorF32(allocator, query_value);
     defer if (query_vec.owned) |data| allocator.free(data);
 
-    const k_value = try evalExpr(allocator, args[2].*, env);
     const raw_k: i64 = switch (k_value) {
         .Int => |value| value,
         .SmallInt => |value| value,
@@ -3295,7 +3414,7 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
     if (raw_k <= 0) return .{ .List = &.{} };
     const k: usize = @intCast(raw_k);
 
-    const metric = try parseVectorMetric(try evalExpr(allocator, args[3].*, env));
+    const metric = try parseVectorMetric(metric_value);
 
     // CANARY: REQ=REQ-ADVANCED-INDEX-RESTART-REBUILD; FEATURE="VectorIndex"; ASPECT=LazyRebuildAfterRestart; STATUS=TESTED; TEST=tests/test_advanced_index_restart.zig; OWNER=index; UPDATED=2026-08-25
     // ADVANCED-INDEX-RESTART: nothing rebuilds advanced indexes on catalog
@@ -3305,8 +3424,19 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
     // here is NOT fatal: the scan below is a correct (if O(n)) answer, which is
     // exactly the behaviour that shipped before, so a rebuild that cannot
     // allocate must not turn a working query into an error.
+    // SONNY-6607 (3): not silently: an index that cannot be rebuilt is logged
+    // with its cause (the scan below still answers).
+    // SONNY-6703: the index is the session graph's own: another graph's
+    // same-named property neither revokes it nor is served by it.
+    const knn_graph = (try currentKnnScanScope()).graph;
     @import("execution/statement_dispatcher.zig")
-        .ensureAdvancedVectorIndexForProperty(allocator, property_name) catch {};
+        .ensureAdvancedVectorIndexForPropertyInGraph(allocator, knn_graph, property_name) catch |err| {
+        const logging = @import("logging");
+        logging.scoped("eval").warn("knn: the vector index for the property could not be rebuilt; answering by a scan", &.{
+            logging.Attr.string("property", property_name),
+            logging.Attr.string("error", @errorName(err)),
+        });
+    };
 
     // CANARY: REQ=REQ-GEODE-877-KNN-INDEX-SHADOW; FEATURE="VectorKnn"; ASPECT=UnrelatedIndexMustNotShadowScan; STATUS=TESTED; TEST=tests/test_vector_knn_silent_failures.zig; OWNER=eval; UPDATED=2026-08-29
     // geode#877 (b): this used to COMMIT to any index registered for the
@@ -3334,9 +3464,15 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
     // O(store) authority scan before it is ever used.
     var index_consulted = false;
     if (index_manager.getGlobalIndexManager()) |manager| {
-        if (try manager.findAdvancedVectorIndexForPropertyAlloc(allocator, property_name)) |index_name| {
+        if (try manager.findAdvancedVectorIndexForPropertyInGraphAlloc(allocator, knn_graph, property_name)) |index_name| {
             defer allocator.free(index_name);
             index_consulted = true;
+            // SONNY-6703: the query metric is checked against the index's
+            // whether the index or the scan answers. The scan used to answer
+            // without the check whenever the index was not authoritative.
+            if (manager.vectorIndexMetric(index_name)) |index_metric| {
+                if (index_metric != metric) return error.VectorMetricMismatch;
+            }
             if (advancedVectorIndexIsAuthoritative(allocator, manager, index_name, property_name)) {
                 if (try knnFromVectorIndex(allocator, manager, index_name, query_vec.vector, k, metric)) |ranked| return ranked;
             }
@@ -3351,7 +3487,18 @@ fn evalVectorKnn(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env) Eval
     // when nothing in scope knows the property: no advanced index is registered
     // for it AND no in-scope row supplies it. "Property known, zero scoreable
     // neighbours" stays a clean empty list.
-    if (!index_consulted and !scanned.property_seen) return error.UnknownProperty;
+    //
+    // CANARY: REQ=REQ-SONNY-2820-KNN-HIDDEN-PROPERTY-EMPTY; FEATURE="VectorKnn"; ASPECT=HiddenOnlyPropertyEmptyList; STATUS=TESTED; TEST=tests/test_sonny6338_tenant_visibility_consistency.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-2820: a session whose scope can hide rows (a tenant scope, or an
+    // RLS policy that may deny it one) gets an empty list instead, as MATCH
+    // gives it an empty result: a property only hidden rows carry used to
+    // raise UnknownProperty. The diagnostic is not raised for such a session
+    // even when no row at all carries the property, because telling the two
+    // apart would reveal that a hidden row carries it.
+    if (!index_consulted and !scanned.property_seen) {
+        if (scanned.scope_restricts) return .{ .List = &.{} };
+        return error.UnknownProperty;
+    }
     return scanned.value;
 }
 
@@ -3445,9 +3592,16 @@ fn advancedVectorIndexIsAuthoritative(
     // longest metadata exposure on the knn path.
     const label = (manager.advancedIndexLabelAlloc(allocator, index_name) catch return false) orelse return false;
     defer allocator.free(label);
-    const scope = currentKnnScanScope() catch return false;
+    const scope = currentKnnRowScope(allocator) catch return false;
+    defer scope.deinit();
     const store = graph_store.getGlobalStore(allocator);
-    return store.labelSolelyCarriesProperty(scope.graph, scope.tenant, label, property_name);
+    // SONNY-2820: the carriers are counted over the rows the session sees.
+    // With a tenant hierarchy that is more than its own tag, so every
+    // tenant's carriers count (the storage filter is exact).
+    const tenant = if (scope.row) |row| row.storageTenant() else scope.tenant;
+    // SONNY-6703: an index of this graph holds this graph's rows only, so a
+    // carrier in another graph neither revokes it nor needs it.
+    return store.labelSolelyCarriesPropertyScoped(scope.graph, tenant, label, property_name, manager.advancedIndexIsGraphScoped(index_name));
 }
 
 /// Which adjacency `indegree()` / `outdegree()` count.
@@ -3490,6 +3644,8 @@ fn visibleNodeDegree(allocator: std.mem.Allocator, arg: Value, direction: Degree
     switch (arg) {
         .Node => {},
         .Int => |raw_id| if (std.math.cast(u64, raw_id) == null) return absent,
+        // SONNY-6555 item 4: NULL in is NULL out (it was 0).
+        .Null => return Value{ .Null = {} },
         else => return absent,
     }
     const store = graph_store.getGlobalStore(allocator);
@@ -3515,10 +3671,12 @@ fn visibleNodeDegree(allocator: std.mem.Allocator, arg: Value, direction: Degree
     };
 
     // Counted by id: the node itself is not read again.
-    const edge_ids = switch (direction) {
-        .incoming => store.getIncomingEdgeIds(node_id),
-        .outgoing => store.getOutgoingEdgeIds(node_id),
-    } orelse return absent;
+    // SONNY-6607 (1): an adjacency list that cannot be read fails the call;
+    // it read as "no edges" (a degree of 0, or absent).
+    const edge_ids = (switch (direction) {
+        .incoming => store.getIncomingEdgeIdsOrError(node_id),
+        .outgoing => store.getOutgoingEdgeIdsOrError(node_id),
+    } catch |err| return value_types.storageReadFailed(err)) orelse return absent;
     const hop = row orelse return .{ .Int = @intCast(edge_ids.len) };
     if (!hop.restrictsNodes()) return .{ .Int = @intCast(edge_ids.len) };
 
@@ -3526,7 +3684,9 @@ fn visibleNodeDegree(allocator: std.mem.Allocator, arg: Value, direction: Degree
     for (edge_ids) |edge_id| {
         // By value: a copy taken under the edge shard's lock
         // (`getEdgeHydrated`), safe against a concurrent edge writer.
-        const edge = store.getEdgeHydrated(edge_id) orelse continue;
+        // SONNY-6594 (4): an unreadable edge fails the call; it was skipped
+        // (a degree short by the edges that could not be read).
+        const edge = (store.getEdgeHydratedChecked(edge_id) catch |err| return value_types.storageReadFailed(err)) orelse continue;
         const neighbour = switch (direction) {
             .incoming => edge.from_id,
             .outgoing => edge.to_id,
@@ -3540,13 +3700,102 @@ fn visibleNodeDegree(allocator: std.mem.Allocator, arg: Value, direction: Degree
 // Phase 6 M6.1: Value converter functions moved to eval/type_promotion.zig
 // Functions: valueToExtValue, extValueToValue, evalValueToHeapValue, heapValueToEvalValue
 
+// CANARY: REQ=REQ-SONNY-6645-SHORTEST-PATH-ONE; FEATURE="ShortestPath"; ASPECT=OneOperandForm; STATUS=TESTED; TEST=tests/test_sonny6645_query_followups.zig; OWNER=eval; UPDATED=2026-11-16
+/// SONNY-6645 item 2: `shortestPath(x)` / `allShortestPaths(x)` with one
+/// operand, as a value (the pattern form is the `.ShortestPath` expression).
+/// A path is its own shortest path; a node, the path of that node alone;
+/// NULL is NULL. A list built a two-node path from its first and last node,
+/// with no relationships, whether or not they were connected; a list, and
+/// anything else that is no path, is 22G03 (`TypeMismatch`). `all` answers
+/// the list of the one path.
+fn shortestPathOfOne(allocator: std.mem.Allocator, arg: Value, all: bool) EvalError!Value {
+    const path: Value = switch (arg) {
+        .Null => return .{ .Null = {} },
+        .Path => arg,
+        .Node => |node| blk: {
+            const nodes = try allocator.alloc(*const graph_store.Node, 1);
+            nodes[0] = node;
+            break :blk .{ .Path = .{ .nodes = nodes, .edges = &.{} } };
+        },
+        else => return EvalError.TypeMismatch,
+    };
+    if (!all) return path;
+    const paths = try allocator.alloc(Value, 1);
+    paths[0] = path;
+    return .{ .List = paths };
+}
+
+// CANARY: REQ=REQ-SONNY-6637-SHORTEST-PATH-NODES; FEATURE="ShortestPath"; ASPECT=TwoArgumentForm; STATUS=TESTED; TEST=tests/test_sonny6637_query_items.zig; OWNER=eval; UPDATED=2026-11-15
+/// SONNY-6637 item 1: `shortestPath(a, b)` / `allShortestPaths(a, b)`, two
+/// node operands. The forms built a two-node path with no relationships
+/// whether or not `a` and `b` were connected (and `shortestPath(1, 2)` the
+/// list [1, 2]). They now take the walk `shortestPath((a)-[*0..]-(b))` takes
+/// (`graph_algorithms.findShortestPath`, with its session scope: tenant,
+/// graph and RLS): any relationship type, either direction, `a` to itself
+/// the path of `a` alone. No path is NULL (`allShortestPaths`: the empty
+/// list); a NULL operand is NULL, any other non-node operand 22G03.
+fn evalShortestPathBetween(allocator: std.mem.Allocator, args: []*ast.Expr, env: Env, all: bool) EvalError!Value {
+    const start = try evalExpr(allocator, args[0].*, env);
+    const end = try evalExpr(allocator, args[1].*, env);
+    const none: Value = if (all) .{ .List = &.{} } else .{ .Null = {} };
+    if (start == .Null or end == .Null) return .{ .Null = {} };
+    if (start != .Node or end != .Node) return EvalError.TypeMismatch;
+    // The two operands, bound to names no query can write (a space), as
+    // the pattern's endpoints.
+    const start_name = " shortest path start";
+    const end_name = " shortest path end";
+    const names = [_][]const u8{ start_name, end_name };
+    const values = [_]Value{ start, end };
+    var walk_env = env;
+    walk_env.names = &names;
+    walk_env.values = &values;
+    walk_env.owned = false;
+    var hops = [_]ast.Hop{.{
+        .left = .{ .name = start_name, .labels = &.{}, .props = null },
+        .rel = .{ .name = null, .types = &.{}, .props = null, .dir = .undirected, .min_len = 0, .max_len = null },
+        .right = .{ .name = end_name, .labels = &.{}, .props = null },
+    }};
+    var chains = [_]ast.Chain{.{ .hops = &hops, .is_shortest = true }};
+    const pattern = ast.GraphPattern{ .chains = &chains };
+    // As the `.ShortestPath` expression: a tenancy refusal and a limit are
+    // the query's; any other failure is no path.
+    const found = (try getExecutionCallbacks()).findShortestPath(allocator, pattern, all, walk_env) catch |err| {
+        if (err == error.TenantScopeRequired) return error.TenantScopeRequired;
+        if (limitAsEvalError(err)) |limit_err| return limit_err;
+        if (err == error.OutOfMemory) return EvalError.OutOfMemory;
+        return none;
+    };
+    if (!all) return found;
+    return switch (found) {
+        .Null => none,
+        .List => found,
+        else => blk: {
+            const paths = try allocator.alloc(Value, 1);
+            paths[0] = found;
+            break :blk Value{ .List = paths };
+        },
+    };
+}
+
 /// Try to execute basic built-in functions (length, upper, lower, etc.)
 fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, args: []*ast.Expr, env: Env) !?Value {
     const evaluator_functions = @import("types/evaluator_functions.zig");
 
+    // SONNY-6727: CURRENT_GRAPH / CURRENT_PROPERTY_GRAPH value expressions
+    // (ISO/IEC 39075:2024): the session's graph name, read from the active
+    // execution context (the default graph with none).
+    if (std.mem.eql(u8, function_name, ast.session_graph_value_fn)) {
+        if (args.len != 0) return error.WrongArgumentCount;
+        const execution = @import("execution.zig");
+        const session_graph = @import("execution/session_graph.zig");
+        const name = if (execution.getActiveContext()) |ctx| session_graph.current(ctx.*) else @import("graph_store.zig").DEFAULT_GRAPH_NAME;
+        // A copy: the session frees its own name when the graph changes.
+        return Value{ .Str = try allocator.dupe(u8, name) };
+    }
+
     // Handle current_user() function - returns the current authenticated user
     if (std.ascii.eqlIgnoreCase(function_name, "current_user")) {
-        if (args.len != 0) return null;
+        if (args.len != 0) return error.WrongArgumentCount;
         // Check if we have a token-authenticated user in the environment
         if (env.get("__token_user__")) |user| {
             return user;
@@ -3582,7 +3831,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // error between incomparable operands — leaves the value unchanged, which
     // is the standard's "not equal" outcome.
     if (std.ascii.eqlIgnoreCase(function_name, "nullif")) {
-        if (args.len != 2) return null;
+        if (args.len != 2) return error.WrongArgumentCount;
         const eq_expr = ast.Expr{ .Binary = .{ .op = .Eq, .left = args[0], .right = args[1] } };
         const eq = evalExpr(allocator, eq_expr, env) catch |err| switch (err) {
             EvalError.OutOfMemory => return err,
@@ -3595,7 +3844,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // CANARY: REQ=REQ-GQL-PROPERTIES-001; FEATURE="PropertiesFunction"; ASPECT=NodeProperties; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
     // B05 Fix: Handle properties() function - returns property map of a node or edge
     if (std.ascii.eqlIgnoreCase(function_name, "properties")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Node => |node| {
@@ -3608,7 +3857,12 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 var prop_map = std.StringHashMap(Value).init(allocator);
                 var prop_iter = node.properties.iterator();
                 while (prop_iter.next()) |entry| {
-                    const prop_val = property_codec.propertyValueToProjectedValue(allocator, entry.value_ptr.*) catch continue;
+                    // SONNY-6327: a string through the FLE read policy (it
+                    // was the stored bytes: ciphertext).
+                    const prop_val = if (entry.value_ptr.* == .String)
+                        Value{ .Str = try fleReadEntity(allocator, .node, if (node.labels.len > 0) node.labels[0] else "Unknown", entry.key_ptr.*, entry.value_ptr.String, node.id, node.tenant_id) }
+                    else
+                        property_codec.propertyValueToProjectedValue(allocator, entry.value_ptr.*) catch continue;
                     const key_copy = allocator.dupe(u8, entry.key_ptr.*) catch continue;
                     prop_map.put(key_copy, prop_val) catch {
                         allocator.free(key_copy);
@@ -3623,7 +3877,10 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 var prop_map = std.StringHashMap(Value).init(allocator);
                 var prop_iter = edge.properties.iterator();
                 while (prop_iter.next()) |entry| {
-                    const prop_val = property_codec.propertyValueToProjectedValue(allocator, entry.value_ptr.*) catch continue;
+                    const prop_val = if (entry.value_ptr.* == .String)
+                        Value{ .Str = try fleReadEntity(allocator, .edge, edge.label, entry.key_ptr.*, entry.value_ptr.String, edge.id, edge.tenant_id) }
+                    else
+                        property_codec.propertyValueToProjectedValue(allocator, entry.value_ptr.*) catch continue;
                     const key_copy = allocator.dupe(u8, entry.key_ptr.*) catch continue;
                     prop_map.put(key_copy, prop_val) catch {
                         allocator.free(key_copy);
@@ -3637,65 +3894,6 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // CANARY: REQ=REQ-GQL-KEYS-001; FEATURE="KeysFunction"; ASPECT=NodePropertyKeys; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
-    // B06 Fix: Handle keys() function for maps AND nodes
-    if (std.ascii.eqlIgnoreCase(function_name, "keys")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            // GAP-0910 (same class as labels()/properties()): key strings are
-            // duplicated so the projected list owns its memory.
-            .Map => |map| {
-                var keys = try allocator.alloc(Value, map.count());
-                var iter = map.iterator();
-                var i: usize = 0;
-                while (iter.next()) |entry| : (i += 1) {
-                    keys[i] = Value{ .Str = try allocator.dupe(u8, entry.key_ptr.*) };
-                }
-                return Value{ .List = keys };
-            },
-            .Node => |node| {
-                // Return property keys from node
-                var keys = try allocator.alloc(Value, node.properties.count());
-                var iter = node.properties.iterator();
-                var i: usize = 0;
-                while (iter.next()) |entry| : (i += 1) {
-                    keys[i] = Value{ .Str = try allocator.dupe(u8, entry.key_ptr.*) };
-                }
-                return Value{ .List = keys };
-            },
-            .Edge => |edge| {
-                // Return property keys from edge
-                var keys = try allocator.alloc(Value, edge.properties.count());
-                var iter = edge.properties.iterator();
-                var i: usize = 0;
-                while (iter.next()) |entry| : (i += 1) {
-                    keys[i] = Value{ .Str = try allocator.dupe(u8, entry.key_ptr.*) };
-                }
-                return Value{ .List = keys };
-            },
-            else => return Value{ .Null = {} },
-        }
-    }
-
-    // Handle values() function for maps
-    if (std.ascii.eqlIgnoreCase(function_name, "values")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .Map => |map| {
-                var values = try allocator.alloc(Value, map.count());
-                var iter = map.iterator();
-                var i: usize = 0;
-                while (iter.next()) |entry| : (i += 1) {
-                    values[i] = entry.value_ptr.*;
-                }
-                return Value{ .List = values };
-            },
-            else => return Value{ .Null = {} },
-        }
-    }
-
     // CANARY: REQ=REQ-GQL-PATH-002; FEATURE="ShortestPath"; ASPECT=GraphTraversal; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-10
     // GAP-0088 RESOLVED: Proper path finding implementation
     // Handle shortestPath function - returns shortest path between nodes
@@ -3704,59 +3902,14 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // 1. A Path value (from pattern like (a)-[*]-(b))
         // 2. Two node arguments (start, end)
         if (args.len == 1) {
-            // Single argument - should be a path pattern result
-            const arg = try evalExpr(allocator, args[0].*, env);
-            switch (arg) {
-                .Path => {
-                    // Already a path - return it as the shortest path
-                    return arg;
-                },
-                .Node => {
-                    // Single node - return a path containing just that node
-                    var nodes = try allocator.alloc(*const graph_store.Node, 1);
-                    nodes[0] = arg.Node;
-                    return Value{ .Path = .{ .nodes = nodes, .edges = &.{} } };
-                },
-                .List => |list| {
-                    // List of nodes - try to construct path
-                    if (list.len >= 2) {
-                        const start_val = list[0];
-                        const end_val = list[list.len - 1];
-                        if (start_val == .Node and end_val == .Node) {
-                            // Return path with start and end nodes
-                            var nodes = try allocator.alloc(*const graph_store.Node, 2);
-                            nodes[0] = start_val.Node;
-                            nodes[1] = end_val.Node;
-                            return Value{ .Path = .{ .nodes = nodes, .edges = &.{} } };
-                        }
-                    }
-                    return Value{ .Null = {} };
-                },
-                else => return Value{ .Null = {} },
-            }
+            // SONNY-6645 item 2: one operand, a path or a node.
+            return try shortestPathOfOne(allocator, try evalExpr(allocator, args[0].*, env), false);
         } else if (args.len == 2) {
-            // Two arguments - start and end nodes
-            const start_arg = try evalExpr(allocator, args[0].*, env);
-            const end_arg = try evalExpr(allocator, args[1].*, env);
-
-            // Both must be nodes
-            if (start_arg == .Node and end_arg == .Node) {
-                var nodes = try allocator.alloc(*const graph_store.Node, 2);
-                nodes[0] = start_arg.Node;
-                nodes[1] = end_arg.Node;
-                return Value{ .Path = .{ .nodes = nodes, .edges = &.{} } };
-            }
-            // If node IDs are provided as integers, return them as a list
-            if (start_arg == .Int and end_arg == .Int) {
-                var path_values = try allocator.alloc(Value, 2);
-                path_values[0] = start_arg;
-                path_values[1] = end_arg;
-                return Value{ .List = path_values };
-            }
-            return Value{ .Null = {} };
+            // SONNY-6637 item 1: the walk between the two nodes.
+            return try evalShortestPathBetween(allocator, args, env, false);
         }
-        // Invalid arguments
-        return Value{ .Null = {} };
+        // The arity table refuses any other count first.
+        return EvalError.WrongArgumentCount;
     }
 
     // CANARY: REQ=REQ-GQL-PATH-003; FEATURE="AllShortestPaths"; ASPECT=GraphTraversal; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-10
@@ -3765,67 +3918,19 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     if (std.ascii.eqlIgnoreCase(function_name, "allshortestpaths") or std.ascii.eqlIgnoreCase(function_name, "all_shortest_paths")) {
         // allShortestPaths returns a list of all shortest paths
         if (args.len == 1) {
-            const arg = try evalExpr(allocator, args[0].*, env);
-            switch (arg) {
-                .Path => {
-                    // Return list containing this single path
-                    var paths = try allocator.alloc(Value, 1);
-                    paths[0] = arg;
-                    return Value{ .List = paths };
-                },
-                .Node => {
-                    // Single node - return list with one path containing just that node
-                    var nodes = try allocator.alloc(*const graph_store.Node, 1);
-                    nodes[0] = arg.Node;
-                    var paths = try allocator.alloc(Value, 1);
-                    paths[0] = Value{ .Path = .{ .nodes = nodes, .edges = &.{} } };
-                    return Value{ .List = paths };
-                },
-                .List => |list| {
-                    if (list.len >= 2) {
-                        const start_val = list[0];
-                        const end_val = list[list.len - 1];
-                        if (start_val == .Node and end_val == .Node) {
-                            var nodes = try allocator.alloc(*const graph_store.Node, 2);
-                            nodes[0] = start_val.Node;
-                            nodes[1] = end_val.Node;
-                            var paths = try allocator.alloc(Value, 1);
-                            paths[0] = Value{ .Path = .{ .nodes = nodes, .edges = &.{} } };
-                            return Value{ .List = paths };
-                        }
-                    }
-                    return Value{ .List = &.{} };
-                },
-                else => return Value{ .List = &.{} },
-            }
+            // SONNY-6645 item 2: one operand, a path or a node.
+            return try shortestPathOfOne(allocator, try evalExpr(allocator, args[0].*, env), true);
         } else if (args.len == 2) {
-            const start_arg = try evalExpr(allocator, args[0].*, env);
-            const end_arg = try evalExpr(allocator, args[1].*, env);
-
-            if (start_arg == .Node and end_arg == .Node) {
-                var nodes = try allocator.alloc(*const graph_store.Node, 2);
-                nodes[0] = start_arg.Node;
-                nodes[1] = end_arg.Node;
-                var paths = try allocator.alloc(Value, 1);
-                paths[0] = Value{ .Path = .{ .nodes = nodes, .edges = &.{} } };
-                return Value{ .List = paths };
-            }
-            if (start_arg == .Int and end_arg == .Int) {
-                var path_values = try allocator.alloc(Value, 2);
-                path_values[0] = start_arg;
-                path_values[1] = end_arg;
-                var paths = try allocator.alloc(Value, 1);
-                paths[0] = Value{ .List = path_values };
-                return Value{ .List = paths };
-            }
-            return Value{ .List = &.{} };
+            // SONNY-6637 item 1: every shortest walk between the two nodes.
+            return try evalShortestPathBetween(allocator, args, env, true);
         }
-        return Value{ .List = &.{} };
+        // The arity table refuses any other count first.
+        return EvalError.WrongArgumentCount;
     }
 
     // Handle algo.asNode function - converts nodeId to node reference
     if (std.ascii.eqlIgnoreCase(function_name, "algo.asnode") or std.ascii.eqlIgnoreCase(function_name, "asnode")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         // Just return the node ID for now
         return arg;
@@ -3844,7 +3949,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // path value (a path is a sequence, not a graph element), so there is no id
     // to return. `id(nodes(p)[0])` names the element identities inside it.
     if (std.ascii.eqlIgnoreCase(function_name, "id")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Int => |i| return Value{ .Int = i }, // Already an integer ID
@@ -3858,7 +3963,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // Handle exists() function - checks if a property exists on a node/edge (returns true/false)
     // This is different from EXISTS { ... } predicate which checks pattern matches
     if (std.ascii.eqlIgnoreCase(function_name, "exists")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         // exists() returns true if the value is NOT null, false if it is null
         // When a property doesn't exist on a node, property access returns null
@@ -3870,7 +3975,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=types; UPDATED=2025-12-22
     // Handle type() function - returns relationship type for edges, type name for other values
     if (std.ascii.eqlIgnoreCase(function_name, "type")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Edge => |e| return Value{ .Str = e.label },
@@ -3884,14 +3989,14 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // relationship label. Not ISO 39075 (the standard's surface is the
     // IS TYPED predicate); registered as a compatibility spelling.
     if (std.ascii.eqlIgnoreCase(function_name, "valuetype")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         return Value{ .Str = getTypeName(arg) };
     }
 
     // Handle labels() function - returns node labels as a list
     if (std.ascii.eqlIgnoreCase(function_name, "labels")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Node => |n| {
@@ -3911,7 +4016,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // CANARY: REQ=REQ-GQL-INDEGREE-001; FEATURE="IndegreeFunction"; ASPECT=NodeDegree; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-03
     // Handle indegree() function - returns number of incoming edges to a node
     if (std.ascii.eqlIgnoreCase(function_name, "indegree")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         // PHASE 1 (edge-engine-direct): the in-degree IS the length of the node's
         // INCOMING adjacency (engine-backed, hydrate-on-miss). The old full
@@ -3925,7 +4030,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // CANARY: REQ=REQ-GQL-OUTDEGREE-001; FEATURE="OutdegreeFunction"; ASPECT=NodeDegree; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-03
     // Handle outdegree() function - returns number of outgoing edges from a node
     if (std.ascii.eqlIgnoreCase(function_name, "outdegree")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         // PHASE 1: out-degree IS the length of the node's OUTGOING adjacency
         // (engine-backed). See indegree above — replaces an O(all edges),
@@ -3934,26 +4039,9 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         return try visibleNodeDegree(allocator, arg, .outgoing);
     }
 
-    // Handle length() function - returns length of path, string, or list
-    if (std.ascii.eqlIgnoreCase(function_name, "length")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .Str => |s| return Value{ .Int = @intCast(s.len) },
-            .List => |l| return Value{ .Int = @intCast(l.len) },
-            .Path => |p| return Value{ .Int = @intCast(p.edges.len) }, // Path length is number of relationships
-            // CANARY: REQ=REQ-BUG731-MATCH-SCOPING; FEATURE="PathLength"; ASPECT=NullPropagation; STATUS=TESTED; TEST=tests/test_bug731_match_scoping.zig:553; OWNER=eval; UPDATED=2026-07-31
-            // GQL 3VL: length(NULL) is NULL, not 0. Returning 0 made an
-            // unresolved binding (e.g. a path variable dropped by a WITH
-            // projection) silently look like a real zero-length path.
-            .Null => return Value{ .Null = {} },
-            else => return Value{ .Int = 0 },
-        }
-    }
-
     // Handle nodes() function - returns list of nodes in a path
     if (std.ascii.eqlIgnoreCase(function_name, "nodes")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Path => |p| {
@@ -3969,7 +4057,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // Handle relationships() function - returns list of edges in a path
     if (std.ascii.eqlIgnoreCase(function_name, "relationships")) {
-        if (args.len != 1) return null;
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
             .Path => |p| {
@@ -3978,37 +4066,6 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                     edge_values[i] = Value{ .Edge = edge };
                 }
                 return Value{ .List = edge_values };
-            },
-            else => return Value{ .Null = {} },
-        }
-    }
-
-    // Handle string case conversion functions
-    if (std.ascii.eqlIgnoreCase(function_name, "toupper") or std.ascii.eqlIgnoreCase(function_name, "upper")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .Str => |s| {
-                var upper = try allocator.alloc(u8, s.len);
-                for (s, 0..) |c, i| {
-                    upper[i] = std.ascii.toUpper(c);
-                }
-                return Value{ .Str = upper };
-            },
-            else => return Value{ .Null = {} },
-        }
-    }
-
-    if (std.ascii.eqlIgnoreCase(function_name, "tolower") or std.ascii.eqlIgnoreCase(function_name, "lower")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .Str => |s| {
-                var lower = try allocator.alloc(u8, s.len);
-                for (s, 0..) |c, i| {
-                    lower[i] = std.ascii.toLower(c);
-                }
-                return Value{ .Str = lower };
             },
             else => return Value{ .Null = {} },
         }
@@ -4028,7 +4085,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         const is_ends = std.ascii.eqlIgnoreCase(function_name, "endswith");
         const is_contains = std.ascii.eqlIgnoreCase(function_name, "contains");
         if (is_starts or is_ends or is_contains) {
-            if (args.len != 2) return null;
+            if (args.len != 2) return error.WrongArgumentCount;
             const str_arg = try evalExpr(allocator, args[0].*, env);
             const needle_arg = try evalExpr(allocator, args[1].*, env);
 
@@ -4053,268 +4110,6 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    // icontains(str, substr) - case-insensitive containment check
-    if (std.ascii.eqlIgnoreCase(function_name, "icontains")) {
-        if (args.len != 2) return null;
-        const str_arg = try evalExpr(allocator, args[0].*, env);
-        const needle_arg = try evalExpr(allocator, args[1].*, env);
-
-        const str_val = switch (str_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
-        };
-        const needle_val = switch (needle_arg) {
-            .Str => |s| s,
-            else => return Value{ .Null = {} },
-        };
-
-        if (needle_val.len == 0) return Value{ .Bool = true };
-
-        var lower_str = try allocator.alloc(u8, str_val.len);
-        for (str_val, 0..) |c, i| {
-            lower_str[i] = std.ascii.toLower(c);
-        }
-        var lower_needle = try allocator.alloc(u8, needle_val.len);
-        for (needle_val, 0..) |c, i| {
-            lower_needle[i] = std.ascii.toLower(c);
-        }
-
-        return Value{ .Bool = std.mem.indexOf(u8, lower_str, lower_needle) != null };
-    }
-
-    // Handle reverse function
-    if (std.ascii.eqlIgnoreCase(function_name, "reverse")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .Str => |s| {
-                var reversed = try allocator.alloc(u8, s.len);
-                var i: usize = 0;
-                while (i < s.len) : (i += 1) {
-                    reversed[i] = s[s.len - 1 - i];
-                }
-                return Value{ .Str = reversed };
-            },
-            .List => |l| {
-                var reversed = try allocator.alloc(Value, l.len);
-                var i: usize = 0;
-                while (i < l.len) : (i += 1) {
-                    reversed[i] = l[l.len - 1 - i];
-                }
-                return Value{ .List = reversed };
-            },
-            else => return Value{ .Null = {} },
-        }
-    }
-
-    // Math functions are now handled as special cases in the Call block above
-
-    // Handle aggregation functions (simplified for now - real implementation needs context)
-    if (std.ascii.eqlIgnoreCase(function_name, "count")) {
-        // COUNT(*) or COUNT(expr)
-        if (args.len == 1) {
-            // Check if argument is "*"
-            if (args[0].* == .Ident and std.mem.eql(u8, args[0].Ident.orig, "*")) {
-                // COUNT(*) - for now return 1 since we're in a single-row context
-                return Value{ .Int = 1 };
-            }
-            // Evaluate the argument
-            const arg = try evalExpr(allocator, args[0].*, env);
-            // If the argument is not null, count it as 1
-            if (arg != .Null) {
-                return Value{ .Int = 1 };
-            }
-            return Value{ .Int = 0 };
-        }
-        return Value{ .Int = 0 };
-    } else if (std.ascii.eqlIgnoreCase(function_name, "sum")) {
-        // SUM aggregation function
-        if (args.len == 0) return Value{ .Null = {} };
-
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .List => |list| {
-                if (list.len == 0) return Value{ .Null = {} };
-
-                // Check if we have any decimals
-                var has_decimal = false;
-                for (list) |item| {
-                    if (item == .Decimal) {
-                        has_decimal = true;
-                        break;
-                    }
-                }
-
-                // Check if we have any float types (Real or Double)
-                var has_float = false;
-                for (list) |item| {
-                    if (item == .Real or item == .Double) {
-                        has_float = true;
-                        break;
-                    }
-                }
-
-                if (has_float or has_decimal) {
-                    // Sum as float (f64)
-                    var sum: f64 = 0.0;
-                    for (list) |item| {
-                        switch (item) {
-                            .Int => |n| sum += @floatFromInt(n),
-                            .Real => |f| sum += @floatCast(f),
-                            .Double => |f| sum += f,
-                            .Decimal => |d| {
-                                const divisor = std.math.pow(f64, 10.0, @floatFromInt(d.scale));
-                                sum += @as(f64, @floatFromInt(d.coeff)) / divisor;
-                            },
-                            else => {},
-                        }
-                    }
-                    return Value{ .Double = sum };
-                } else {
-                    // Sum as integer (SONNY-2769: checked; `+=` aborted)
-                    var sum: i64 = 0;
-                    for (list) |item| {
-                        switch (item) {
-                            .Int => |n| sum = std.math.add(i64, sum, n) catch return EvalError.IntegerOverflow,
-                            else => {},
-                        }
-                    }
-                    return Value{ .Int = sum };
-                }
-            },
-            else => return Value{ .Null = {} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "avg")) {
-        // AVG aggregation function
-        if (args.len == 0) return Value{ .Null = {} };
-
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .List => |list| {
-                if (list.len == 0) return Value{ .Null = {} };
-
-                // Check if we have any float types
-                var has_float = false;
-                var has_decimal = false;
-                for (list) |item| {
-                    if (item == .Real or item == .Double) {
-                        has_float = true;
-                        break;
-                    }
-                    if (item == .Decimal) {
-                        has_decimal = true;
-                    }
-                }
-
-                var count: usize = 0;
-                if (has_float or has_decimal) {
-                    var sum: f64 = 0.0;
-                    for (list) |item| {
-                        switch (item) {
-                            .Int => |n| {
-                                sum += @floatFromInt(n);
-                                count += 1;
-                            },
-                            .Real => |f| {
-                                sum += @floatCast(f);
-                                count += 1;
-                            },
-                            .Double => |f| {
-                                sum += f;
-                                count += 1;
-                            },
-                            .Decimal => |d| {
-                                const divisor = std.math.pow(f64, 10.0, @floatFromInt(d.scale));
-                                sum += @as(f64, @floatFromInt(d.coeff)) / divisor;
-                                count += 1;
-                            },
-                            else => {},
-                        }
-                    }
-                    if (count == 0) return Value{ .Null = {} };
-                    return Value{ .Double = sum / @as(f64, @floatFromInt(count)) };
-                } else {
-                    var sum: i64 = 0;
-                    for (list) |item| {
-                        switch (item) {
-                            .Int => |n| {
-                                // SONNY-2769: checked; `+=` aborted the server.
-                                sum = std.math.add(i64, sum, n) catch return EvalError.IntegerOverflow;
-                                count += 1;
-                            },
-                            else => {},
-                        }
-                    }
-                    if (count == 0) return Value{ .Null = {} };
-                    return Value{ .Int = @divFloor(sum, @as(i64, @intCast(count))) };
-                }
-            },
-            else => return Value{ .Null = {} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "min")) {
-        // MIN aggregation function
-        if (args.len == 0) return Value{ .Null = {} };
-
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .List => |list| {
-                if (list.len == 0) return Value{ .Null = {} };
-
-                var min_val = list[0];
-                for (list[1..]) |item| {
-                    // Simple comparison for common types
-                    const is_less = switch (item) {
-                        .Int => |n| switch (min_val) {
-                            .Int => |m| n < m,
-                            else => false,
-                        },
-                        .Str => |s| switch (min_val) {
-                            .Str => |ms| std.mem.order(u8, s, ms) == .lt,
-                            else => false,
-                        },
-                        else => false,
-                    };
-                    if (is_less) {
-                        min_val = item;
-                    }
-                }
-                return min_val;
-            },
-            else => return Value{ .Null = {} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "max")) {
-        // MAX aggregation function
-        if (args.len == 0) return Value{ .Null = {} };
-
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .List => |list| {
-                if (list.len == 0) return Value{ .Null = {} };
-
-                var max_val = list[0];
-                for (list[1..]) |item| {
-                    // Simple comparison for common types
-                    const is_greater = switch (item) {
-                        .Int => |n| switch (max_val) {
-                            .Int => |m| n > m,
-                            else => false,
-                        },
-                        .Str => |s| switch (max_val) {
-                            .Str => |ms| std.mem.order(u8, s, ms) == .gt,
-                            else => false,
-                        },
-                        else => false,
-                    };
-                    if (is_greater) {
-                        max_val = item;
-                    }
-                }
-                return max_val;
-            },
-            else => return Value{ .Null = {} },
-        }
-    }
-
     // CANARY: REQ=REQ-FN-DISPATCH-PARITY; FEATURE="RandomFunction"; ASPECT=RandAlias; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
     // Handle random() function which takes no arguments.
     // FN-DISPATCH-PARITY: `rand()` is advertised by BOTH SHOW FUNCTIONS and
@@ -4323,27 +4118,27 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // already-implemented, already-tested `random()`, which returns a Double
     // in [0,1) from the same seeded CSPRNG, so it is implemented here rather
     // than un-advertised.
-    if (std.ascii.eqlIgnoreCase(function_name, "random") or
-        std.ascii.eqlIgnoreCase(function_name, "rand"))
-    {
-        if (args.len != 0) return null;
-        const result = evaluator_functions.random_val(allocator) catch return null;
+    // SONNY-6540 item 7: `random()` itself is the math handler's
+    // (`call_handlers.evalMathFunction`), which answers it first.
+    if (std.ascii.eqlIgnoreCase(function_name, "rand")) {
+        if (args.len != 0) return error.WrongArgumentCount;
+        const result = evaluator_functions.random_val(allocator) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 
     // Handle date/time functions which take no arguments
     if (std.ascii.eqlIgnoreCase(function_name, "current_date")) {
-        if (args.len != 0) return null;
+        if (args.len != 0) return error.WrongArgumentCount;
         const result = evaluator_functions.current_date();
         return heapValueToEvalValue(result);
     }
     if (std.ascii.eqlIgnoreCase(function_name, "current_time")) {
-        if (args.len != 0) return null;
+        if (args.len != 0) return error.WrongArgumentCount;
         const result = evaluator_functions.current_time();
         return heapValueToEvalValue(result);
     }
     if (std.ascii.eqlIgnoreCase(function_name, "current_timestamp")) {
-        if (args.len != 0) return null;
+        if (args.len != 0) return error.WrongArgumentCount;
         const result = evaluator_functions.current_timestamp();
         return heapValueToEvalValue(result);
     }
@@ -4362,17 +4157,23 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             const arg = try evalExpr(allocator, args[0].*, env);
             const str = switch (arg) {
                 .Str => |s| s,
+                // SONNY-6645 item 4: a NULL operand is NULL (it was 22G03).
+                .Null => return Value{ .Null = {} },
                 // A non-string argument is a data exception on a resolved
                 // function, not "no such function" — `return null` here would
                 // fall through to EvalError.UnknownFunction (42883).
                 else => return EvalError.TypeMismatch,
             };
 
-            // Parse the datetime string using the Timestamp parser; accept a
-            // date-only literal ('2024-06-15') as midnight UTC, matching the
-            // date()/time() siblings. A string neither form parses is a
-            // TimeParse data exception, never a swallowed 42883.
+            // A zoned datetime string ('...Z', '...+02:00') gives its instant
+            // (SONNY-2808: the offset was ignored and trailing text accepted);
+            // one with no zone is taken as UTC, and a date-only literal
+            // ('2024-06-15') as midnight UTC. A string none of these parses is
+            // a TimeParse data exception, never a swallowed 42883.
             const micros: i64 = blk: {
+                if (datetime_module.TimestampTZ.fromStr(str)) |tz| {
+                    break :blk tz.micros_since_epoch_utc;
+                } else |_| {}
                 if (datetime_module.Timestamp.fromStr(str)) |ts| {
                     break :blk ts.micros_since_epoch;
                 } else |_| {
@@ -4385,15 +4186,16 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             const tz_ts = eval_ext.ExtValue{ .TimestampTZ = .{ .micros_since_epoch_utc = micros } };
             return Value{ .ExtValue = tz_ts };
         } else {
-            // datetime() takes zero or one argument.
-            return EvalError.InvalidArgs;
+            // datetime() takes zero or one argument (SONNY-6555 item 5:
+            // 42000, not 22023).
+            return EvalError.WrongArgumentCount;
         }
     }
 
     // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=timestamp; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=datetime; UPDATED=2025-12-22
     // Handle timestamp() function - returns current timestamp as integer (epoch millis)
     if (std.ascii.eqlIgnoreCase(function_name, "timestamp")) {
-        if (args.len != 0) return null;
+        if (args.len != 0) return error.WrongArgumentCount;
         const ts = blk: {
             var timespec: std.posix.timespec = undefined;
             if (comptime builtin.os.tag == .linux) {
@@ -4412,23 +4214,28 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // Handle localdatetime() function - returns current local datetime
     if (std.ascii.eqlIgnoreCase(function_name, "localdatetime")) {
         if (args.len == 0) {
-            // localdatetime() with no args returns current local datetime (same as datetime for now)
-            const result = evaluator_functions.current_timestamp();
-            return heapValueToEvalValue(result);
+            // SONNY-6489: the current local datetime (20.27 GR 10a), in the
+            // server's time zone displacement (UTC); it was a zoned datetime.
+            const now = evaluator_functions.current_timestamp();
+            return Value{ .Timestamp = .{ .micros_since_epoch = now.TimestampTZ.micros_since_epoch_utc } };
         } else if (args.len == 1) {
             // localdatetime(string) parses ISO datetime string
             const datetime_module = @import("types/datetime.zig");
-            const eval_ext = @import("eval_extended.zig");
 
             const arg = try evalExpr(allocator, args[0].*, env);
             const str = switch (arg) {
                 .Str => |s| s,
-                else => return null,
+                .Null => return Value{ .Null = {} },
+                else => return EvalError.TypeMismatch,
             };
 
-            const ts = datetime_module.Timestamp.fromStr(str) catch return null;
-            const tz_ts = eval_ext.ExtValue{ .TimestampTZ = .{ .micros_since_epoch_utc = ts.micros_since_epoch } };
-            return Value{ .ExtValue = tz_ts };
+            // SONNY-2808: a malformed string (or one with a zone: a local
+            // datetime has none) is a TimeParse data exception; `return null`
+            // fell through to "unknown function" (42883).
+            // SONNY-6489: a local datetime (20.27 GR 10b), not a zoned one:
+            // it was a UTC TIMESTAMPTZ that rendered with Z.
+            const ts = datetime_module.Timestamp.fromStr(str) catch return EvalError.TimeParse;
+            return Value{ .Timestamp = ts };
         } else {
             return null;
         }
@@ -4445,11 +4252,12 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             const arg = try evalExpr(allocator, args[0].*, env);
             const str = switch (arg) {
                 .Str => |s| s,
-                else => return null,
+                .Null => return Value{ .Null = {} },
+                else => return EvalError.TypeMismatch,
             };
 
             const datetime_module = @import("types/datetime.zig");
-            const d = datetime_module.Date.fromStr(str) catch return null;
+            const d = datetime_module.Date.fromStr(str) catch return EvalError.TimeParse;
 
             // Return Date directly for proper type matching in arithmetic operations
             return Value{ .Date = d };
@@ -4481,11 +4289,13 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             const arg = try evalExpr(allocator, args[0].*, env);
             const str = switch (arg) {
                 .Str => |s| s,
-                else => return null,
+                .Null => return Value{ .Null = {} },
+                else => return EvalError.TypeMismatch,
             };
 
             const datetime_module = @import("types/datetime.zig");
-            const t = datetime_module.Time.fromStr(str) catch return null;
+            // SONNY-2808: see localdatetime.
+            const t = datetime_module.Time.fromStr(str) catch return EvalError.TimeParse;
 
             const eval_ext = @import("eval_extended.zig");
             const time_val = eval_ext.ExtValue{ .Time = t };
@@ -4497,12 +4307,15 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=duration; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=datetime; UPDATED=2026-01-09
     // Handle duration() function - parses ISO 8601 duration string and returns Interval
-    if (std.ascii.eqlIgnoreCase(function_name, "duration") or std.ascii.eqlIgnoreCase(function_name, "interval")) {
-        if (args.len != 1) return null;
+    // SONNY-6540 item 7: `interval()` is the advanced-type handler's
+    // (`call_handlers.evalAdvancedTypeFunction`), which answers it first.
+    if (std.ascii.eqlIgnoreCase(function_name, "duration")) {
+        if (args.len != 1) return error.WrongArgumentCount;
         const arg = try evalExpr(allocator, args[0].*, env);
         const str = switch (arg) {
             .Str => |s| s,
-            else => return null,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         // Parse ISO 8601 duration format: P[n]Y[n]M[n]DT[n]H[n]M[n]S
@@ -4511,10 +4324,15 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // GQL queries can construct an interval value with the same name the
         // GQL specs use in comparisons / overlap predicates.
         const datetime_module = @import("types/datetime.zig");
-        // A malformed duration literal on a resolved function is a TimeParse
-        // data exception — `return null` here used to fall through to 42883
+        // A malformed duration literal on a resolved function is a data
+        // exception — `return null` here used to fall through to 42883
         // ("Unknown function"), disagreeing with the interval() error path.
-        const interval = datetime_module.Interval.fromStr(str) catch return EvalError.TimeParse;
+        // SONNY-6489: invalid duration format (22G0H), 20.29 GR 1c.
+        const interval = datetime_module.Interval.fromStr(str) catch |e| return switch (e) {
+            // SONNY-6499: a component past its range is 22015.
+            error.IntervalFieldOverflow => EvalError.IntervalFieldOverflow,
+            else => EvalError.DurationParse,
+        };
         return Value{ .Interval = interval };
     }
 
@@ -4530,19 +4348,22 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // 30 days and days to 86 400 seconds). This matches the natural reading
     // of "the longer duration contains the shorter".
     //
-    // Both helpers fail closed (return null) on a non-Interval argument so
-    // bad input does not surface as a true/false answer.
+    // Both helpers refuse a non-Interval argument (22G03, SONNY-6518; they
+    // answered NULL) so bad input does not surface as a true/false answer;
+    // a NULL argument gives NULL.
     if (std.ascii.eqlIgnoreCase(function_name, "interval_overlaps") or std.ascii.eqlIgnoreCase(function_name, "interval_contains")) {
-        if (args.len != 2) return null;
+        if (args.len != 2) return error.WrongArgumentCount;
         const a_val = try evalExpr(allocator, args[0].*, env);
         const b_val = try evalExpr(allocator, args[1].*, env);
         const a_iv = switch (a_val) {
             .Interval => |iv| iv,
-            else => return null,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
         const b_iv = switch (b_val) {
             .Interval => |iv| iv,
-            else => return null,
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         };
 
         // Canonicalised total micro-seconds: months → 30 days, days → 86_400 s.
@@ -4567,19 +4388,10 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         return Value{ .Bool = b_total >= 0 and a_total >= b_total };
     }
 
-    // CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=types; UPDATED=2025-12-22
-    // Handle type() function - returns the type name of a value
-    if (std.ascii.eqlIgnoreCase(function_name, "type")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        const type_name = getTypeName(arg);
-        return Value{ .Str = type_name };
-    }
-
     // CANARY: REQ=REQ-GQL-088; FEATURE="GraphSimilarityFunctions"; ASPECT=Evaluation; STATUS=TESTED; OWNER=eval; UPDATED=2025-10-14
     // Handle algo.similarity.jaccard(list1, list2) - Jaccard similarity coefficient
     if (std.ascii.eqlIgnoreCase(function_name, "algo.similarity.jaccard") or std.ascii.eqlIgnoreCase(function_name, "jaccard")) {
-        if (args.len != 2) return null;
+        if (args.len != 2) return error.WrongArgumentCount;
         const arg1 = try evalExpr(allocator, args[0].*, env);
         const arg2 = try evalExpr(allocator, args[1].*, env);
 
@@ -4617,7 +4429,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // Handle algo.similarity.cosine(vector1, vector2) - Cosine similarity
     // CANARY: REQ=REQ-ALG-SIM-001; FEATURE="SimilarityAlgorithms"; ASPECT=Cosine; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2025-10-16
     if (std.ascii.eqlIgnoreCase(function_name, "algo.similarity.cosine") or std.ascii.eqlIgnoreCase(function_name, "cosine")) {
-        if (args.len != 2) return null;
+        if (args.len != 2) return error.WrongArgumentCount;
         const arg1 = try evalExpr(allocator, args[0].*, env);
         const arg2 = try evalExpr(allocator, args[1].*, env);
 
@@ -4683,243 +4495,61 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     const first_arg = try evalExpr(allocator, args[0].*, env);
     const heap_first_arg = evalValueToHeapValue(first_arg);
 
-    // Handle common string functions
-    if (std.ascii.eqlIgnoreCase(function_name, "length")) {
-        const result = evaluator_functions.length_chars(heap_first_arg) catch return null;
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "upper")) {
-        const result = evaluator_functions.upper(allocator, heap_first_arg) catch return null;
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "lower")) {
-        const result = evaluator_functions.lower(allocator, heap_first_arg) catch return null;
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "trim")) {
-        const result = evaluator_functions.trim(allocator, heap_first_arg) catch return null;
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "abs")) {
-        const result = evaluator_functions.abs_val(heap_first_arg) catch return null;
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "sqrt")) {
-        const result = evaluator_functions.sqrt_val(heap_first_arg) catch |err| {
-            return switch (err) {
-                evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
-                evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                else => EvalError.TypeMismatch,
-            };
-        };
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "ceil")) {
-        const result = evaluator_functions.ceil_val(heap_first_arg) catch return null;
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "floor")) {
-        const result = evaluator_functions.floor_val(heap_first_arg) catch return null;
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "pow") or std.ascii.eqlIgnoreCase(function_name, "power")) {
+    // SONNY-6540 item 7: the call handlers (`src/eval/call_handlers.zig`,
+    // tried first in `evalExpr`) answer every other one-argument function
+    // this chain named (length, size, upper, lower, trim, abs, sqrt, ceil,
+    // floor, pow, sin, cos, tan, asin, acos, log, exp, toString, toInteger,
+    // toFloat, toBoolean, head, tail, last) and never pass one on; `type`
+    // is answered above. Those branches were unreachable.
+    if (std.ascii.eqlIgnoreCase(function_name, "power")) {
         // CANARY: REQ=REQ-GQL-POWER-001; FEATURE="MathFunctions"; ASPECT=PowerAlias; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=eval; UPDATED=2025-12-24
-        if (args.len != 2) return null;
-        const heap_second_arg = evalValueToHeapValue(try evalExpr(allocator, args[1].*, env));
-        const result = evaluator_functions.pow_val(allocator, heap_first_arg, heap_second_arg) catch return null;
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "sin")) {
-        const result = evaluator_functions.sin_val(heap_first_arg) catch return null;
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "cos")) {
-        const result = evaluator_functions.cos_val(heap_first_arg) catch return null;
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "tan")) {
-        const result = evaluator_functions.tan_val(heap_first_arg) catch return null;
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "asin")) {
-        const result = evaluator_functions.asin_val(heap_first_arg) catch |err| {
-            return switch (err) {
-                evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
-                evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                else => EvalError.TypeMismatch,
-            };
-        };
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "acos")) {
-        const result = evaluator_functions.acos_val(heap_first_arg) catch |err| {
-            return switch (err) {
-                evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
-                evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                else => EvalError.TypeMismatch,
-            };
-        };
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "log")) {
-        const result = evaluator_functions.log_val(heap_first_arg) catch |err| {
-            return switch (err) {
-                evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
-                evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                else => EvalError.TypeMismatch,
-            };
-        };
+        if (args.len != 2) return error.WrongArgumentCount;
+        const second_arg = try evalExpr(allocator, args[1].*, env);
+        // SONNY-6645 item 4: a NULL operand is NULL (it was 22G03).
+        if (first_arg == .Null or second_arg == .Null) return Value{ .Null = {} };
+        const heap_second_arg = evalValueToHeapValue(second_arg);
+        const result = evaluator_functions.pow_val(allocator, heap_first_arg, heap_second_arg) catch |err| return call_handlers.mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "log10")) {
         // CANARY: REQ=REQ-GQL-LOG10-001; FEATURE="MathFunctions"; ASPECT=Log10; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=eval; UPDATED=2025-12-24
         // log10(x) = log(x) / log(10)
         switch (first_arg) {
             .Int => |i| {
-                if (i <= 0) return Value{ .Null = {} };
+                if (i <= 0) return EvalError.NumericOutOfRange;
                 const f: f64 = @floatFromInt(i);
                 const log10_result = @log10(f);
                 return Value{ .Decimal = .{ .coeff = @intFromFloat(log10_result * float_to_decimal_scale_f64), .scale = 6 } };
             },
             .Decimal => |d| {
                 const f: f64 = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale));
-                if (f <= 0) return Value{ .Null = {} };
+                if (f <= 0) return EvalError.NumericOutOfRange;
                 const log10_result = @log10(f);
                 return Value{ .Decimal = .{ .coeff = @intFromFloat(log10_result * float_to_decimal_scale_f64), .scale = 6 } };
             },
-            else => return Value{ .Null = {} },
+            .Double => |f| {
+                if (f <= 0) return EvalError.NumericOutOfRange;
+                return Value{ .Decimal = .{ .coeff = try call_handlers.roundedScale6(@log10(f)), .scale = 6 } };
+            },
+            // SONNY-6518: 20.22 SR 12 (LOG(10, x)), GR 8 a), b): NULL is
+            // NULL, x <= 0 is 22003, a value that is no number 22G03 (each
+            // answered NULL).
+            .Null => return Value{ .Null = {} },
+            else => return EvalError.TypeMismatch,
         }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "exp")) {
-        const result = evaluator_functions.exp_val(heap_first_arg) catch return null;
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "type")) {
-        const result = evaluator_functions.type_val(heap_first_arg) catch return null;
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "tostring")) {
-        const result = evaluator_functions.toString_val(allocator, heap_first_arg) catch return null;
-        return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "tointeger")) {
-        const result = evaluator_functions.toInteger_val(heap_first_arg) catch |err| {
-            // Convert evaluator errors to eval errors
-            return switch (err) {
-                evaluator_functions.EvaluatorError.InvalidFormat => EvalError.TypeMismatch,
-                evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
-                evaluator_functions.EvaluatorError.Overflow => EvalError.IntegerOverflow,
-                else => EvalError.TypeMismatch,
-            };
-        };
-        return heapValueToEvalValue(result);
     } else if (std.ascii.eqlIgnoreCase(function_name, "toreal")) {
+        // SONNY-6645 item 4: a NULL operand is NULL (it was 22G03).
+        if (first_arg == .Null) return Value{ .Null = {} };
         const result = evaluator_functions.toReal_val(heap_first_arg) catch |err| {
             return switch (err) {
                 evaluator_functions.EvaluatorError.InvalidFormat => EvalError.TypeMismatch,
                 evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
                 evaluator_functions.EvaluatorError.Overflow => EvalError.IntegerOverflow,
-                else => EvalError.TypeMismatch,
+                // SONNY-6499: every other error keeps its identity (an
+                // out-of-memory was a TypeMismatch, now 22G03).
+                else => call_handlers.mapEvaluatorError(err),
             };
         };
         return heapValueToEvalValue(result);
-    } else if (std.ascii.eqlIgnoreCase(function_name, "size") or std.ascii.eqlIgnoreCase(function_name, "length")) {
-        // CANARY: REQ=REQ-GQL-SIZE-001; FEATURE="SizeFunction"; ASPECT=ListPropertySize; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
-        // Size of a list, string, or map
-        switch (first_arg) {
-            .List => |l| return Value{ .Int = @intCast(l.len) },
-            .Str => |s| return Value{ .Int = @intCast(s.len) },
-            .Map => |m| return Value{ .Int = @intCast(m.count()) },
-            // Handle ExtValue.List for list properties stored on nodes
-            // CANARY: REQ=REQ-FN-SIZE-OF-VECTOR; FEATURE="SizeFunction"; ASPECT=VectorDimension; STATUS=TESTED; TEST=tests/test_fn_dispatch_parity.zig; OWNER=eval; UPDATED=2026-08-25
-            // FN-DISPATCH-PARITY: see src/eval/call_handlers.zig — a VECTOR reports its
-            // dimension, not 0.
-            .ExtValue => |ext| switch (ext) {
-                .List => |l| return Value{ .Int = @intCast(l.len) },
-                .VectorF32 => |v| return Value{ .Int = @intCast(v.data.len) },
-                .VectorI32 => |v| return Value{ .Int = @intCast(v.data.len) },
-                else => return Value{ .Int = 0 },
-            },
-            else => return Value{ .Int = 0 },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "head")) {
-        // CANARY: REQ=REQ-GQL-HEAD-001; FEATURE="ListFunctions"; ASPECT=HeadElement; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
-        // Return the first element of a list
-        switch (first_arg) {
-            .List => |l| {
-                if (l.len == 0) return Value{ .Null = {} };
-                return l[0];
-            },
-            else => return Value{ .Null = {} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "tail")) {
-        // CANARY: REQ=REQ-GQL-TAIL-001; FEATURE="ListFunctions"; ASPECT=TailElements; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
-        // Return all elements except the first
-        switch (first_arg) {
-            .List => |l| {
-                if (l.len <= 1) {
-                    return Value{ .List = &[_]Value{} };
-                }
-                const tail_slice = try allocator.alloc(Value, l.len - 1);
-                @memcpy(tail_slice, l[1..]);
-                return Value{ .List = tail_slice };
-            },
-            else => return Value{ .List = &[_]Value{} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "last")) {
-        // CANARY: REQ=REQ-GQL-LAST-001; FEATURE="ListFunctions"; ASPECT=LastElement; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-24
-        // Return the last element of a list
-        switch (first_arg) {
-            .List => |l| {
-                if (l.len == 0) return Value{ .Null = {} };
-                return l[l.len - 1];
-            },
-            else => return Value{ .Null = {} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "toString")) {
-        // Convert to string
-        switch (first_arg) {
-            .Int => |i| {
-                var buf: [64]u8 = undefined;
-                const str = std.fmt.bufPrint(&buf, "{d}", .{i}) catch return Value{ .Str = "" };
-                return Value{ .Str = try allocator.dupe(u8, str) };
-            },
-            // SONNY-2769 (round 6): exact, as CAST does. Through f64 the text
-            // lost every digit past the 17th and the scale's trailing zeros.
-            .Decimal => |d| {
-                return Value{ .Str = try decimal_text.alloc(allocator, d.coeff, d.scale) };
-            },
-            .Str => |s| return Value{ .Str = s },
-            .Bool => |b| return Value{ .Str = if (b) "true" else "false" },
-            .Null => return Value{ .Str = "null" },
-            else => return Value{ .Str = "" },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "tofloat") or std.ascii.eqlIgnoreCase(function_name, "toFloat") or std.ascii.eqlIgnoreCase(function_name, "todouble") or std.ascii.eqlIgnoreCase(function_name, "toDouble")) {
-        // CANARY: REQ=REQ-GQL-086; FEATURE="TypeConversionFunctions"; ASPECT=Evaluation; STATUS=TESTED; OWNER=eval; UPDATED=2025-10-14
-        // Convert to float - use scale=6 for 6 decimal places of precision
-        const float_scale: u8 = 6;
-        switch (first_arg) {
-            .Int => |i| return Value{ .Decimal = .{ .coeff = i * float_to_decimal_scale, .scale = float_scale } },
-            .Decimal => |d| return Value{ .Decimal = d },
-            .Str => |s| {
-                const f = std.fmt.parseFloat(f64, s) catch return Value{ .Null = {} };
-                // SONNY-2739: 'nan', 'inf' or past the decimal is 22003.
-                const scaled = try @import("types/decimal128.zig").checkedScaledCoeff(@round(f * float_to_decimal_scale_f64), 1.0);
-                return Value{ .Decimal = .{ .coeff = scaled, .scale = float_scale } };
-            },
-            else => return Value{ .Null = {} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "toint") or std.ascii.eqlIgnoreCase(function_name, "tointeger")) {
-        // Convert to integer
-        switch (first_arg) {
-            .Int => |i| return Value{ .Int = i },
-            // SONNY-2739: exact and checked; the floor, as before.
-            .Decimal => |d| return Value{ .Int = try narrowing.decimalToInt(d.coeff, d.scale, .floor) },
-            .Bool => |b| return Value{ .Int = if (b) 1 else 0 },
-            .Str => |s| {
-                const i = std.fmt.parseInt(i64, s, 10) catch return Value{ .Null = {} };
-                return Value{ .Int = i };
-            },
-            else => return Value{ .Null = {} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "toboolean") or std.ascii.eqlIgnoreCase(function_name, "toBoolean") or std.ascii.eqlIgnoreCase(function_name, "tobool")) {
-        // CANARY: REQ=REQ-GQL-TOBOOLEAN-001; FEATURE="TypeConversionFunctions"; ASPECT=ToBooleanConversion; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-24
-        // Convert to boolean
-        switch (first_arg) {
-            .Bool => |b| return Value{ .Bool = b },
-            .Int => |i| return Value{ .Bool = i != 0 },
-            .Str => |s| {
-                if (std.mem.eql(u8, s, "true") or std.mem.eql(u8, s, "TRUE") or std.mem.eql(u8, s, "1")) {
-                    return Value{ .Bool = true };
-                } else if (std.mem.eql(u8, s, "false") or std.mem.eql(u8, s, "FALSE") or std.mem.eql(u8, s, "0")) {
-                    return Value{ .Bool = false };
-                }
-                return Value{ .Null = {} };
-            },
-            .Null => return Value{ .Null = {} },
-            else => return Value{ .Null = {} },
-        }
     }
 
     // Handle two-argument functions
@@ -4927,25 +4557,8 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         const second_arg = try evalExpr(allocator, args[1].*, env);
         const heap_second_arg = evalValueToHeapValue(second_arg);
 
-        if (std.ascii.eqlIgnoreCase(function_name, "substring")) {
-            if (args.len >= 3) {
-                const third_arg = try evalExpr(allocator, args[2].*, env);
-                const heap_third_arg = evalValueToHeapValue(third_arg);
-                const result = evaluator_functions.substring(allocator, heap_first_arg, heap_second_arg, heap_third_arg) catch return null;
-                return heapValueToEvalValue(result);
-            } else {
-                // Two-argument substring from start to end
-                const result = evaluator_functions.substring(allocator, heap_first_arg, heap_second_arg, null) catch return null;
-                return heapValueToEvalValue(result);
-            }
-        } else if (std.ascii.eqlIgnoreCase(function_name, "replace")) {
-            if (args.len >= 3) {
-                const third_arg = try evalExpr(allocator, args[2].*, env);
-                const heap_third_arg = evalValueToHeapValue(third_arg);
-                const result = evaluator_functions.replace(allocator, heap_first_arg, heap_second_arg, heap_third_arg) catch return null;
-                return heapValueToEvalValue(result);
-            }
-        } else if (std.ascii.eqlIgnoreCase(function_name, "decimal_add")) {
+        // substring and replace are the string handler's (SONNY-6540 item 7).
+        if (std.ascii.eqlIgnoreCase(function_name, "decimal_add")) {
             const result = evaluator_functions.decimal_add(heap_first_arg, heap_second_arg) catch |err| {
                 return err;
             };
@@ -4966,127 +4579,6 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             };
             return heapValueToEvalValue(result);
         }
-    }
-
-    // CANARY: REQ=REQ-GQL-KEYS-003; FEATURE="KeysFunction"; ASPECT=NodeEdgeMapKeys; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
-    // B06 Fix: Handle keys() for Map, Node, AND Edge types
-    if (std.ascii.eqlIgnoreCase(function_name, "keys")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .Map => |map| {
-                var keys = try allocator.alloc(Value, map.count());
-                var iter = map.iterator();
-                var i: usize = 0;
-                while (iter.next()) |entry| : (i += 1) {
-                    keys[i] = Value{ .Str = entry.key_ptr.* };
-                }
-                return Value{ .List = keys };
-            },
-            .Node => |node| {
-                var keys = try allocator.alloc(Value, node.properties.count());
-                var iter = node.properties.iterator();
-                var i: usize = 0;
-                while (iter.next()) |entry| : (i += 1) {
-                    keys[i] = Value{ .Str = entry.key_ptr.* };
-                }
-                return Value{ .List = keys };
-            },
-            .Edge => |edge| {
-                var keys = try allocator.alloc(Value, edge.properties.count());
-                var iter = edge.properties.iterator();
-                var i: usize = 0;
-                while (iter.next()) |entry| : (i += 1) {
-                    keys[i] = Value{ .Str = entry.key_ptr.* };
-                }
-                return Value{ .List = keys };
-            },
-            else => return Value{ .Null = {} },
-        }
-    } else if (std.ascii.eqlIgnoreCase(function_name, "values")) {
-        if (args.len != 1) return null;
-        const arg = try evalExpr(allocator, args[0].*, env);
-        switch (arg) {
-            .Map => |map| {
-                var values = try allocator.alloc(Value, map.count());
-                var iter = map.iterator();
-                var i: usize = 0;
-                while (iter.next()) |entry| : (i += 1) {
-                    values[i] = entry.value_ptr.*;
-                }
-                return Value{ .List = values };
-            },
-            else => return Value{ .Null = {} },
-        }
-    }
-
-    // CANARY: REQ=REQ-CLIENT-INTEGRATION-001; FEATURE="range() function"; ASPECT=BuiltinFunctions; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-11-15
-    // Handle range(start, stop[, step]) function - generates integer sequences
-    // Used for performance testing: UNWIND range(1, 100) AS x RETURN x
-    if (std.ascii.eqlIgnoreCase(function_name, "range")) {
-        // range() requires 2 or 3 arguments
-        if (args.len < 2 or args.len > 3) return Value{ .Null = {} };
-
-        // Evaluate start argument (required)
-        const start_val = try evalExpr(allocator, args[0].*, env);
-        const start = switch (start_val) {
-            .Int => |i| i,
-            else => return Value{ .Null = {} },
-        };
-
-        // Evaluate stop argument (required)
-        const stop_val = try evalExpr(allocator, args[1].*, env);
-        const stop = switch (stop_val) {
-            .Int => |i| i,
-            else => return Value{ .Null = {} },
-        };
-
-        // Evaluate step argument (optional, defaults to 1)
-        const step = if (args.len == 3) blk: {
-            const step_val = try evalExpr(allocator, args[2].*, env);
-            break :blk switch (step_val) {
-                .Int => |i| i,
-                else => return Value{ .Null = {} },
-            };
-        } else 1;
-
-        // Step must not be zero
-        if (step == 0) return Value{ .Null = {} };
-
-        // Calculate the number of elements in the range
-        // SONNY-2769: in i128, so a span or a step at the edge of i64
-        // (`range(minInt, maxInt)`, a step of minInt) no longer overflows
-        // and aborts the server; every element still fits i64.
-        const count: i128 = if (step > 0) blk: {
-            if (stop <= start) break :blk 0;
-            break :blk @divFloor(@as(i128, stop) - start + step - 1, step);
-        } else blk: {
-            if (stop >= start) break :blk 0;
-            break :blk @divFloor(@as(i128, start) - stop - step - 1, -@as(i128, step));
-        };
-
-        // Allocate result array
-        if (count <= 0) {
-            return Value{ .List = &.{} };
-        }
-
-        // Safety check: limit range size to prevent OOM
-        const max_range_size: i64 = 10_000_000; // 10 million elements max
-        if (count > max_range_size) {
-            return error.RangeTooLarge;
-        }
-
-        const ucount = @as(usize, @intCast(count));
-        var result = try allocator.alloc(Value, ucount);
-
-        // Generate range values (i128: the step past the last one may leave i64)
-        var current: i128 = start;
-        for (0..ucount) |i| {
-            result[i] = Value{ .Int = @intCast(current) };
-            current += step;
-        }
-
-        return Value{ .List = result };
     }
 
     // Function not recognized
@@ -5163,6 +4655,83 @@ fn parseDurationString(str: []const u8) !i64 {
 /// expression one that was never NULL: `1.50 IN [1.5]` and `1 IN [1.0]` were
 /// false while `=` called them equal, and `2 IN $list` with `$list = [1,
 /// NULL]` was false, not NULL.
+/// A list value's elements: a list literal or parameter (`Value.List`) or a
+/// stored list, which reads back as an extended list.
+const ListView = union(enum) {
+    values: []const Value,
+    ext: []const @import("eval_extended.zig").ExtValue,
+
+    fn of(v: Value) ?ListView {
+        return switch (v) {
+            .List => |items| .{ .values = items },
+            .ExtValue => |e| if (e == .List) .{ .ext = e.List } else null,
+            else => null,
+        };
+    }
+
+    fn len(self: ListView) usize {
+        return switch (self) {
+            inline else => |items| items.len,
+        };
+    }
+
+    fn at(self: ListView, i: usize) Value {
+        return switch (self) {
+            .values => |items| items[i],
+            .ext => |items| property_codec.extValueToValue(items[i]),
+        };
+    }
+};
+
+/// SONNY-738: `l = r` for two lists (ISO/IEC 39075:2024 19.3 GR 1)b)ii)):
+/// False when the lengths differ or some element pair is not equal, True
+/// when every pair is equal, otherwise Unknown. Null when either is not a
+/// list.
+fn listEquality(alloc: std.mem.Allocator, l: Value, r: Value) EvalError!?Value {
+    const a = ListView.of(l) orelse return null;
+    const b = ListView.of(r) orelse return null;
+    if (a.len() != b.len()) return .{ .Bool = false };
+    var unknown = false;
+    for (0..a.len()) |i| {
+        switch (try evalBinary(alloc, .Eq, a.at(i), b.at(i))) {
+            .Bool => |eq| if (!eq) return .{ .Bool = false },
+            else => unknown = true,
+        }
+    }
+    return if (unknown) .{ .Null = {} } else .{ .Bool = true };
+}
+
+/// SONNY-738: `l = r` for two records (19.3 GR 1)b)iii)): field by field,
+/// as for lists. Records with different field names are not essentially
+/// comparable: False (GR 1)a)i)). Null when either is not a record.
+fn recordEquality(alloc: std.mem.Allocator, l: Value, r: Value) EvalError!?Value {
+    if (l != .Map or r != .Map) return null;
+    if (l.Map.count() != r.Map.count()) return .{ .Bool = false };
+    var it = l.Map.iterator();
+    while (it.next()) |entry| {
+        if (!r.Map.contains(entry.key_ptr.*)) return .{ .Bool = false };
+    }
+    var unknown = false;
+    it = l.Map.iterator();
+    while (it.next()) |entry| {
+        switch (try evalBinary(alloc, .Eq, entry.value_ptr.*, r.Map.get(entry.key_ptr.*).?)) {
+            .Bool => |eq| if (!eq) return .{ .Bool = false },
+            else => unknown = true,
+        }
+    }
+    return if (unknown) .{ .Null = {} } else .{ .Bool = true };
+}
+
+/// The characters of a character string of any representation, else null.
+fn charString(v: Value) ?[]const u8 {
+    return switch (v) {
+        .Str, .Text => |s| s,
+        .Varchar => |c| c.data,
+        .Char => |c| c.data,
+        else => null,
+    };
+}
+
 fn inStep(allocator: std.mem.Allocator, value: Value, item: Value, unknown: *bool) EvalError!bool {
     switch (try evalBinary(allocator, .Eq, value, item)) {
         .Bool => |b| return b,
@@ -5189,6 +4758,34 @@ fn inValues(allocator: std.mem.Allocator, value: Value, items: []const Value) Ev
     return if (unknown) .{ .Null = {} } else .{ .Bool = false };
 }
 
+/// SONNY-6518: the error a built-in function's failure raises. An error of
+/// the evaluator's own set keeps its identity; an allocation failure is
+/// OutOfMemory; malformed JSON text is 22018; any other failure of an
+/// argument value is 22023 (invalid parameter value). The dispatch turned
+/// every error it did not list into NULL (ISO/IEC 39075:2024 19.1 GR 1: an
+/// exception is the statement's).
+fn builtinError(err: anyerror) EvalError {
+    inline for (@typeInfo(EvalError).error_set.?) |e| {
+        if (err == @field(anyerror, e.name)) return @field(EvalError, e.name);
+    }
+    return switch (err) {
+        error.InvalidJson => EvalError.JsonInvalid,
+        else => EvalError.InvalidArgs,
+    };
+}
+
+/// The error an expression subquery's failure raises. SONNY-3251: a limit
+/// keeps its identity (54001, 53200, 57014); SONNY-6525: so does any error
+/// an expression raises (a data exception in the subquery is the
+/// statement's, ISO/IEC 39075:2024 19.1 GR 1). Any other failure (a shape
+/// the executors refuse) is 0A000.
+fn subqueryError(err: anyerror) EvalError {
+    inline for (@typeInfo(EvalError).error_set.?) |e| {
+        if (err == @field(anyerror, e.name)) return @field(EvalError, e.name);
+    }
+    return error.Unsupported;
+}
+
 /// `value IN (subquery)`: the first value of each row, as `inValues` does
 /// for a list. No rows is FALSE.
 fn inRows(allocator: std.mem.Allocator, value: Value, rows: []const []Value) EvalError!Value {
@@ -5212,9 +4809,50 @@ fn concatOperand(alloc: std.mem.Allocator, v: Value, buf: *[64]u8) EvalError![]c
 }
 
 /// An INT, SMALLINT, BIGINT or DECIMAL as an exact number, else null.
+/// The named field of a temporal value, as an INTEGER, or null when `v` is
+/// not a temporal value or has no such field. A zoned datetime is held as its
+/// UTC instant (Geode keeps no displacement), so its fields are UTC's; a zoned
+/// time's are its own time of day.
+fn temporalField(v: Value, field: []const u8) ?Value {
+    const datetime_module = @import("types/datetime.zig");
+    const F = datetime_module.Fields;
+    const fields: F = switch (v) {
+        .Date => |d| F.ofDate(d.days_since_epoch),
+        .Time => |t| F.ofTimeOfDay(t.micros_since_midnight),
+        .TimeTZ => |t| F.ofTimeOfDay(t.time.micros_since_midnight),
+        .Timestamp => |t| F.ofEpochMicros(t.micros_since_epoch),
+        .TimestampTZ => |t| F.ofEpochMicros(t.micros_since_epoch_utc),
+        .ExtValue => |e| switch (e) {
+            .Date => |d| F.ofDate(d.days_since_epoch),
+            .Time => |t| F.ofTimeOfDay(t.micros_since_midnight),
+            .TimeTZ => |t| F.ofTimeOfDay(t.time.micros_since_midnight),
+            .Timestamp => |t| F.ofEpochMicros(t.micros_since_epoch),
+            .TimestampTZ => |t| F.ofEpochMicros(t.micros_since_epoch_utc),
+            else => return null,
+        },
+        else => return null,
+    };
+    const n: ?i64 = blk: {
+        if (std.mem.eql(u8, field, "year")) break :blk fields.year;
+        if (std.mem.eql(u8, field, "month")) break :blk fields.month;
+        if (std.mem.eql(u8, field, "day")) break :blk fields.day;
+        if (std.mem.eql(u8, field, "hour")) break :blk fields.hour;
+        if (std.mem.eql(u8, field, "minute")) break :blk fields.minute;
+        if (std.mem.eql(u8, field, "second")) break :blk fields.second;
+        if (std.mem.eql(u8, field, "millisecond")) break :blk if (fields.microsecond) |us| @divTrunc(us, 1000) else null;
+        if (std.mem.eql(u8, field, "microsecond")) break :blk fields.microsecond;
+        break :blk null;
+    };
+    return if (n) |x| .{ .Int = x } else null;
+}
+
 fn exactNumber(v: Value) ?value_order.Number {
     const n = value_order.numberOf(v) orelse return null;
     return if (n == .exact) n else null;
+}
+
+fn isNanNumber(n: value_order.Number) bool {
+    return n == .float and std.math.isNan(n.float);
 }
 
 // ---------------------------------------------------------------------------
@@ -5264,14 +4902,15 @@ test "eval: IN/NOT IN with NULL semantics and mixed-type edges" {
     const nin2 = ast.Expr{ .NotIn = .{ .value = &lit8, .set = arr3[0..] } };
     const v4 = try evalExpr(allocator, nin2, env);
     try std.testing.expect(v4 == .Null);
-    // Mixed-type equality edge: leading zeros in string
+    // An integer never equals a string, whatever its text (ISO/IEC
+    // 39075:2024 19.3 GR 1, NOTE 307; SONNY-6282, SONNY-738): 7 = "7" and
+    // 7 = "007" are both False.
     var str7 = ast.Expr{ .String = "7" };
     const eq = ast.Expr{ .Binary = .{ .op = .Eq, .left = &a_ident, .right = &str7 } };
     const v5 = try evalExpr(allocator, eq, env);
-    try std.testing.expect(v5 == .Bool and v5.Bool);
+    try std.testing.expect(v5 == .Bool and !v5.Bool);
     const eq2 = ast.Expr{ .Binary = .{ .op = .Eq, .left = &a_ident, .right = &s_ident } };
     const v6 = try evalExpr(allocator, eq2, env);
-    // 7 vs "007" should be false by decimal string compare
     try std.testing.expect(v6 == .Bool and !v6.Bool);
     // NOT IN with empty list -> always true
     var empty: [0]*ast.Expr = .{};
@@ -5286,7 +4925,7 @@ test "eval: IN/NOT IN with NULL semantics and mixed-type edges" {
     try std.testing.expect(v8 == .Null);
 }
 
-test "eval: mixed-type IN across bools and big ints stringified" {
+test "eval: mixed-type IN across bools and big ints: only an equal number matches" {
     const allocator = std.testing.allocator;
     const env = Env{ .allocator = allocator, .names = &.{"a"}, .values = &.{Value{ .Int = 9007199254740991 }} }; // 2^53-1
     var a_ident = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
@@ -5296,8 +4935,16 @@ test "eval: mixed-type IN across bools and big ints stringified" {
     var items: [3]*ast.Expr = .{ &s_big, &t_true, &b_true };
     const inx = ast.Expr{ .In = .{ .value = &a_ident, .set = items[0..] } };
     const v = try evalExpr(allocator, inx, env);
-    // Should match the big-int via decimal string, ignore bool mismatches
-    try std.testing.expect(v == .Bool and v.Bool == true);
+    // SONNY-738: an integer equals neither a string with its digits nor a
+    // Boolean (ISO/IEC 39075:2024 19.3 GR 1, NOTE 307), and no element is
+    // Unknown: False, not an error.
+    try std.testing.expect(v == .Bool and v.Bool == false);
+    // The integer itself, as an element, matches.
+    var i_big = ast.Expr{ .Int = 9007199254740991 };
+    var items2: [3]*ast.Expr = .{ &s_big, &b_true, &i_big };
+    const inx2 = ast.Expr{ .In = .{ .value = &a_ident, .set = items2[0..] } };
+    const v2 = try evalExpr(allocator, inx2, env);
+    try std.testing.expect(v2 == .Bool and v2.Bool == true);
 }
 
 test "eval: CASE searched produces expected values" {
@@ -5366,19 +5013,26 @@ test "eval: implicit int<->string in predicates and IN list" {
     const sw = ast.Expr{ .StartsWith = .{ .value = &s_ident, .prefix = &four } };
     const v1 = try evalExpr(allocator, sw, env);
     try std.testing.expect(v1 == .Bool and v1.Bool == true);
-    // a = "42" -> true (implicit Eq int<->string)
+    // a = "42" -> false: no implicit integer/string equality (ISO/IEC
+    // 39075:2024 19.3 GR 1, NOTE 307; SONNY-6282)
     var a_ident = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
     var s_lit = ast.Expr{ .String = "42" };
     const eq = ast.Expr{ .Binary = .{ .op = .Eq, .left = &a_ident, .right = &s_lit } };
     const v2 = try evalExpr(allocator, eq, env);
-    try std.testing.expect(v2 == .Bool and v2.Bool == true);
-    // a IN ["41", "42", 43] -> true
+    try std.testing.expect(v2 == .Bool and v2.Bool == false);
+    // a IN ["41", "42", 43] -> false: IN is `=` element by element
     var lit41 = ast.Expr{ .String = "41" };
     var lit43 = ast.Expr{ .Int = 43 };
     var arr: [3]*ast.Expr = .{ &lit41, &s_lit, &lit43 };
     const inx = ast.Expr{ .In = .{ .value = &a_ident, .set = arr[0..] } };
     const v3 = try evalExpr(allocator, inx, env);
-    try std.testing.expect(v3 == .Bool and v3.Bool == true);
+    try std.testing.expect(v3 == .Bool and v3.Bool == false);
+    // a IN ["42", 42] -> true: the integer element matches
+    var lit42 = ast.Expr{ .Int = 42 };
+    var arr2: [2]*ast.Expr = .{ &s_lit, &lit42 };
+    const inx2 = ast.Expr{ .In = .{ .value = &a_ident, .set = arr2[0..] } };
+    const v4 = try evalExpr(allocator, inx2, env);
+    try std.testing.expect(v4 == .Bool and v4.Bool == true);
 }
 
 test "eval: parameters substitution and STARTS WITH via $param" {
@@ -5403,7 +5057,8 @@ test "eval: parameters in IN list, mixed-type equality, and regex via $param" {
     const inx = ast.Expr{ .In = .{ .value = &a_ident, .set = items[0..] } };
     const v1 = try evalExpr(allocator, inx, env);
     try std.testing.expect(v1 == .Bool and v1.Bool);
-    // Equality mixed-type: a = s (7 vs "007") -> false; but a = "7" literal -> true
+    // Equality mixed-type: a = s (7 vs "007") -> false, and a = "7" -> false
+    // too: an integer never equals a string (ISO/IEC 39075:2024 19.3 GR 1)
     var s_ident = ast.Expr{ .Ident = .{ .orig = "s", .cnf = "S" } };
     const eq1 = ast.Expr{ .Binary = .{ .op = .Eq, .left = &a_ident, .right = &s_ident } };
     const v2 = try evalExpr(allocator, eq1, env);
@@ -5411,7 +5066,7 @@ test "eval: parameters in IN list, mixed-type equality, and regex via $param" {
     var s7 = ast.Expr{ .String = "7" };
     const eq2 = ast.Expr{ .Binary = .{ .op = .Eq, .left = &a_ident, .right = &s7 } };
     const v3 = try evalExpr(allocator, eq2, env);
-    try std.testing.expect(v3 == .Bool and v3.Bool);
+    try std.testing.expect(v3 == .Bool and !v3.Bool);
     // Equality using int parameter vs string field: $list1 (7) = s ("007") -> false
     var p_int = ast.Expr{ .Param = "list1" };
     const eq3 = ast.Expr{ .Binary = .{ .op = .Eq, .left = &p_int, .right = &s_ident } };
@@ -5454,12 +5109,14 @@ test "eval: CASE permutations with multiple WHENs and ELSE variants" {
     const cs3b = ast.Expr{ .Case = .{ .operand = &op2, .whens = whs3b[0..], .else_expr = &C } };
     const o3b = try evalExpr(allocator, cs3b, env);
     try std.testing.expect(o3b == .Str and std.mem.eql(u8, o3b.Str, "C"));
-    // Simple CASE: operand NULL, WHEN NULL then -> THEN; ELSE present should be ignored
+    // Simple CASE: operand NULL takes no WHEN, not even WHEN NULL: the
+    // simple CASE is `WHEN NULL = NULL`, Unknown (ISO/IEC 39075:2024 20.7
+    // SR; SONNY-738) -> ELSE
     var opn = ast.Expr{ .Null = {} };
     var whs4: [2]ast.CaseWhen = .{ .{ .when = &n, .then_expr = &A }, .{ .when = &t, .then_expr = &B } };
     const cs4 = ast.Expr{ .Case = .{ .operand = &opn, .whens = whs4[0..], .else_expr = &C } };
     const o4 = try evalExpr(allocator, cs4, env);
-    try std.testing.expect(o4 == .Str and std.mem.eql(u8, o4.Str, "A"));
+    try std.testing.expect(o4 == .Str and std.mem.eql(u8, o4.Str, "C"));
 }
 
 test "eval: CASE 3VL searched and simple with NULLs" {
@@ -5472,14 +5129,16 @@ test "eval: CASE 3VL searched and simple with NULLs" {
     const c1 = ast.Expr{ .Case = .{ .operand = null, .whens = whs1[0..], .else_expr = &then1 } };
     const o1 = try evalExpr(allocator, c1, env);
     try std.testing.expect(o1 == .Str and std.mem.eql(u8, o1.Str, "x"));
-    // Simple CASE: operand NULL, WHEN NULL -> match returns THEN
+    // Simple CASE: operand NULL, WHEN NULL: `NULL = NULL` is Unknown, so no
+    // WHEN is taken and the implicit ELSE NULL applies (ISO/IEC 39075:2024
+    // 20.7 SR; SONNY-738)
     var opn = ast.Expr{ .Null = {} };
     var wnull = ast.Expr{ .Null = {} };
     var t2 = ast.Expr{ .String = "n" };
     var whs2: [1]ast.CaseWhen = .{.{ .when = &wnull, .then_expr = &t2 }};
     const c2 = ast.Expr{ .Case = .{ .operand = &opn, .whens = whs2[0..], .else_expr = null } };
     const o2 = try evalExpr(allocator, c2, env);
-    try std.testing.expect(o2 == .Str and std.mem.eql(u8, o2.Str, "n"));
+    try std.testing.expect(o2 == .Null);
 }
 
 test "eval: icontains case-insensitive string matching" {
@@ -5655,4 +5314,5 @@ test {
     // file (see build.zig "EVAL CALL-HANDLER UNIT TESTS").
     _ = ts_call_handlers;
     _ = quantifier_call_handlers;
+    _ = temporal_ops; // SONNY-2797
 }

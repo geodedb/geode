@@ -61,7 +61,21 @@ pub const RangeTracker = struct {
     // Returns true if key K is inside any registered range for txn_id
     pub fn keyInRanges(self: *RangeTracker, txn_id: u64, key: []const u8) bool {
         const list_opt = self.map.get(txn_id) orelse return false;
-        for (list_opt.items) |e| {
+        return keyInEntries(list_opt.items, key);
+    }
+
+    /// The ranges registered for txn_id, or null when there are none.
+    /// SONNY-6422: one hash lookup per commit; check each key with
+    /// `keyInEntries` instead of `keyInRanges` (a lookup per key).
+    pub fn rangesFor(self: *RangeTracker, txn_id: u64) ?[]const Entry {
+        const list = self.map.get(txn_id) orelse return null;
+        if (list.items.len == 0) return null;
+        return list.items;
+    }
+
+    /// Returns true if key K is inside any of `entries`.
+    pub fn keyInEntries(entries: []const Entry, key: []const u8) bool {
+        for (entries) |e| {
             if (le(e.range.low, key) and le(key, e.range.high)) return true;
         }
         return false;

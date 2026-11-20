@@ -1,8 +1,12 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
 test "protocol hashagg spill threshold does not break execution" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("hashagg spill threshold");
     errdefer util.testFail();
 
@@ -21,7 +25,7 @@ test "protocol hashagg spill threshold does not break execution" {
 
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr },
         &.{"GEODE_SPILL_THRESHOLD_BYTES=1"},
     );
     defer server.deinit();

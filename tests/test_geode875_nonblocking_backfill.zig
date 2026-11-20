@@ -153,6 +153,7 @@ fn mgr() *IndexManager {
 }
 
 /// Number of entity ids currently resident in the named vector index.
+/// `name` is the runtime key, `<graph>\x1f<index>` (SONNY-6703).
 fn indexedCount(name: []const u8) !usize {
     const wrapper = mgr().advanced_vector_indexes.get(name) orelse return error.IndexNotFound;
     return wrapper.ids.count();
@@ -194,36 +195,36 @@ test "geode#875 RC-2b: a rebuild window queues concurrent writes and refuses a s
         try h.run("USE GRAPH nbf");
         try seed(&h, "NbfDoc", 6);
         try h.run("CREATE INDEX nbf_idx ON NbfDoc (emb) USING vector WITH (metric = 'l2')");
-        try testing.expectEqual(@as(usize, 6), try indexedCount("nbf_idx"));
+        try testing.expectEqual(@as(usize, 6), try indexedCount("nbf\x1fnbf_idx"));
 
         // Arm the window (what the non-blocking rebuild does before it snapshots
         // the id set and starts building the shadow index).
-        try mgr().beginRebuild("nbf_idx");
+        try mgr().beginRebuild("nbf\x1fnbf_idx");
 
         // A SECOND rebuild of the same index is refused rather than two builds
         // racing for the same swap slot.
-        try testing.expectError(error.RebuildInProgress, mgr().beginRebuild("nbf_idx"));
+        try testing.expectError(error.RebuildInProgress, mgr().beginRebuild("nbf\x1fnbf_idx"));
 
         // A live write landing inside the window must be captured. Deduped: the
         // same id noted twice drains once.
-        try testing.expect(mgr().noteWriteDuringRebuild("nbf_idx", 4242));
-        _ = mgr().noteWriteDuringRebuild("nbf_idx", 4242);
+        try testing.expect(mgr().noteWriteDuringRebuild("nbf\x1fnbf_idx", 4242));
+        _ = mgr().noteWriteDuringRebuild("nbf\x1fnbf_idx", 4242);
 
         // The index is NOT dropped-then-empty for the duration of the build:
         // readers still see every pre-existing row (that is the whole point of
         // building into a shadow wrapper instead of in place).
-        try testing.expectEqual(@as(usize, 6), try indexedCount("nbf_idx"));
+        try testing.expectEqual(@as(usize, 6), try indexedCount("nbf\x1fnbf_idx"));
 
-        const drained = try mgr().endRebuild("nbf_idx", testing.allocator);
+        const drained = try mgr().endRebuild("nbf\x1fnbf_idx", testing.allocator);
         defer testing.allocator.free(drained);
         try testing.expectEqual(@as(usize, 1), drained.len);
         try testing.expectEqual(@as(u64, 4242), drained[0]);
 
         // Window closed: notes are no longer captured, and a fresh rebuild is
         // allowed again.
-        try testing.expect(!mgr().noteWriteDuringRebuild("nbf_idx", 5150));
-        try mgr().beginRebuild("nbf_idx");
-        const leftover = try mgr().endRebuild("nbf_idx", testing.allocator);
+        try testing.expect(!mgr().noteWriteDuringRebuild("nbf\x1fnbf_idx", 5150));
+        try mgr().beginRebuild("nbf\x1fnbf_idx");
+        const leftover = try mgr().endRebuild("nbf\x1fnbf_idx", testing.allocator);
         defer testing.allocator.free(leftover);
         try testing.expectEqual(@as(usize, 0), leftover.len);
     }
@@ -247,14 +248,14 @@ test "geode#875 RC-2b: a real write during the rebuild window is captured by the
         try seed(&h, "NbfW", 4);
         try h.run("CREATE INDEX nbfw_idx ON NbfW (emb) USING vector WITH (metric = 'l2')");
 
-        try mgr().beginRebuild("nbfw_idx");
+        try mgr().beginRebuild("nbf_write\x1fnbfw_idx");
 
         // A genuine statement — the same chokepoint every node property write
         // passes through (execution/property_mutation.zig setNodePropertyFromValue).
         try h.run("CREATE (:NbfW {i: 99, emb: vectorf32([99.0, 0.0, 0.0, 0.0])})");
         const written = try h.nodeId("MATCH (n:NbfW {i: 99}) RETURN id(n)");
 
-        const drained = try mgr().endRebuild("nbfw_idx", testing.allocator);
+        const drained = try mgr().endRebuild("nbf_write\x1fnbfw_idx", testing.allocator);
         defer testing.allocator.free(drained);
 
         var found = false;
@@ -293,15 +294,15 @@ test "geode#875 RC-5: rebuildAdvancedIndexCounted reports the rows it actually i
     try h.run("CREATE INDEX nbfc_idx ON NbfC (emb) USING vector WITH (metric = 'l2')");
 
     const store = graph_store.getGlobalStore(testing.allocator);
-    const indexed = try mgr().rebuildAdvancedIndexCounted(store, "nbfc_idx");
+    const indexed = try mgr().rebuildAdvancedIndexCounted(store, "nbf_count\x1fnbfc_idx");
     try testing.expectEqual(@as(usize, 7), indexed);
-    try testing.expectEqual(@as(usize, 7), try indexedCount("nbfc_idx"));
+    try testing.expectEqual(@as(usize, 7), try indexedCount("nbf_count\x1fnbfc_idx"));
 
     // A rebuild of an index that does not exist reports zero rather than
     // pretending to have indexed something.
-    try testing.expectEqual(@as(usize, 0), try mgr().rebuildAdvancedIndexCounted(store, "no_such_idx"));
+    try testing.expectEqual(@as(usize, 0), try mgr().rebuildAdvancedIndexCounted(store, "nbf_count\x1fno_such_idx"));
 
     // Sanity: the backfilled rows really are addressable in the index.
     const first = try h.nodeId("MATCH (n:NbfC {i: 3}) RETURN id(n)");
-    try testing.expect(try indexContains("nbfc_idx", first));
+    try testing.expect(try indexContains("nbf_count\x1fnbfc_idx", first));
 }

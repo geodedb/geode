@@ -561,6 +561,10 @@ test "allowlist: FOR, PROFILE, UNION and programs of allowlisted shapes, in ever
 // Refused, with nothing written.
 
 const refused = error.WriteClauseNotApplied;
+// SONNY-6525 item 2: a statement that names a variable nothing binds is
+// refused with 42000 before its write shape is checked (it was the write
+// shape's refusal); nothing is written either way.
+const out_of_scope = error.VariableNotInScope;
 const syntax = error.UnexpectedToken;
 
 /// Every refused case of the round-2 review's probes (wfix2-review cases
@@ -573,7 +577,9 @@ const refused_cases = [_]Case{
     .{ .write = "MATCH (q:Q) DELETE q CREATE (w:W)", .refused = syntax },
     .{ .write = "MATCH (q:Q) WHERE q.i = 0 DETACH DELETE q CREATE (w:W {i: q.i})", .refused = syntax },
     .{ .write = "MATCH (n:G) WHERE n.i = 5 SET n.x = 1 MERGE (m:M {g: n.g})", .refused = syntax },
-    .{ .write = "MERGE (m:M {g: 'z'}) CREATE (m)-[:T]->(z:Z)", .refused = syntax },
+    // SONNY-6496 item 3: refused with 0A000 naming the shape (it was a
+    // syntax error).
+    .{ .write = "MERGE (m:M {g: 'z'}) CREATE (m)-[:T]->(z:Z)", .refused = error.UnsupportedQueryShape },
     .{ .write = "MATCH (n:G) WHERE n.i >= 8 SET n.x = 1 WITH n MATCH (n)-[:R]->(x:X) SET x.x = 1", .refused = syntax },
     .{ .write = "MATCH (n:G) WHERE n.i = 5 SET n.x = 1 WITH n SET n.y = 2", .refused = syntax },
     .{ .write = "MERGE (m:M {g: 'z'}) WITH m SET m.k = 1", .refused = syntax },
@@ -587,12 +593,12 @@ const refused_cases = [_]Case{
     .{ .write = "START TRANSACTION MATCH (n:G) WHERE n.i = 5 SET n.x = 1 WITH n SET n.y = 2 COMMIT", .refused = syntax },
     .{ .write = "MATCH (n:G {i: 5}) SET n.x = 1 MATCH (q:Q {i: 0}) SET q.x = 1", .refused = syntax },
     // A DELETE with no MATCH (SPL7, SPL8).
-    .{ .write = "DETACH DELETE q", .refused = refused },
-    .{ .write = "DELETE q", .refused = refused },
+    .{ .write = "DETACH DELETE q", .refused = out_of_scope },
+    .{ .write = "DELETE q", .refused = out_of_scope },
     // SONNY-3166: a program is validated before any statement runs: the
     // first statement's SET is not left behind by the second's refusal.
     .{ .write = "MATCH (n:G {i: 5}) SET n.x = 1; MATCH (q:Q) WITH q MATCH (q) DELETE q", .refused = refused },
-    .{ .write = "MATCH (n:G {i: 5}) SET n.x = 1; DETACH DELETE q", .refused = refused },
+    .{ .write = "MATCH (n:G {i: 5}) SET n.x = 1; DETACH DELETE q", .refused = out_of_scope },
     // SONNY-3139 (reopened): a SELECT projection (review b: SEL1..SEL7,
     // i: INS7, PS10, TN13, RL12).
     .{ .write = "WITH 1 AS one SELECT 2 AS two MATCH (n:G) WHERE n.i = 5 SET n.x = 1", .refused = refused },
@@ -606,7 +612,7 @@ const refused_cases = [_]Case{
     // a read too (review b, i: INS1..INS7, PRF6, CTE1..CTE3, TN10, RL9).
     .{ .write = "MATCH (n:G) WHERE n.i IN (MATCH (q:Q) SET q.c = coalesce(q.c, 0) + 1 RETURN q.i) RETURN count(*) AS c", .refused = refused },
     .{ .write = "RETURN 1 IN (CREATE (z:Z {k: 1}) DELETE z RETURN 1) AS b", .refused = refused },
-    .{ .write = "RETURN 5 IN (MATCH (n:G) SET n.x = 1, nn.y = 2 RETURN n.i) AS b", .refused = refused },
+    .{ .write = "RETURN 5 IN (MATCH (n:G) SET n.x = 1, nn.y = 2 RETURN n.i) AS b", .refused = out_of_scope },
     .{ .write = "RETURN 5 IN (WITH 5 AS k MATCH (n:G) WHERE n.i = k SET n.x = 1 RETURN n.i) AS b", .refused = refused },
     .{ .write = "MATCH (n:G) WHERE n.i = 5 RETURN n.i NOT IN (MATCH (q:Q) WHERE q.i = 0 DELETE q RETURN 0) AS b", .refused = refused },
     .{ .write = "MATCH (n:G) WHERE n.i = 5 SET n.y = 1 IN (MATCH (q:Q) SET q.x = 1 RETURN 1)", .refused = refused },
@@ -621,7 +627,7 @@ const refused_cases = [_]Case{
     // UNION, INTERSECT and EXCEPT (review b: UNI2..UNI9; SONNY-3183 I1).
     .{ .write = "WITH 1 AS w FOR v IN [1] CREATE (:Z {k: v}) RETURN v AS i UNION ALL MATCH (q:Q) WHERE q.i = 0 SET q.x = 1 RETURN q.i AS i", .refused = refused },
     .{ .write = "WITH 1 AS one UNWIND [1, 2] AS u CREATE (:Z {k: u}) RETURN u AS i UNION ALL MATCH (q:Q) WHERE q.i = 0 SET q.x = 1 RETURN q.i AS i", .refused = refused },
-    .{ .write = "MATCH (q:Q) WHERE q.i = 0 SET q.x = 1 RETURN q.i AS i UNION ALL CALL { MATCH (n:G) WHERE n.i = 5 SET n.x = 1, zz.y = 1 RETURN n } RETURN n.i AS i", .refused = refused },
+    .{ .write = "MATCH (q:Q) WHERE q.i = 0 SET q.x = 1 RETURN q.i AS i UNION ALL CALL { MATCH (n:G) WHERE n.i = 5 SET n.x = 1, zz.y = 1 RETURN n } RETURN n.i AS i", .refused = out_of_scope },
     .{ .write = "MATCH (q:Q) WHERE q.i = 0 SET q.x = 1 RETURN q.i AS i UNION ALL WITH 1 AS w FOR v IN [1] CREATE (z:Z {k: v}) DELETE z RETURN v AS i", .refused = refused },
     .{ .write = "MATCH (n:G) WHERE n.i = 1 SET n.x = 1 RETURN n.i AS i INTERSECT MATCH (q:Q) WHERE q.i = 1 SET q.x = 1 RETURN q.i AS i", .refused = refused },
     .{ .write = "MATCH (n:G) SET n.x = 1 RETURN 2 AS i EXCEPT MATCH (q:Q) WITH q MATCH (q) DELETE q RETURN 1 AS i", .refused = refused },
@@ -647,7 +653,11 @@ const refused_cases = [_]Case{
     .{ .write = "MATCH (n:G) OPTIONAL MATCH (n)-[:R]->(x:X) WHERE x.j > 100 SET n.x = 1", .refused = refused },
     .{ .write = "MATCH (q:Q) OPTIONAL MATCH (n:G) WHERE n.i = q.i SET n.x = 1", .refused = refused },
     .{ .write = "WITH 1 AS one UNWIND [5, 99] AS u OPTIONAL MATCH (n:G) WHERE n.i = u SET n.x = 1", .refused = refused },
-    .{ .write = "MATCH (n:G) WHERE n.i = 5 OPTIONAL MATCH (n)-[:R]->(x:X) WHERE x.j > 100 SET n.x = 1", .refused = syntax },
+    // SONNY-6337 / SONNY-3184: an OPTIONAL MATCH's own WHERE after a MATCH's
+    // WHERE parses now (each clause keeps its WHERE; it was a syntax error),
+    // so the write gate refuses it, as it does the shape without the first
+    // WHERE (two lines up).
+    .{ .write = "MATCH (n:G) WHERE n.i = 5 OPTIONAL MATCH (n)-[:R]->(x:X) WHERE x.j > 100 SET n.x = 1", .refused = refused },
     // SONNY-3146 (reopened): a path DELETE (review d: DP1, DP2, DP4..DP7;
     // e: TN4, RL2, RL10, PS3; i: PS3, PS8, PS9, PS11; j: PS12..PS19).
     .{ .write = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 DETACH DELETE p", .refused = refused },
@@ -666,10 +676,12 @@ const refused_cases = [_]Case{
     // SONNY-3183 (I2, I3) and SONNY-3184: unbound variables, a name the
     // dispatcher binds shadowing a pattern variable or a client parameter
     // (review c: IW12, IW13, UW9; d: WS4; j: UB1..UB3).
-    .{ .write = "WITH nosuch AS k MATCH (n:G) WHERE n.i = k SET n.x = 1", .refused = refused },
-    .{ .write = "WITH nosuch AS l UNWIND l AS u CREATE (:U {u: u})", .refused = refused },
-    .{ .write = "MATCH (n:G) WHERE n.i = 5 SET n.y = nosuch", .refused = refused },
-    .{ .write = "MATCH (n:G) WHERE n.i = 5 WITH n AS m SET m.y = n.i", .refused = refused },
+    .{ .write = "WITH nosuch AS k MATCH (n:G) WHERE n.i = k SET n.x = 1", .refused = out_of_scope },
+    .{ .write = "WITH nosuch AS l UNWIND l AS u CREATE (:U {u: u})", .refused = out_of_scope },
+    .{ .write = "MATCH (n:G) WHERE n.i = 5 SET n.y = nosuch", .refused = out_of_scope },
+    // SONNY-6496: n is not in scope after `WITH n AS m` (ISO/IEC 39075
+    // 20.12 SR 8): refused with 42000 before the write shape is checked.
+    .{ .write = "MATCH (n:G) WHERE n.i = 5 WITH n AS m SET m.y = n.i", .refused = error.VariableNotInScope },
     // SONNY-3367 (round 4b-1c): a value (a WITH expression's alias, a FOR
     // variable) named as a node pattern is refused as a variable-kind
     // conflict (42000), before the write shape is checked.
@@ -677,10 +689,10 @@ const refused_cases = [_]Case{
     .{ .write = "WITH 5 AS k MATCH (n:G) WHERE n.i = $k SET n.x = 1", .params = &.{.{ .name = "k", .expr = "7" }}, .refused = refused },
     .{ .write = "WITH [5] AS l UNWIND l AS n MATCH (n:G) SET n.x = 1", .refused = refused },
     .{ .write = "FOR n IN [5] MATCH (n:G) SET n.x = 1", .refused = error.VariableKindConflict },
-    .{ .write = "MATCH (n:G) WHERE nosuch.i = 5 SET n.x = 1", .refused = refused },
-    .{ .write = "MATCH (n:G) WHERE n.i = 5 CREATE (z:Z {k: nosuch.k})", .refused = refused },
-    .{ .write = "MERGE (m:M {g: 'z'}) ON CREATE SET m.k = nosuch", .refused = refused },
-    .{ .write = "MATCH (q:Q) WHERE nosuch = 1 DELETE q", .refused = refused },
+    .{ .write = "MATCH (n:G) WHERE nosuch.i = 5 SET n.x = 1", .refused = out_of_scope },
+    .{ .write = "MATCH (n:G) WHERE n.i = 5 CREATE (z:Z {k: nosuch.k})", .refused = out_of_scope },
+    .{ .write = "MERGE (m:M {g: 'z'}) ON CREATE SET m.k = nosuch", .refused = out_of_scope },
+    .{ .write = "MATCH (q:Q) WHERE nosuch = 1 DELETE q", .refused = out_of_scope },
     .{ .write = "WITH 5 AS k WHERE k > 1 FOR v IN [1] MATCH (n:G) WHERE n.i = k SET n.x = v", .refused = refused },
     // The shapes the allowlist leaves out (SONNY-3111).
     .{ .write = "MATCH (q:Q) WITH q MATCH (q) DELETE q", .refused = refused },
@@ -704,7 +716,7 @@ const refused_cases = [_]Case{
     .{ .write = "MERGE (a:A {k: 1})-[r:T]->(b:B {k: 2}) ON CREATE SET a.x = 1, r.w = 2", .refused = refused },
     .{ .write = "MATCH (a:G), (x:X) WHERE a.i = 5 AND x.j = 6 MERGE (a)-[r:T]->(x) ON CREATE SET x.x = 1", .refused = refused },
     .{ .write = "MATCH (n:G) SET n.x = 1 CALL algo.pageRank.stream({iterations: 1}) YIELD nodeId, score RETURN count(*) AS c", .refused = refused },
-    .{ .write = "MATCH (n:G) SET n.x = 1, nn.y = 2", .refused = refused },
+    .{ .write = "MATCH (n:G) SET n.x = 1, nn.y = 2", .refused = out_of_scope },
     .{ .write = "MATCH (a:G)-[r:R]->(x:X) WHERE x.j = 9 WITH r SET r:Foo", .refused = refused },
     .{ .write = "MATCH (n:G)-[r*1..1]->(x:X) WHERE n.i = 5 SET r.k = 1", .refused = error.VariableLengthPathWrite },
     .{ .write = "LET $k = 5 MATCH (n:G) WHERE n.i = $k SET n.x = 1", .refused = refused },
@@ -914,7 +926,13 @@ test "allowlist: the fast-path shape gate refuses any field it does not name" {
     for (probes) |p| {
         var parsed = try geode.parseGql(p.src, aa);
         defer parsed.deinit();
-        try testing.expectEqual(p.ok, ws.onlyFields(parsed.program.statements[0].Query, &.{ "match", "create_pattern" }));
+        // SONNY-6383: the parser records every MATCH clause in
+        // `match_clauses`, so the gate names it, as the bulk edge detectors
+        // do (`bulk_ingest.matchEdgeSpec`), beside `plainMatchClauses`.
+        const q = parsed.program.statements[0].Query;
+        try testing.expectEqual(p.ok, ws.onlyFields(q, &.{ "match", "match_clauses", "create_pattern" }) and ws.plainMatchClauses(q));
+        // A gate that does not name `match_clauses` serves no parsed MATCH.
+        try testing.expect(!ws.onlyFields(q, &.{ "match", "create_pattern" }));
     }
     // The bulk detectors serve only what the validator accepts.
     var sel = try geode.parseGql("WITH 1 AS one SELECT 2 AS two MATCH (a:G {i: 1}), (b:G {i: 2}) CREATE (a)-[:T]->(b)", aa);

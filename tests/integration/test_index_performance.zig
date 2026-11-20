@@ -288,7 +288,7 @@ test "index memory usage" {
 }
 
 test "CANARY: REQ=REQ-GQL-INDEX-PERFORMANCE" {
-    // CANARY: REQ=REQ-GQL-INDEX-PERFORMANCE; FEATURE="IndexPerformance"; ASPECT=Performance; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_INDEX_PERFORMANCE; OWNER=team; UPDATED=2025-10-02
+    // CANARY: REQ=REQ-GQL-INDEX-PERFORMANCE; FEATURE="IndexPerformance"; ASPECT=Performance; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_INDEX_PERFORMANCE; OWNER=team; UPDATED=2026-11-14
     const allocator = std.testing.allocator;
 
     var index_mgr = geode.index.IndexManager.init(allocator);

@@ -24,17 +24,26 @@ const kms_tls = @import("kms_test_tls.zig");
 // CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=ConcurrencyStressVariance; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_ConcurrencyStress; OWNER=security; UPDATED=2025-09-26
 // CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=ConcurrencyStressVariance; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_UnwrapConcurrencyVariance; OWNER=security; UPDATED=2025-09-26
 
-/// Start a KMS server on `port`, serve it from a background thread for the
-/// duration of `body`, then stop + join the thread and deinit the server.
-fn withServer(port: u16, auth: []const u8, body: fn (*kms.RemoteKmsServer) anyerror!void) !void {
+/// Start a KMS server on a port the kernel chooses, serve it from a background
+/// thread for the duration of `body` (which gets the bound port), then stop +
+/// join the thread and deinit the server.
+///
+/// SONNY-6332: these tests used fixed ports 13051-13054. The QUIC socket binds
+/// with SO_REUSEADDR, so a second run on the host (parallel lanes, pre-push
+/// shards) bound the same UDP port and the two servers answered each other's
+/// clients (AuthenticationFailed / RemoteError from the other server's key).
+fn withServer(auth: []const u8, body: fn (*kms.RemoteKmsServer, u16) anyerror!void) !void {
     // A private certificate pair per server (SONNY-2394 review): the
     // aggregate runs the KMS test binaries concurrently.
     var tls = try kms_tls.TestTls.init(std.testing.allocator);
     defer tls.deinit(std.testing.allocator);
     var server = try kms.RemoteKmsServer.init(std.testing.allocator, 0xdeadbeefcafebabe);
     defer server.deinit();
-    try server.startWithOptions(port, tls.startOptions());
+    try server.startWithOptions(0, tls.startOptions());
+    server_ca = tls.caPath();
     try server.server.setAuthToken(auth);
+    const port = server.port;
+    try std.testing.expect(port != 0);
 
     var stop = std.atomic.Value(bool).init(false);
     const serving = try std.Thread.spawn(.{}, kms.RemoteKmsServer.serveUntilStopped, .{ &server, &stop });
@@ -42,14 +51,18 @@ fn withServer(port: u16, auth: []const u8, body: fn (*kms.RemoteKmsServer) anyer
         stop.store(true, .release);
         serving.join();
     }
-    try body(&server);
+    try body(&server, port);
 }
+
+/// The CA bundle of the server `withServer` is running (SONNY-6442).
+var server_ca: []const u8 = "";
 
 // Clients stay on page_allocator (see the GAP-0514 P3 note in
 // tests/canary_remote_kms.zig: the pinned vendor TLS stack leaks client
 // handshake allocations); the server side runs under std.testing.allocator.
 fn connectClient(port: u16, auth: ?[]const u8) !kms.RemoteKmsClient {
-    var client = kms.RemoteKmsClient.init(std.heap.page_allocator);
+    // SONNY-6442: the client verifies the server against its CA bundle.
+    var client = kms.RemoteKmsClient.initWithOptions(std.heap.page_allocator, .{ .ca_cert_path = server_ca });
     errdefer client.deinit();
     try client.connect("127.0.0.1", port);
     if (auth) |a| client.setAuthToken(a);
@@ -57,9 +70,8 @@ fn connectClient(port: u16, auth: ?[]const u8) !kms.RemoteKmsClient {
 }
 
 test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_InvalidAuth" {
-    const port: u16 = 13051;
-    try withServer(port, "secret-token", struct {
-        pub fn f(s: *kms.RemoteKmsServer) !void {
+    try withServer("secret-token", struct {
+        pub fn f(s: *kms.RemoteKmsServer, port: u16) !void {
             std.mem.doNotOptimizeAway(s);
             std.debug.print("[HARDENING] InvalidAuth start\n", .{});
             // Positive client (control)
@@ -82,12 +94,12 @@ test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_InvalidAuth" {
 
 // Simulate expired attestation by mutating hash after acquisition then verifying unwrap attestation fails
 test "TestCANARY_REQ_GQL_TDE_ATTEST_001_ExpiredAttestation" {
-    const port: u16 = 13052;
-    try withServer(port, "a-token", struct {
-        pub fn f(s: *kms.RemoteKmsServer) !void {
+    try withServer("a-token", struct {
+        pub fn f(s: *kms.RemoteKmsServer, port: u16) !void {
             var c = try connectClient(port, "a-token");
             defer c.deinit();
-            // Perform attestation
+            // Perform attestation (SONNY-6435: against the pinned key)
+            c.pinAttestationKey(try s.server.attestationPublicKey());
             const hash = try c.attest();
             // Directly tamper server attestation hash to simulate expiry/rotation.
             // (The serving thread only reads it for Attest requests; none is
@@ -102,11 +114,84 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_ExpiredAttestation" {
             @memset(&bogus_sig, 0);
             var pub_key: [32]u8 = undefined;
             @memset(&pub_key, 0);
-            const ok = kms.RemoteKmsClient.verifyAttestation(std.testing.allocator, pub_key, hash, bogus_sig, false);
+            const nonce = [_]u8{0x42} ** 32;
+            const ok = kms.RemoteKmsClient.verifyAttestation(pub_key, nonce, hash, [_]u8{0} ** 32, bogus_sig);
             try std.testing.expect(!ok);
+            // A fresh attestation now reports the changed hash.
+            const rotated = try c.attest();
+            try std.testing.expect(!std.mem.eql(u8, &hash, &rotated));
             std.debug.print("[HARDENING] ExpiredAttestation simulated\n", .{});
         }
     }.f);
+}
+
+// SONNY-6430 (4): ported from tests/test_remote_kms_attestation.zig, which
+// no build step compiled (it cited fixed ports and a removed API). The
+// server's Attest answer carries an Ed25519 signature over
+// "GEODE-KMS-ATTEST-V3" || nonce || hash || channel binding (SONNY-6435:
+// the client's nonce; SONNY-6442: the TLS exporter value of the channel):
+// it verifies under the server's public key, and a flipped signature byte,
+// another hash, another nonce or another channel binding do not.
+// CANARY: REQ=REQ-GQL-TDE-ATTEST-001; FEATURE="RemoteKmsAttestation"; ASPECT=SignatureVerifyTamperDetect; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect; OWNER=security; UPDATED=2026-11-12
+test "TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerifyTamperDetect" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    try withServer("tok-attest", struct {
+        pub fn f(s: *kms.RemoteKmsServer, port: u16) !void {
+            std.mem.doNotOptimizeAway(s);
+            var c = try connectClient(port, "tok-attest");
+            defer c.deinit();
+            const qc = &c.quic_client.?;
+            var stream = try qc.getStream();
+            defer stream.close();
+            const nonce = [_]u8{0x7E} ** 32;
+            const nonce_hex = std.fmt.bytesToHex(nonce, .lower);
+            var req_buf: [256]u8 = undefined;
+            try stream.writeAll(try std.fmt.bufPrint(&req_buf, "{{\"op\":\"Attest\",\"auth\":\"tok-attest\",\"nonce\":\"{s}\"}}\n", .{&nonce_hex}));
+            var waited_ms: u32 = 0;
+            const resp = while (true) {
+                try qc.poll(50);
+                break stream.readLine(8192) catch |err| {
+                    if (err != error.WouldBlock) return err;
+                    if (waited_ms >= 30_000) return error.Timeout;
+                    waited_ms += 60;
+                    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(10 * std.time.ns_per_ms), .awake) catch {};
+                    continue;
+                };
+            };
+            const binding = try c.channelBinding();
+            var hash: [32]u8 = undefined;
+            var pub_key: [32]u8 = undefined;
+            var sig: [64]u8 = undefined;
+            try hexField(resp, "\"hash\":\"", &hash);
+            try hexField(resp, "\"pub\":\"", &pub_key);
+            try hexField(resp, "\"sig\":\"", &sig);
+            try std.testing.expect(!std.mem.allEqual(u8, &hash, 0));
+            try std.testing.expectEqualSlices(u8, &(try s.server.attestationPublicKey()), &pub_key);
+            try std.testing.expect(kms.RemoteKmsClient.verifyAttestation(pub_key, nonce, hash, binding, sig));
+            var bad_sig = sig;
+            bad_sig[10] ^= 0xAA;
+            try std.testing.expect(!kms.RemoteKmsClient.verifyAttestation(pub_key, nonce, hash, binding, bad_sig));
+            var bad_hash = hash;
+            bad_hash[0] ^= 0x01;
+            try std.testing.expect(!kms.RemoteKmsClient.verifyAttestation(pub_key, nonce, bad_hash, binding, sig));
+            // Nonce binding: the signature does not verify for another nonce.
+            var other_nonce = nonce;
+            other_nonce[0] ^= 0x01;
+            try std.testing.expect(!kms.RemoteKmsClient.verifyAttestation(pub_key, other_nonce, hash, binding, sig));
+            // Channel binding (SONNY-6442): not for another channel.
+            var other_binding = binding;
+            other_binding[0] ^= 0x01;
+            try std.testing.expect(!kms.RemoteKmsClient.verifyAttestation(pub_key, nonce, hash, other_binding, sig));
+        }
+    }.f);
+}
+
+fn hexField(resp: []const u8, tag: []const u8, out: []u8) !void {
+    const at = std.mem.indexOf(u8, resp, tag) orelse return error.FieldMissing;
+    const start = at + tag.len;
+    if (resp.len < start + out.len * 2) return error.FieldTruncated;
+    _ = try std.fmt.hexToBytes(out, resp[start .. start + out.len * 2]);
 }
 
 const StressWorker = struct {
@@ -131,9 +216,8 @@ const StressWorker = struct {
 // Concurrency stress: 16 clients -- 16 concurrent connections -- each unwrap
 // the same envelope.
 test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_ConcurrencyStress" {
-    const port: u16 = 13053;
-    try withServer(port, "stress-token", struct {
-        pub fn f(s: *kms.RemoteKmsServer) !void {
+    try withServer("stress-token", struct {
+        pub fn f(s: *kms.RemoteKmsServer, port: u16) !void {
             std.mem.doNotOptimizeAway(s);
             var main_client = try connectClient(port, "stress-token");
             defer main_client.deinit();
@@ -165,9 +249,8 @@ test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_ConcurrencyStress" {
 
 // Benchmark skeleton for concurrency variance (JSON prints; no perf assertion).
 pub fn runUnwrapConcurrencyVariance() !void {
-    const port: u16 = 13054;
-    try withServer(port, "bench-token", struct {
-        pub fn f(s: *kms.RemoteKmsServer) !void {
+    try withServer("bench-token", struct {
+        pub fn f(s: *kms.RemoteKmsServer, port: u16) !void {
             std.mem.doNotOptimizeAway(s);
             var client = try connectClient(port, "bench-token");
             defer client.deinit();

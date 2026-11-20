@@ -54,12 +54,19 @@ test "GAP-0875c: pre-cancelled token short-circuits callTool with error.Cancelle
 }
 
 test "GAP-0875c: non-cancelled token still dispatches (unknown tool control)" {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    // The unknown-tool path records its JSON-RPC message and data with
+    // mcp.setErrorDetail (SONNY-6585), which the mcp server takes and frees
+    // when it builds the response. Called directly there is no server, so
+    // the detail stays in mcp's thread-local until the next setErrorDetail
+    // frees it with the allocator it was made with: a long-lived allocator,
+    // not a leak-checked one that is torn down at the end of this test.
+    const allocator = std.heap.page_allocator;
 
     var token = mcp.CancelToken{};
     const p = testPrincipal();
     const result = tools.callTool(allocator, null, false, &p, "no-such-tool", "{}", &token);
-    try std.testing.expectError(error.UnknownTool, result);
+    // SONNY-6585: an unknown tool is error.ToolNotFound, which mcp v0.1.23+
+    // answers with -32602 (MCP 2025-11-25's protocol error for an unknown
+    // tool) and "Unknown tool: <name>" (SONNY-6552 returned InvalidParams).
+    try std.testing.expectError(error.ToolNotFound, result);
 }

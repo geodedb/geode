@@ -1,8 +1,11 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("profile_test_util.zig");
 
 test "protocol: per-stage allocation deltas and op ordering" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // DISTINCT + ORDER + LIMIT to exercise multiple phases.
     const out = try util.runProfile(testing.allocator, "PROFILE RETURN 1 AS x DISTINCT ORDER BY x LIMIT 2", null);
     defer testing.allocator.free(out);

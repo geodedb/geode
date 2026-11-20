@@ -1,5 +1,16 @@
 # Nix Deployment Guide for Geode
 
+> **Status (2026-11-12, SONNY-6430): not in this repository.** The Nix
+> packaging this guide describes (`flake.nix`, `nix/packages/`,
+> `nix/modules/geode-daemon.nix`, the `services.geode` NixOS module) was
+> removed in commit `6d7d71dd` ("remove nix packaging temporarily") and has
+> not come back: none of the commands or options below work against this
+> tree. The guide is kept as the design for that packaging. Its former
+> `services.geode.federation` examples were removed: the module wrote
+> `federation_enable` / `federation_role` / `federation_peers` into a config
+> file whose keys the server does not read (cluster mode is
+> `GEODE_CLUSTER_TOKEN` plus the cluster flags of `geode serve`).
+
 This guide covers deploying and managing Geode using Nix, NixOS, and related tooling.
 
 ## Table of Contents
@@ -225,30 +236,13 @@ services.geode = {
     keyFile = "/etc/ssl/private/geode.key";
   };
 
-  # Federation for distributed setup
-  federation = {
-    enable = true;
-    role = "shard";           # or "coordinator"
-    peers = [
-      "coordinator1.prod.com:3141"
-      "coordinator2.prod.com:3141"
-    ];
-  };
+  # No backup option: geode has no S3 / object-storage backup (backups are
+  # local files written by `geode backup create`; SONNY-6290). Schedule that
+  # command yourself and copy the file with your own tool.
 
-  # S3 backups
-  backup = {
-    enable = true;
-    s3Bucket = "prod-geode-backups";
-    s3Region = "us-west-2";
-    schedule = "0 2 * * *";   # Daily at 2 AM
-  };
-
-  # Change Data Capture
-  cdc = {
-    enable = true;
-    webhookUrl = "https://api.prod.com/geode-events";
-    retention = "30d";
-  };
+  # No CDC option: the module has none, and a server captures no changes
+  # (SONNY-6570; change capture is SONNY-6572). GEODE_CDC_ENABLE=1 starts the
+  # CDC engine, which nothing feeds.
 
   # Monitoring and metrics
   monitoring = {
@@ -264,8 +258,7 @@ services.geode = {
 
   # Environment variables
   environment = {
-    GEODE_ENVIRONMENT = "production";
-    RUST_LOG = "info";
+    GEODE_ENV = "production";
   };
 
   # Additional configuration
@@ -337,16 +330,6 @@ services.promtail = {
 # Multi-node cluster setup
 services.geode = {
   enable = true;
-
-  federation = {
-    enable = true;
-    role = "coordinator";     # Primary coordinator
-    peers = [
-      "geode-shard-1.internal:3141"
-      "geode-shard-2.internal:3141"
-      "geode-shard-3.internal:3141"
-    ];
-  };
 
   # Load balancing
   network = {
@@ -431,8 +414,7 @@ docker run -d \
   -v ./geode.conf:/etc/geode/geode.conf:ro \
   -v geode-data:/var/lib/geode \
   -v geode-logs:/var/log/geode \
-  -e GEODE_LOG_LEVEL=debug \
-  geode:latest serve
+  geode:latest serve --log-level debug
 
 # Interactive shell
 docker run -it --rm geode:latest shell
@@ -465,9 +447,8 @@ services:
       - geode-data:/var/lib/geode
       - geode-logs:/var/log/geode
       - ./config:/etc/geode:ro
-    environment:
-      - GEODE_LOG_LEVEL=info
-      - GEODE_JSON_LOGS=true
+    # geode does not read GEODE_LOG_LEVEL or GEODE_JSON_LOGS: the log level
+    # is `serve --log-level` (SONNY-6435).
     healthcheck:
       test: ["CMD", "geode", "health-check"]
       interval: 30s
@@ -619,13 +600,9 @@ spec:
         - containerPort: 9090
           name: metrics
           protocol: TCP
+        # The server's config file is `serve --config <path>`; no
+        # environment variable names it (SONNY-6593).
         env:
-        - name: GEODE_CONFIG
-          value: "/etc/geode/geode.conf"
-        - name: GEODE_LOG_LEVEL
-          value: "info"
-        - name: GEODE_JSON_LOGS
-          value: "true"
         - name: POD_NAME
           valueFrom:
             fieldRef:
@@ -899,9 +876,7 @@ services.geode = {
   logging.level = "warn";
   performance.memoryLimit = "16GB";
   tls.generateSelfSigned = false;
-  federation.enable = true;
   backup.enable = true;
-  cdc.enable = true;
   monitoring.enable = true;
 };
 ```
@@ -1434,8 +1409,10 @@ nix flake check
 systemctl status geode
 journalctl -u geode -f
 
-# Check configuration
-geode --config=/etc/geode/geode.conf --validate-config
+# Check configuration: geode has no check-only mode. `geode serve --config`
+# loads the file at startup and refuses to start on one it cannot load,
+# printing "[startup] config load failed; refusing to start: <error>".
+journalctl -u geode | grep 'refusing to start'
 
 # Check permissions
 ls -la /var/lib/geode /var/log/geode /etc/geode
@@ -1494,11 +1471,6 @@ services.geode = {
   enable = true;
   logging.level = "debug";
 
-  environment = {
-    GEODE_DEBUG = "1";
-    RUST_LOG = "debug";
-    RUST_BACKTRACE = "1";
-  };
 
   extraArgs = [
     "--debug"

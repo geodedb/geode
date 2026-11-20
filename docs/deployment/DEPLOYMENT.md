@@ -6,7 +6,7 @@ This guide covers deploying Geode using Docker Compose with a complete productio
 
 - **Geode Database** - Graph database with QUIC+TLS transport
 - **HashiCorp Vault** - Secrets management and encryption key storage
-- **MinIO** - S3-compatible object storage for backups
+- **MinIO** - S3-compatible object storage, for backup files you copy there (geode itself writes backups to local files only)
 - **Redis** - Caching layer
 - **Prometheus** - Metrics collection
 - **Grafana** - Metrics visualization
@@ -84,17 +84,23 @@ docker-compose exec geode geode query "RETURN 1 AS health" --server 127.0.0.1:84
 
 All configuration is managed through `.env` file:
 
+geode itself does not read `GEODE_LOG_LEVEL`: `docker-compose.yml`
+substitutes it into the `geode serve --log-level` option (debug, info, warn,
+error). The listen address is the `--listen` option in the compose
+`command` (SONNY-6448).
+
 ```bash
 # Geode Configuration
-GEODE_LOG_LEVEL=info           # Log level: debug, info, warn, error
+# geode does not read GEODE_LOG_LEVEL; docker-compose.yml passes it as --log-level
+GEODE_LOG_LEVEL=info
 GEODE_DATA_DIR=/data           # Data directory path
-GEODE_LISTEN_ADDR=0.0.0.0:8443 # Listen address
 
 # Vault Configuration
 VAULT_ADDR=http://vault:8200
 VAULT_TOKEN=<generated-token>
 
-# MinIO/S3 Configuration
+# MinIO/S3 Configuration (read by the MinIO service and your own copy
+# jobs; geode does not read these: it has no object-storage path)
 S3_ENDPOINT=http://minio:9000
 S3_ACCESS_KEY=geode-minio-admin
 S3_SECRET_KEY=<generated-password>
@@ -117,6 +123,15 @@ Generated automatically by setup script:
 ```bash
 ./scripts/setup-deployment.sh
 ```
+
+Without `--cert`/`--key`, `geode serve` uses `server.crt` and `server.key`
+in `GEODE_CERT_DIR`, else in its data directory (`--data-dir`,
+`GEODE_DATA_DIR` or the per-user default), and generates a self-signed pair
+there when neither file exists (key 0600, certificate 0644, created
+exclusively; SONNY-6325). There is no `/tmp` fallback. The server refuses to
+start when that key is a symbolic link, belongs to another user, is
+readable or writable by group or others, or has no matching certificate:
+fix it (`chmod 600 server.key`) or remove both files to regenerate.
 
 #### Production Certificates
 
@@ -284,17 +299,24 @@ groups:
 
 ## Backup and Recovery
 
-### Automated Backups
+### Backups
 
-Geode automatically backs up to MinIO/S3 when configured:
+Geode does not back up to MinIO/S3 by itself: `geode backup create` writes a
+local file (an `s3://` `--output` is refused; SONNY-6290 corrected this guide,
+which showed a `geode backup --dest s3://...` form the binary never had).
+Write the backup into a volume and copy it to MinIO with your own tool:
 
 ```bash
-# Trigger manual backup
-docker-compose exec geode geode backup --dest s3://geode-backups/manual-$(date +%Y%m%d)
+# Full backup from the running server into the data volume
+docker-compose exec geode geode backup create --output /data/backups/manual.backup --compress
 
-# List backups
-docker-compose exec minio mc ls local/geode-backups
+# Copy it out of the container, then into MinIO with the MinIO client
+docker-compose cp geode:/data/backups/manual.backup ./manual.backup
+mc cp ./manual.backup myminio/geode-backups/manual-$(date +%Y%m%d).backup
 ```
+
+Add `--timeout <seconds>` (default 300) when a large store takes longer to
+back up than the CLI waits for the server's answer.
 
 ### Restore from Backup
 
@@ -302,8 +324,14 @@ docker-compose exec minio mc ls local/geode-backups
 # Stop Geode
 docker-compose stop geode
 
-# Restore data
-docker-compose exec geode geode restore --source s3://geode-backups/backup-20231215
+# Restore data: copy the backup file into the volume first (restoring
+# straight from s3:// is not supported), then restore it offline into a new
+# or empty data directory and point Geode at that directory. Backups do not
+# hold the auth-chain HMAC key (.geode_hmac_key): give the source server's key
+# file, or set GEODE_AUTH_HMAC_KEY / GEODE_TDE_KEY as the source server had it.
+# --hmac-key-file cannot be combined with GEODE_TDE_KEY: a backup taken with
+# GEODE_TDE_KEY set is restored with that key alone (-e GEODE_TDE_KEY=...)
+docker-compose run --rm geode geode restore /data/backups/full.backup --data-dir /data/restored --yes --hmac-key-file /secrets/geode_hmac_key
 
 # Start Geode
 docker-compose start geode
@@ -490,7 +518,7 @@ docker-compose exec geode geode admin check
 6. **Regularly update images** for security patches
 7. **Use secrets rotation** for credentials
 8. **Enable network encryption** between services
-9. **Implement backup encryption** for S3 backups
+9. **Set `GEODE_TDE_KEY`** so backups are encrypted: with it set, `geode backup create` and the server encrypt the backup payload with AES-256-GCM under it (owner-only file, mode 0600), and restoring needs the same key; without it a backup is written unencrypted (SONNY-6355). Keep the key apart from the backups
 10. **Use RBAC** for Grafana and Prometheus
 
 ## Production Checklist

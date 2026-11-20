@@ -14,6 +14,9 @@ const executeReturnClauseWithNodes = execution.executeReturnClauseWithNodes;
 // GAP-0535: value ownership helpers for projection results
 const value_utilities = @import("value_utilities.zig");
 const value_order = @import("value_order.zig");
+const canonical_string = @import("../unicode/canonical_string.zig");
+// SONNY-2696: aggregate detection walks every expression kind.
+const grouped_having = @import("grouped_having.zig");
 
 // Import for unique column name generation
 const match_operations = @import("match_operations.zig");
@@ -202,12 +205,13 @@ pub fn sortRowsEx(allocator: std.mem.Allocator, result: *ExecutionResult, order:
         order: ast.OrderBy,
         columns: []const []const u8,
         return_items: ?[]const ast.ReturnItem,
+        /// SONNY-2811: the first error evaluating a key. The comparator
+        /// cannot return it; the sort is failed with it afterwards.
+        key_error: *?anyerror,
 
-        fn compare(ctx: @This(), row_a: []Value, row_b: []Value) bool {
-            for (ctx.order.keys) |key| {
-                const val1 = getValueForKey(ctx, key, row_a);
-                const val2 = getValueForKey(ctx, key, row_b);
-
+        /// `keys_a` and `keys_b`: two rows' values of the ORDER BY keys.
+        fn compare(ctx: @This(), keys_a: []const Value, keys_b: []const Value) bool {
+            for (ctx.order.keys, keys_a, keys_b) |key, val1, val2| {
                 const v1_is_null = val1 == .Null;
                 const v2_is_null = val2 == .Null;
 
@@ -231,6 +235,16 @@ pub fn sortRowsEx(allocator: std.mem.Allocator, result: *ExecutionResult, order:
                 }
             }
             return false; // Equal by all keys
+        }
+
+        /// SONNY-2811: a key that fails to evaluate (a 22003 overflow, a
+        /// type error) fails the statement; it was sorted as NULL, so the
+        /// error was hidden and the rows came back in no order.
+        fn evalKey(ctx: @This(), expr: ast.Expr, env: Env) Value {
+            return evalOrderByExpr(ctx.allocator, expr, env) catch |err| {
+                if (ctx.key_error.* == null) ctx.key_error.* = err;
+                return .{ .Null = {} };
+            };
         }
 
         fn getValueForKey(ctx: @This(), key: ast.OrderBy.OrderKey, row: []Value) Value {
@@ -286,7 +300,7 @@ pub fn sortRowsEx(allocator: std.mem.Allocator, result: *ExecutionResult, order:
                     .values = row,
                     .allocator = ctx.allocator,
                 };
-                return evalOrderByExpr(ctx.allocator, key.expr, env) catch .{ .Null = {} };
+                return ctx.evalKey(key.expr, env);
             } else {
                 if (ctx.return_items) |items| {
                     if (findColumnIndexByExpression(key.expr, items)) |idx| {
@@ -298,19 +312,53 @@ pub fn sortRowsEx(allocator: std.mem.Allocator, result: *ExecutionResult, order:
                     .values = row,
                     .allocator = ctx.allocator,
                 };
-                return evalOrderByExpr(ctx.allocator, key.expr, env) catch .{ .Null = {} };
+                return ctx.evalKey(key.expr, env);
             }
         }
     };
 
+    // SONNY-6449, SONNY-6450 item 5: each key is evaluated once per row,
+    // before the sort, on an arena of the sort's own, freed after it. The
+    // comparator evaluated both rows' computed keys at every comparison
+    // (`ORDER BY upper(n.s)`, `ORDER BY n.s || 'x'`) and freed none of them:
+    // a leak per comparison. The rows are permuted as the heap sort of the
+    // rows themselves permuted them.
+    var key_arena = std.heap.ArenaAllocator.init(allocator);
+    defer key_arena.deinit();
+    var key_error: ?anyerror = null;
     const ctx = SortContext{
-        .allocator = allocator,
+        .allocator = key_arena.allocator(),
         .order = order,
         .columns = result.columns,
         .return_items = return_items,
+        .key_error = &key_error,
     };
 
-    std.sort.heap([]Value, result.rows, ctx, SortContext.compare);
+    const width = order.keys.len;
+    const key_values = try allocator.alloc(Value, result.rows.len * width);
+    defer allocator.free(key_values);
+    for (result.rows, 0..) |row, r| {
+        for (order.keys, key_values[r * width ..][0..width]) |key, *value| value.* = ctx.getValueForKey(key, row);
+    }
+    if (key_error) |err| return err;
+
+    const IndexOrder = struct {
+        sort: SortContext,
+        keys: []const Value,
+        width: usize,
+
+        fn lessThan(self: @This(), a: usize, b: usize) bool {
+            return self.sort.compare(self.keys[a * self.width ..][0..self.width], self.keys[b * self.width ..][0..self.width]);
+        }
+    };
+    const permutation = try allocator.alloc(usize, result.rows.len);
+    defer allocator.free(permutation);
+    for (permutation, 0..) |*p, i| p.* = i;
+    std.sort.heap(usize, permutation, IndexOrder{ .sort = ctx, .keys = key_values, .width = width }, IndexOrder.lessThan);
+    const sorted = try allocator.alloc([]Value, result.rows.len);
+    defer allocator.free(sorted);
+    for (permutation, sorted) |i, *row| row.* = result.rows[i];
+    @memcpy(result.rows, sorted);
 }
 
 // CANARY: REQ=REQ-GQL-ORDERBY-WRAPPER-001; FEATURE="OrderBySortRowsWrapper"; ASPECT=BackwardsCompatibility; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
@@ -358,7 +406,8 @@ pub fn compareValuesWithNullsPolicy(a: Value, b: Value, nulls: ast.OrderBy.Nulls
         if (numberOf(b)) |nb| return compareNumbers(na, nb);
     }
     if (textOf(a)) |ta| {
-        if (textOf(b)) |tb| return orderToI8(std.mem.order(u8, ta, tb));
+        // SONNY-3055: by their NFC forms, as `<` and `=` order them.
+        if (textOf(b)) |tb| return orderToI8(canonical_string.orderNoAlloc(ta, tb));
     }
     if (std.meta.activeTag(a) == std.meta.activeTag(b)) {
         switch (a) {
@@ -444,38 +493,37 @@ fn getTypeOrder(v: Value) u8 {
 
 // CANARY: REQ=REQ-GQL-AGG-DETECT-001; FEATURE="AggregationDetection"; ASPECT=RecursiveCheck; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
 // CANARY: REQ=REQ-SONNY-3189-CHAIN-WALKERS; FEATURE="QueryAnalysis"; ASPECT=IterativeWalkers; STATUS=TESTED; TEST=tests/test_sonny3181_expr_chain_cap.zig; OWNER=execution; UPDATED=2026-09-27
-/// SONNY-3189: the left operand of a binary expression and the operand of a
-/// unary one are followed with a loop, not one recursion per operator (and
-/// a copy of the expression per level): `RETURN 1 + 1 + ...` is as deep as
-/// it is long. Right operands recurse; nesting bounds them.
+// CANARY: REQ=REQ-SONNY-2696-AGGREGATE-DETECTION; FEATURE="AggregationDetection"; ASPECT=NestedAggregates; STATUS=TESTED; TEST=tests/test_sonny2696_aggregate_expressions.zig; OWNER=execution; UPDATED=2026-11-11
+/// Whether `root` contains an aggregate call (count, countDistinct, sum, avg,
+/// min, max, collect) anywhere outside a pattern or subquery, whose own
+/// projection aggregates over its own rows: an item that does is computed
+/// over groups.
+///
+/// SONNY-2696: only arithmetic operators were followed down to the call, so
+/// an aggregate inside a function call, a list, a map or a CASE
+/// (`toString(count(*))`, `[count(*), sum(n.i)]`) did not make its item
+/// aggregating, and the item was evaluated against each input row. The walk
+/// is `grouped_having.containsAggregate`, which follows every expression's
+/// chains with a loop (SONNY-3189).
 pub fn isAggregationExpr(root: ast.Expr) bool {
-    var expr: *const ast.Expr = &root;
-    while (true) {
-        switch (expr.*) {
-            .Call => |call| {
-                if (call.callee.* == .Ident) {
-                    const func_name = call.callee.Ident.orig;
-                    // Use case-insensitive comparison for aggregation functions
-                    return std.ascii.eqlIgnoreCase(func_name, "count") or
-                        std.ascii.eqlIgnoreCase(func_name, "countDistinct") or
-                        std.ascii.eqlIgnoreCase(func_name, "sum") or
-                        std.ascii.eqlIgnoreCase(func_name, "avg") or
-                        std.ascii.eqlIgnoreCase(func_name, "min") or
-                        std.ascii.eqlIgnoreCase(func_name, "max") or
-                        std.ascii.eqlIgnoreCase(func_name, "collect");
-                }
-                return false;
-            },
-            .Binary => |bin| {
-                // Check for aggregations in binary expressions (e.g., d.budget - sum(e.salary))
-                if (isAggregationExpr(bin.right.*)) return true;
-                expr = bin.left;
-            },
-            // Check for aggregations in unary expressions
-            .Unary => |un| expr = un.expr,
-            else => return false,
-        }
-    }
+    return grouped_having.containsAggregate(root);
+}
+
+/// Whether `e` is itself a call of one of the aggregate functions (and not an
+/// expression with one inside it): the item the aggregate code computes as
+/// it is.
+pub fn isAggregateCall(e: ast.Expr) bool {
+    if (e != .Call) return false;
+    const callee = e.Call.callee.*;
+    if (callee != .Ident) return false;
+    const func_name = callee.Ident.orig;
+    return std.ascii.eqlIgnoreCase(func_name, "count") or
+        std.ascii.eqlIgnoreCase(func_name, "countDistinct") or
+        std.ascii.eqlIgnoreCase(func_name, "sum") or
+        std.ascii.eqlIgnoreCase(func_name, "avg") or
+        std.ascii.eqlIgnoreCase(func_name, "min") or
+        std.ascii.eqlIgnoreCase(func_name, "max") or
+        std.ascii.eqlIgnoreCase(func_name, "collect");
 }
 
 /// SONNY-3189: as `isAggregationExpr`, left operands and unary operands with
@@ -548,13 +596,27 @@ pub fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnC
 
     // Collect column names (with disambiguation for duplicates)
     const columns = try generateUniqueColumnNames(allocator, items);
+    // SONNY-6483: an item that fails frees what was built.
+    errdefer {
+        for (columns) |c| allocator.free(c);
+        allocator.free(columns);
+    }
 
     // Evaluate expressions with provided environment (GAP-0535: each value is
     // adopted or duplicated so the result fully owns its row memory)
-    var row = try allocator.alloc(Value, items.len);
+    // SONNY-6449: evaluated on the statement's scratch arena, then copied
+    // (`value_utilities.lentAllocator`).
+    const lent = value_utilities.lentAllocator(allocator);
+    const row = try allocator.alloc(Value, items.len);
+    var filled: usize = 0;
+    errdefer {
+        for (row[0..filled]) |v| value_utilities.freeValue(allocator, v);
+        allocator.free(row);
+    }
     for (items, 0..) |item, i| {
-        const evaluated = try eval.evalExpr(allocator, item.expr, env);
+        const evaluated = try eval.evalExpr(lent, item.expr, env);
         row[i] = try value_utilities.ensureOwnedProjectionValue(allocator, item.expr, evaluated);
+        filled += 1;
     }
 
     var rows = try allocator.alloc([]Value, 1);

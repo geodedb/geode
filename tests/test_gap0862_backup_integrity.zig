@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 
 // GAP-0862: Restore data-integrity regression.
@@ -133,27 +134,31 @@ fn seedKnownGraph(store: *graph_store.GraphStore) !SeededGraph {
 }
 
 fn assertRestoredIntegrity(restored: *graph_store.GraphStore, seed: SeededGraph) !void {
-    // Node and edge counts must match the seeded graph exactly.
-    try testing.expectEqual(@as(usize, 5), restored.nodes.count());
-    try testing.expectEqual(@as(usize, 3), restored.edges.count());
+    // Node and edge counts must match the seeded graph exactly. Read them the
+    // way the engine does: loadFromFile defers each graph's resident load to
+    // first access (Phase 1b, a31800da), so `nodes`/`edges` are caches that
+    // are empty on a cold store (SONNY-6277); getNodeCount/getEdgeCount and
+    // getEdgePtr hydrate.
+    try testing.expectEqual(@as(usize, 5), restored.getNodeCount());
+    try testing.expectEqual(@as(usize, 3), restored.getEdgeCount());
 
     // Sampled node property round-trip (String + Int).
-    const alice_name = restored.getNodeProperty(seed.user_alice, "name") orelse return error.NodePropertyMissing;
+    const alice_name = (try restored.getNodePropertyOrError(seed.user_alice, "name")) orelse return error.NodePropertyMissing;
     try testing.expectEqualStrings("Alice", alice_name.String);
-    const alice_age = restored.getNodeProperty(seed.user_alice, "age") orelse return error.NodePropertyMissing;
+    const alice_age = (try restored.getNodePropertyOrError(seed.user_alice, "age")) orelse return error.NodePropertyMissing;
     try testing.expectEqual(@as(i64, 30), alice_age.Int);
 
-    const carol_name = restored.getNodeProperty(seed.user_carol, "name") orelse return error.NodePropertyMissing;
+    const carol_name = (try restored.getNodePropertyOrError(seed.user_carol, "name")) orelse return error.NodePropertyMissing;
     try testing.expectEqualStrings("Carol", carol_name.String);
-    const carol_age = restored.getNodeProperty(seed.user_carol, "age") orelse return error.NodePropertyMissing;
+    const carol_age = (try restored.getNodePropertyOrError(seed.user_carol, "age")) orelse return error.NodePropertyMissing;
     try testing.expectEqual(@as(i64, 41), carol_age.Int);
 
-    const hello_title = restored.getNodeProperty(seed.post_hello, "title") orelse return error.NodePropertyMissing;
+    const hello_title = (try restored.getNodePropertyOrError(seed.post_hello, "title")) orelse return error.NodePropertyMissing;
     try testing.expectEqualStrings("Hello World", hello_title.String);
 
     // Sampled edge round-trip: topology (from/to/label) + property.
     for (seed.edges) |ef| {
-        const edge_ptr = restored.edges.getPtr(ef.id) orelse return error.EdgeMissing;
+        const edge_ptr = (try restored.getEdgePtrHydratedChecked(ef.id)) orelse return error.EdgeMissing;
         try testing.expectEqual(ef.from, edge_ptr.from_id);
         try testing.expectEqual(ef.to, edge_ptr.to_id);
         try testing.expectEqualStrings(ef.label, edge_ptr.label);
@@ -166,6 +171,8 @@ fn assertRestoredIntegrity(restored: *graph_store.GraphStore, seed: SeededGraph)
 // Default BackupConfig path (which requests .zstd — see the compression test
 // for why that lands as .none on disk).
 test "GAP-0862 restore preserves node/edge counts and properties" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     defer resetGlobalStorage(allocator);
 
@@ -190,7 +197,8 @@ test "GAP-0862 restore preserves node/edge counts and properties" {
 
     const restore_dir = try makeTempDir(allocator, "restore");
     defer cleanupTempDir(allocator, restore_dir);
-    try mgr.restoreToPointInTime(restore_dir, meta.timestamp + 1);
+    var restored_side = try mgr.restoreInto(restore_dir, meta.timestamp + 1, .{});
+    restored_side.deinit();
 
     // Re-open a fresh adapter + store on the restored directory and assert
     // the graph round-tripped intact.
@@ -211,6 +219,8 @@ test "GAP-0862 restore preserves node/edge counts and properties" {
 // is available via `.gzip` (see tests/test_gap0880_backup_upload.zig for the
 // gzip round-trip + magic-byte verification).
 test "GAP-0862 zstd request is rejected with UnsupportedCompression" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     defer resetGlobalStorage(allocator);
 
@@ -235,6 +245,8 @@ test "GAP-0862 zstd request is rejected with UnsupportedCompression" {
 // A corrupted backup payload must be rejected by checksum verification rather
 // than silently restoring garbage. Proves the integrity guard is real.
 test "GAP-0862 corrupted backup payload is rejected on restore" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     defer resetGlobalStorage(allocator);
 
@@ -272,6 +284,5 @@ test "GAP-0862 corrupted backup payload is rejected on restore" {
     const restore_dir = try makeTempDir(allocator, "xrestore");
     defer cleanupTempDir(allocator, restore_dir);
 
-    const result = mgr.restoreToPointInTime(restore_dir, meta.timestamp + 1);
-    try testing.expectError(error.BackupChecksumMismatch, result);
+    try testing.expectError(error.BackupChecksumMismatch, mgr.restoreInto(restore_dir, meta.timestamp + 1, .{}));
 }

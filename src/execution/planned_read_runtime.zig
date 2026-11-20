@@ -10,6 +10,8 @@ const value_utilities = @import("value_utilities.zig");
 const graph_store = @import("../graph_store.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 const stored_property_equality = @import("stored_property_equality.zig");
+const distinct_set = @import("distinct_set.zig");
+const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const query_arena = @import("../server/query_arena.zig");
 const pattern_helpers = @import("pattern_helpers.zig");
@@ -20,6 +22,7 @@ const pattern_helpers = @import("pattern_helpers.zig");
 // through the tenant-aware path. The common single-tenant case (null/"default"
 // scope) keeps the fast path with zero overhead.
 const tenancy = @import("tenancy.zig");
+const catalog_mod = @import("../schema/catalog.zig");
 // GAP-ENT-0044/0045 (T5): read-executor budget + cancel. Polled at every
 // row-materialization boundary (right before g_path_rows_materialized ticks),
 // so a runaway/abandoned planned read aborts within one row of the trip.
@@ -34,6 +37,33 @@ const read_budget = @import("../read_budget.zig");
 // 90-min loadtest, pegged the server at 8 cores — M0_10_CONCERNS.md).
 inline fn scratchOr(fallback: std.mem.Allocator) std.mem.Allocator {
     return query_arena.currentScratchAllocator() orelse fallback;
+}
+
+// CANARY: REQ=REQ-SONNY-6744-READ-BUDGET-SCRATCH; FEATURE="ReadExecutorBudget"; ASPECT=ScratchInteriorCharge; STATUS=TESTED; TEST=tests/test_gap0044_read_budget_cancel.zig; OWNER=execution; UPDATED=2026-11-18
+/// SONNY-6744: charge the interior bytes a materialized node or edge took from
+/// the statement's scratch arena to the read budget. The arena is NOT behind the
+/// read scope's `MeteredAllocator` (only the row and Node/Edge structs are), and
+/// every statement runs with one since SONNY-6449 (a transport's pooled arena
+/// before that), so a runaway full-row read held O(rows x row size) bytes the
+/// budget never saw and never aborted. With no arena installed the interior is
+/// on `allocator`, which the scope already meters: nothing to add. Coarse, like
+/// the write budget's detached-box estimate (a tripwire, not a ledger); the
+/// arena releases nothing until the statement ends, so nothing is credited.
+fn chargeScratchInterior(graph_name: []const u8, labels: []const []const u8, props: *const graph_store.CompactPropertyMap, label: ?[]const u8) void {
+    if (query_arena.currentScratchAllocator() == null) return;
+    var total: u64 = graph_name.len;
+    if (label) |l| total += l.len;
+    for (labels) |l| total += l.len + @sizeOf([]const u8);
+    var it = props.iterator();
+    while (it.next()) |entry| {
+        total += 64; // entry + key/value boxing overhead (coarse)
+        total += entry.key_ptr.len;
+        total += switch (entry.value_ptr.*) {
+            .String => |s| s.len,
+            else => @as(u64, 16),
+        };
+    }
+    read_budget.charge(total);
 }
 
 // GAP-ENT-0002: TDD observable gate. Counts path/node rows materialized by
@@ -165,12 +195,16 @@ pub const RuntimeOp = struct {
     input_rows: u64 = 0,
     rows: u64 = 0,
     time_ns: u64 = 0,
+    /// SONNY-1335: for an `IndexSeek` the executor ran, the catalog index
+    /// that served it (owned by the trace); null for every other operator.
+    index_name: ?[]const u8 = null,
 };
 
 pub const RuntimeTrace = struct {
     ops: []RuntimeOp,
 
     pub fn deinit(self: *RuntimeTrace, allocator: std.mem.Allocator) void {
+        for (self.ops) |op| if (op.index_name) |name| allocator.free(name);
         allocator.free(self.ops);
     }
 
@@ -286,7 +320,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
             const main_chain = q.match.chains[0];
             const first_node = if (main_chain.head) |head| head else main_chain.hops[0].left;
             root_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, first_node.name, "node", 0);
-            const scan_kind: OpKind = if (nodeCanUseIndex(context, first_node, q.where_clause))
+            const scan_kind: OpKind = if (nodeCanUseIndex(allocator, context, first_node, q.where_clause))
                 .IndexSeek
             else if (first_node.labels.len > 0)
                 .LabelScan
@@ -322,7 +356,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
             const chain = q.match.chains[0];
             const hop = chain.hops[0];
             const vle_seed_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, hop.left.name, "node", 0);
-            const scan_kind: OpKind = if (nodeCanUseIndex(context, hop.left, q.where_clause))
+            const scan_kind: OpKind = if (nodeCanUseIndex(allocator, context, hop.left, q.where_clause))
                 .IndexSeek
             else if (hop.left.labels.len > 0)
                 .LabelScan
@@ -356,15 +390,20 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
             const chain = q.match.chains[0];
             const first_node = if (chain.head) |head| head else chain.hops[0].left;
             root_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, first_node.name, "node", 0);
-            const scan_kind: OpKind = if (nodeCanUseIndex(context, first_node, q.where_clause))
+            // SONNY-6496 item 4: the start the run takes (`startsFromTail`):
+            // the scan of the tail and the hop walked backwards, as PROFILE
+            // reports them. The bindings keep the pattern's order.
+            const from_tail = if (graph_store.getGlobalAdapter()) |adapter| startsFromTail(adapter, graph_name, chain, context.query_param_names, context.query_param_values, allocator) else false;
+            const start_node = if (from_tail) chain.hops[0].right else first_node;
+            const scan_kind: OpKind = if (nodeCanUseIndex(allocator, context, start_node, q.where_clause))
                 .IndexSeek
-            else if (first_node.labels.len > 0)
+            else if (start_node.labels.len > 0)
                 .LabelScan
             else
                 .AllNodesScan;
             try ops.append(allocator, .{
                 .kind = scan_kind,
-                .est_rows = try estimateScanRows(allocator, graph_name, first_node),
+                .est_rows = try estimateScanRows(allocator, graph_name, start_node),
             });
 
             for (chain.hops, 0..) |hop, hop_idx| {
@@ -373,7 +412,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
                     .right_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, hop.right.name, "node", hop_idx + 1),
                 });
                 try ops.append(allocator, .{
-                    .kind = switch (hop.rel.dir) {
+                    .kind = switch (if (from_tail) flipRelDir(hop.rel.dir) else hop.rel.dir) {
                         .right => .ExpandOut,
                         .left => .ExpandIn,
                         .undirected => .ExpandEither,
@@ -394,7 +433,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
         }
         if (q.with_clause) |with_clause| {
             try ops.append(allocator, .{
-                .kind = if (q.group_by != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project,
+                .kind = if (q.withStageGroupBy() != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project,
             });
             if (with_clause.distinct) {
                 try ops.append(allocator, .{ .kind = .Distinct });
@@ -412,7 +451,7 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
 
         if (needsFinalProjection(q)) {
             try ops.append(allocator, .{
-                .kind = if ((q.with_clause == null and q.group_by != null) or hasAggregationItems(q.ret.items)) .Aggregate else .Project,
+                .kind = if (q.returnStageGroupBy() != null or hasAggregationItems(q.ret.items)) .Aggregate else .Project,
             });
             if (q.ret.distinct) {
                 try ops.append(allocator, .{ .kind = .Distinct });
@@ -426,14 +465,22 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
         }
     }
 
+    // SONNY-6498: each slice is freed if a later one cannot be made (the
+    // names leaked when the kinds' slice failed, and so on down).
+    const plan_kinds = try binding_kinds.toOwnedSlice(allocator);
+    errdefer allocator.free(plan_kinds);
+    const plan_ops = try ops.toOwnedSlice(allocator);
+    errdefer allocator.free(plan_ops);
+    const plan_hops = try hop_bindings.toOwnedSlice(allocator);
+    errdefer allocator.free(plan_hops);
     return Plan{
         .graph_name = graph_name,
         .binding_names = try binding_names.toOwnedSlice(allocator),
-        .binding_kinds = try binding_kinds.toOwnedSlice(allocator),
-        .ops = try ops.toOwnedSlice(allocator),
+        .binding_kinds = plan_kinds,
+        .ops = plan_ops,
         .execution_mode = execution_mode,
         .root_index = root_index,
-        .hops = try hop_bindings.toOwnedSlice(allocator),
+        .hops = plan_hops,
         .optional_join = optional_join,
         .var_length_endpoint = var_length_endpoint,
     };
@@ -475,6 +522,17 @@ pub fn executeProfiledIfSupported(
     // CANARY: REQ=REQ-PROFILE-RLS-TENANT-001; FEATURE="PROFILE"; ASPECT=ActiveContextPush; STATUS=TESTED; TEST=tests/test_profile_rls_tenant.zig; OWNER=security; UPDATED=2026-08-29
     const prev_ctx = execution.pushActiveContext(&context);
     defer execution.popActiveContext(prev_ctx);
+    // CANARY: REQ=REQ-SONNY-6460-PROFILE-SCRATCH; FEATURE="ExecutionResultOwnership"; ASPECT=ProfiledEntryPointScratch; STATUS=TESTED; TEST=tests/test_sonny6460_unscoped_eval.zig; OWNER=execution; UPDATED=2026-11-13
+    // SONNY-6460 item 4: a statement scratch arena, as the executor's other
+    // entry points open one (`execution.executeStatementWithContext`). An
+    // embedded caller of this `pub` entry point had none, so what the
+    // evaluator lends (a list property's copy, a decrypted or redacted FLE
+    // string: `eval.lentValueAllocator`) fell back to `allocator` and was
+    // freed by no one. With an arena already installed (a transport's, or a
+    // statement's when `executeIfSupported` runs inside one) it does nothing.
+    var scratch: query_arena.StatementScratch = .{};
+    scratch.open(allocator);
+    defer scratch.close();
     // CANARY: REQ=REQ-SONNY-3027-PROFILE-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=ProfiledEntryPoint; STATUS=TESTED; TEST=tests/test_sonny3027_profile_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
     // SONNY-3027: a profiled query is a program of its own, like one run
     // through `executeProgramWithContext`: the session engine transaction a
@@ -524,8 +582,14 @@ pub fn executeProfiledIfSupported(
         if (in_type_error) return execution.endStatementFailed(owns_scope, error.InListRequiresList);
         return execution.endStatementFailed(owns_scope, limit_error.?);
     }
-    execution.endStatementSucceeded(owns_scope) catch |err| {
+    execution.endStatementSucceeded(owns_scope, context.catalog) catch |err| {
         profiled.result.deinit(allocator);
+        profiled.deinitMetadata(allocator);
+        return err;
+    };
+    // SONNY-6460 item 4: the result is copied out of the arena opened above
+    // before it closes (it frees the result on failure).
+    execution.detachFromStatementScratch(allocator, &scratch, &profiled.result) catch |err| {
         profiled.deinitMetadata(allocator);
         return err;
     };
@@ -567,7 +631,11 @@ fn executeProfiledInScope(
     };
     errdefer trace.deinit(allocator);
     for (plan.ops, 0..) |op, idx| {
-        trace.ops[idx] = .{ .kind = op.kind };
+        // SONNY-1335: the plan's IndexSeek is what it expected; the scan
+        // operator says what ran once the start slots are collected
+        // (`recordStartAccess`). Until then it is the label scan an IndexSeek
+        // plan falls back to (only a labelled node is planned as one).
+        trace.ops[idx] = .{ .kind = if (op.kind == .IndexSeek) .LabelScan else op.kind };
     }
 
     var filter_occurrence: usize = 0;
@@ -595,7 +663,7 @@ fn executeProfiledInScope(
     }
 
     if (q.with_clause) |with_clause| {
-        const with_kind: OpKind = if (q.group_by != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project;
+        const with_kind: OpKind = if (q.withStageGroupBy() != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project;
         const with_op_index = switch (with_kind) {
             .Aggregate => nextOpIndex(trace.ops, .Aggregate, &aggregate_occurrence),
             .Project => nextOpIndex(trace.ops, .Project, &project_occurrence),
@@ -607,7 +675,8 @@ fn executeProfiledInScope(
         const start_ns = nowNs();
         // SONNY-2667: a HAVING without a GROUP BY is a WHERE after RETURN, so it
         // belongs to the RETURN stage below, not to this one.
-        var with_result = try transformResultRowsWithParams(allocator, result, with_stage, q.group_by, execution.withStageHaving(q.*), param_names, param_values);
+        var with_result = try transformResultRowsWithParams(allocator, result, with_stage, q.withStageGroupBy(), execution.withStageHaving(q.*), param_names, param_values);
+        // (Nothing below can fail before `result` takes it over.)
         transferOwnedGraphEntities(&result, &with_result);
         deinitResultKeepingOwnedGraphEntities(allocator, &result);
 
@@ -655,11 +724,13 @@ fn executeProfiledInScope(
     }
 
     if (needsFinalProjection(q)) {
-        const return_group_by = if (q.with_clause == null) q.group_by else null;
         // SONNY-2667: a WHERE after RETURN (parsed as a HAVING with no GROUP BY)
         // filters the RETURN's rows, with or without a WITH before it.
-        const return_having = if (q.with_clause == null or q.group_by == null) q.having else null;
-        const return_kind: OpKind = if ((q.with_clause == null and q.group_by != null) or hasAggregationItems(q.ret.items)) .Aggregate else .Project;
+        // SONNY-2698: a GROUP BY and HAVING written after the RETURN are the
+        // RETURN's, with or without a WITH before it.
+        const return_group_by = q.returnStageGroupBy();
+        const return_having = q.returnStageHaving();
+        const return_kind: OpKind = if (return_group_by != null or hasAggregationItems(q.ret.items)) .Aggregate else .Project;
         const return_op_index = switch (return_kind) {
             .Aggregate => nextOpIndex(trace.ops, .Aggregate, &aggregate_occurrence),
             .Project => nextOpIndex(trace.ops, .Project, &project_occurrence),
@@ -672,6 +743,10 @@ fn executeProfiledInScope(
         const input_rows = result.rows.len;
         const start_ns = nowNs();
         var projected = try transformResultRowsWithParams(allocator, result, return_stage, return_group_by, return_having, param_names, param_values);
+        // SONNY-6297: freed when making it own its values fails (it leaked);
+        // `result` takes it over below.
+        var projected_taken = false;
+        errdefer if (!projected_taken) projected.deinit(allocator);
         // GAP-0535: the final projection is the result handed to the caller —
         // make it fully OWN its row values (adopt provably-fresh call results,
         // deep-duplicate everything else) so ExecutionResult.deinit is
@@ -688,6 +763,7 @@ fn executeProfiledInScope(
         trace.ops[return_op_index].time_ns = elapsedSince(start_ns);
 
         result = projected;
+        projected_taken = true;
 
         if (q.ret.distinct) {
             const op_index = nextOpIndex(trace.ops, .Distinct, &distinct_occurrence) orelse unreachable;
@@ -816,7 +892,7 @@ fn estimatePatternSelectivity(
     for (props) |prop| {
         if (pattern_helpers.containsVariableReference(prop.value.*)) continue;
         if (!graph_store.shouldIndexProperty(prop.key)) continue;
-        const expected_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch continue;
+        const expected_val = eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env) catch continue;
         const pv: graph_store.PropertyValue = switch (expected_val) {
             .Str => |s| .{ .String = s },
             .Int => |i| .{ .Int = i },
@@ -832,6 +908,29 @@ fn estimatePatternSelectivity(
     return best_len;
 }
 
+// CANARY: REQ=REQ-SONNY-6496-EXPLAIN-TAIL-START; FEATURE="EXPLAIN"; ASPECT=PlanMatchesRunStart; STATUS=TESTED; TEST=tests/test_sonny6496_explain_start.zig; OWNER=engine; UPDATED=2026-11-13
+/// Bug B / SONNY-6496 item 4: whether `executePatternQuery` starts `chain`
+/// from its tail: a single directed hop whose tail pattern is more selective
+/// than its head. EXPLAIN (`buildPlanIfSupported`) asks the same question,
+/// so its plan starts where the run does; it described the head while
+/// PROFILE reported the tail.
+fn startsFromTail(
+    adapter: *graph_storage_adapter.StorageAdapter,
+    graph_name: []const u8,
+    chain: ast.Chain,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    allocator: std.mem.Allocator,
+) bool {
+    if (chain.hops.len != 1) return false;
+    const hop = chain.hops[0];
+    if (hop.rel.dir == .undirected) return false;
+    if (!adapter.graphExists(graph_name)) return false;
+    const head_sel = estimatePatternSelectivity(adapter, graph_name, hop.left, param_names, param_values, allocator);
+    const tail_sel = estimatePatternSelectivity(adapter, graph_name, hop.right, param_names, param_values, allocator);
+    return tail_sel < head_sel;
+}
+
 fn executePatternQuery(
     allocator: std.mem.Allocator,
     q: *const ast.Query,
@@ -845,6 +944,8 @@ fn executePatternQuery(
     const chain = q.match.chains[0];
     var rows = std.ArrayList([]Value).empty;
     defer rows.deinit(allocator);
+    // SONNY-6498: the rows read, until the result holds them.
+    errdefer for (rows.items) |r| allocator.free(r);
     var owned_entities = try OwnedGraphEntities.init(allocator);
     errdefer owned_entities.deinit();
 
@@ -872,13 +973,7 @@ fn executePatternQuery(
     };
 
     if (!adapter.graphExists(plan.graph_name)) {
-        const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-        const empty_result = ExecutionResult{
-            .columns = column_result.columns,
-            .rows = try rows.toOwnedSlice(allocator),
-            .flags = std.ArrayList([]const u8).empty,
-            .column_buffer = column_result.buffer,
-        };
+        const empty_result = try bindingResult(allocator, plan, q, &rows, null);
         owned_entities.deinit();
         return empty_result;
     }
@@ -889,17 +984,7 @@ fn executePatternQuery(
     //   - hop.rel.dir != .undirected (undirected: unchanged path)
     //   - tail strictly more selective than head
     // All other cases take the existing seeded_from_tail==false path unchanged.
-    const seeded_from_tail: bool = sel: {
-        if (chain.hops.len == 1) {
-            const hop = chain.hops[0];
-            if (hop.rel.dir != .undirected) {
-                const head_sel = estimatePatternSelectivity(adapter, plan.graph_name, hop.left, param_names, param_values, allocator);
-                const tail_sel = estimatePatternSelectivity(adapter, plan.graph_name, hop.right, param_names, param_values, allocator);
-                if (tail_sel < head_sel) break :sel true;
-            }
-        }
-        break :sel false;
-    };
+    const seeded_from_tail = startsFromTail(adapter, plan.graph_name, chain, param_names, param_values, allocator);
     const start_pattern = if (seeded_from_tail)
         chain.hops[0].right
     else if (chain.head) |head|
@@ -908,6 +993,7 @@ fn executePatternQuery(
         chain.hops[0].left;
     const scan_op_index = 0;
     const scan_start_ns = nowNs();
+    var start_seek: ?StartSeek = null;
     const start_slots = try collectStartSlots(
         allocator,
         adapter,
@@ -918,10 +1004,12 @@ fn executePatternQuery(
         param_values,
         context,
         q.where_clause,
+        &start_seek,
     );
     defer allocator.free(start_slots);
     trace.ops[scan_op_index].rows = @intCast(start_slots.len);
     trace.ops[scan_op_index].time_ns = elapsedSince(scan_start_ns);
+    try recordStartAccess(allocator, context, &trace.ops[scan_op_index], start_pattern, start_seek);
 
     if (chain.hops.len == 0) {
         for (start_slots) |slot_id| {
@@ -967,14 +1055,8 @@ fn executePatternQuery(
         }
     }
 
-    const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-    const result = ExecutionResult{
-        .columns = column_result.columns,
-        .rows = try rows.toOwnedSlice(allocator),
-        .flags = std.ArrayList([]const u8).empty,
-        .column_buffer = column_result.buffer,
-        .owned_graph_entities = if (owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0) owned_entities else null,
-    };
+    const tracked = owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0;
+    const result = try bindingResult(allocator, plan, q, &rows, if (tracked) owned_entities else null);
     if (result.owned_graph_entities == null) {
         owned_entities.deinit();
     }
@@ -1046,13 +1128,8 @@ fn materializeNodeOnlyRow(
     rows: *std.ArrayList([]Value),
     owned_entities: *OwnedGraphEntities,
 ) !void {
-    var local_nodes = std.ArrayList(*graph_store.Node).empty;
-    defer local_nodes.deinit(allocator);
-    var local_edges = std.ArrayList(*graph_store.Edge).empty;
-    defer local_edges.deinit(allocator);
-
     const node = try materializeNode(allocator, plan.graph_name, node_slot);
-    try local_nodes.append(allocator, node);
+    try owned_entities.adoptNode(node);
 
     const binding_values = try allocator.alloc(Value, plan.binding_names.len);
     defer allocator.free(binding_values);
@@ -1071,12 +1148,12 @@ fn materializeNodeOnlyRow(
     };
 
     const row = try buildBindingRow(allocator, q, env, binding_values);
-    try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
+    read_budget.check() catch |err| {
+        allocator.free(row);
+        return err;
+    }; // T5: budget/cancel poll at the row-materialization boundary
     _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
-    try rows.append(allocator, row);
-    for (local_nodes.items) |tracked_node| {
-        try owned_entities.trackNode(tracked_node);
-    }
+    try appendRow(allocator, rows, row);
 }
 
 // ---------------------------------------------------------------------------
@@ -1110,17 +1187,13 @@ fn executeOptionalLeftOuter(
 
     var rows = std.ArrayList([]Value).empty;
     defer rows.deinit(allocator);
+    // SONNY-6498: the rows read, until the result holds them.
+    errdefer for (rows.items) |r| allocator.free(r);
     var owned_entities = try OwnedGraphEntities.init(allocator);
     errdefer owned_entities.deinit();
 
     if (!adapter.graphExists(plan.graph_name)) {
-        const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-        const empty_result = ExecutionResult{
-            .columns = column_result.columns,
-            .rows = try rows.toOwnedSlice(allocator),
-            .flags = std.ArrayList([]const u8).empty,
-            .column_buffer = column_result.buffer,
-        };
+        const empty_result = try bindingResult(allocator, plan, q, &rows, null);
         owned_entities.deinit();
         return empty_result;
     }
@@ -1147,6 +1220,7 @@ fn executeOptionalLeftOuter(
     // point-read seed anyway). where_clause is null by gate.
     const start_pattern = if (main_chain.head) |head| head else main_chain.hops[0].left;
     const scan_start_ns = nowNs();
+    var start_seek: ?StartSeek = null;
     const start_slots = try collectStartSlots(
         allocator,
         adapter,
@@ -1157,11 +1231,13 @@ fn executeOptionalLeftOuter(
         param_values,
         context,
         null,
+        &start_seek,
     );
     defer allocator.free(start_slots);
     if (trace.ops.len > 0) {
         trace.ops[0].rows = @intCast(start_slots.len);
         trace.ops[0].time_ns = elapsedSince(scan_start_ns);
+        try recordStartAccess(allocator, context, &trace.ops[0], start_pattern, start_seek);
     }
 
     const projection_plan = try buildProjectionPlan(allocator, q, plan);
@@ -1221,14 +1297,8 @@ fn executeOptionalLeftOuter(
         }
     }
 
-    const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-    const result = ExecutionResult{
-        .columns = column_result.columns,
-        .rows = try rows.toOwnedSlice(allocator),
-        .flags = std.ArrayList([]const u8).empty,
-        .column_buffer = column_result.buffer,
-        .owned_graph_entities = if (owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0) owned_entities else null,
-    };
+    const tracked = owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0;
+    const result = try bindingResult(allocator, plan, q, &rows, if (tracked) owned_entities else null);
     if (result.owned_graph_entities == null) {
         owned_entities.deinit();
     }
@@ -1341,16 +1411,16 @@ fn emitOptionalLeftOuterRow(
 
     if (plan.root_index) |idx| {
         const root_node = try materializeNodeForBinding(allocator, graph_name, node_slots[0], projection_plan, idx);
-        try owned_entities.trackNode(root_node);
+        try owned_entities.adoptNode(root_node);
         main_values[idx] = Value{ .Node = root_node };
     }
     for (plan.hops, 0..) |hop_binding, hop_idx| {
         const edge = try materializeEdge(allocator, graph_name, edge_steps[hop_idx]);
-        try owned_entities.trackEdge(edge);
+        try owned_entities.adoptEdge(edge);
         main_values[hop_binding.rel_index] = Value{ .Edge = edge };
 
         const right_node = try materializeNodeForBinding(allocator, graph_name, node_slots[hop_idx + 1], projection_plan, hop_binding.right_index);
-        try owned_entities.trackNode(right_node);
+        try owned_entities.adoptNode(right_node);
         main_values[hop_binding.right_index] = Value{ .Node = right_node };
     }
 
@@ -1368,9 +1438,9 @@ fn emitOptionalLeftOuterRow(
         }
 
         const opt_edge = try materializeEdge(allocator, graph_name, edge);
-        try owned_entities.trackEdge(opt_edge);
+        try owned_entities.adoptEdge(opt_edge);
         const opt_node = try materializeNodeForBinding(allocator, graph_name, edge.next_slot, projection_plan, oj.right_index);
-        try owned_entities.trackNode(opt_node);
+        try owned_entities.adoptNode(opt_node);
 
         const binding_values = try allocator.alloc(Value, plan.binding_names.len);
         defer allocator.free(binding_values);
@@ -1387,9 +1457,12 @@ fn emitOptionalLeftOuterRow(
             .exec_context = @constCast(&context),
         };
         const row = try buildBindingRow(allocator, q, env, binding_values);
-        try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
+        read_budget.check() catch |err| {
+            allocator.free(row);
+            return err;
+        }; // T5: budget/cancel poll at the row-materialization boundary
         _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
-        try rows.append(allocator, row);
+        try appendRow(allocator, rows, row);
         emitted += 1;
     }
 
@@ -1407,9 +1480,12 @@ fn emitOptionalLeftOuterRow(
             .exec_context = @constCast(&context),
         };
         const row = try buildBindingRow(allocator, q, env, binding_values);
-        try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
+        read_budget.check() catch |err| {
+            allocator.free(row);
+            return err;
+        }; // T5: budget/cancel poll at the row-materialization boundary
         _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
-        try rows.append(allocator, row);
+        try appendRow(allocator, rows, row);
     }
 }
 
@@ -1423,9 +1499,8 @@ fn emitOptionalLeftOuterRow(
 // engine-direct port of the clone-path oracle's BFS
 // (execution.PathIterator, driven by
 // match_operations.executeVariableLengthPathTraversal): a breadth-first expand
-// with ACYCLIC per-path semantics (no repeated node per path), a (node,depth)
-// expansion dedup (only the FIRST path to reach a (node,depth) state expands
-// further — emission of already-discovered paths is unaffected), and the same
+// with ACYCLIC per-path semantics (no repeated node per path), every path
+// expanding (SONNY-6264: no (node,depth) dedup), and the same
 // 10_000-iteration / 5_000-queue safety caps. Emission is ONE ROW PER
 // QUALIFYING PATH (duplicates allowed; downstream DISTINCT dedups); min_len==0
 // emits the seed as a 0-length path; the endpoint label/prop filter restricts
@@ -1468,7 +1543,7 @@ const VarLenExec = struct {
             return;
         }
         const endpoint_node = try materializeNode(self.allocator, self.graph_name, endpoint_slot);
-        try self.owned_entities.trackNode(endpoint_node);
+        try self.owned_entities.adoptNode(endpoint_node);
 
         const binding_values = try self.allocator.alloc(Value, self.plan.binding_names.len);
         defer self.allocator.free(binding_values);
@@ -1485,9 +1560,12 @@ const VarLenExec = struct {
             .exec_context = @constCast(&self.context),
         };
         const row = try buildBindingRow(self.allocator, self.q, env, binding_values);
-        try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
+        read_budget.check() catch |err| {
+            self.allocator.free(row);
+            return err;
+        }; // T5: budget/cancel poll at the row-materialization boundary
         _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
-        try self.rows.append(self.allocator, row);
+        try appendRow(self.allocator, self.rows, row);
     }
 
     fn cloneNodeSet(self: *VarLenExec, src: *const std.AutoHashMapUnmanaged(u64, void)) !std.AutoHashMapUnmanaged(u64, void) {
@@ -1511,7 +1589,7 @@ const VarLenExec = struct {
     fn runSeed(self: *VarLenExec, seed_slot: u64) !void {
         if (sessionIsRestricted(self.context)) return error.RestrictedSessionOnPlannedRead;
         const seed_node = try materializeNode(self.allocator, self.graph_name, seed_slot);
-        try self.owned_entities.trackNode(seed_node);
+        try self.owned_entities.adoptNode(seed_node);
 
         var queue: std.ArrayList(VarLenBfsItem) = .empty;
         var front: usize = 0;
@@ -1519,9 +1597,6 @@ const VarLenExec = struct {
             for (queue.items[front..]) |*it| it.node_set.deinit(self.allocator);
             queue.deinit(self.allocator);
         }
-        var visited: std.AutoHashMapUnmanaged(u64, void) = .empty;
-        defer visited.deinit(self.allocator);
-
         var seed_set: std.AutoHashMapUnmanaged(u64, void) = .empty;
         {
             errdefer seed_set.deinit(self.allocator);
@@ -1542,6 +1617,9 @@ const VarLenExec = struct {
 
             var current = queue.items[front];
             front += 1;
+            // SONNY-6498: the dequeued path's node set, when expanding it
+            // fails (the queue's defer frees only what is still queued).
+            errdefer current.node_set.deinit(self.allocator);
             const depth = current.depth;
 
             // At max depth: never expand further. Emit if depth>=min_len
@@ -1556,15 +1634,9 @@ const VarLenExec = struct {
                 continue;
             }
 
-            // (node, depth) expansion dedup: only the FIRST path to reach this
-            // state expands. Already-emitted paths are unaffected.
-            const state_key: u64 = current.last + (@as(u64, depth) << 32);
-            if (visited.contains(state_key)) {
-                current.node_set.deinit(self.allocator);
-                continue;
-            }
-            try visited.put(self.allocator, state_key, {});
-
+            // SONNY-6264: every path expands, as in `execution.PathIterator`
+            // (a later path through the same node at the same depth lost
+            // every extension).
             const edges = try collectHopEdges(self.allocator, self.adapter, self.graph_name, current.last, self.dir);
             defer self.allocator.free(edges);
             for (edges) |edge| {
@@ -1611,17 +1683,13 @@ fn executeVarLengthEndpoint(
 
     var rows = std.ArrayList([]Value).empty;
     defer rows.deinit(allocator);
+    // SONNY-6498: the rows read, until the result holds them.
+    errdefer for (rows.items) |r| allocator.free(r);
     var owned_entities = try OwnedGraphEntities.init(allocator);
     errdefer owned_entities.deinit();
 
     if (!adapter.graphExists(plan.graph_name)) {
-        const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-        const empty_result = ExecutionResult{
-            .columns = column_result.columns,
-            .rows = try rows.toOwnedSlice(allocator),
-            .flags = std.ArrayList([]const u8).empty,
-            .column_buffer = column_result.buffer,
-        };
+        const empty_result = try bindingResult(allocator, plan, q, &rows, null);
         owned_entities.deinit();
         return empty_result;
     }
@@ -1629,6 +1697,7 @@ fn executeVarLengthEndpoint(
     // Seed the start nodes from the bound seed pattern (where_clause is null by
     // gate). The endpoint filter is applied per emitted row, not here.
     const scan_start_ns = nowNs();
+    var start_seek: ?StartSeek = null;
     const start_slots = try collectStartSlots(
         allocator,
         adapter,
@@ -1639,11 +1708,13 @@ fn executeVarLengthEndpoint(
         param_values,
         context,
         null,
+        &start_seek,
     );
     defer allocator.free(start_slots);
     if (trace.ops.len > 0) {
         trace.ops[0].rows = @intCast(start_slots.len);
         trace.ops[0].time_ns = elapsedSince(scan_start_ns);
+        try recordStartAccess(allocator, context, &trace.ops[0], hop.left, start_seek);
     }
 
     var exec = VarLenExec{
@@ -1668,14 +1739,8 @@ fn executeVarLengthEndpoint(
         try exec.runSeed(seed_slot);
     }
 
-    const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-    const result = ExecutionResult{
-        .columns = column_result.columns,
-        .rows = try rows.toOwnedSlice(allocator),
-        .flags = std.ArrayList([]const u8).empty,
-        .column_buffer = column_result.buffer,
-        .owned_graph_entities = if (owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0) owned_entities else null,
-    };
+    const tracked = owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0;
+    const result = try bindingResult(allocator, plan, q, &rows, if (tracked) owned_entities else null);
     if (result.owned_graph_entities == null) {
         owned_entities.deinit();
     }
@@ -1767,8 +1832,18 @@ fn extractJoinPredicate(root: ast.Expr, chain_vars: []const ?[]const u8) ?JoinPr
     }
 }
 
-// Get a node property as a comparable string key using an arena allocator so
-// no explicit cleanup is needed — the arena frees everything at once.
+// Get a node property as a hash-join key using an arena allocator so no
+// explicit cleanup is needed — the arena frees everything at once. NULL (or
+// no property) joins nothing, as `=` with NULL is never true.
+//
+// SONNY-2807: the key is the canonical value key GROUP BY and DISTINCT use
+// (distinct_set.writeKey), so two values join exactly when they are one
+// group: numbers by exact value, whatever their type. The key was the text of
+// an INT ("i:1") or a DOUBLE ("f:1"), the raw bytes of a string, and nothing
+// for a decimal or any extended value: `MATCH (a:T), (b:T) WHERE a.x = b.x`
+// returned no row for decimal or DOUBLE-parameter properties, an INT never
+// joined a DOUBLE of the same value, and the string 'i:1' shared a key with
+// the integer 1.
 fn slotPropertyAsHashKey(
     arena: std.mem.Allocator,
     adapter: *graph_storage_adapter.StorageAdapter,
@@ -1777,14 +1852,11 @@ fn slotPropertyAsHashKey(
     prop_name: []const u8,
 ) !?[]const u8 {
     const maybe_val = adapter.getNodeProperty(graph_name, slot_id, prop_name, arena) catch return null;
-    const val = maybe_val orelse return null;
-    return switch (val) {
-        .string => |s| s,
-        .int => |i| try std.fmt.allocPrint(arena, "i:{d}", .{i}),
-        .bool => |b| @as([]const u8, if (b) "b:1" else "b:0"),
-        .float => |f| try std.fmt.allocPrint(arena, "f:{d}", .{f}),
-        else => null,
-    };
+    const stored = maybe_val orelse return null;
+    const decoded = try graph_storage_adapter.fromStorageProperty(arena, stored);
+    var key: std.Io.Writer.Allocating = .init(arena);
+    if (!try distinct_set.writeKey(&key.writer, arena, property_codec.propertyValueToValue(decoded))) return null;
+    return key.written();
 }
 
 fn materializeMultiChainRow(
@@ -1799,16 +1871,13 @@ fn materializeMultiChainRow(
     rows: *std.ArrayList([]Value),
     owned_entities: *OwnedGraphEntities,
 ) !void {
-    var local_nodes = std.ArrayList(*graph_store.Node).empty;
-    defer local_nodes.deinit(allocator);
-
     const binding_values = try allocator.alloc(Value, plan.binding_names.len);
     defer allocator.free(binding_values);
     for (binding_values) |*v| v.* = .{ .Null = {} };
 
     for (slot_ids, binding_indices) |slot_id, bind_idx| {
         const node = try materializeNode(allocator, plan.graph_name, slot_id);
-        try local_nodes.append(allocator, node);
+        try owned_entities.adoptNode(node);
         if (bind_idx < binding_values.len) {
             binding_values[bind_idx] = .{ .Node = node };
         }
@@ -1824,12 +1893,12 @@ fn materializeMultiChainRow(
     };
 
     const row = try buildBindingRow(allocator, q, env, binding_values);
-    try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
+    read_budget.check() catch |err| {
+        allocator.free(row);
+        return err;
+    }; // T5: budget/cancel poll at the row-materialization boundary
     _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
-    try rows.append(allocator, row);
-    for (local_nodes.items) |n| {
-        try owned_entities.trackNode(n);
-    }
+    try appendRow(allocator, rows, row);
 }
 
 fn nestedLoopCartesian(
@@ -1873,20 +1942,13 @@ fn executeMultiChainHashJoin(
 
     var rows = std.ArrayList([]Value).empty;
     defer rows.deinit(allocator);
+    // SONNY-6498: the rows read, until the result holds them.
+    errdefer for (rows.items) |r| allocator.free(r);
     var owned_entities = try OwnedGraphEntities.init(allocator);
     errdefer owned_entities.deinit();
 
     if (!adapter.graphExists(plan.graph_name)) {
-        const col_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-        // Release the tracker only after the last fallible step: a failed
-        // toOwnedSlice would otherwise run the errdefer on a freed tracker
-        // (same order as the other three early-return sites).
-        const empty_result = ExecutionResult{
-            .columns = col_result.columns,
-            .rows = try rows.toOwnedSlice(allocator),
-            .flags = std.ArrayList([]const u8).empty,
-            .column_buffer = col_result.buffer,
-        };
+        const empty_result = try bindingResult(allocator, plan, q, &rows, null);
         owned_entities.deinit();
         return empty_result;
     }
@@ -1926,6 +1988,7 @@ fn executeMultiChainHashJoin(
     for (q.match.chains, 0..) |chain, ci| {
         const root = if (chain.head) |head| head else chain.hops[0].left;
         const scan_start_ns = nowNs();
+        var start_seek: ?StartSeek = null;
         const slots = try collectStartSlots(
             allocator,
             adapter,
@@ -1936,11 +1999,13 @@ fn executeMultiChainHashJoin(
             param_values,
             context,
             null,
+            &start_seek,
         );
         all_slots_list.appendAssumeCapacity(slots);
         if (ci < trace.ops.len) {
             trace.ops[ci].rows = @intCast(slots.len);
             trace.ops[ci].time_ns = elapsedSince(scan_start_ns);
+            try recordStartAccess(allocator, context, &trace.ops[ci], root, start_seek);
         }
     }
 
@@ -2034,14 +2099,8 @@ fn executeMultiChainHashJoin(
         try nestedLoopCartesian(allocator, q, context, plan, all_slots, chain_binding_indices, param_names, param_values, &rows, owned_entities, slot_combo, 0, materialize_cap);
     }
 
-    const col_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
-    const result = ExecutionResult{
-        .columns = col_result.columns,
-        .rows = try rows.toOwnedSlice(allocator),
-        .flags = std.ArrayList([]const u8).empty,
-        .column_buffer = col_result.buffer,
-        .owned_graph_entities = if (owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0) owned_entities else null,
-    };
+    const tracked = owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0;
+    const result = try bindingResult(allocator, plan, q, &rows, if (tracked) owned_entities else null);
     if (result.owned_graph_entities == null) owned_entities.deinit();
     return result;
 }
@@ -2132,43 +2191,37 @@ fn buildProjectionPlan(
     // transfer ownership of the slice.
     for (projections, 0..) |*proj, idx| {
         switch (proj.*) {
+            // SONNY-6297: a list is left empty (`clearAndFree`), never
+            // undefined, and a failed `toOwnedSlice` frees only the slices
+            // already committed: the errdefers above free the lists and
+            // `projections`. The lists were freed here and again by them (a
+            // double free, a crash on an allocation failure).
             .unused => {
                 // Defensive: analyzer only promotes to .keys on member
                 // accesses; .unused + non-empty list shouldn't happen,
                 // but clean up just in case.
                 for (key_lists[idx].items) |k| allocator.free(k);
-                key_lists[idx].deinit(allocator);
+                key_lists[idx].clearAndFree(allocator);
             },
             .keys => {
                 const deduped = dedupInPlace(key_lists[idx].items, allocator);
                 // Truncate the list to the dedup length before transferring.
                 key_lists[idx].items = key_lists[idx].items[0..deduped];
                 const owned = key_lists[idx].toOwnedSlice(allocator) catch |err| {
-                    // toOwnedSlice on Zig 0.16 can OOM — treat as bail.
-                    // Free remaining keys and unwind.
-                    for (key_lists[idx].items) |k| allocator.free(k);
-                    key_lists[idx].deinit(allocator);
-                    // Free everything we already committed.
                     for (projections[0..idx]) |p| switch (p) {
                         .keys => |k| {
-                            for (k) |s| allocator.free(s);
+                            for (k) |key| allocator.free(key);
                             allocator.free(k);
                         },
                         else => {},
                     };
-                    // And the remaining scratch lists.
-                    for (key_lists[idx + 1 ..]) |*rest| {
-                        for (rest.items) |s| allocator.free(s);
-                        rest.deinit(allocator);
-                    }
-                    allocator.free(projections);
                     return err;
                 };
                 proj.* = .{ .keys = owned };
             },
             .full => {
                 for (key_lists[idx].items) |k| allocator.free(k);
-                key_lists[idx].deinit(allocator);
+                key_lists[idx].clearAndFree(allocator);
             },
         }
     }
@@ -2445,7 +2498,12 @@ fn analyzeLeafForProjection(
                 if (failed.*) return;
             }
         },
-        .List => |items| {
+        // CANARY: REQ=REQ-SONNY-3126-LIST-PROJECTION-LEAKS; FEATURE="PlannedReadProjection"; ASPECT=BracketListLiteralKeys; STATUS=TESTED; TEST=tests/test_sonny3126_list_projection_leaks.zig; OWNER=engine; UPDATED=2026-11-13
+        // SONNY-3126: a bracket list literal parses as `.ArrayLit`, whose
+        // elements are expressions; it was taken for a pure literal, so the
+        // keys its elements read were never fetched for a projected node
+        // and `RETURN [a.s, b.s]` over a relationship answered [null, null].
+        .List, .ArrayLit => |items| {
             for (items) |item| {
                 analyzeExprForProjection(allocator, item.*, plan, projections, key_lists, failed);
                 if (failed.*) return;
@@ -2503,7 +2561,6 @@ fn analyzeLeafForProjection(
         .DomainLit,
         .UuidLit,
         .EnumLit,
-        .ArrayLit,
         .BitLit,
         .VarBitLit,
         .Date,
@@ -2556,28 +2613,23 @@ fn materializePathRow(
     owned_entities: *OwnedGraphEntities,
     projection_plan: ?[]const BindingProjection,
 ) !void {
-    var local_nodes = std.ArrayList(*graph_store.Node).empty;
-    defer local_nodes.deinit(allocator);
-    var local_edges = std.ArrayList(*graph_store.Edge).empty;
-    defer local_edges.deinit(allocator);
-
     const binding_values = try allocator.alloc(Value, plan.binding_names.len);
     defer allocator.free(binding_values);
     for (binding_values) |*value| value.* = Value{ .Null = {} };
 
     if (plan.root_index) |idx| {
         const root_node = try materializeNodeForBinding(allocator, graph_name, node_slots[0], projection_plan, idx);
-        try local_nodes.append(allocator, root_node);
+        try owned_entities.adoptNode(root_node);
         binding_values[idx] = Value{ .Node = root_node };
     }
 
     for (plan.hops, 0..) |hop_binding, hop_idx| {
         const edge = try materializeEdge(allocator, graph_name, edge_steps[hop_idx]);
-        try local_edges.append(allocator, edge);
+        try owned_entities.adoptEdge(edge);
         binding_values[hop_binding.rel_index] = Value{ .Edge = edge };
 
         const right_node = try materializeNodeForBinding(allocator, graph_name, node_slots[hop_idx + 1], projection_plan, hop_binding.right_index);
-        try local_nodes.append(allocator, right_node);
+        try owned_entities.adoptNode(right_node);
         binding_values[hop_binding.right_index] = Value{ .Node = right_node };
     }
 
@@ -2591,15 +2643,12 @@ fn materializePathRow(
     };
 
     const row = try buildBindingRow(allocator, q, env, binding_values);
-    try read_budget.check(); // T5: budget/cancel poll at the row-materialization boundary
+    read_budget.check() catch |err| {
+        allocator.free(row);
+        return err;
+    }; // T5: budget/cancel poll at the row-materialization boundary
     _ = g_path_rows_materialized.fetchAdd(1, .monotonic);
-    try rows.append(allocator, row);
-    for (local_nodes.items) |node| {
-        try owned_entities.trackNode(node);
-    }
-    for (local_edges.items) |edge| {
-        try owned_entities.trackEdge(edge);
-    }
+    try appendRow(allocator, rows, row);
 }
 
 /// Route to the right materialize variant based on this binding's
@@ -2662,14 +2711,6 @@ fn propertyAccessMatches(expr: ast.Expr, pattern_name: []const u8) ?[]const u8 {
     };
 }
 
-/// Whether the double nearest `i` is `i` itself (always within 2^53).
-fn doubleHoldsExactly(i: i64) bool {
-    const f: f64 = @floatFromInt(i);
-    // maxInt(i64) rounds up to 2^63, which no i64 holds.
-    if (f >= 0x1p63) return false;
-    return @as(i64, @intFromFloat(f)) == i;
-}
-
 fn tryExtractPatternEqPredicate(
     pattern_name: ?[]const u8,
     where: ast.Expr,
@@ -2695,6 +2736,90 @@ fn tryExtractPatternEqPredicate(
     return null;
 }
 
+/// SONNY-6276: the exact-property seek `collectStartSlots` starts `pattern`
+/// with: the key and value it looks up, or null when it scans the label. EXPLAIN asks
+/// the same question (`nodeCanUseIndex`), so the plan names the access path
+/// the executor takes.
+const StartSeedChoice = struct {
+    key: []const u8,
+    pv: graph_store.PropertyValue,
+};
+
+fn chooseStartSeed(
+    allocator: std.mem.Allocator,
+    adapter: *graph_storage_adapter.StorageAdapter,
+    graph_name: []const u8,
+    pattern: ast.NodePattern,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    where_clause: ?ast.Expr,
+) ?StartSeedChoice {
+    if (pattern.labels.len != 1) return null;
+
+    var seed: ?StartSeedChoice = null;
+    if (pattern.props) |props| {
+        if (props.len == 0) return null;
+        const prop_env = Env{
+            .names = &.{},
+            .values = &.{},
+            .param_names = param_names,
+            .param_values = param_values,
+            .allocator = allocator,
+        };
+        var best_len: usize = std.math.maxInt(usize);
+        for (props) |prop| {
+            if (pattern_helpers.containsVariableReference(prop.value.*)) continue;
+            // GAP-0900 Layer-3 (Fix 2): in lean-index mode only MERGE/declared
+            // keys are present in the exact property index. An empty result from
+            // a non-indexed key is meaningless — skip it and try the next prop.
+            // No-op when lean mode is off (shouldIndexProperty is then true for all).
+            if (!graph_store.shouldIndexProperty(prop.key)) continue;
+            const expected_val = eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, prop_env) catch continue;
+            const pv: graph_store.PropertyValue = switch (expected_val) {
+                .Str => |s| .{ .String = s },
+                .Int => |i| .{ .Int = i },
+                .Bool => |b| .{ .Bool = b },
+                else => continue,
+            };
+            const plen = adapter.countCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], prop.key, pv) catch continue;
+            if (plen < best_len) {
+                best_len = plen;
+                seed = .{ .key = prop.key, .pv = pv };
+                // zero postings = authoritative miss for an indexed key;
+                // one posting = unique hit — neither can be beaten by any other prop.
+                if (plen <= 1) break;
+            }
+        }
+        if (seed == null) return null; // no indexed prop → fall to label-scan path
+    } else if (where_clause) |wc| {
+        const extracted = tryExtractPatternEqPredicate(pattern.name, wc) orelse return null;
+        // GAP-0900 Layer-3 (Fix 2): same lean-index guard as the props arm above.
+        if (!graph_store.shouldIndexProperty(extracted.key)) return null;
+        const prop_env = Env{
+            .names = &.{},
+            .values = &.{},
+            .param_names = param_names,
+            .param_values = param_values,
+            .allocator = allocator,
+        };
+        const expected_val = eval.evalExpr(value_utilities.lentAllocator(allocator), extracted.value.*, prop_env) catch return null;
+        const seed_pv: graph_store.PropertyValue = switch (expected_val) {
+            .Str => |s| graph_store.PropertyValue{ .String = s },
+            // SONNY-2807: `=` compares numbers by exact value, as the
+            // exact index keys them, so the integer's own posting is every
+            // node `=` can find (a stored DOUBLE 2^53 is not 2^53 + 1).
+            .Int => |i| graph_store.PropertyValue{ .Int = i },
+            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+            else => return null,
+        };
+        seed = .{ .key = extracted.key, .pv = seed_pv };
+    } else {
+        return null;
+    }
+
+    return seed;
+}
+
 fn collectStartSlots(
     allocator: std.mem.Allocator,
     adapter: *graph_storage_adapter.StorageAdapter,
@@ -2706,7 +2831,10 @@ fn collectStartSlots(
     param_values: []const Value,
     context: ExecutionContext,
     where_clause: ?ast.Expr,
+    /// SONNY-1335: set to the exact-index seek the slots came from, if any.
+    seek_out: ?*?StartSeek,
 ) ![]u64 {
+    if (seek_out) |o| o.* = null;
     if (!adapter.graphExists(graph_name)) {
         return try allocator.alloc(u64, 0);
     }
@@ -2742,8 +2870,6 @@ fn collectStartSlots(
     // if the extracted predicate is a subset of WHERE, correctness is
     // preserved.
     fp: {
-        if (pattern.labels.len != 1) break :fp;
-
         // GAP-ENT-0001 Bug A fix: pick the most-selective indexed inline prop
         // (mirrors node_scan_stream.seekIndexedCandidates). Previously the block
         // required exactly ONE inline prop and bailed for composite patterns —
@@ -2754,94 +2880,12 @@ fn collectStartSlots(
         // per-candidate verification by nodeMatchesPatternBySlot (invariant 2).
         // Seed key+value are set atomically so neither is ever valid without
         // the other — eliminates the `undefined` field and the dead `orelse`.
-        var seed: ?struct { key: []const u8, pv: graph_store.PropertyValue } = null;
-        // SONNY-2807: the WHERE arm's second seek, for an integer no double
-        // holds (see below).
-        var nearest_double: ?graph_store.PropertyValue = null;
-
-        if (pattern.props) |props| {
-            if (props.len == 0) break :fp;
-            const prop_env = Env{
-                .names = &.{},
-                .values = &.{},
-                .param_names = param_names,
-                .param_values = param_values,
-                .allocator = allocator,
-            };
-            var best_len: usize = std.math.maxInt(usize);
-            for (props) |prop| {
-                if (pattern_helpers.containsVariableReference(prop.value.*)) continue;
-                // GAP-0900 Layer-3 (Fix 2): in lean-index mode only MERGE/declared
-                // keys are present in the exact property index. An empty result from
-                // a non-indexed key is meaningless — skip it and try the next prop.
-                // No-op when lean mode is off (shouldIndexProperty is then true for all).
-                if (!graph_store.shouldIndexProperty(prop.key)) continue;
-                const expected_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch continue;
-                const pv: graph_store.PropertyValue = switch (expected_val) {
-                    .Str => |s| .{ .String = s },
-                    .Int => |i| .{ .Int = i },
-                    .Bool => |b| .{ .Bool = b },
-                    else => continue,
-                };
-                const plen = adapter.countCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], prop.key, pv) catch continue;
-                if (plen < best_len) {
-                    best_len = plen;
-                    seed = .{ .key = prop.key, .pv = pv };
-                    // zero postings = authoritative miss for an indexed key;
-                    // one posting = unique hit — neither can be beaten by any other prop.
-                    if (plen <= 1) break;
-                }
-            }
-            if (seed == null) break :fp; // no indexed prop → fall to label-scan path
-        } else if (where_clause) |wc| {
-            const extracted = tryExtractPatternEqPredicate(pattern.name, wc) orelse break :fp;
-            // GAP-0900 Layer-3 (Fix 2): same lean-index guard as the props arm above.
-            if (!graph_store.shouldIndexProperty(extracted.key)) break :fp;
-            const prop_env = Env{
-                .names = &.{},
-                .values = &.{},
-                .param_names = param_names,
-                .param_values = param_values,
-                .allocator = allocator,
-            };
-            const expected_val = eval.evalExpr(allocator, extracted.value.*, prop_env) catch break :fp;
-            const seed_pv: graph_store.PropertyValue = switch (expected_val) {
-                .Str => |s| graph_store.PropertyValue{ .String = s },
-                .Int => |i| blk: {
-                    // SONNY-2807: `=` compares a stored DOUBLE with an
-                    // integer in a double, and the seek finds the nodes whose
-                    // value is exactly the integer. Past 2^53 a double may
-                    // not hold the integer: `n.x = 9007199254740993` is true
-                    // for a stored DOUBLE 2^53, which the seek missed. Seek
-                    // the nearest double too; the WHERE filter that follows
-                    // drops what `=` does not keep.
-                    const nearest: f64 = @floatFromInt(i);
-                    if (!doubleHoldsExactly(i)) nearest_double = .{ .Float = nearest };
-                    break :blk graph_store.PropertyValue{ .Int = i };
-                },
-                .Bool => |b| graph_store.PropertyValue{ .Bool = b },
-                else => break :fp,
-            };
-            seed = .{ .key = extracted.key, .pv = seed_pv };
-        } else {
-            break :fp;
-        }
-
-        const s = seed orelse break :fp;
-        const exact = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], s.key, s.pv, allocator) catch break :fp;
-        const candidates = if (nearest_double) |d| blk: {
-            defer allocator.free(exact);
-            const near = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], s.key, d, allocator) catch break :fp;
-            defer allocator.free(near);
-            // Two values, two postings: disjoint but for a hash collision.
-            var both = try std.ArrayList(u64).initCapacity(allocator, exact.len + near.len);
-            errdefer both.deinit(allocator);
-            both.appendSliceAssumeCapacity(exact);
-            for (near) |slot| {
-                if (std.mem.indexOfScalar(u64, exact, slot) == null) both.appendAssumeCapacity(slot);
-            }
-            break :blk try both.toOwnedSlice(allocator);
-        } else exact;
+        // SONNY-6276: the same seed decision EXPLAIN asks. SONNY-2807: `=`
+        // compares numbers by exact value, as the exact index keys them, so
+        // the seed's own posting is every node `=` can find (no probe of the
+        // nearest double).
+        const s = chooseStartSeed(allocator, adapter, graph_name, pattern, param_names, param_values, where_clause) orelse break :fp;
+        const candidates = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], s.key, s.pv, allocator) catch break :fp;
         defer allocator.free(candidates);
 
         var verified = try std.ArrayList(u64).initCapacity(allocator, candidates.len);
@@ -2851,7 +2895,9 @@ fn collectStartSlots(
                 try verified.append(allocator, slot_id);
             }
         }
-        return try verified.toOwnedSlice(allocator);
+        const out = try verified.toOwnedSlice(allocator);
+        if (seek_out) |o| o.* = .{ .label = pattern.labels[0], .key = s.key };
+        return out;
     }
 
     const initial = if (pattern.labels.len > 0)
@@ -2936,9 +2982,10 @@ fn collectHopEdges(
 
     switch (dir) {
         .right => {
-            var out = try adapter.iterateOutgoingEdges(graph_name, node_slot, allocator);
-            defer out.deinit();
-            while (try out.next()) |entry| {
+            // SONNY-6498: the engine's slice (`getOutgoingEdges`).
+            const out = try adapter.getOutgoingEdges(graph_name, node_slot, allocator);
+            defer allocator.free(out);
+            for (out) |entry| {
                 try edges.append(allocator, .{
                     .edge_id = entry.edge_id,
                     .actual_from_slot = node_slot,
@@ -2950,16 +2997,17 @@ fn collectHopEdges(
             }
         },
         .left => {
-            var incoming = try adapter.iterateIncomingEdges(graph_name, node_slot, allocator);
-            defer incoming.deinit();
-            while (try incoming.next()) |entry| {
+            const incoming = try adapter.getIncomingEdges(graph_name, node_slot, allocator);
+            defer allocator.free(incoming);
+            for (incoming) |entry| {
                 try edges.append(allocator, .{
                     .edge_id = entry.edge_id,
                     .actual_from_slot = entry.neighbor,
                     .actual_to_slot = node_slot,
                     .next_slot = entry.neighbor,
                     .rel_type = entry.rel_type,
-                    .prop_head = entry.prop_head,
+                    // SONNY-6266: from the edge index (`edgePropHeadFromIndex`).
+                    .prop_head = try adapter.edgePropHeadFromIndex(graph_name, entry.neighbor, entry.edge_id, entry.prop_head),
                 });
             }
         },
@@ -2967,9 +3015,10 @@ fn collectHopEdges(
             var seen = std.AutoHashMap(u64, void).init(allocator);
             defer seen.deinit();
 
-            var out = try adapter.iterateOutgoingEdges(graph_name, node_slot, allocator);
-            defer out.deinit();
-            while (try out.next()) |entry| {
+            // SONNY-6498: the engine's slice (`getOutgoingEdges`).
+            const out = try adapter.getOutgoingEdges(graph_name, node_slot, allocator);
+            defer allocator.free(out);
+            for (out) |entry| {
                 if (seen.contains(entry.edge_id)) continue;
                 try seen.put(entry.edge_id, {});
                 try edges.append(allocator, .{
@@ -2982,9 +3031,9 @@ fn collectHopEdges(
                 });
             }
 
-            var incoming = try adapter.iterateIncomingEdges(graph_name, node_slot, allocator);
-            defer incoming.deinit();
-            while (try incoming.next()) |entry| {
+            const incoming = try adapter.getIncomingEdges(graph_name, node_slot, allocator);
+            defer allocator.free(incoming);
+            for (incoming) |entry| {
                 if (seen.contains(entry.edge_id)) continue;
                 try seen.put(entry.edge_id, {});
                 try edges.append(allocator, .{
@@ -2993,7 +3042,8 @@ fn collectHopEdges(
                     .actual_to_slot = node_slot,
                     .next_slot = entry.neighbor,
                     .rel_type = entry.rel_type,
-                    .prop_head = entry.prop_head,
+                    // SONNY-6266: from the edge index (`edgePropHeadFromIndex`).
+                    .prop_head = try adapter.edgePropHeadFromIndex(graph_name, entry.neighbor, entry.edge_id, entry.prop_head),
                 });
             }
         },
@@ -3073,14 +3123,17 @@ fn propsMatch(
     context: ExecutionContext,
 ) !bool {
     for (props) |prop| {
-        const expected = eval.evalExpr(allocator, prop.value.*, Env{
+        // SONNY-6483 (4): a value that fails to evaluate fails the read
+        // (ISO/IEC 39075 19.1 GR 1); it was no match. What it computes is
+        // lent from the statement's scratch arena.
+        const expected = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, Env{
             .names = &.{},
             .values = &.{},
             .param_names = param_names,
             .param_values = param_values,
             .allocator = allocator,
             .exec_context = @constCast(&context),
-        }) catch return false;
+        });
         const actual = actual_props.get(prop.key) orelse return false;
         // SONNY-2806: by value, as the legacy executor compares (a decimal by
         // representation, a DOUBLE and every extended value never). A stored
@@ -3145,6 +3198,7 @@ fn materializeNodeProjected(
         try node.properties.put(owned_key, decoded);
     }
 
+    chargeScratchInterior(node.graph_name, node.labels, &node.properties, null);
     return node;
 }
 
@@ -3190,6 +3244,7 @@ pub fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slo
         try node.properties.put(key, value);
     }
 
+    chargeScratchInterior(node.graph_name, node.labels, &node.properties, null);
     return node;
 }
 
@@ -3233,6 +3288,7 @@ fn materializeEdge(allocator: std.mem.Allocator, graph_name: []const u8, edge_st
         try edge.properties.put(key, value);
     }
 
+    chargeScratchInterior(edge.graph_name, &.{}, &edge.properties, edge.label);
     return edge;
 }
 
@@ -3315,6 +3371,33 @@ fn buildBindingColumns(
     return .{ .columns = columns.columns, .buffer = columns.buffer };
 }
 
+// CANARY: REQ=REQ-SONNY-6498-ERROR-PATH-OWNERSHIP; FEATURE="ExecutionResultOwnership"; ASPECT=PlannedReadRows; STATUS=TESTED; TEST=tests/test_sonny6297_allocation_failure_sweep.zig; OWNER=execution; UPDATED=2026-11-13
+/// SONNY-6498: the rows read and the binding columns as a result. On a
+/// failed allocation nothing leaves `rows` (the caller frees them); the
+/// columns and the rows' slice leaked when the second allocation failed.
+fn bindingResult(allocator: std.mem.Allocator, plan: *const Plan, q: *const ast.Query, rows: *std.ArrayList([]Value), entities: ?*OwnedGraphEntities) !ExecutionResult {
+    const column_result = try buildBindingColumns(allocator, plan.binding_names, q.inline_let_bindings);
+    errdefer {
+        allocator.free(column_result.buffer);
+        allocator.free(column_result.columns);
+    }
+    return .{
+        .columns = column_result.columns,
+        .rows = try rows.toOwnedSlice(allocator),
+        .flags = std.ArrayList([]const u8).empty,
+        .column_buffer = column_result.buffer,
+        .owned_graph_entities = entities,
+    };
+}
+
+/// SONNY-6498: `row` appended to `rows`, freed when it cannot be.
+fn appendRow(allocator: std.mem.Allocator, rows: *std.ArrayList([]Value), row: []Value) !void {
+    rows.append(allocator, row) catch |err| {
+        allocator.free(row);
+        return err;
+    };
+}
+
 fn buildBindingRow(
     allocator: std.mem.Allocator,
     q: *const ast.Query,
@@ -3323,6 +3406,7 @@ fn buildBindingRow(
 ) ![]Value {
     const total_values = binding_values.len + q.inline_let_bindings.len;
     const row = try allocator.alloc(Value, total_values);
+    errdefer allocator.free(row);
 
     for (binding_values, 0..) |value, idx| {
         row[idx] = value;
@@ -3372,7 +3456,19 @@ fn applyResultFilters(
     var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, result.rows.len);
     defer filtered_rows.deinit(allocator);
 
-    for (result.rows) |row| {
+    // CANARY: REQ=REQ-SONNY-6296-PLANNED-WHERE-ERRORS; FEATURE="PlannedRead"; ASPECT=WhereErrorsFailTheQuery; STATUS=TESTED; TEST=tests/test_sonny6296_legacy_read_gaps.zig; OWNER=execution; UPDATED=2026-11-13
+    // SONNY-6296 (5): an error evaluating the WHERE or the FILTER for a row
+    // fails the query (ISO/IEC 39075:2024 19.1 GR 1 evaluates the search
+    // condition for every row; an exception it raises is the statement's),
+    // as on the other executors. Only a limit (SONNY-3251) and an FLE read
+    // refusal (SONNY-6327) did; any other error was the row's false, so
+    // `WHERE t.k + 9223372036854775807 > 0` answered over the rows that did
+    // not overflow. Every row is decided before any is freed: an error
+    // leaves `result` whole for the caller to free once (a row freed here
+    // before a later row's error was freed again).
+    const keep = try allocator.alloc(bool, result.rows.len);
+    defer allocator.free(keep);
+    for (result.rows, keep) |row, *k| {
         const env = Env{
             .names = result.columns,
             .values = row,
@@ -3381,32 +3477,21 @@ fn applyResultFilters(
             .allocator = allocator,
             .exec_context = @constCast(&context),
         };
-
-        // SONNY-3251 (round 15, F6): a limit (54001, 53200, 57014) is the
-        // query's; any other error is the row's false, as it was.
-        const passes_where = if (where_expr) |expr|
-            truthyPredicate(eval.evalExpr(allocator, expr, env) catch |err| if (eval.isResourceLimitError(err)) return err else Value{ .Bool = false })
-        else
-            true;
-        if (!passes_where) {
-            allocator.free(row);
-            continue;
-        }
-
-        const passes_filter = if (filter_expr) |expr|
-            truthyPredicate(eval.evalExpr(allocator, expr, env) catch |err| if (eval.isResourceLimitError(err)) return err else Value{ .Bool = false })
-        else
-            true;
-        if (!passes_filter) {
-            allocator.free(row);
-            continue;
-        }
-
-        try filtered_rows.append(allocator, row);
+        const passes_where = if (where_expr) |expr| truthyPredicate(try eval.evalExpr(value_utilities.lentAllocator(allocator), expr, env)) else true;
+        k.* = passes_where and if (filter_expr) |expr| truthyPredicate(try eval.evalExpr(value_utilities.lentAllocator(allocator), expr, env)) else true;
     }
-
+    for (result.rows, keep) |row, k| {
+        if (k) filtered_rows.appendAssumeCapacity(row);
+    }
+    // SONNY-6525: the kept rows' slice is made before any dropped row is
+    // freed: a failed allocation leaves `result` whole (it freed the dropped
+    // rows first, and the caller freed them again).
+    const kept = try filtered_rows.toOwnedSlice(allocator);
+    for (result.rows, keep) |row, k| {
+        if (!k) allocator.free(row);
+    }
     const old_rows = result.rows;
-    result.rows = try filtered_rows.toOwnedSlice(allocator);
+    result.rows = kept;
     allocator.free(old_rows);
     trace_op.rows = @intCast(result.rows.len);
     trace_op.time_ns = elapsedSince(start_ns);
@@ -3504,22 +3589,11 @@ fn resolveWindowValue(
     return null;
 }
 
-fn passesPredicates(allocator: std.mem.Allocator, q: *const ast.Query, env: Env) bool {
-    if (q.where_clause) |where_expr| {
-        const value = eval.evalExpr(allocator, where_expr, env) catch return false;
-        if (!truthyPredicate(value)) return false;
-    }
-    if (q.filter_clause) |filter_expr| {
-        const value = eval.evalExpr(allocator, filter_expr, env) catch return false;
-        if (!truthyPredicate(value)) return false;
-    }
-    return true;
-}
-
+/// SONNY-6425: only the Boolean True keeps a row (ISO/IEC 39075 19.1 GR2);
+/// a non-zero integer did.
 fn truthyPredicate(value: Value) bool {
     return switch (value) {
         .Bool => |boolean| boolean,
-        .Int => |integer| integer != 0,
         else => false,
     };
 }
@@ -3598,14 +3672,18 @@ fn ensureBinding(
                 return idx;
             }
         }
-        try names.append(allocator, try allocator.dupe(u8, name));
-        try kinds.append(allocator, kind);
+        // SONNY-6498: both lists grow first, so the copy is never dropped.
+        try names.ensureUnusedCapacity(allocator, 1);
+        try kinds.ensureUnusedCapacity(allocator, 1);
+        names.appendAssumeCapacity(try allocator.dupe(u8, name));
+        kinds.appendAssumeCapacity(kind);
         return names.items.len - 1;
     }
 
-    const generated = try std.fmt.allocPrint(allocator, "__planned_{s}_{d}", .{ prefix, ordinal });
-    try names.append(allocator, generated);
-    try kinds.append(allocator, kind);
+    try names.ensureUnusedCapacity(allocator, 1);
+    try kinds.ensureUnusedCapacity(allocator, 1);
+    names.appendAssumeCapacity(try std.fmt.allocPrint(allocator, "__planned_{s}_{d}", .{ prefix, ordinal }));
+    kinds.appendAssumeCapacity(kind);
     return names.items.len - 1;
 }
 
@@ -3631,83 +3709,80 @@ fn estimateScanRows(allocator: std.mem.Allocator, graph_name: []const u8, patter
     return adapter.nodeCount(graph_name) catch 0;
 }
 
-// CANARY: REQ=REQ-AUTO-INDEX-EXPLAIN-004; FEATURE="AutoIdIndex"; ASPECT=PlanIndexSeek; STATUS=IMPL; OWNER=planner; UPDATED=2026-04-02
-/// Returns true if the catalog has an index on the given label+property pair,
-/// enabling the planner to choose IndexSeek over LabelScan.
-fn labelHasIndexForProp(context: ExecutionContext, label: []const u8, prop: []const u8) bool {
+// CANARY: REQ=REQ-SONNY-1335-PROFILE-ACCESS-PATH; FEATURE="PROFILE"; ASPECT=CatalogIndexForSeek; STATUS=TESTED; TEST=tests/test_sonny1335_profile_access_path.zig; OWNER=engine; UPDATED=2026-11-11
+/// SONNY-1335: the name of the catalog index that serves an equality seek on
+/// `label`.`prop`, duplicated into `allocator`, or null when there is none.
+/// Only a btree or hash index serves an equality (a fulltext, vector or
+/// spatial index on the same property does not). When several do, the
+/// smallest name, so the answer does not depend on hash map order. Only the
+/// session graph's rows count (SONNY-6707; SONNY-1319 made index rows
+/// graph-scoped): the index SHOW INDEXES lists for the label and property in
+/// that graph, an engine-wide legacy row included, never another graph's.
+pub fn equalityIndexName(allocator: std.mem.Allocator, context: ExecutionContext, label: []const u8, prop: []const u8) !?[]u8 {
     const cat = context.catalog;
+    const graph_name = resolveGraphName(context);
     cat.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer cat.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+    var best: ?[]const u8 = null;
     var iter = cat.indexes.valueIterator();
     while (iter.next()) |info| {
-        if (std.mem.eql(u8, info.table_name, label) and
-            info.columns.len > 0 and
-            std.mem.eql(u8, info.columns[0], prop))
-        {
-            return true;
-        }
+        if (!catalog_mod.rowInGraph(info.graph, graph_name)) continue;
+        if (!std.mem.eql(u8, info.table_name, label)) continue;
+        if (info.columns.len == 0 or !std.mem.eql(u8, info.columns[0], prop)) continue;
+        if (!std.mem.eql(u8, info.index_type, "btree") and !std.mem.eql(u8, info.index_type, "hash")) continue;
+        if (best == null or std.mem.lessThan(u8, info.name, best.?)) best = info.name;
     }
-    return false;
+    const name = best orelse return null;
+    return try allocator.dupe(u8, name);
 }
 
-/// Returns true if the node has an inline property that matches a catalog index,
-/// or if the WHERE clause contains an equality on an indexed property.
-fn nodeCanUseIndex(context: ExecutionContext, node: ast.NodePattern, where_clause: ?ast.Expr) bool {
-    if (node.labels.len == 0) return false;
-    const label = node.labels[0];
+/// SONNY-1335: the exact-index seek `collectStartSlots` collected its start
+/// slots with. Borrowed from the pattern (or the WHERE clause) it was given.
+const StartSeek = struct {
+    label: []const u8,
+    key: []const u8,
+};
 
-    // Check inline properties (MATCH (n:Label {prop: value}))
-    if (node.props) |props| {
-        for (props) |prop| {
-            if (labelHasIndexForProp(context, label, prop.key)) return true;
-        }
-    }
-
-    // Check WHERE clause equality (MATCH (n:Label) WHERE n.prop = value)
-    if (where_clause) |where| {
-        if (node.name) |var_name| {
-            return whereClauseHasIndexedEquality(where, var_name, label, context);
-        }
-    }
-    return false;
+/// SONNY-1335: record on a scan operator the access path its start slots were
+/// collected with. A seek is reported as `IndexSeek`, named after the catalog
+/// index that serves it, only when `collectStartSlots` seeked AND a catalog
+/// index covers the label and key; anything else is the scan it was (an
+/// equality the internal exact-property lookup answered without a declared
+/// index reports a scan, as EXPLAIN does).
+fn recordStartAccess(
+    allocator: std.mem.Allocator,
+    context: ExecutionContext,
+    op: *RuntimeOp,
+    pattern: ast.NodePattern,
+    seek: ?StartSeek,
+) !void {
+    op.kind = if (pattern.labels.len > 0) .LabelScan else .AllNodesScan;
+    const s = seek orelse return;
+    const name = (try equalityIndexName(allocator, context, s.label, s.key)) orelse return;
+    if (op.index_name) |old| allocator.free(old);
+    op.index_name = name;
+    op.kind = .IndexSeek;
 }
 
-fn whereClauseHasIndexedEquality(root: ast.Expr, var_name: []const u8, label: []const u8, context: ExecutionContext) bool {
-    // SONNY-3189: down an AND chain with a loop, not one recursion per AND.
-    var at: *const ast.Expr = &root;
-    while (at.* == .Binary and at.Binary.op == .And) {
-        if (whereClauseHasIndexedEquality(at.Binary.right.*, var_name, label, context)) return true;
-        at = at.Binary.left;
-    }
-    const expr = at.*;
-    switch (expr) {
-        .Binary => |bin| {
-            if (bin.op == .And) {
-                if (whereClauseHasIndexedEquality(bin.left.*, var_name, label, context)) return true;
-                return whereClauseHasIndexedEquality(bin.right.*, var_name, label, context);
-            }
-            if (bin.op == .Eq) {
-                const prop = extractVarPropName(bin.left.*, var_name) orelse
-                    extractVarPropName(bin.right.*, var_name) orelse return false;
-                return labelHasIndexForProp(context, label, prop);
-            }
-            return false;
-        },
-        else => return false,
-    }
-}
-
-fn extractVarPropName(expr: ast.Expr, var_name: []const u8) ?[]const u8 {
-    switch (expr) {
-        .PropertyAccess => |pa| {
-            if (std.mem.eql(u8, pa.object, var_name)) return pa.property;
-        },
-        .Member => |m| {
-            if (m.target.* == .Ident and std.mem.eql(u8, m.target.Ident.orig, var_name)) return m.field;
-        },
-        else => {},
-    }
-    return null;
+// CANARY: REQ=REQ-AUTO-INDEX-EXPLAIN-004; FEATURE="AutoIdIndex"; ASPECT=PlanIndexSeek; STATUS=TESTED; TEST=tests/test_sonny6276_explain_access_path.zig; OWNER=planner; UPDATED=2026-11-13
+// CANARY: REQ=REQ-SONNY-6276-EXPLAIN-ACCESS-PATH; FEATURE="EXPLAIN"; ASPECT=PlanMatchesExecutorSeek; STATUS=TESTED; TEST=tests/test_sonny6276_explain_access_path.zig; OWNER=engine; UPDATED=2026-11-13
+/// SONNY-6276: whether the executor starts `node` with an index seek, as
+/// PROFILE reports it (`recordStartAccess`): `collectStartSlots` seeks on a
+/// key (`chooseStartSeed`, the same decision) and a catalog btree or hash
+/// index covers the label and that key. It answered true for an index of any
+/// type (a fulltext one too) on any inline property, and for an indexed
+/// equality anywhere in an AND chain, where the executor seeks only on a
+/// WHERE that is one equality.
+fn nodeCanUseIndex(allocator: std.mem.Allocator, context: ExecutionContext, node: ast.NodePattern, where_clause: ?ast.Expr) bool {
+    const adapter = graph_store.getGlobalAdapter() orelse return false;
+    const graph_name = resolveGraphName(context);
+    if (!adapter.graphExists(graph_name)) return false;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const seed = chooseStartSeed(a, adapter, graph_name, node, context.query_param_names, context.query_param_values, where_clause) orelse return false;
+    const name = equalityIndexName(a, context, node.labels[0], seed.key) catch return false;
+    return name != null;
 }
 
 fn resolveGraphName(context: ExecutionContext) []const u8 {
@@ -3921,7 +3996,7 @@ fn appendLegacyPlanOps(
 
     if (q.with_clause) |with_clause| {
         try ops.append(allocator, .{
-            .kind = if (q.group_by != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project,
+            .kind = if (q.withStageGroupBy() != null or hasAggregationItems(with_clause.items)) .Aggregate else .Project,
         });
         if (with_clause.distinct) {
             try ops.append(allocator, .{ .kind = .Distinct });
@@ -3939,7 +4014,7 @@ fn appendLegacyPlanOps(
 
     if (needsFinalProjection(q)) {
         try ops.append(allocator, .{
-            .kind = if ((q.with_clause == null and q.group_by != null) or hasAggregationItems(q.ret.items)) .Aggregate else .Project,
+            .kind = if (q.returnStageGroupBy() != null or hasAggregationItems(q.ret.items)) .Aggregate else .Project,
         });
         if (q.ret.distinct) {
             try ops.append(allocator, .{ .kind = .Distinct });
@@ -3967,6 +4042,13 @@ fn isAllSimpleNodeMultiChain(q: *const ast.Query) bool {
     for (q.match.chains) |chain| {
         if (chain.is_optional or chain.is_shortest or chain.path_mode != .walk) return false;
         if (chain.hops.len > 0) return false;
+        // SONNY-6498: a property value that reads another chain's variable
+        // (`MATCH (n), (t {k: n.k})`) is the legacy executor's: each chain's
+        // start slots are filtered here with no variable bound, so the value
+        // read NULL and the chain matched nothing (an error in it was lost).
+        if (chain.head) |head| if (head.props) |props| for (props) |prop| {
+            if (pattern_helpers.containsVariableReference(prop.value.*)) return false;
+        };
     }
     return true;
 }
@@ -3988,6 +4070,9 @@ pub fn isStorageNativeReadShape(q: *const ast.Query) bool {
 
 fn isStorageNativeQuery(q: *const ast.Query) bool {
     if (q.next_query != null) return false;
+    // SONNY-6335 (3): an inline map on an FLE-encrypted field compares as
+    // WHERE reads it, in the executor (`propsMatch` compares stored bytes).
+    if (pattern_helpers.patternMapsNameEncryptedField(q.match)) return false;
     // A `WITH … FOR …` shape must NOT be served as a plain WITH projection —
     // the storage-native path would drop the FOR body entirely (write loss for
     // `WITH … FOR … CREATE`, and a collapsed one-row result for a read-bodied

@@ -3,7 +3,7 @@ const geode = @import("geode");
 const Parser = geode.gql.parser.Parser;
 const Lexer = geode.gql.lexer.Lexer;
 
-// CANARY: REQ=REQ-GQL-COMPLIANCE-001; FEATURE="GQL Compliance Regression"; ASPECT=Parser; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_COMPLIANCE_001_Parser; OWNER=parser; UPDATED=2025-01-03
+// CANARY: REQ=REQ-GQL-COMPLIANCE-001; FEATURE="GQL Compliance Regression"; ASPECT=Parser; STATUS=TESTED; TEST=tests/gql_compliance_regression_test.zig; OWNER=parser; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_GQL_COMPLIANCE_001_Parser: Full GQL compliance maintained" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -19,7 +19,7 @@ test "TestCANARY_REQ_GQL_COMPLIANCE_001_Parser: Full GQL compliance maintained" 
 
         // Aggregation functions
         "MATCH (n) RETURN COUNT(n) AS count",
-        "MATCH (n) RETURN SUM(n.value) AS sum",
+        "MATCH (n) RETURN SUM(n.value) AS `sum`",
         "MATCH (n) RETURN AVG(n.score) AS average",
         "MATCH (n) RETURN MIN(n.age) AS minimum",
         "MATCH (n) RETURN MAX(n.age) AS maximum",
@@ -93,7 +93,7 @@ test "TestCANARY_REQ_GQL_COMPLIANCE_002_Parser: Error cases still fail correctly
     const error_cases = [_][]const u8{
         "MATCH (n:) RETURN n", // Missing label name
         "RETURN (1 + 2", // Unclosed parenthesis
-        "RETURN MATCH", // Reserved keyword as identifier incorrectly
+        "RETURN MATCH", // A reserved word as an identifier (ISO/IEC 39075 21.3; SONNY-6564)
         "MATCH (n) SET = value", // Missing property
         "MATCH (n) REMOVE", // Missing property
         "MATCH (n) SET n. = 1", // Missing property name
@@ -103,9 +103,14 @@ test "TestCANARY_REQ_GQL_COMPLIANCE_002_Parser: Error cases still fail correctly
         var l = Lexer{ .src = query };
         var p = Parser{ .lx = &l, .arena = &arena, .cur = l.next() };
 
-        const result = p.parseProgram();
         // These SHOULD fail
-        try std.testing.expect(result == error.UnexpectedToken);
+        if (p.parseProgram()) |_| {
+            std.debug.print("accepted: {s}\n", .{query});
+            return error.TestUnexpectedResult;
+        } else |err| {
+            if (err != error.UnexpectedToken) std.debug.print("{s}: {s}\n", .{ query, @errorName(err) });
+            try std.testing.expect(err == error.UnexpectedToken);
+        }
     }
 }
 
@@ -119,7 +124,7 @@ test "TestCANARY_REQ_GQL_COMPLIANCE_003_Parser: Complex integration scenarios" {
         "MATCH path = (a:Person)-[:KNOWS*2..4]->(b:Person) RETURN COUNT(path) AS count",
 
         // SET/REMOVE + aggregation + keywords
-        "MATCH (n) SET n.property = 'value' RETURN SUM(n.count) AS sum",
+        "MATCH (n) SET n.property = 'value' RETURN SUM(n.count) AS `sum`",
 
         // Multiple path variables with keywords
         "MATCH path = (a)-[:KNOWS]->(b), route = (b)-[:LIVES_IN]->(c) RETURN length(path) + length(route) AS total",

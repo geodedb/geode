@@ -50,7 +50,10 @@ have openssl || skip "openssl not available"
 have python3 || skip "python3 not available"
 [ -x "$BIN" ] || skip "geode binary not found at $BIN (build first: zig build)"
 
-TOKEN="netns-test-token"; HMAC="netns-test-hmac-0123456789abcdef0123456789abcdef"; ADMINPW="NetnsTestPw123!"
+# SONNY-6436: the auth-chain HMAC key must be 64 hex characters (the server
+# refuses any other), and the admin seed a passphrase meeting the password
+# policy (anything else forces a reset at the first login).
+TOKEN="netns-test-token"; HMAC="$(openssl rand -hex 32)"; ADMINPW="Netns Cluster Admin Passphrase"
 PEERS="geode-1.geode.test:4242,geode-2.geode.test:4242,geode-3.geode.test:4242"
 FAILED=0
 declare -A PID
@@ -119,7 +122,16 @@ subjectAltName=DNS:geode-1.geode.test,DNS:geode-2.geode.test,DNS:geode-3.geode.t
 extendedKeyUsage=serverAuth,clientAuth
 EOF
 openssl x509 -req -in "$WORK/leaf.csr" -CA "$WORK/ca.crt" -CAkey "$WORK/ca.key" -CAcreateserial -days 2 -extfile "$WORK/leaf.ext" -out "$WORK/leaf.crt" 2>/dev/null
-RUNUSER="${SUDO_USER:-$(id -un)}"
+# SONNY-6447: the user the nodes run as. SUDO_USER names the invoking user
+# only when this script itself runs as root under sudo; otherwise it is
+# whatever an outer session left in the environment (an ansible become, a
+# parent sudo shell) and can name a user that cannot even reach $WORK (every
+# node then fails with "Permission denied" and no node starts).
+if [ "$(id -u)" = "0" ] && [ -n "${SUDO_USER:-}" ] && id -u "$SUDO_USER" >/dev/null 2>&1; then
+  RUNUSER="$SUDO_USER"
+else
+  RUNUSER="$(id -un)"
+fi
 chown -R "$RUNUSER" "$WORK" 2>/dev/null || true
 chmod -R a+rX "$WORK"
 

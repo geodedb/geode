@@ -11,6 +11,7 @@
 //! insert in parallel.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 const adapter_mod = geode.graph_storage_adapter;
 const pooled = geode.pooled;
@@ -73,6 +74,8 @@ fn mergeWorker(ctx_ptr: *anyopaque) void {
 }
 
 test "GAP-0894: concurrent single-property MERGE stripes through merge_tuple_locks" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -182,7 +185,7 @@ test "GAP-0894: single-property MERGE apply_on_match upserts without duplicating
 
     // The second MERGE's bare-SET (apply_on_match) must have overwritten the
     // first: confirm the upsert effect, not just the no-duplicate identity.
-    const rank = store.getNodeProperty(id2, "rank") orelse return error.RankPropertyMissing;
+    const rank = (try store.getNodePropertyOrError(id2, "rank")) orelse return error.RankPropertyMissing;
     try std.testing.expect(rank == .String);
     try std.testing.expectEqualStrings("genus", rank.String);
 }

@@ -1,8 +1,12 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
 test "e2e: PROFILE returns payload for GROUP BY" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("PROFILE returns payload for GROUP BY");
     errdefer util.testFail();
 
@@ -18,7 +22,7 @@ test "e2e: PROFILE returns payload for GROUP BY" {
     defer allocator.free(addr);
 
     util.progress("Starting server on port {d}...", .{port});
-    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, util.TestEnv.standard()) catch |err| {
+    var server = util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr }, util.TestEnv.standard()) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
         util.testSkip();
         return;
@@ -35,7 +39,7 @@ test "e2e: PROFILE returns payload for GROUP BY" {
     util.progress("Running PROFILE GROUP BY query...", .{});
     var child = std.process.Child.init(
         &.{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "query",
             "PROFILE RETURN count(*) GROUP BY x",
             "--server",

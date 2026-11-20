@@ -783,8 +783,10 @@ pub const functions = [_]FunctionInfo{
             .{ .name = "end", .type_name = "INTEGER" },
             .{ .name = "step", .type_name = "INTEGER", .optional = true, .default = "1" },
         },
-        .compliance = .iso_gql,
-        .doc = "Create a list of integers",
+        // SONNY-6466: ISO/IEC 39075:2024 has no range function; the end is
+        // exclusive (half-open), unlike openCypher's range().
+        .compliance = .geode_extension,
+        .doc = "Geode extension (ISO GQL has no range function): integers from start up to, not including, end, by step (default 1); openCypher's range() includes end",
         .example = "RETURN range(1, 10)",
     },
     // Type conversion functions
@@ -991,7 +993,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "L2 (Euclidean) distance between vectors",
-        .example = "RETURN vector_l2(n.embedding, $query)",
+        .example = "RETURN vector_l2(n.embedding, $query_vector)",
     },
     .{
         .name = "vector_cosine",
@@ -1003,7 +1005,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "Cosine distance between vectors",
-        .example = "RETURN vector_cosine(n.embedding, $query)",
+        .example = "RETURN vector_cosine(n.embedding, $query_vector)",
     },
     .{
         .name = "vector_dot",
@@ -1015,7 +1017,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "Dot product of vectors",
-        .example = "RETURN vector_dot(n.embedding, $query)",
+        .example = "RETURN vector_dot(n.embedding, $query_vector)",
     },
     .{
         .name = "distance",
@@ -1028,7 +1030,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "Distance between two vectors. metric is one of 'l2'/'euclidean' (default), 'cosine', 'dot'",
-        .example = "RETURN distance(n.embedding, $query, 'euclidean')",
+        .example = "RETURN distance(n.embedding, $query_vector, 'euclidean')",
     },
     .{
         .name = "similarity",
@@ -1041,7 +1043,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "Similarity between two vectors. metric is one of 'cosine' (default) or 'dot'; use distance() for 'l2'",
-        .example = "RETURN similarity(n.embedding, $query)",
+        .example = "RETURN similarity(n.embedding, $query_vector)",
     },
     .{
         .name = "cosine",
@@ -1053,7 +1055,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "Cosine similarity (alias)",
-        .example = "RETURN cosine(n.embedding, $query)",
+        .example = "RETURN cosine(n.embedding, $query_vector)",
     },
     .{
         .name = "euclidean",
@@ -1065,7 +1067,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "Euclidean distance (alias for vector_l2)",
-        .example = "RETURN euclidean(n.embedding, $query)",
+        .example = "RETURN euclidean(n.embedding, $query_vector)",
     },
     .{
         .name = "manhattan",
@@ -1077,7 +1079,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "Manhattan (L1) distance between vectors",
-        .example = "RETURN manhattan(n.embedding, $query)",
+        .example = "RETURN manhattan(n.embedding, $query_vector)",
     },
     // docs/@BUGS_731.md bug 8f: `vector_knn` (and its `knn` alias) is a real,
     // dispatched function (src/eval.zig evalVectorKnn) that this catalog did
@@ -1095,7 +1097,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "K nearest node/edge ids by vector property. metric is 'l2'/'euclidean', 'cosine' or 'dot'",
-        .example = "RETURN vector_knn('embedding', $query, 10, 'cosine')",
+        .example = "RETURN vector_knn('embedding', $query_vector, 10, 'cosine')",
     },
     .{
         .name = "knn",
@@ -1109,7 +1111,7 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .geode_extension,
         .doc = "Alias of vector_knn",
-        .example = "RETURN knn('embedding', $query, 10, 'l2')",
+        .example = "RETURN knn('embedding', $query_vector, 10, 'l2')",
     },
     // Predicate functions
     .{
@@ -1184,7 +1186,38 @@ pub const functions = [_]FunctionInfo{
         },
         .compliance = .iso_gql,
         .doc = "Return NULL if values are equal",
-        .example = "RETURN nullIf(n.status, 'inactive')",
+        .example = "MATCH (n) RETURN nullIf(n.status, 'inactive')",
+    },
+    // SONNY-6613: functions the evaluator answers to that were not listed.
+    .{
+        .name = "st_point",
+        .category = .conversion,
+        .return_type = "GEOMETRY",
+        .params = &[_]FunctionParam{
+            .{ .name = "x", .type_name = "NUMERIC" },
+            .{ .name = "y", .type_name = "NUMERIC" },
+        },
+        .compliance = .geode_extension,
+        .doc = "A Point geometry at (x, y)",
+        .example = "RETURN st_x(st_point(1, 2))",
+    },
+    .{
+        .name = "ipaddr",
+        .category = .conversion,
+        .return_type = "IPADDR",
+        .params = &[_]FunctionParam{.{ .name = "text", .type_name = "STRING" }},
+        .compliance = .geode_extension,
+        .doc = "An IPv4 or IPv6 address parsed from text",
+        .example = "RETURN ipaddr('192.168.1.1')",
+    },
+    .{
+        .name = "url_host",
+        .category = .scalar_string,
+        .return_type = "STRING",
+        .params = &[_]FunctionParam{.{ .name = "url", .type_name = "URL" }},
+        .compliance = .geode_extension,
+        .doc = "The host of a URL value (made with url(text))",
+        .example = "RETURN url_host(url('https://example.com/path'))",
     },
     // Graph degree functions (to be exposed)
     .{

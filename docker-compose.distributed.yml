@@ -1,4 +1,19 @@
-# Docker Compose for Geode - Distributed Deployment with Raft Consensus
+# Docker Compose for Geode - three nodes (NOT a Raft cluster as shipped)
+#
+# SONNY-6435: this file used to configure a cluster with NODE_ID, NODE_ROLE,
+# CLUSTER_NAME, RAFT_PORT, RAFT_PEERS, RAFT_JOIN, CLUSTER_NODES,
+# GEODE_DISTRIBUTED, GEODE_SHARD_COUNT and GEODE_REPLICATION_FACTOR, and with
+# `geode serve` options for a node id, a Raft bind / advertise / join address,
+# a bootstrap size and JSON logs. geode reads none of those variables and has
+# none of those options (`geode serve` then ignored an option it did not
+# know; it refuses one since SONNY-6442), so the three nodes ran standalone.
+# They have been removed; the nodes still run standalone. Geode forms a
+# cluster from GEODE_CLUSTER_TOKEN, GEODE_PEERS (the same comma-separated
+# host:port list on every node), GEODE_NODE_ID (a number, the node's 1-based
+# position in GEODE_PEERS), GEODE_CLUSTER_NAME,
+# GEODE_CLUSTER_PORT and the cluster TLS certificate
+# (src/server/cluster_bootstrap.zig); this file has not been validated with
+# them. The log level is --log-level.
 
 services:
   # Geode Leader Node
@@ -16,28 +31,13 @@ services:
       - geode-leader-data:/data
       - geode-certs:/certs
       - ./certs:/certs
-    environment:
-      - NODE_ID=node-1
-      - NODE_ROLE=leader
-      - CLUSTER_NAME=geode-cluster
-      - RAFT_PORT=8300
-      - RAFT_PEERS=geode-follower-1:8300,geode-follower-2:8300
-      - LOG_LEVEL=${LOG_LEVEL:-error}
-      - GEODE_DISTRIBUTED=true
-      - GEODE_SHARD_COUNT=3
-      - GEODE_REPLICATION_FACTOR=2
     command: >
       --listen 0.0.0.0:7567
       --data-dir /data
-      --node-id node-1
-      --raft-bind 0.0.0.0:8300
-      --raft-advertise geode-leader:8300
-      --bootstrap-expect 3
-      --log-json
     restart: unless-stopped
     healthcheck:
       test:
-        ['CMD', 'geode query', 'RETURN 1 AS health', '--server', '127.0.0.1:7567']
+        ['CMD', '/usr/local/bin/health-check.sh']
       interval: 30s
       timeout: 3s
       retries: 3
@@ -49,10 +49,11 @@ services:
       nproc:
         soft: 4096
         hard: 4096
-    pids_limit: 4096
     deploy:
       resources:
         limits:
+          # SONNY-6448: here, not pids_limit (Compose refuses both).
+          pids: 4096
           cpus: '2'
           memory: 4G
 
@@ -71,28 +72,15 @@ services:
       - geode-follower-1-data:/data
       - geode-certs:/certs
       - ./certs:/certs
-    environment:
-      - NODE_ID=node-2
-      - NODE_ROLE=follower
-      - CLUSTER_NAME=geode-cluster
-      - RAFT_PORT=8300
-      - RAFT_JOIN=geode-leader:8300
-      - LOG_LEVEL=${LOG_LEVEL:-error}
-      - GEODE_DISTRIBUTED=true
     command: >
       --listen 0.0.0.0:7567
       --data-dir /data
-      --node-id node-2
-      --raft-bind 0.0.0.0:8300
-      --raft-advertise geode-follower-1:8300
-      --raft-join geode-leader:8300
-      --log-json
     restart: unless-stopped
     depends_on:
       - geode-leader
     healthcheck:
       test:
-        ['CMD', 'geode query', 'RETURN 1 AS health', '--server', '127.0.0.1:7567']
+        ['CMD', '/usr/local/bin/health-check.sh']
       interval: 30s
       timeout: 3s
       retries: 3
@@ -104,10 +92,11 @@ services:
       nproc:
         soft: 4096
         hard: 4096
-    pids_limit: 4096
     deploy:
       resources:
         limits:
+          # SONNY-6448: here, not pids_limit (Compose refuses both).
+          pids: 4096
           cpus: '2'
           memory: 4G
 
@@ -126,28 +115,15 @@ services:
       - geode-follower-2-data:/data
       - geode-certs:/certs
       - ./certs:/certs
-    environment:
-      - NODE_ID=node-3
-      - NODE_ROLE=follower
-      - CLUSTER_NAME=geode-cluster
-      - RAFT_PORT=8300
-      - RAFT_JOIN=geode-leader:8300
-      - LOG_LEVEL=${LOG_LEVEL:-error}
-      - GEODE_DISTRIBUTED=true
     command: >
       --listen 0.0.0.0:7567
       --data-dir /data
-      --node-id node-3
-      --raft-bind 0.0.0.0:8300
-      --raft-advertise geode-follower-2:8300
-      --raft-join geode-leader:8300
-      --log-json
     restart: unless-stopped
     depends_on:
       - geode-leader
     healthcheck:
       test:
-        ['CMD', 'geode query', 'RETURN 1 AS health', '--server', '127.0.0.1:7567']
+        ['CMD', '/usr/local/bin/health-check.sh']
       interval: 30s
       timeout: 3s
       retries: 3
@@ -159,10 +135,11 @@ services:
       nproc:
         soft: 4096
         hard: 4096
-    pids_limit: 4096
     deploy:
       resources:
         limits:
+          # SONNY-6448: here, not pids_limit (Compose refuses both).
+          pids: 4096
           cpus: '2'
           memory: 4G
 
@@ -218,8 +195,6 @@ services:
     volumes:
       - geode-certs:/certs:ro
       - ./scripts:/scripts:ro
-    environment:
-      - CLUSTER_NODES=geode-leader:7567,geode-follower-1:7567,geode-follower-2:7567
     networks:
       geode-cluster-net:
         ipv4_address: 172.29.0.30

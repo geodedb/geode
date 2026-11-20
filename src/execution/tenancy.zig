@@ -167,6 +167,34 @@ pub fn isConcreteScope(tid: []const u8) bool {
 /// Both `crud_operations.tenantFilterFromContext` and
 /// `match_operations.getSessionTenantFilter` delegate here so the
 /// null=all-tenants footgun is closed in exactly one place.
+// CANARY: REQ=REQ-SONNY-6607-TENANT-LIFECYCLE; FEATURE="TenantLifecycle"; ASPECT=DroppingTenantRefused; STATUS=TESTED; TEST=tests/test_sonny6607_tenant_lifecycle.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6607 (4): refuse a statement whose session tenant is registered and
+/// marked as being dropped (a DROP that failed part-way leaves it so until
+/// it is retried). Its sessions went on reading and writing it. Checked at
+/// every statement's entry (`executeStatementWithContext`,
+/// `executeProgramWithContext`) and by the QUIC handler before its fast
+/// paths (SONNY-6612 (2)).
+///
+/// SONNY-6612 (2): once tenants are administered (the registry holds a
+/// tenant other than the default), a session scoped to a tenant the registry
+/// does not know is refused too (`TenantNotRegistered`, fail closed): it read
+/// and wrote under any tenant id a client asserted. With no registry, or an
+/// empty one (single tenant, or client-asserted tenancy not administered
+/// through the registry), nothing is refused.
+pub fn refuseDroppingTenant(maybe_tid: ?[]const u8) error{ TenantDropping, TenantNotRegistered }!void {
+    const tid = maybe_tid orelse return;
+    if (!isConcreteScope(tid)) return;
+    const reg = tenant_registry.getGlobalRegistry() orelse return;
+    if (reg.isDropping(tid)) {
+        log.warn("tenant is being dropped; its statement is refused", &.{logging.Attr.string("tenant", tid)});
+        return error.TenantDropping;
+    }
+    if (!reg.contains(tid) and reg.hasNonDefaultTenant()) {
+        log.warn("tenant is not registered; its statement is refused", &.{logging.Attr.string("tenant", tid)});
+        return error.TenantNotRegistered;
+    }
+}
+
 pub fn resolveTenantFilter(maybe_tid: ?[]const u8) TenancyError!?[]const u8 {
     if (maybe_tid) |tid| {
         if (isConcreteScope(tid)) return tid;

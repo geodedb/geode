@@ -10,7 +10,7 @@ PORT="8443"
 DATA_DIR="./data"
 GEODE="./zig-out/bin/geode"
 ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
-ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-Geode Test Admin Passphrase}"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -72,7 +72,7 @@ echo -e "${YELLOW}Testing connection to Geode server...${NC}"
 if ! $GEODE query "RETURN 1 AS test" --server "${HOST}:${PORT}" --insecure --user "${ADMIN_USER}" --password "${ADMIN_PASS}" > /dev/null 2>&1; then
     echo -e "${RED}Error: Cannot connect to Geode server${NC}"
     echo "Is the server running? Start it with:"
-    echo "  GEODE_ADMIN_USERNAME=${ADMIN_USER} GEODE_DEFAULT_PASSWORD=${ADMIN_PASS} ./zig-out/bin/geode serve --listen-quic ${HOST}:${PORT} --data-dir ${DATA_DIR}"
+    echo "  GEODE_ADMIN_USERNAME=${ADMIN_USER} GEODE_DEFAULT_PASSWORD='${ADMIN_PASS}' ./zig-out/bin/geode serve --listen-quic ${HOST}:${PORT} --data-dir ${DATA_DIR}"
     exit 1
 fi
 echo -e "${GREEN}✓ Connection successful${NC}"
@@ -138,12 +138,12 @@ echo -e "${GREEN}=== Dataset loaded successfully! ===${NC}"
 echo ""
 echo "Try these example queries:"
 echo "  # Find top influencers:"
-echo "  $GEODE query \"MATCH (u:User) WHERE u.follower_count > 1000 RETURN u.username, u.follower_count ORDER BY u.follower_count DESC LIMIT 5\" --server ${HOST}:${PORT} --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS}"
+echo "  $GEODE query \"MATCH (u:User) WHERE u.follower_count > 1000 RETURN u.username, u.follower_count ORDER BY u.follower_count DESC LIMIT 5\" --server ${HOST}:${PORT} --insecure --user ${ADMIN_USER} --password '${ADMIN_PASS}'"
 echo ""
 echo "  # Network security analysis:"
-echo "  $GEODE query \"MATCH (d:Device)-[:CONNECTED_FROM]->(u:User) WHERE ip_is_private(d.ip_address) RETURN u.username, d.ip_address, d.trust_score\" --server ${HOST}:${PORT} --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS}"
+echo "  $GEODE query \"MATCH (d:Device)-[:CONNECTED_FROM]->(u:User) WHERE ip_is_private(d.ip_address) RETURN u.username, d.ip_address, d.trust_score\" --server ${HOST}:${PORT} --insecure --user ${ADMIN_USER} --password '${ADMIN_PASS}'"
 echo ""
 echo "  # Geographic search (events near SF):"
-echo "  $GEODE query \"MATCH (e:Event) WHERE distance_haversine(e.location, LatLon(37.7749, -122.4194)) < 100000 RETURN e.title, e.venue\" --server ${HOST}:${PORT} --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS}"
+echo "  $GEODE query \"MATCH (e:Event) WHERE distance_haversine(e.location, LatLon(37.7749, -122.4194)) < 100000 RETURN e.title, e.venue\" --server ${HOST}:${PORT} --insecure --user ${ADMIN_USER} --password '${ADMIN_PASS}'"
 echo ""
 echo "For more examples, see migrations/README.md"

@@ -196,16 +196,20 @@ pub fn validateQuery(allocator: std.mem.Allocator, query: []const u8) ![]const u
         });
     }
 
-    // Run recommendation engine for context-aware suggestions
+    // Run recommendation engine for context-aware suggestions.
+    // SONNY-6511: its errors (out-of-memory included) reach the caller; they
+    // used to answer as if there were no recommendation. Positions come from
+    // the source (the AST has none): 0-based there, 1-based here like the
+    // parse errors above (lexer line/col start at 1).
     var rec_engine = mod.recommendations.RecommendationEngine.init(allocator);
     defer rec_engine.deinit();
-    const suggestions = rec_engine.analyze(program) catch &[_]mod.recommendations.Recommendation{};
+    const suggestions = try rec_engine.analyzeSource(program, query);
     for (suggestions) |suggestion| {
         try diagnostics.append(allocator, Diagnostic{
-            .line = suggestion.line,
-            .column = suggestion.column,
-            .end_line = suggestion.line,
-            .end_column = suggestion.column,
+            .line = suggestion.line + 1,
+            .column = suggestion.column + 1,
+            .end_line = suggestion.line + 1,
+            .end_column = suggestion.end_column + 1,
             .severity = switch (suggestion.severity) {
                 .information => .information,
                 .hint => .hint,
@@ -221,7 +225,10 @@ pub fn validateQuery(allocator: std.mem.Allocator, query: []const u8) ![]const u
 /// Get completions at a cursor position
 pub fn getCompletions(allocator: std.mem.Allocator, query: []const u8, line: u32, column: u32) ![]const u8 {
     // LSP-SEC-007 / GAP-0819: chokepoint check before any lexer work.
-    _ = validateAndSanitizeGqlInput(query) catch |err| {
+    // SONNY-6484: an empty document is the start of a statement (an editor
+    // asks for completions in an empty buffer), not a rejected query; every
+    // other chokepoint check still applies.
+    if (query.len != 0) _ = validateAndSanitizeGqlInput(query) catch |err| {
         return formatRejectionResponse(allocator, err);
     };
 
@@ -275,7 +282,8 @@ pub fn getCompletions(allocator: std.mem.Allocator, query: []const u8, line: u32
 /// Get hover information for a position
 pub fn getHover(allocator: std.mem.Allocator, query: []const u8, line: u32, column: u32) ![]const u8 {
     // LSP-SEC-007 / GAP-0819: chokepoint check before any lexer work.
-    _ = validateAndSanitizeGqlInput(query) catch |err| {
+    // SONNY-6484: an empty document has no word to describe (null contents).
+    if (query.len != 0) _ = validateAndSanitizeGqlInput(query) catch |err| {
         return formatRejectionResponse(allocator, err);
     };
 
@@ -299,32 +307,18 @@ pub fn getHover(allocator: std.mem.Allocator, query: []const u8, line: u32, colu
 
     // Check if it's a function
     if (language_metadata.findFunction(word.?)) |func| {
-        var params_buf: [1024]u8 = undefined;
-        var params_len: usize = 0;
+        const params = try formatHoverParams(allocator, func.params);
+        defer allocator.free(params);
 
-        for (func.params, 0..) |param, i| {
-            if (i > 0) {
-                params_buf[params_len] = ',';
-                params_buf[params_len + 1] = ' ';
-                params_len += 2;
-            }
-            const param_str = param.name;
-            @memcpy(params_buf[params_len .. params_len + param_str.len], param_str);
-            params_len += param_str.len;
-            params_buf[params_len] = ':';
-            params_buf[params_len + 1] = ' ';
-            params_len += 2;
-            @memcpy(params_buf[params_len .. params_len + param.type_name.len], param.type_name);
-            params_len += param.type_name.len;
-        }
-
+        const example = try formatExample(allocator, func.example);
+        defer allocator.free(example);
         const doc = try std.fmt.allocPrint(allocator, "**{s}**({s}) → {s}\n\n{s}\n\nCompliance: {s}{s}", .{
             func.name,
-            params_buf[0..params_len],
+            params,
             func.return_type,
             func.doc,
             @tagName(func.compliance),
-            if (func.example) |ex| try std.fmt.allocPrint(allocator, "\n\nExample: `{s}`", .{ex}) else "",
+            example,
         });
         defer allocator.free(doc);
 
@@ -333,11 +327,13 @@ pub fn getHover(allocator: std.mem.Allocator, query: []const u8, line: u32, colu
 
     // Check if it's a type
     if (language_metadata.findType(word.?)) |typ| {
+        const example = try formatExample(allocator, typ.example);
+        defer allocator.free(example);
         const doc = try std.fmt.allocPrint(allocator, "**{s}** (GQL Type)\n\n{s}\n\nCompliance: {s}{s}", .{
             typ.name,
             typ.doc,
             @tagName(typ.compliance),
-            if (typ.example) |ex| try std.fmt.allocPrint(allocator, "\n\nExample: `{s}`", .{ex}) else "",
+            example,
         });
         defer allocator.free(doc);
 
@@ -346,24 +342,16 @@ pub fn getHover(allocator: std.mem.Allocator, query: []const u8, line: u32, colu
 
     // Check if it's a procedure
     if (language_metadata.findProcedure(word.?)) |proc| {
-        var cols_buf: [2048]u8 = undefined;
-        var cols_len: usize = 0;
+        const cols = try formatHoverColumns(allocator, proc.columns);
+        defer allocator.free(cols);
 
-        for (proc.columns, 0..) |col, i| {
-            if (i > 0) {
-                cols_buf[cols_len] = ',';
-                cols_buf[cols_len + 1] = ' ';
-                cols_len += 2;
-            }
-            @memcpy(cols_buf[cols_len .. cols_len + col.name.len], col.name);
-            cols_len += col.name.len;
-        }
-
+        const example = try formatExample(allocator, proc.example);
+        defer allocator.free(example);
         const doc = try std.fmt.allocPrint(allocator, "**{s}**\n\nYIELD: {s}\n\n{s}{s}", .{
             proc.name,
-            cols_buf[0..cols_len],
+            cols,
             proc.doc,
-            if (proc.example) |ex| try std.fmt.allocPrint(allocator, "\n\nExample: `{s}`", .{ex}) else "",
+            example,
         });
         defer allocator.free(doc);
 
@@ -371,6 +359,41 @@ pub fn getHover(allocator: std.mem.Allocator, query: []const u8, line: u32, colu
     }
 
     return formatHoverResponse(allocator, null);
+}
+
+/// SONNY-6487: a function's hover parameter list ("name: TYPE, ..."),
+/// allocated to its real length and owned by the caller. It used to be
+/// written into a fixed 1024-byte stack buffer with unchecked index writes.
+pub fn formatHoverParams(allocator: std.mem.Allocator, params: []const language_metadata.FunctionParam) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    for (params, 0..) |param, i| {
+        if (i > 0) try out.appendSlice(allocator, ", ");
+        try out.appendSlice(allocator, param.name);
+        try out.appendSlice(allocator, ": ");
+        try out.appendSlice(allocator, param.type_name);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// SONNY-6487: a procedure's hover YIELD column list ("a, b, ..."),
+/// allocated to its real length and owned by the caller. It used to be
+/// written into a fixed 2048-byte stack buffer with unchecked index writes.
+pub fn formatHoverColumns(allocator: std.mem.Allocator, columns: []const language_metadata.ProcedureColumn) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    for (columns, 0..) |col, i| {
+        if (i > 0) try out.appendSlice(allocator, ", ");
+        try out.appendSlice(allocator, col.name);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// SONNY-6484: the hover "Example:" suffix, owned by the caller (it used to
+/// be allocated inline in the format arguments and never freed).
+fn formatExample(allocator: std.mem.Allocator, example: ?[]const u8) ![]const u8 {
+    const ex = example orelse return allocator.dupe(u8, "");
+    return std.fmt.allocPrint(allocator, "\n\nExample: `{s}`", .{ex});
 }
 
 /// Get all diagnostics for a document (alias for validateQuery)
@@ -612,7 +635,10 @@ fn formatHoverResponse(allocator: std.mem.Allocator, hover: ?HoverInfo) ![]const
         .contents = if (hover) |h| h.contents else null,
     };
 
-    return try json_lib.encode(allocator, response, .{});
+    // SONNY-6484: `contents` is always present; null when there is no hover
+    // documentation (the JSON library omits null optionals by default, which
+    // turned "no hover" into `{}`).
+    return try json_lib.encode(allocator, response, .{ .emit_null_optional_fields = true });
 }
 
 // =============================================================================
@@ -694,6 +720,32 @@ test "getHover for unknown word" {
     defer allocator.free(result);
 
     try std.testing.expect(std.mem.indexOf(u8, result, "\"contents\":null") != null);
+}
+
+test "getHover documents functions, types and procedures with examples without leaking" {
+    // SONNY-6484: the "Example:" suffix was allocated and never freed, so
+    // every hover on a function, type or procedure with an example leaked
+    // in a long-running `geode mcp` server (std.testing.allocator checks).
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{ "RETURN rand()", "RETURN CAST(1 AS INTEGER)" }, [_]u32{ 9, 20 }, [_][]const u8{ "rand", "INTEGER" }) |query, column, name| {
+        const result = try getHover(allocator, query, 1, column);
+        defer allocator.free(result);
+        try std.testing.expect(std.mem.indexOf(u8, result, name) != null);
+        try std.testing.expect(std.mem.indexOf(u8, result, "Example:") != null);
+    }
+    const proc = language_metadata.procedures[0];
+    const query = try std.fmt.allocPrint(allocator, "CALL {s}()", .{proc.name});
+    defer allocator.free(query);
+    const result = try getHover(allocator, query, 1, 7);
+    defer allocator.free(result);
+    try std.testing.expect(std.mem.indexOf(u8, result, "YIELD:") != null);
+}
+
+test "getHover on an empty document returns null contents" {
+    const allocator = std.testing.allocator;
+    const result = try getHover(allocator, "", 1, 1);
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("{\"contents\":null}", result);
 }
 
 test "getDiagnostics is alias for validateQuery" {

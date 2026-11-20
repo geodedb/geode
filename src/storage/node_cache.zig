@@ -48,6 +48,11 @@ const sharded_store = @import("graph_storage").sharded_store;
 
 pub const SHARD_COUNT = sharded_store.SHARD_COUNT;
 
+/// The shard `key` lives in (tests: keys that share a shard's cap).
+pub fn shardOf(key: u64) usize {
+    return sharded_store.shardIndex(key);
+}
+
 /// Default resident cap when `GEODE_NODE_CACHE_ENTRIES` is unset.
 pub const DEFAULT_CAP: usize = 1_000_000;
 
@@ -421,8 +426,12 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
                 self.free_fn(self.allocator, &value);
                 return p;
             }
+            // SONNY-6268: a failed insert leaves `value` ours (see `put`).
+            self.insertEvicting(key, value) catch |err| {
+                self.free_fn(self.allocator, &value);
+                return err;
+            };
             self.hydrations_total += 1;
-            try self.insertEvicting(key, value);
             return self.store.getPtr(key);
         }
 
@@ -456,8 +465,11 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
                 self.free_fn(self.allocator, &value);
                 return p.*;
             }
+            self.insertEvicting(key, value) catch |err| {
+                self.free_fn(self.allocator, &value);
+                return err;
+            };
             self.hydrations_total += 1;
-            try self.insertEvicting(key, value);
             return self.store.getPtr(key).?.*;
         }
 
@@ -467,6 +479,17 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         /// resident set past `cap`, cold entries are evicted (unlinked + retired)
         /// to make room. An overwrite of an existing key frees the OLD value via
         /// the retire list (its heap may still be referenced by a reader).
+        ///
+        /// OWNERSHIP (SONNY-6268):
+        ///   * success: the cache owns `value` (frees it via `free_fn` when it
+        ///     is overwritten, evicted, removed or the cache is torn down);
+        ///   * error: NOTHING changed (map, FIFO, retire lists, counters) and
+        ///     the CALLER still owns `value` and must free it. The cache never
+        ///     frees a value it did not store.
+        ///   * evictions this put triggers only unlink and RETIRE their victims
+        ///     (freed at the next grace-point reclaim), never free them inline,
+        ///     and never touch `key`'s new entry; a pointer the caller holds
+        ///     into another resident value stays valid until that reclaim.
         pub fn put(self: *Self, key: K, value: V) !void {
             const idx = sharded_store.shardIndex(@as(u64, key));
             self.shards[idx].map_lock.lockUncancelable(io());
@@ -485,10 +508,21 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         /// Record that `key` was just inserted via `getOrPut` so it participates
         /// in eviction, then evict its shard down to cap if needed. Safe to call
         /// for an existing key (it just refreshes FIFO position).
+        ///
+        /// SONNY-6268: on error nothing changed (the key is not queued, nothing
+        /// was evicted); the caller's `getOrPut` entry stays as it wrote it,
+        /// and the caller removes it (`fetchRemove`) if it gives up the insert.
         pub fn noteInserted(self: *Self, key: K) !void {
             const idx = sharded_store.shardIndex(@as(u64, key));
-            try self.shards[idx].fifo.pushBack(self.allocator, key);
-            try self.evictShardToCap(idx);
+            const sh = &self.shards[idx];
+            try sh.fifo.ensureUnusedCapacity(self.allocator, 1);
+            const per_shard = self.perShardCap();
+            const len = self.store.shardLen(idx);
+            if (per_shard != 0 and len > per_shard) {
+                try sh.retired.ensureUnusedCapacity(self.allocator, len - per_shard);
+            }
+            sh.fifo.pushBackAssumeCapacity(key);
+            self.evictShardToCapAssumeCapacity(idx, key);
         }
 
         /// Remove `key`. The removed value is retired (freed at the next
@@ -785,29 +819,41 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
 
         // ---- Internals ------------------------------------------------------
 
+        /// SONNY-6268: failure-atomic. Every allocation the insert can need
+        /// (the map slot, the FIFO slot, retire-list room for the old value
+        /// or for the evictions this insert triggers) is reserved first; the
+        /// commit after it cannot fail. On error nothing changed and the
+        /// caller still owns `value` (see `put`). Before, a failed FIFO append
+        /// freed `value` here while the caller's own error path freed it
+        /// again, and a failed eviction append left the new entry inserted
+        /// behind an error (the caller then freed a value the map held).
         fn insertEvicting(self: *Self, key: K, value: V) !void {
             const idx = sharded_store.shardIndex(@as(u64, key));
-            const gop = try self.store.getOrPut(key);
+            const sh = &self.shards[idx];
+            const map = &self.store.shards[idx];
+            // Room for: the slot, its FIFO entry, and on the retire list the
+            // overwritten value or every eviction this insert triggers. All
+            // amortised (the containers keep their capacity), so this adds no
+            // per-insert allocation.
+            try map.ensureUnusedCapacity(1);
+            try sh.fifo.ensureUnusedCapacity(self.allocator, 1);
+            const per_shard = self.perShardCap();
+            const len_after = map.count() + 1;
+            const evictions = if (per_shard != 0 and len_after > per_shard) len_after - per_shard else 0;
+            try sh.retired.ensureUnusedCapacity(self.allocator, @max(evictions, 1));
+            // Commit: nothing below can fail.
+            const gop = map.getOrPutAssumeCapacity(key);
             if (gop.found_existing) {
                 // Overwrite: retire the OLD value (a reader may hold a pointer
                 // to it) and store the new one. Don't re-queue in FIFO — the key
                 // is already tracked.
-                try self.shards[idx].retired.append(self.allocator, gop.value_ptr.*);
+                sh.retired.appendAssumeCapacity(gop.value_ptr.*);
                 gop.value_ptr.* = value;
                 return;
             }
-            // New entry.
             gop.value_ptr.* = value;
-            // Record for eviction. If the FIFO append fails we must not leave an
-            // untracked entry (it could never be evicted), so undo the insert.
-            self.shards[idx].fifo.pushBack(self.allocator, key) catch |err| {
-                if (self.store.fetchRemove(key)) |kv| {
-                    var v = kv.value;
-                    self.free_fn(self.allocator, &v);
-                }
-                return err;
-            };
-            try self.evictShardToCap(idx);
+            sh.fifo.pushBackAssumeCapacity(key);
+            self.evictShardToCapAssumeCapacity(idx, key);
         }
 
         /// Evict (unlink + retire) cold entries from shard `idx` until that
@@ -815,13 +861,30 @@ pub fn BoundedNodeCache(comptime K: type, comptime V: type) type {
         /// eviction. SAFETY: only mutates shard `idx`'s map partition, FIFO, and
         /// retire list — the consumer holds shard `idx`'s lock EXCLUSIVE, so this
         /// never touches a partition another thread could be reading.
-        fn evictShardToCap(self: *Self, idx: usize) !void {
+        ///
+        /// SONNY-6268: the caller reserved retire-list room for every eviction,
+        /// so nothing here can fail. (An unreserved append that failed after
+        /// `fetchRemove` lost the victim: unlinked, never retired, never freed.)
+        ///
+        /// SONNY-6567 (2): `keep` (the key just inserted) is never evicted. A
+        /// key `remove`d and inserted again (an undo restoring a deleted
+        /// node) leaves a stale FIFO entry ahead of its new one; popping it
+        /// evicted the live key, and when that happened during the key's own
+        /// insert, `getOrHydratePtr` returned null: an existing body read as
+        /// absent. Its entry goes back to the end instead (the pass is bounded
+        /// by the queue's length, so a shard of stale entries cannot spin).
+        fn evictShardToCapAssumeCapacity(self: *Self, idx: usize, keep: K) void {
             const per_shard = self.perShardCap();
             if (per_shard == 0) return;
-            while (self.store.shardLen(idx) > per_shard) {
+            var budget = self.shards[idx].fifo.len;
+            while (self.store.shardLen(idx) > per_shard and budget > 0) : (budget -= 1) {
                 const victim_key = self.shards[idx].fifo.popFront() orelse return;
+                if (victim_key == keep) {
+                    self.shards[idx].fifo.pushBackAssumeCapacity(victim_key);
+                    continue;
+                }
                 if (self.store.fetchRemove(victim_key)) |kv| {
-                    try self.shards[idx].retired.append(self.allocator, kv.value);
+                    self.shards[idx].retired.appendAssumeCapacity(kv.value);
                     self.evictions_total += 1;
                 }
                 // else: stale FIFO entry (already removed/overwritten) — skip.

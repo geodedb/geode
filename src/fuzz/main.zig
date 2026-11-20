@@ -21,9 +21,8 @@ pub fn main() !void {
     // Read input with size limit to prevent OOM.
     // Zig 0.16 retired `std.Io.File.readAll`; stdin is a pipe (no
     // positional reads), so the supported pattern is the buffered
-    // `reader().interface.readSliceShort` loop used elsewhere in this
-    // codebase (e.g. tools/fed_latency_streak.zig).  Total bytes are
-    // still capped at 1 MiB.
+    // `reader().interface.readSliceShort` loop.  Total bytes are still
+    // capped at 1 MiB.
     const max_input_size: usize = 1024 * 1024; // 1 MiB max
     var input_data = try alloc.alloc(u8, max_input_size);
     defer alloc.free(input_data);

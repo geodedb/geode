@@ -9,6 +9,17 @@
 // Thread-safety: the callback runs inside the Raft tick loop which is
 // single-threaded per RaftNode.  The GraphStore itself uses internal locking,
 // so concurrent access from the query engine is safe.
+//
+// What reaches this module (SONNY-6547 (6)): the server proposes only
+// `graph_mutation` entries (`statement_proposals.zig`, through
+// `ClusterCoordinator.proposeWrite`), plus the raft library's own no-op.
+// Nothing in the server proposes `schema_change`, `config_change`,
+// `snapshot_pointer`, `txn_prepare` or `txn_decide`: their arms below are
+// the receiving side of features that do not exist yet (replicated DDL,
+// dynamic membership, log truncation, distributed transactions), kept
+// because they are safe and tested, and exercised only by tests that
+// propose or apply such entries directly. In cluster mode the DDL they
+// would carry is refused (`cluster.gateUnreplicatedWrite`).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -24,6 +35,9 @@ const TxnCoordinator = @import("txn_coordinator.zig").TxnCoordinator;
 const graph_store_mod = @import("../graph_store.zig");
 const GraphStore = graph_store_mod.GraphStore;
 const cluster_replication = @import("cluster_replication.zig");
+const raft_snapshot_manager = @import("raft_snapshot_manager.zig");
+const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
+const fle_integration = @import("../fle_integration.zig");
 
 const logging = @import("logging");
 const log = logging.scoped("raft_apply");
@@ -40,10 +54,70 @@ const Attr = logging.Attr;
 
 var g_store: ?*GraphStore = null;
 
+// CANARY: REQ=REQ-SONNY-6567-RAFT-APPLY-HYDRATION; FEATURE="DistributedCluster"; ASPECT=RefusedReplicatedDropHaltsApply; STATUS=TESTED; TEST=tests/test_sonny6547_single_voter_drop.zig; OWNER=distributed; UPDATED=2026-11-15
+/// SONNY-6567 (6a): set when a committed entry could not be applied on this
+/// node in a way that leaves it different from the others (a replicated
+/// DROP GRAPH refused because a session transaction changed the graph). The
+/// Raft node logs an entry it could not apply and goes on with the next one:
+/// the node kept the graph every other node dropped, and applied (or
+/// failed) the later entries on it differently. Instead it stops applying:
+/// every later entry fails (`ReplicatedApplyHalted`), so its store stays the
+/// cluster's state as of the entry before the drop (behind, never
+/// different), and the operator error says to restart it. A restarted node
+/// replays the committed log (cluster.zig: rebuilt by committed-log replay)
+/// with no transaction open, and the drop applies. Hard stop, not a
+/// decision about open transactions: that is for the replicated DDL feature
+/// (nothing proposes a `schema_change` today, SONNY-6547 (6)).
+var g_apply_halted: std.atomic.Value(bool) = .init(false);
+
+fn haltApply(reason: []const u8, graph: []const u8) void {
+    if (g_apply_halted.swap(true, .acq_rel)) return;
+    log.err("raft apply: HALTED: a committed entry could not be applied on this node; it stops applying so it cannot diverge from the cluster. Restart the node: it replays the committed log", &.{
+        Attr.string("reason", reason),
+        Attr.string("graph", graph),
+    });
+}
+
+/// Has this node stopped applying (SONNY-6567 (6a))?
+pub fn applyHalted() bool {
+    return g_apply_halted.load(.acquire);
+}
+
+/// Tests: clear the halt (a restart does, the flag is per process).
+pub fn resetApplyHaltForTesting() void {
+    g_apply_halted.store(false, .release);
+}
+
 /// Register the graph store used by the apply callback.
 /// Must be called before the Raft node begins processing committed entries.
 pub fn setGlobalStore(store: *GraphStore) void {
     g_store = store;
+    loadStoreRaftIndex(store);
+}
+
+// CANARY: REQ=REQ-SONNY-6636-STORE-RAFT-INDEX; FEATURE="Raft Snapshot Persistence"; ASPECT=CoveredEntriesNotReapplied; STATUS=TESTED; TEST=tests/test_sonny6636_durable_snapshot_restore.zig; OWNER=distributed; UPDATED=2026-11-16
+/// SONNY-6636 (3): the Raft index the registered durable store reflects
+/// (`raft_store.index`, recorded when a snapshot restore finished); 0 when
+/// none. `applyCommand` applies no entry at or below it: the snapshot
+/// covered it, and a node that restarted before the snapshot was persisted
+/// in its Raft log replays its older entries onto the restored store.
+var g_store_raft_index: std.atomic.Value(u64) = .init(0);
+
+pub fn storeRaftIndex() u64 {
+    return g_store_raft_index.load(.acquire);
+}
+
+fn loadStoreRaftIndex(store: *GraphStore) void {
+    g_store_raft_index.store(0, .release);
+    const adapter = graph_store_mod.getGlobalAdapter() orelse return;
+    if (graph_store_mod.getCurrentGlobalStore() != store) return;
+    const point = adapter.storeRaftIndex() catch |err| {
+        // Guessing low would apply entries the store already reflects.
+        log.err("raft apply: the Raft index the store reflects cannot be read; this node applies nothing until it is fixed", &.{Attr.string("error", @errorName(err))});
+        haltApply("raft_store.index unreadable", "");
+        return;
+    };
+    g_store_raft_index.store(point.index, .release);
 }
 
 /// Return the currently registered store (useful in tests / diagnostics).
@@ -54,6 +128,7 @@ pub fn getGlobalStore() ?*GraphStore {
 /// Reset the global store to null (for test isolation).
 pub fn resetGlobalStore() void {
     g_store = null;
+    g_store_raft_index.store(0, .release);
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +239,8 @@ pub fn resetSnapshotPointer() void {
 // Committed txn_prepare / txn_decide entries route into the existing 2PC
 // machinery (`txn_coordinator.TxnCoordinator`): prepare buffers the write
 // set + takes locks, decide(commit) applies the write set to the store,
-// decide(abort) releases without applying.
+// decide(abort) releases without applying. No server code proposes such an
+// entry (SONNY-6547 (6)): geode runs no distributed transaction.
 // ---------------------------------------------------------------------------
 
 var g_txn_coordinator: ?*TxnCoordinator = null;
@@ -227,6 +303,153 @@ pub fn applyCallbackFn(allocator: Allocator, cmd: Command, raft_index: u64) anye
     return applyCommand(allocator, g_store, cmd, raft_index);
 }
 
+// CANARY: REQ=REQ-SONNY-6547-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=PrehydrateBeforePropose; STATUS=TESTED; TEST=tests/test_sonny6547_apply_hydration_stall.zig; OWNER=distributed; UPDATED=2026-11-14
+/// SONNY-6547 (4): hydrate the graph a `graph_mutation` entry's apply writes
+/// (`applyGraphMutationInner`), for a proposer to call before it takes the
+/// Raft node's `inner_mutex`: the apply then finds the graph hydrated and
+/// builds nothing under `inner_mutex`. The products are not persisted here
+/// either (the proposer may hold the graph's lock, which that persist's
+/// checkpoint waits for); the next full checkpoint persists them. Ordering
+/// is unchanged: hydration builds resident indexes from the engine, as any
+/// first read of the graph does, and writes nothing.
+///
+/// SONNY-6631: also the graph of every entry of a statement batch (GBAT),
+/// inside a tenant wrapper or not: a batch for one graph may write
+/// another. The Raft node calls it (`RaftNode.prehydrate_callback`) for
+/// every entry a follower receives and every entry a restarted node
+/// replays.
+pub fn prehydrateForApply(cmd: Command) void {
+    const store = g_store orelse return;
+    switch (cmd) {
+        .graph_mutation => |gm| {
+            const graph = if (gm.graph.len > 0) gm.graph else "default";
+            // SONNY-6605: a build that fails transiently is tried again by the
+            // apply, which fails if it fails again.
+            store.ensureGraphHydratedForReplicatedApply(graph) catch {};
+            const body = if (cluster_replication.isTenantPayload(gm.data))
+                (cluster_replication.splitTenant(gm.data) catch return).inner
+            else
+                gm.data;
+            if (cluster_replication.isBatchPayload(body)) {
+                // A malformed batch is refused by its apply; nothing to do here.
+                cluster_replication.forEachBatchGraph(body, store, prehydrateBatchEntry) catch {};
+            } else internNamesOf(graph, body);
+        },
+        else => {},
+    }
+}
+
+fn prehydrateBatchEntry(store: *GraphStore, graph: []const u8, payload: []const u8) void {
+    const g = if (graph.len > 0) graph else "default";
+    store.ensureGraphHydratedForReplicatedApply(g) catch {};
+    internNamesOf(g, payload);
+}
+
+// CANARY: REQ=REQ-SONNY-6633-INTERN-LABELS-BEFORE-APPLY; FEATURE="DistributedCluster"; ASPECT=PrehydrateInternsNames; STATUS=TESTED; TEST=tests/test_sonny6631_apply_hydration_off_mutex.zig; OWNER=distributed; UPDATED=2026-11-15
+/// SONNY-6633 (4): give the labels and relationship types a lone-entry
+/// payload writes their label ids before the apply, so a name new to the
+/// graph is not written to disk (fsynced) under `inner_mutex`
+/// (`StorageAdapter.internNamesForReplicatedApply`). The payload's own
+/// graph wins over the entry's. Best effort.
+fn internNamesOf(entry_graph: []const u8, payload: []const u8) void {
+    // Not on a thread holding a graph's lock or the store lock (a leader's
+    // proposer inside its statement): pinning takes the adapter's tier-0
+    // handle mutex, never taken after a graph lock. The apply assigns them.
+    if (graph_storage_adapter.threadHoldsAnyGraphOrStoreLock()) return;
+    const adapter = graph_store_mod.getGlobalAdapter() orelse return;
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const effect = cluster_replication.effectOf(a, payload) catch return;
+    var names: std.ArrayList([]const u8) = .empty;
+    for (effect.created) |c| names.appendSlice(a, c.labels) catch return;
+    names.appendSlice(a, effect.written_labels) catch return;
+    names.appendSlice(a, effect.edge_types) catch return;
+    adapter.internNamesForReplicatedApply(if (effect.graph.len > 0) effect.graph else entry_graph, names.items);
+}
+
+// CANARY: REQ=REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE; FEATURE="Raft Snapshot Persistence"; ASPECT=RestoreIntoStore; STATUS=TESTED; TEST=tests/test_sonny6622_raft_v022_adapt.zig; OWNER=distributed; UPDATED=2026-11-16
+/// SONNY-6622: `RaftNode.snapshot_restore_callback`: replace the registered
+/// store's contents with the snapshot `data` the leader passed to
+/// `reportSnapshot`. The Raft node runs it on its restore thread, without
+/// `inner_mutex`, while it stays paused (SONNY-6636).
+///
+/// SONNY-6636: the durable store takes a durable snapshot (GRS3,
+/// `raft_snapshot_manager.restoreDurableSnapshot`: the leader's engine
+/// files, swapped in crash-safely; the store then reflects Raft `index`).
+/// Anything else is refused (`RaftSnapshotUnknownFormat`; the JSON-lines
+/// GRS2 form was removed), and so is any snapshot for a store that is not
+/// the durable one (`RaftSnapshotNeedsDurableStore`). A refusal stops the
+/// node instead of applying past the snapshot.
+pub fn restoreSnapshotCallbackFn(allocator: Allocator, data: []const u8, index: u64, term: u64) anyerror!void {
+    const store = g_store orelse return error.StoreNotAvailable;
+    if (!raft_snapshot_manager.isDurableSnapshot(data)) {
+        log.err("raft apply: a snapshot that is not a durable (GRS3) one cannot be restored; the node stops", &.{
+            Attr.uint("snapshot_index", index),
+            Attr.uint("snapshot_term", term),
+        });
+        return error.RaftSnapshotUnknownFormat;
+    }
+    const adapter = (if (graph_store_mod.getCurrentGlobalStore() == store) graph_store_mod.getGlobalAdapter() else null) orelse
+        return error.RaftSnapshotNeedsDurableStore;
+    try raft_snapshot_manager.restoreDurableSnapshot(allocator, store, adapter, data, .{ .index = index, .term = term }, g_idempotency_dedup);
+    g_store_raft_index.store(index, .release);
+    log.info("raft apply: durable store restored from the leader's snapshot", &.{
+        Attr.uint("snapshot_index", index),
+        Attr.uint("snapshot_term", term),
+    });
+}
+
+// CANARY: REQ=REQ-SONNY-6636-SERVER-SNAPSHOT; FEATURE="Raft Snapshot Persistence"; ASPECT=SnapshotDurableStore; STATUS=TESTED; TEST=tests/test_sonny6636_server_snapshot.zig; OWNER=distributed; UPDATED=2026-11-16
+/// SONNY-6636 (b): `RaftNode.snapshot_create_callback`: the durable snapshot
+/// (GRS3, `raft_snapshot_manager.encodeDurableSnapshot`) of the registered
+/// store, which reflects Raft `index` exactly (the node holds its applies).
+/// Runs on the node's snapshot thread, without `inner_mutex`. An in-memory
+/// store cannot be snapshotted (`RaftSnapshotNeedsDurableStore`; the node
+/// then stops trying).
+pub fn createSnapshotCallbackFn(allocator: Allocator, index: u64, term: u64) anyerror![]u8 {
+    const store = g_store orelse return error.StoreNotAvailable;
+    if (graph_store_mod.getCurrentGlobalStore() != store) return error.RaftSnapshotNeedsDurableStore;
+    const adapter = graph_store_mod.getGlobalAdapter() orelse return error.RaftSnapshotNeedsDurableStore;
+    const data = try raft_snapshot_manager.encodeDurableSnapshot(allocator, adapter, g_idempotency_dedup);
+    errdefer allocator.free(data);
+    // SONNY-6665: the store reflects `index` (the node holds its applies),
+    // so a restart does not take this node's own snapshot for one received
+    // and not yet restored (cluster.zig compares the two).
+    if (index > storeRaftIndex()) {
+        try adapter.recordStoreRaftIndex(.{ .index = index, .term = term });
+        g_store_raft_index.store(index, .release);
+    }
+    log.info("raft apply: durable store snapshotted", &.{
+        Attr.uint("snapshot_index", index),
+        Attr.uint("snapshot_term", term),
+        Attr.uint("bytes", data.len),
+    });
+    return data;
+}
+
+/// SONNY-6665: a snapshot `restoreSnapshotCallbackFn` can restore into the
+/// registered store (a durable one, GRS3, into the durable store).
+pub fn isRestorableSnapshot(data: []const u8) bool {
+    const store = g_store orelse return false;
+    if (graph_store_mod.getCurrentGlobalStore() != store or graph_store_mod.getGlobalAdapter() == null) return false;
+    return raft_snapshot_manager.isDurableSnapshot(data);
+}
+
+/// SONNY-6636 (b): a node restarting with a snapshot of its own in its Raft
+/// storage replays only the entries after it, so the keys the entries before
+/// it recorded come back from the snapshot's idempotency table (else a
+/// client's retry of such a statement would be applied a second time).
+/// `data` is the snapshot (`RaftNode.localSnapshotData`). A snapshot that is
+/// not a durable one carries no table here.
+pub fn seedFromLocalSnapshot(data: []const u8) !void {
+    if (!raft_snapshot_manager.isDurableSnapshot(data)) return;
+    const dedup = g_idempotency_dedup orelse return;
+    var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+    defer arena.deinit();
+    try dedup.replaceFrom(try raft_snapshot_manager.durableSnapshotDedupTable(arena.allocator(), data));
+}
+
 // ---------------------------------------------------------------------------
 // Core routing logic
 // ---------------------------------------------------------------------------
@@ -240,6 +463,23 @@ pub fn applyCallbackFn(allocator: Allocator, cmd: Command, raft_index: u64) anye
 /// Returns a result payload (caller-owned).  For most MVP paths this is an
 /// empty slice allocated from `allocator`; the caller must free it.
 pub fn applyCommand(allocator: Allocator, store: ?*GraphStore, command: Command, raft_index: u64) ![]u8 {
+    // SONNY-6567 (6a): a node that could not apply a committed entry stops
+    // applying (see `haltApply`).
+    if (g_apply_halted.load(.acquire)) {
+        log.err("raft apply: HALTED; this node does not apply committed entries until it is restarted", &.{
+            Attr.uint("raft_index", raft_index),
+        });
+        return error.ReplicatedApplyHalted;
+    }
+    // SONNY-6636 (3): an entry a restored snapshot covered is in the store.
+    if (raft_index != 0 and store != null and store == g_store and raft_index <= g_store_raft_index.load(.acquire)) {
+        log.debug("raft apply: entry covered by the restored snapshot; skipped", &.{Attr.uint("raft_index", raft_index)});
+        return allocator.alloc(u8, 0);
+    }
+    // SONNY-6567 (6c): no hydration this apply triggers persists (waits for
+    // a graph lock) under the Raft node's `inner_mutex`.
+    GraphStore.enterReplicatedApply();
+    defer GraphStore.leaveReplicatedApply();
     switch (command) {
         // ---- no-op: nothing to apply ----
         .noop => {
@@ -355,7 +595,9 @@ fn applySnapshotPointer(allocator: Allocator, sp: SnapshotPointer) ![]u8 {
 // The APPLY path below does not depend on it: write sets use the native G2PC
 // codec (txn_coordinator.serializeWriteSet / deserializeWriteSet), so the
 // full prepare → decide → store-mutation path is real and exercised by
-// in-process tests constructing commands directly (test-gap0870).
+// in-process tests constructing commands directly (test-gap0870). It is
+// reached only that way: nothing in the server proposes these entries
+// (SONNY-6547 (6)).
 // ---------------------------------------------------------------------------
 
 // CANARY: REQ=REQ-DIST-RAFT-CMD-VARIANTS; FEATURE="Raft Command Variants"; ASPECT=ApplyTxnPrepare; STATUS=TESTED; TEST=tests/test_gap0870_raft_command_variants.zig; OWNER=distributed; UPDATED=2026-06-11
@@ -399,7 +641,24 @@ fn applyTxnDecide(allocator: Allocator, td: TxnDecide) ![]u8 {
 // Graph mutation handler
 // ---------------------------------------------------------------------------
 
+// CANARY: REQ=REQ-SONNY-2726-REPLICATED-TENANT; FEATURE="DistributedCluster"; ASPECT=ApplyUnderTenant; STATUS=TESTED; TEST=tests/test_sonny2726_replicated_tenant.zig; OWNER=distributed; UPDATED=2026-11-12
+/// SONNY-2726: an entry in a GTN1 tenant envelope is applied as that tenant:
+/// the apply thread has no request context, so the creates take the tenant
+/// from the thread's FLE tenant (`fle_integration.tenantPreferringActiveContext`),
+/// set here for the entry and restored after it. An entry without the
+/// envelope applies as before (the default tenant).
 fn applyGraphMutation(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMutation, raft_index: u64) ![]u8 {
+    if (!cluster_replication.isTenantPayload(gm.data)) return applyGraphMutationInner(allocator, store_opt, gm, raft_index);
+    const split = try cluster_replication.splitTenant(gm.data);
+    const prev = fle_integration.getCurrentTenantId();
+    fle_integration.setCurrentTenantId(split.tenant);
+    defer fle_integration.setCurrentTenantId(if (std.mem.eql(u8, prev, "default")) null else prev);
+    var inner = gm;
+    inner.data = split.inner;
+    return applyGraphMutationInner(allocator, store_opt, inner, raft_index);
+}
+
+fn applyGraphMutationInner(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMutation, raft_index: u64) ![]u8 {
     const store = store_opt orelse {
         log.err("raft apply: graph_mutation received but no store registered", &.{});
         return error.StoreNotAvailable;
@@ -407,11 +666,36 @@ fn applyGraphMutation(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMu
 
     const graph_name: []const u8 = if (gm.graph.len > 0) gm.graph else "default";
 
-    // Ensure the target graph exists (idempotent).
-    store.createGraph(graph_name) catch |err| switch (err) {
+    // Ensure the target graph exists (idempotent). SONNY-6492 (3): never
+    // creates a graph dropped since the store opened (a replicated DROP
+    // GRAPH earlier in the log, or a local drop): GraphNotFound, on every
+    // replica alike. Only a replicated CREATE GRAPH (schema_change) does.
+    store.ensureGraphForReplicatedWrite(graph_name) catch |err| switch (err) {
         error.GraphAlreadyExists => {}, // fine — idempotent
         else => return err,
     };
+
+    // CANARY: REQ=REQ-SONNY-6528-APPLY-CHECKPOINT-EXCLUSION; FEATURE="DistributedCluster"; ASPECT=ApplyHoldsReplicatedApplyMutex; STATUS=TESTED; TEST=tests/test_sonny6528_apply_checkpoint_exclusion.zig; OWNER=storage; UPDATED=2026-11-14
+    // SONNY-6528 (1): the write holds the graph's `replicated_apply_mutex`,
+    // so a checkpoint of the graph waits for it (every local writer holds
+    // the graph's rwlock, which this thread must not take: see
+    // `ManagedGraph.replicated_apply_mutex`). The graph is hydrated first,
+    // outside it.
+    // CANARY: REQ=REQ-SONNY-6547-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=ApplyHydratesWithoutPersist; STATUS=TESTED; TEST=tests/test_sonny6547_apply_hydration_stall.zig; OWNER=distributed; UPDATED=2026-11-14
+    // SONNY-6547 (4): this runs under the Raft node's `inner_mutex`, so a
+    // first hydration here does not persist its products: that persist is a
+    // checkpoint of the graph, which waits up to 5 s for the graph's lock
+    // (held by any local request on the graph), and the whole Raft node
+    // waited with it (no tick, no heartbeat, no inbound message; 6.3 s
+    // measured). The leader hydrates an entry's graph before it proposes
+    // it, without `inner_mutex` (`prehydrateForApply`); a graph hydrated
+    // here is persisted by the next full checkpoint.
+    // SONNY-6605: a build that failed transiently left the graph's products
+    // partial: the apply fails rather than write on them.
+    try store.ensureGraphHydratedForReplicatedApply(graph_name);
+    const apply_adapter = graph_store_mod.getGlobalAdapter();
+    const apply_mg = if (apply_adapter) |a| try a.beginReplicatedApply(graph_name) else null;
+    defer if (apply_mg) |mg| apply_adapter.?.endReplicatedApply(mg);
 
     // CANARY: REQ=REQ-SONNY-3348-CLUSTER-BATCH; FEATURE="DistributedCluster"; ASPECT=ApplyStatementBatch; STATUS=TESTED; TEST=tests/test_sonny3348_cluster_batch.zig; OWNER=distributed; UPDATED=2026-09-29
     // SONNY-3348 (round 19): one statement's writes, as one entry (GBAT,
@@ -617,6 +901,9 @@ fn applyGraphMutation(allocator: Allocator, store_opt: ?*GraphStore, gm: GraphMu
 // Schema change handler
 // ---------------------------------------------------------------------------
 
+/// SONNY-6547 (6): nothing in the server proposes a `schema_change`; CREATE
+/// and DROP GRAPH are refused in cluster mode (`gateUnreplicatedWrite`).
+/// This is the receiving side of a future replicated DDL, reached by tests.
 fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaChange) ![]u8 {
     const store = store_opt orelse {
         log.err("raft apply: schema_change received but no store registered", &.{});
@@ -642,24 +929,60 @@ fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaCh
             // apply thread dropped it with no lock, and freed the graph under
             // requests holding it. A graph that is not there is not locked
             // (the lock would create it); the drop is idempotent.
-            if (!store.graphExists(sc.graph)) {
-                log.info("raft apply: drop_graph of a graph that is not there (idempotent)", &.{
-                    Attr.string("graph", sc.graph),
-                });
-                return allocator.alloc(u8, 0);
-            }
-            const lock = graph_store_mod.acquireGraphWriteLock(sc.graph);
-            defer graph_store_mod.releaseGraphLock(lock);
+            // SONNY-6384 (item 4): `GraphStore.dropGraph` takes the graph's
+            // write lock itself (SONNY-3135) and reports a graph that is not
+            // there as GraphNotFound without locking it. The apply checked
+            // `graphExists` first and then took `acquireGraphWriteLock`; a
+            // drop in between sent that lock to its global-exclusive
+            // fallback for a graph that no longer existed.
+            // CANARY: REQ=REQ-SONNY-6541-DROP-APPLY-NO-DEADLOCK; FEATURE="DistributedCluster"; ASPECT=DropApplyAnnouncesWait; STATUS=TESTED; TEST=tests/test_sonny6541_drop_apply_deadlock.zig; OWNER=distributed; UPDATED=2026-11-14
+            // SONNY-6541 (1): that wait runs under the Raft node's
+            // `inner_mutex`, and a request on the leader holds its graph's
+            // lock while it proposes (taking `inner_mutex`) and waits for the
+            // commit. The wait is announced on the graph first: a holder of
+            // its lock that would wait for Raft gives up instead
+            // (`threadHoldsGraphAwaitedByReplicatedDrop`), lets go of the
+            // lock, and the drop goes on.
+            const drop_adapter = graph_store_mod.getGlobalAdapter();
+            const drop_mg = if (drop_adapter) |a| a.beginReplicatedDrop(sc.graph) else null;
+            defer if (drop_mg) |mg| drop_adapter.?.endReplicatedDrop(mg);
             store.dropGraph(sc.graph) catch |err| switch (err) {
-                error.GraphNotFound => {}, // idempotent
+                error.GraphNotFound => {
+                    log.info("raft apply: drop_graph of a graph that is not there (idempotent)", &.{
+                        Attr.string("graph", sc.graph),
+                    });
+                    return allocator.alloc(u8, 0);
+                },
                 error.CannotDropDefaultGraph => {
                     log.warn("raft apply: attempted to drop default graph, ignoring", &.{});
                 },
-                // SONNY-3028: the apply thread has no engine transaction open
-                // on the graph; kept for the error set.
+                // CANARY: REQ=REQ-SONNY-6547-REPLICATED-DROP-IN-USE; FEATURE="DistributedCluster"; ASPECT=RefusedDropFailsApply; STATUS=TESTED; TEST=tests/test_sonny6547_single_voter_drop.zig; OWNER=distributed; UPDATED=2026-11-14
+                // SONNY-6547 (3): the graph is in use on this node (the
+                // applying thread holds its read lock, or a session
+                // transaction changed it, SONNY-3134): nothing was dropped,
+                // and the apply fails, so the Raft node counts and logs a
+                // committed entry not applied. It logged the refusal, then
+                // the graph as dropped, and reported the entry applied while
+                // the node kept the graph. An apply runs on the thread that
+                // ticks or steps the node (the raft library commits on a
+                // tick or a step, never in a propose), which holds no graph
+                // lock. What a replicated drop does to an open transaction is
+                // for the replicated DDL feature to decide: nothing proposes
+                // a `schema_change` today (SONNY-6547 (6)).
+                // SONNY-6567 (6a): and the node then stops applying
+                // (`haltApply`) rather than go on without the drop.
                 error.ObjectInUse => {
-                    log.warn("raft apply: graph in use by this thread's transaction, not dropped", &.{});
+                    log.err("raft apply: drop_graph refused, the graph is in use on this node; the entry is not applied here", &.{
+                        Attr.string("graph", sc.graph),
+                    });
+                    haltApply("replicated drop_graph refused: the graph is in use on this node", sc.graph);
+                    return err;
                 },
+                // SONNY-6433: no room to record the graph lock; nothing was
+                // dropped, and the apply fails.
+                // SONNY-6523 (5): or the drop could not be recorded on disk;
+                // nothing was dropped either.
+                error.OutOfMemory, error.DroppedGraphNamesNotSaved => return err,
             };
             log.info("raft apply: dropped graph via schema_change", &.{
                 Attr.string("graph", sc.graph),

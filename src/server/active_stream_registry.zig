@@ -152,8 +152,8 @@ fn nowMonotonicNs() i128 {
         return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
     } else {
         // Non-Linux: mirror the std.posix.timespec + std.c.clock_gettime
-        // pattern already established in src/performance/simple_async_io.zig
-        // (compat_milliTimestamp etc.). std.c.timespec on macOS lacks
+        // pattern used by the compat_milliTimestamp helpers elsewhere in
+        // src/. std.c.timespec on macOS lacks
         // .tv_sec / .tv_nsec entirely (release pipeline #2530555362
         // build-release caught this on aarch64-macos cross-compile);
         // std.posix.timespec exposes .sec / .nsec uniformly across
@@ -305,7 +305,7 @@ test "GlobalStreamThrottle release wakes waiter" {
     }.run, .{ &throttle, &acquired });
 
     // Give the waiter time to enter the condvar wait.
-    std.Thread.sleep(5 * std.time.ns_per_ms);
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(5 * std.time.ns_per_ms), .awake) catch {};
 
     // Release our slot — this should wake the waiter.
     throttle.release();

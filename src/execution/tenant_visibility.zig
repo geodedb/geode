@@ -58,28 +58,25 @@
 //   separate, pre-existing concern this ticket does not claim to close, and
 //   it is why the row says "H1" and not an unqualified "yes".)
 //
-// CALL SITES ADDED BY SONNY-1326 (`src/execution/graph_algorithms.zig`):
+// CALL SITES ADDED BY SONNY-1326 (`src/execution/graph_algorithms.zig`;
+// SONNY-2707 moved COUNT {}, EXISTS {} and pattern comprehensions onto one
+// walk, `PatternWalk`, which `countPatternMatches` and
+// `executePatternComprehension` share):
 //
 //   | site                                             | predicate               |
 //   |--------------------------------------------------|-------------------------|
 //   | findFirstMatchingNode (start/end node scan)      | passesTenantFilter      |
 //   | findEdgeBetween (path edge lookup)               | edgeTraversable         |
-//   | countVariableLengthPathMatches (frontier edge)   | edgeTraversable         |
-//   | countVariableLengthPathMatches (counted target)  | passesTenantFilter      |
-//   | countSingleHopMatches (hop edge)                 | edgeTraversable         |
-//   | countSingleHopMatches (counted target)           | passesTenantFilter      |
-//   | countPatternMatches (correlated outer binding)   | passesTenantFilter      |
-//   | countPatternMatches (bare node loop)             | passesTenantFilter      |
-//   | countPatternMatches (relationship arm)           | edgeTraversable         |
+//   | PatternWalk.walkChain (correlated start)         | passesTenantFilter      |
+//   | PatternWalk.walkChain (scanned start)            | passesTenantFilter      |
+//   | PatternWalk.walkSingleHop (hop edge)             | edgeTraversable         |
+//   | PatternWalk.walkSingleHop (far node)             | passesTenantFilter      |
+//   | PatternWalk.walkVariableLengthHop (every step)   | edgeTraversable         |
+//   | PatternWalk.walkVariableLengthHop (path end)     | passesTenantFilter      |
 //   | findShortestPath (env-bound start/end)           | passesTenantFilter      |
 //   | findShortestPath (start/end id gate)             | nodeIdVisible           |
 //   | findShortestPath (BFS out/in frontier)           | edgeTraversable         |
 //   | materializePath (every path node)                | passesTenantFilter      |
-//   | executePatternComprehension (node-only scan)     | passesTenantFilter      |
-//   | executePatternComprehension (env source node)    | passesTenantFilter      |
-//   | executePatternComprehension (scanned source)     | passesTenantFilter      |
-//   | executePatternComprehension (out/in edge)        | edgeTraversable         |
-//   | executePatternComprehension (target node)        | passesTenantFilter      |
 //
 // The scope itself is resolved once per evaluation by
 // `graph_algorithms.sessionScope()` -> `resolveScope` (below).
@@ -203,13 +200,15 @@
 //          path). The non-resident case is exactly what
 //          `tenantTagFallbackAllowed` now refuses on an arm.
 //
-//     SEPARATE PRE-EXISTING BUG found while pinning this ticket, NOT a race and
-//     NOT fixed here — recorded for SONNY-1562 (NOT 1332; 1332 tracks the
-//     threadlocal-propagation residual above): `countPatternMatches` scans
-//     `store.nodes.iterator()`, which is RESIDENT-ONLY. Over a cold store a
-//     bare `RETURN COUNT { (a:A)-[:R]->(b:B) }` answers 0 on the SERIAL path
-//     too, because it never sees a node to expand from. `COUNT {}` / `EXISTS {}`
-//     results are therefore residency-dependent, independent of threading.
+//     SEPARATE PRE-EXISTING BUG found while pinning this ticket, NOT a race:
+//     `countPatternMatches` scanned `store.nodes.iterator()`, which is
+//     RESIDENT-ONLY, so over a cold store a bare
+//     `RETURN COUNT { (a:A)-[:R]->(b:B) }` answered 0 on the SERIAL path too.
+//     FIXED by SONNY-1562: the expression path's uncorrelated scans read the
+//     authoritative id sets through `graph_algorithms.ScanSource` (label index
+//     or per-graph node-id index, bodies via the detached
+//     `getNodePtrForScan`), with every node still gated by the predicates
+//     above (`tests/test_sonny1562_cold_subquery_scan.zig`).
 //
 // Every OTHER caller (`recursion_handler.zig`, the serial centrality loops, and
 // `match_operations.zig` when it is NOT running under a parallel UNION arm)
@@ -278,6 +277,171 @@ pub inline fn passesTenantFilterSlice(node_tenant: []const u8, filter_tenant: ?[
     if (std.mem.eql(u8, node_tenant, tid)) return true;
     const hm = hierarchyForFilter(tid) orelse return false;
     return hm.canAccessTenantSafe(tid, node_tenant);
+}
+
+// CANARY: REQ=REQ-SONNY-6338-TENANT-VISIBILITY-CONSISTENCY; FEATURE="PerTenantIsolation"; ASPECT=StorageFilterAndDescendants; STATUS=TESTED; TEST=tests/test_sonny6338_tenant_visibility_consistency.zig; OWNER=security; UPDATED=2026-11-12
+/// GAP-0846: the tenant to hand a storage primitive that filters by EXACT tag
+/// (`getNodesByLabels(..., tenant)`, `labelSolelyCarriesProperty`): the
+/// session's tenant when it sees only its own rows, null (every tenant) when
+/// the hierarchy grants it more, so the caller filters each candidate with
+/// `passesTenantFilter*` instead. (Moved here from match_operations.zig so
+/// MERGE and knn() use the same decision, SONNY-6338 / SONNY-2820.)
+pub inline fn storageTenantFilter(filter_tenant: ?[]const u8) ?[]const u8 {
+    const tid = filter_tenant orelse return null;
+    if (hierarchyForFilter(tid) != null) return null;
+    return tid;
+}
+
+/// SONNY-6338: does the session's tenant see rows of a tenant other than
+/// itself, i.e. does it have descendants in the hierarchy? False for an
+/// unscoped session (null), a tenant outside the hierarchy and a leaf. When
+/// false, "visible to the session" and "tagged exactly with its tenant" are
+/// the same set, which is what the exact-tag storage MERGE primitives rely on.
+pub fn tenantHasDescendants(filter_tenant: ?[]const u8) bool {
+    const tid = filter_tenant orelse return false;
+    const hm = hierarchyForFilter(tid) orelse return false;
+    return hm.hasChildren(tid);
+}
+
+// CANARY: REQ=REQ-SONNY-6344-TENANT-LISTINGS; FEATURE="PerTenantIsolation"; ASPECT=VisibleTenantTags; STATUS=TESTED; TEST=tests/test_sonny6344_tenant_schema_listings.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6344: the tenant tags whose rows the session sees, for a listing
+/// that reads per-tenant structures by EXACT tag (`listNodeLabels`,
+/// `listEdgeTypes`, `listPropertiesForLabel`): the session's tenant and,
+/// when it is registered in the hierarchy, every descendant (children, their
+/// children, ...). Null for an unscoped session (every tag). The caller
+/// unions the per-tag listings and frees the result with `freeTenantTags`.
+pub fn visibleTenantTagsAlloc(allocator: std.mem.Allocator, filter_tenant: ?[]const u8) !?[][]const u8 {
+    const tid = filter_tenant orelse return null;
+    var tags: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (tags.items) |t| allocator.free(t);
+        tags.deinit(allocator);
+    }
+    // SONNY-6498: the list grows first, so the copy is never dropped.
+    try tags.ensureUnusedCapacity(allocator, 1);
+    tags.appendAssumeCapacity(try allocator.dupe(u8, tid));
+    if (hierarchyForFilter(tid)) |hm| {
+        // Breadth-first over the children lists; `tags` doubles as the queue.
+        var next: usize = 0;
+        while (next < tags.items.len) : (next += 1) {
+            const children = try hm.getChildrenAlloc(allocator, tags.items[next]);
+            defer allocator.free(children);
+            var taken: usize = 0;
+            errdefer for (children[taken..]) |c| allocator.free(c);
+            for (children) |child| {
+                if (containsTag(tags.items, child)) {
+                    allocator.free(child);
+                } else {
+                    try tags.append(allocator, child);
+                }
+                taken += 1;
+            }
+        }
+    }
+    return try tags.toOwnedSlice(allocator);
+}
+
+pub fn freeTenantTags(allocator: std.mem.Allocator, tags: ?[][]const u8) void {
+    const list = tags orelse return;
+    for (list) |t| allocator.free(t);
+    allocator.free(list);
+}
+
+fn containsTag(tags: []const []const u8, tag: []const u8) bool {
+    for (tags) |t| {
+        if (std.mem.eql(u8, t, tag)) return true;
+    }
+    return false;
+}
+
+/// SONNY-6344: the node labels a session sees (`listNodeLabels` over every
+/// visible tenant tag, deduplicated). Caller owns the slice and its strings.
+pub fn listNodeLabelsVisible(allocator: std.mem.Allocator, store: *graph_store.GraphStore, filter_tenant: ?[]const u8) ![][]const u8 {
+    return unionOverVisibleTags(allocator, store, filter_tenant, {}, struct {
+        fn list(a: std.mem.Allocator, s: *graph_store.GraphStore, tag: ?[]const u8, _: void) anyerror![][]const u8 {
+            return s.listNodeLabels(a, tag);
+        }
+    }.list);
+}
+
+/// SONNY-6344: the relationship types a session sees.
+pub fn listEdgeTypesVisible(allocator: std.mem.Allocator, store: *graph_store.GraphStore, filter_tenant: ?[]const u8) ![][]const u8 {
+    return unionOverVisibleTags(allocator, store, filter_tenant, {}, struct {
+        fn list(a: std.mem.Allocator, s: *graph_store.GraphStore, tag: ?[]const u8, _: void) anyerror![][]const u8 {
+            return s.listEdgeTypes(a, tag);
+        }
+    }.list);
+}
+
+/// SONNY-6344: the property keys of `label` a session sees.
+pub fn listPropertiesForLabelVisible(allocator: std.mem.Allocator, store: *graph_store.GraphStore, filter_tenant: ?[]const u8, label: []const u8) ![][]const u8 {
+    return unionOverVisibleTags(allocator, store, filter_tenant, label, struct {
+        fn list(a: std.mem.Allocator, s: *graph_store.GraphStore, tag: ?[]const u8, lbl: []const u8) anyerror![][]const u8 {
+            return s.listPropertiesForLabel(a, tag, lbl);
+        }
+    }.list);
+}
+
+/// SONNY-6589 (3): `listNodeLabelsVisible` of graph `graph_name` only.
+pub fn listNodeLabelsVisibleInGraph(allocator: std.mem.Allocator, store: *graph_store.GraphStore, graph_name: []const u8, filter_tenant: ?[]const u8) ![][]const u8 {
+    return unionOverVisibleTags(allocator, store, filter_tenant, graph_name, struct {
+        fn list(a: std.mem.Allocator, s: *graph_store.GraphStore, tag: ?[]const u8, g: []const u8) anyerror![][]const u8 {
+            return s.listNodeLabelsInGraph(a, g, tag);
+        }
+    }.list);
+}
+
+/// SONNY-6589 (3): `listEdgeTypesVisible` of graph `graph_name` only.
+pub fn listEdgeTypesVisibleInGraph(allocator: std.mem.Allocator, store: *graph_store.GraphStore, graph_name: []const u8, filter_tenant: ?[]const u8) ![][]const u8 {
+    return unionOverVisibleTags(allocator, store, filter_tenant, graph_name, struct {
+        fn list(a: std.mem.Allocator, s: *graph_store.GraphStore, tag: ?[]const u8, g: []const u8) anyerror![][]const u8 {
+            return s.listEdgeTypesInGraph(a, g, tag);
+        }
+    }.list);
+}
+
+/// SONNY-6589 (3): `listPropertiesForLabelVisible` of graph `graph_name` only.
+pub fn listPropertiesForLabelVisibleInGraph(allocator: std.mem.Allocator, store: *graph_store.GraphStore, graph_name: []const u8, filter_tenant: ?[]const u8, label: []const u8) ![][]const u8 {
+    const GraphLabel = struct { graph: []const u8, label: []const u8 };
+    return unionOverVisibleTags(allocator, store, filter_tenant, GraphLabel{ .graph = graph_name, .label = label }, struct {
+        fn list(a: std.mem.Allocator, s: *graph_store.GraphStore, tag: ?[]const u8, gl: GraphLabel) anyerror![][]const u8 {
+            return s.listPropertiesForLabelInGraph(a, gl.graph, tag, gl.label);
+        }
+    }.list);
+}
+
+fn unionOverVisibleTags(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    filter_tenant: ?[]const u8,
+    extra: anytype,
+    comptime list: fn (std.mem.Allocator, *graph_store.GraphStore, ?[]const u8, @TypeOf(extra)) anyerror![][]const u8,
+) ![][]const u8 {
+    const tags = try visibleTenantTagsAlloc(allocator, filter_tenant);
+    defer freeTenantTags(allocator, tags);
+    const visible = tags orelse return list(allocator, store, null, extra);
+    if (visible.len == 1) return list(allocator, store, visible[0], extra);
+
+    var out: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (out.items) |s| allocator.free(s);
+        out.deinit(allocator);
+    }
+    for (visible) |tag| {
+        const items = try list(allocator, store, tag, extra);
+        defer allocator.free(items);
+        var moved: usize = 0;
+        errdefer for (items[moved..]) |s| allocator.free(s);
+        for (items) |item| {
+            if (containsTag(out.items, item)) {
+                allocator.free(item);
+            } else {
+                try out.append(allocator, item);
+            }
+            moved += 1;
+        }
+    }
+    return out.toOwnedSlice(allocator);
 }
 
 /// GAP-0279 / GAP-0846: is this node visible to the session's tenant scope?
@@ -391,7 +555,7 @@ pub fn edgeIdTraversable(
     store: *graph_store.GraphStore,
     edge_id: u64,
     filter_tenant: ?[]const u8,
-) bool {
+) !bool {
     if (filter_tenant == null) return true;
     // Review R1 — read the edge BY VALUE. `getEdgePtrHydrated` hands back a raw
     // `*Edge` pointing into the bounded edge-body cache; `graph_store.zig`
@@ -400,7 +564,7 @@ pub fn edgeIdTraversable(
     // safe accessor — it copies the body under the per-shard map lock SHARED,
     // which is exactly what `getNeighbors` already uses. This predicate runs on
     // analytical reads that overlap ingest, so it takes the by-value accessor.
-    const edge = store.getEdgeHydrated(edge_id) orelse return false;
+    const edge = (try store.getEdgeHydratedChecked(edge_id)) orelse return false;
     return edgeTraversable(store, edge, filter_tenant);
 }
 

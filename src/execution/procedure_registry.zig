@@ -25,11 +25,12 @@ const ExecutionError = execution.ExecutionError;
 const procedure_access = @import("procedure_access.zig");
 const execution_helpers = @import("execution_helpers.zig");
 const gps = @import("../security/gps.zig");
+const session_graph = @import("session_graph.zig");
 
 // Import recursion handler for member path building
 const recursion_handler = @import("recursion_handler.zig");
 
-// CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=PROCEDURE_REGISTRY; STATUS=TESTED; TEST=tests/test_performance_integration.zig; OWNER=refactor; UPDATED=2026-01-15
+// CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=PROCEDURE_REGISTRY; STATUS=TESTED; TEST=tests/test_gap0883_algo_procedures.zig; OWNER=refactor; UPDATED=2026-11-12
 
 // ==================== Domain Dispatch Modules ====================
 const algo_dispatch = @import("algo_dispatch.zig");
@@ -41,20 +42,18 @@ const rls_dispatch = @import("rls_dispatch.zig");
 const fts_dispatch = @import("fts_dispatch.zig");
 const ts_dispatch = @import("ts_dispatch.zig");
 const tenant_dispatch = @import("tenant_dispatch.zig");
+const fle_admin = @import("fle_admin.zig");
 
 // ==================== Re-exported Public Accessors ====================
 // These must remain on procedure_registry since external code imports them.
 
-/// Public accessor so other transports (gRPC) can read the global CDC engine.
-pub fn getGlobalCdcEngine() ?*@import("../streaming/cdc_enhanced.zig").CDCEngine {
-    return storage_dispatch.getGlobalCdcEngine();
-}
-
-/// Public accessor for the CDC mutex so external transports (gRPC) can
-/// acquire it before accessing the CDC engine.
-pub fn getCdcMutex() *std.Io.Mutex {
-    return storage_dispatch.getCdcMutex();
-}
+/// SONNY-6561: the CDC_DIAGNOSTICS / CDC_CONTROL frames, answered the same on
+/// every transport.
+pub const CdcRefusal = storage_dispatch.CdcRefusal;
+pub const cdcDiagnosticsAnswer = storage_dispatch.cdcDiagnosticsAnswer;
+pub const cdcControlAnswer = storage_dispatch.cdcControlAnswer;
+pub const CdcActor = storage_dispatch.CdcActor;
+pub const auditCdcFrameRefusal = storage_dispatch.auditCdcFrameRefusal;
 
 // ==================== Main Dispatch Entry Point ====================
 
@@ -120,19 +119,29 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
     // legacy hasPermission() gate. For procedures with no entry in the classifier
     // table (unknown), we fall back to the raw .execute_procedure action, which
     // requires an explicit Policy match (or Admin role) — preserving fail-closed.
+    // SONNY-6334: FLE and TDE key administration is Admin only (it was the
+    // GPS `.write` gate below, so a ReadWrite user could grant its own FLE
+    // role plaintext access). Checked first, so every refusal is audited.
+    if (storage_dispatch.isKeyAdministrationProcedure(proc_name)) try fle_admin.requireAdmin(allocator, proc_name, context);
+    // SONNY-6570: every cdc.* procedure is CDC administration, Admin only as
+    // the CDC_DIAGNOSTICS / CDC_CONTROL frames are (a readwrite or readonly
+    // user read cdc.status() and ran cdc.enable() / cdc.disable()).
+    if (storage_dispatch.isCdcProcedure(proc_name)) try fle_admin.requireAdminFor(allocator, proc_name, context, "CDC administration");
+    // SONNY-6700: storage administration (geode.storage.scrub) likewise.
+    if (storage_dispatch.isStorageAdministrationProcedure(proc_name)) try fle_admin.requireAdminFor(allocator, proc_name, context, "storage administration");
+
     if (context.principal) |princ| {
         const access_class = procedure_access.classifyProcedureName(proc_name);
         const action_for_gate: gps.Action = switch (access_class) {
             .read_only => .read,
             .mutating => .write,
         };
-        const gate_req = gps.DecisionRequest{
-            .principal = princ,
-            .action = action_for_gate,
-            .resource = .{ .procedure = proc_name },
-        };
-        const decision = try gps.decide(allocator, &gate_req);
-        if (decision.kind != .allow) return error.Unauthorized;
+        // SONNY-2753: and no deny scoped to the graph the procedure runs on
+        // (the default graph for the fulltext procedures, SONNY-2790). A
+        // deny scoped to one graph used to match every procedure, on every
+        // graph.
+        const proc_graph = if (procedure_access.isDefaultGraphProcedure(call_stmt)) graph_store.DEFAULT_GRAPH_NAME else session_graph.current(context);
+        if (!try gps.procedurePermitted(allocator, princ, action_for_gate, proc_name, proc_graph)) return error.Unauthorized;
     }
 
     // Get the graph store
@@ -168,14 +177,43 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
     // ---- cdc.* procedures (change data capture) ----
     if (std.mem.startsWith(u8, proc_name, "cdc.")) {
-        if (try storage_dispatch.executeCdc(allocator, proc_name, call_stmt)) |result| {
+        // SONNY-6570: a change to the CDC engine is an audit event, whether
+        // it succeeds or fails.
+        const audited = storage_dispatch.isAuditedCdcChange(proc_name);
+        const actor: storage_dispatch.CdcActor = .{
+            .username = context.user orelse "",
+            .user_id = if (context.principal) |p| (p.user_id orelse 0) else 0,
+        };
+        const cdc_result = storage_dispatch.executeCdc(allocator, proc_name, call_stmt) catch |err| {
+            if (audited) storage_dispatch.auditCdcChange(allocator, proc_name, actor, "", @errorName(err));
+            return err;
+        };
+        if (cdc_result) |result| {
+            if (audited) storage_dispatch.auditCdcChange(allocator, proc_name, actor, "", null);
             return result;
         }
     }
 
     // ---- geode.fle.* procedures (field-level encryption) ----
     if (std.mem.startsWith(u8, proc_name, "geode.fle.")) {
-        if (try storage_dispatch.executeFle(allocator, proc_name, call_stmt)) |result| {
+        // SONNY-6334: a configureField / grant / revoke is an audit event,
+        // whether it succeeds or fails.
+        const audited = storage_dispatch.isAuditedFleChange(proc_name);
+        // SONNY-6688: the migration needs the session (tenant, graph gate).
+        if (std.mem.eql(u8, proc_name, "geode.fle.migrateencrypt")) {
+            const migrated = storage_dispatch.executeFleMigrate(allocator, call_stmt, context) catch |err| {
+                fle_admin.auditChange(allocator, proc_name, call_stmt, context, err);
+                return err;
+            };
+            fle_admin.auditChange(allocator, proc_name, call_stmt, context, null);
+            return migrated;
+        }
+        const fle_result = storage_dispatch.executeFle(allocator, proc_name, call_stmt) catch |err| {
+            if (audited) fle_admin.auditChange(allocator, proc_name, call_stmt, context, err);
+            return err;
+        };
+        if (fle_result) |result| {
+            if (audited) fle_admin.auditChange(allocator, proc_name, call_stmt, context, null);
             return result;
         }
     }
@@ -196,6 +234,17 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
     // ---- geode.storage.* procedures (storage inspection) ----
     if (std.mem.startsWith(u8, proc_name, "geode.storage.")) {
+        // SONNY-6700: a scrub is an audit event, whether it succeeds or fails.
+        if (storage_dispatch.isStorageAdministrationProcedure(proc_name)) {
+            var details_buf: [256]u8 = undefined;
+            var details: std.Io.Writer = .fixed(&details_buf);
+            const scrubbed = storage_dispatch.executeStorageScrub(allocator, call_stmt, context, &details) catch |err| {
+                storage_dispatch.auditStorageScrub(allocator, context, details.buffered(), err);
+                return err;
+            };
+            storage_dispatch.auditStorageScrub(allocator, context, details.buffered(), null);
+            return scrubbed;
+        }
         if (try storage_dispatch.executeStorage(allocator, proc_name, call_stmt, context)) |result| {
             return result;
         }

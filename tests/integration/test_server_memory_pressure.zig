@@ -13,6 +13,8 @@
 // regresses to GPA defaults, this test fails.
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
+const test_ports = @import("test_ports");
 const testing = std.testing;
 
 // std.c.mkdtemp is not exposed in Zig 0.15.2 — declare the libc extern directly.
@@ -88,17 +90,17 @@ test "server RSS stays bounded across 60 connections" {
     defer std.Io.Dir.cwd().deleteTree(testIo(), tmp_dir) catch {};
 
     // Launch the real server binary so the test covers the shipping allocator.
-    // Hard-coded high port — acceptable because this test is gated to test-e2e
-    // which runs serially.  Parallel runs would collide here.
-    const port: u16 = 34717;
+    // A port the kernel reports free (SONNY-6332: this was the fixed 34717,
+    // shared with any other run of the suite on the host).
+    const port: u16 = try test_ports.freeUdpPort();
     var port_buf: [24]u8 = undefined;
     const listen = try std.fmt.bufPrint(&port_buf, "127.0.0.1:{d}", .{port});
 
     const argv = [_][]const u8{
-        "./zig-out/bin/geode", "serve",
-        "--data-dir",          tmp_dir,
-        "--listen",            listen,
-        "--log-level",         "error",
+        geode_test_bin.geode_exe, "serve",
+        "--data-dir",             tmp_dir,
+        "--listen",               listen,
+        "--log-level",            "error",
     };
 
     // GEODE_ADMIN_PASSWORD bootstraps the admin user on first launch; the
@@ -131,7 +133,7 @@ test "server RSS stays bounded across 60 connections" {
             }
         }
     }
-    try env_map.put("GEODE_ADMIN_PASSWORD", "GeodeTestPassword123!");
+    try env_map.put("GEODE_ADMIN_PASSWORD", "Geode Test Password Passphrase 123");
 
     // Zig 0.16: std.process.Child.init/spawn retired in favor of
     // std.process.spawn(io, SpawnOptions).
@@ -198,16 +200,20 @@ test "server RSS stays bounded across 60 connections" {
 
 fn runOneQuery(alloc: std.mem.Allocator, listen: []const u8, query: []const u8) !void {
     const argv = [_][]const u8{
-        "./zig-out/bin/geode",   "query",
-        "--insecure",            "--server",
-        listen,                  "-U",
-        "geode",                 "-P",
-        "GeodeTestPassword123!", query,
+        geode_test_bin.geode_exe,             "query",
+        "--insecure",                         "--server",
+        listen,                               "-U",
+        "geode",                              "-P",
+        "Geode Test Password Passphrase 123", query,
     };
-    _ = alloc;
+    // SONNY-6782: a release build refuses --insecure without GEODE_ALLOW_INSECURE_TLS=1.
+    var env = try std.Io.Threaded.global_single_threaded.environ.process_environ.createMap(alloc);
+    defer env.deinit();
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
     const io = testIo();
     var child = try std.process.spawn(io, .{
         .argv = &argv,
+        .environ_map = &env,
         .stdin = .ignore,
         .stdout = .ignore,
         .stderr = .ignore,

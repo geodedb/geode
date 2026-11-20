@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
 
@@ -73,20 +75,26 @@ fn normalize_rows(allocator: std.mem.Allocator, rows_json: []const u8) ![]u8 {
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity CASE 3VL"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_Case3VL; OWNER=engine; UPDATED=2025-09-24
 test "protocol: transport parity QUIC (CASE 3VL)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("transport parity QUIC (CASE 3VL)");
     errdefer util.testFail();
 
     const allocator = std.testing.allocator;
-    const exe = "./zig-out/bin/geode";
-    const q = "RETURN CASE WHEN a IS NULL THEN 'n' WHEN a THEN 't' ELSE 'f' END AS r";
-    const param = "[null,true,false]";
+    const exe = geode_test_bin.geode_exe;
+    // SONNY-6548: this bound `a` with `--param a [null,true,false]`, the
+    // deleted client's one-row-per-element expansion. The CLI binds a list,
+    // `a` is an unbound variable (42000), and the smoke compared two equal
+    // error outputs and passed until a failed query exited 1 (SONNY-6369).
+    // FOR yields the three rows.
+    const q = "FOR a IN [null, true, false] RETURN CASE WHEN a IS NULL THEN 'n' WHEN a THEN 't' ELSE 'f' END AS r";
 
     var server = try util.spawnServerRandom(allocator, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();
     const addr = server.getAddr();
 
     util.progress("Running first query...", .{});
-    const qres = try run(allocator, addr, &.{ exe, q, "--param", "a", param, "--format", "json" });
+    const qres = try run(allocator, addr, &.{ exe, q, "--format", "json" });
     defer allocator.free(qres.out);
     defer allocator.free(qres.err);
     try std.testing.expectEqual(@as(i32, 0), qres.code);
@@ -96,7 +104,7 @@ test "protocol: transport parity QUIC (CASE 3VL)" {
     defer allocator.free(qnorm);
 
     util.progress("Running second query...", .{});
-    const qres2 = try run(allocator, addr, &.{ exe, q, "--param", "a", param, "--format", "json" });
+    const qres2 = try run(allocator, addr, &.{ exe, q, "--format", "json" });
     defer allocator.free(qres2.out);
     defer allocator.free(qres2.err);
     try std.testing.expectEqual(@as(i32, 0), qres2.code);
@@ -107,6 +115,9 @@ test "protocol: transport parity QUIC (CASE 3VL)" {
 
     util.progress("Comparing results...", .{});
     try std.testing.expect(std.mem.eql(u8, qnorm, qnorm2));
+    for ([_][]const u8{ "{\"r\":\"n\"}", "{\"r\":\"t\"}", "{\"r\":\"f\"}" }) |row| {
+        try std.testing.expect(std.mem.indexOf(u8, qres.out, row) != null);
+    }
 
     util.testPass();
 }

@@ -4,7 +4,7 @@
 
 [![ISO Conformance Suite](https://img.shields.io/badge/ISO%20Conformance%20Suite-70%2F70-brightgreen)](docs/GQL_COMPLIANCE.md)
 [![Local Test Baseline](https://img.shields.io/badge/Local%20Test%20Baseline-166%2F175%20steps-green)](docs/KNOWN_TEST_ISSUES.md)
-[![CANARY Tracking](https://img.shields.io/badge/CANARY%20Markers-4900%2B-blue)](docs/TODO.md)
+[![CANARY Tracking](https://img.shields.io/badge/CANARY%20Markers-5900%2B-blue)](docs/TODO.md)
 [![Status](https://img.shields.io/badge/Status-Development%20Ready%20%28Single--Tenant%29-yellow)](docs/FEATURES_OVERVIEW.md)
 
 Geode is a feature-complete single-tenant graph database implementing the **ISO/IEC 39075:2024 Graph Query Language (GQL)** standard. Built in Zig for performance and reliability, Geode provides enterprise-grade features including advanced security, machine learning integration, and distributed query processing.
@@ -16,21 +16,21 @@ Geode is a feature-complete single-tenant graph database implementing the **ISO/
 ### **Standards Compliance**
 
 - **ISO/IEC 39075:2024 GQL Conformance Suite** - 96/96 cases in the named conformance suite pass (`tests/gql_iso_conformance.zig`, `zig build test-iso-conformance`; parse-only scope); see [GQL Compliance](docs/GQL_COMPLIANCE.md) for the precise scope and documented residual limits
-- **ACID Transactions** - Full MVCC with Serializable Snapshot Isolation (SSI)
-- **Enterprise Security** - Enhanced RLS, TDE, audit logging, MFA support
+- **Transactions** - `START TRANSACTION` / `COMMIT` / `ROLLBACK` with undo-log rollback; writes are serialized per graph and each read sees one snapshot. There are no isolation levels and no SSI (see [docs/ENHANCED_TRANSACTION_ISOLATION.md](docs/ENHANCED_TRANSACTION_ISOLATION.md))
+- **Enterprise Security** - Row-level security, TDE, audit logging (MFA is not enforced at login yet)
 
 ### **Advanced Capabilities**
 
 - **Vector Search** - HNSW indexing with 6 distance metrics and SIMD acceleration
 - **Machine Learning** - Node2Vec, GraphSAGE, DeepWalk graph embeddings
 - **Real-time Analytics** - Streaming pattern detection and anomaly analysis
-- **Distributed Queries** - Federation-aware optimization with load balancing
+- **Cluster mode** - Raft-replicated writes within a documented slice; unreplicated write surfaces fail closed. Federated / scatter-gather query coordination is not implemented
 
 ### **Performance & Scalability**
 
 - **13.18x I/O Performance** - Memory-mapped operations with optimization
-- **Cost-Based Query Planner** - Statistics-driven optimization
-- **Backup/Restore CLI** - `geode backup create` / `geode restore` (engine-backed, full graph data round-trip); S3 backup target supported. GQL `BACKUP`/`RESTORE` *statements* are not implemented (use the CLI). Payload compression currently records `.none` (no encoder wired); see [Known Limitations](CLAUDE.md#known-limitations).
+- **Query Planner** - Rule-based index use; EXPLAIN shows per-operator cost estimates (no cost-based plan choice)
+- **Backup/Restore CLI** - `geode backup create` / `geode restore <file> --data-dir <dir>` (engine-backed, full graph data round-trip; the restore is offline, into a new or empty directory, and verified before it reports success). Backups are local files: geode has no S3/object-storage path for backup or restore (copy files with your own tool; an `s3://` output or source is refused). GQL `BACKUP`/`RESTORE` *statements* are not implemented (use the CLI). Payload compression: `none` or `gzip` (`--compress`); see [Known Limitations](CLAUDE.md#known-limitations).
 - **Multi-Shard Support** - Up to 32 shards with automatic coordination
 
 ## 🚀 Quick Start
@@ -184,7 +184,7 @@ COMMIT;
 ### **Core Components**
 
 - **GQL Parser/Lexer** - ISO/IEC 39075:2024 syntax support; passes the 96/96 named conformance suite (parse-only scope) (see [GQL Compliance](docs/GQL_COMPLIANCE.md) for scope)
-- **Query Planner** - Cost-based optimization with real-time statistics integration
+- **Query Planner** - Rule-based index selection; EXPLAIN / PROFILE with per-operator cost estimates
 - **Storage Engine** - MVCC with WAL, TDE encryption, and memory-mapped I/O
 - **Index System** - 6 index types: B-tree, Hash, Full-text, Spatial, Vector (HNSW), Interval
 - **Transport Layer** - QUIC+TLS for secure, modern network communication
@@ -193,7 +193,7 @@ COMMIT;
 
 - **Vector Processing** - SIMD-accelerated operations with hardware optimization
 - **Machine Learning** - Integrated graph embedding algorithms for AI applications
-- **Security Layer** - Enhanced RLS, policy evaluation, temporal constraints
+- **Security Layer** - Row-level security: policy evaluation, temporal constraints
 - **Analytics Engine** - Real-time stream processing with pattern detection
 
 ## 📊 Performance Benchmarks
@@ -209,22 +209,21 @@ COMMIT;
 
 - **I/O Operations**: 13.18x improvement (5,754μs → 436μs)
 - **Vector Operations**: 8x SIMD speedup for vectors ≥8 dimensions
-- **Transaction Throughput**: SSI with minimal performance overhead
 - **Memory Usage**: <2% overhead for security features
 
 ## 🔐 Security Features
 
 ### **Authentication & Authorization**
 
-- **Enhanced Row-Level Security (RLS)** - Policy-based access control with expression evaluation
+- **Row-Level Security (RLS)** - Policy-based access control with expression evaluation
 - **RBAC/ABAC** - Role and attribute-based access control
-- **Multi-Factor Authentication** - Integrated MFA support
+- **Multi-Factor Authentication** - TOTP enrollment and on-request verification procedures; not enforced at login yet (SONNY-6604, see [docs/USER_AUTH.md](docs/USER_AUTH.md#mfa-is-not-enforced-at-login))
 - **Session Management** - Secure session handling with timeout controls
 
 ### **Data Protection**
 
-- **Transparent Data Encryption (TDE)** - <5% TDE overhead on OLTP workloads (the validated target: `tests/test_tde_oltp_overhead_threshold.zig`, [BENCHMARK_REPORT.md](BENCHMARK_REPORT.md))
-- **Key Management System (KMS)** - HashiCorp Vault integration
+- **Transparent Data Encryption (TDE)** - AES-256-GCM pages and WAL under `GEODE_TDE_KEY`. Measured overhead (`zig build test-sonny6435-tde-overhead`): about +1% with the default per-commit fsync, about +29% on the commit path without fsync ([docs/TDE_FILE_LEVEL_ENCRYPTION.md](docs/TDE_FILE_LEVEL_ENCRYPTION.md#measured-overhead))
+- **Key Management System (KMS)** - KMS provider clients (local, external, remote over QUIC, Vault). The TDE master key comes from `GEODE_TDE_KEY`; it is not fetched from or wrapped by a KMS (see [docs/KMS_PROVIDER_SYSTEM.md](docs/KMS_PROVIDER_SYSTEM.md))
 - **Audit Logging** - Comprehensive compliance tracking
 - **Data Classification** - 5-level security classification system
 
@@ -246,7 +245,7 @@ COMMIT;
 ### **Advanced Types**
 
 - **Vector Types** - VectorF32/VectorI32 with SIMD acceleration
-- **Network Types** - IPv4/IPv6, CIDR, MAC with <1μs parsing
+- **Network Types** - IPv4/IPv6, CIDR, MAC
 - **Geographic** - Point, LineString, Polygon with R-tree indexing
 - **Cryptographic** - Hash types, digital signatures, key management
 
@@ -312,7 +311,7 @@ docker run --rm --gpus all nvidia/cuda:12.3.2-base-ubuntu22.04 nvidia-smi
 
 - **Local Test Baseline** - 167/175 named `zig build test-*` steps pass; see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md) for the canonical baseline (6 FAIL / 2 TIMEOUT with file:line evidence) and the geodetestlab integration suite (separate harness run owed)
 - **Comprehensive Test Suite** - Unit, integration, and performance tests
-- **CANARY Governance** - ~4,900 governance markers (≈80% TESTED, ≈10% IMPL, ≈6% EXEMPT, ≈4% BENCHED; run `make status-generate` for current counts)
+- **CANARY Governance** - 5,937 governance markers (88.1% TESTED, 4.3% IMPL, 4.1% EXEMPT, 3.5% BENCHED, 2026-11-11; run `make status-generate` for current counts)
 - **Cross-Platform** - Linux, macOS, Windows compatibility
 - **GPU Build Foundation** - Vulkan backend scaffold with honest device detection (`zig build test-gpu` self-skips hardware dispatch); algorithms run the CPU path, GPU acceleration planned
 

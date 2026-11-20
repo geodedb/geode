@@ -46,6 +46,14 @@ pub const Handle = struct {
     /// Returns the peer address string for diagnostic logging.  The
     /// pointer must remain valid until `unregister` is called.
     getPeerAddr: *const fn (self: *anyopaque) []const u8,
+    /// SONNY-6466: identity of the QUIC connection the reader's stream
+    /// belongs to (the vendored connection's address), shared by every
+    /// stream of one connection and by no other connection. The
+    /// per-connection stall watchdog groups and cancels by THIS, never by
+    /// the peer address: every client behind one NAT, and every loopback
+    /// client, shares an IP, so grouping by IP let one live connection
+    /// hide another's abandoned read (and cancelled live neighbours with it).
+    getConnId: *const fn (self: *anyopaque) usize,
     /// GAP-ENT-0045: request cancellation of the reader's in-flight
     /// executor. Sets the reader's per-stream atomic cancel flag; the
     /// executor's scan/aggregate loops poll it at row/batch boundaries
@@ -61,6 +69,8 @@ pub const StallSnapshot = struct {
     idle_ns: u64,
     stream_id: u64,
     peer_addr: []const u8,
+    /// SONNY-6466: the connection to pass to `cancelConnection`.
+    conn_id: usize = 0,
 };
 
 /// Process-wide registry of active proto readers.  Single instance
@@ -83,6 +93,10 @@ pub const Registry = struct {
         self.mu.lockUncancelable(io);
         defer self.mu.unlock(io);
         self.entries.deinit(gpa);
+        // Leave an empty, usable registry (SONNY-6378): the server frees the
+        // process-wide instance at shutdown, and a late `unregister` must
+        // see no entries rather than undefined memory.
+        self.entries = .empty;
     }
 
     pub fn reserveCapacity(self: *Registry, gpa: std.mem.Allocator, capacity: usize) !void {
@@ -147,8 +161,9 @@ pub const Registry = struct {
     /// GAP-0895: connection-aware stall detection. A single idle stream on
     /// an otherwise-live connection (the multiplexed control stream while
     /// bulk mutations flow on sibling streams) is NOT a stall. Group
-    /// registered readers by connection — `peer_addr` is the QUIC 4-tuple,
-    /// shared by every stream of one connection — and only return a
+    /// registered readers by connection — `getConnId` (SONNY-6466; this
+    /// used to compare `peer_addr`, which is the peer's IP only, so every
+    /// connection from one host counted as one) — and only return a
     /// snapshot when EVERY stream on a connection has been idle past
     /// `threshold_ns` (the whole connection is wedged, the genuinely
     /// actionable condition). Returns the oldest stream of the most-wedged
@@ -168,13 +183,13 @@ pub const Registry = struct {
             const idle = if (now_ns > last) now_ns - last else 0;
             if (idle < threshold_ns) continue; // this stream itself is active
 
-            const peer = entry.getPeerAddr(entry.self);
+            const conn_id = entry.getConnId(entry.self);
 
             // Is ANY sibling on the same connection active within threshold?
             var sibling_active = false;
             for (self.entries.items, 0..) |other, j| {
                 if (i == j) continue;
-                if (!std.mem.eql(u8, other.getPeerAddr(other.self), peer)) continue;
+                if (other.getConnId(other.self) != conn_id) continue;
                 const o_last = other.getActivityNs(other.self);
                 if (o_last == 0) { // freshly-opened sibling => connection alive
                     sibling_active = true;
@@ -192,7 +207,8 @@ pub const Registry = struct {
                 result = .{
                     .idle_ns = idle,
                     .stream_id = entry.getStreamId(entry.self),
-                    .peer_addr = peer,
+                    .peer_addr = entry.getPeerAddr(entry.self),
+                    .conn_id = conn_id,
                 };
             }
         }
@@ -220,19 +236,19 @@ pub const Registry = struct {
     }
 
     /// GAP-ENT-0045: request cancellation of every reader on ONE connection
-    /// (`peer` is the QUIC 4-tuple shared by that connection's multiplexed
-    /// streams — the same grouping `connectionLevelStall` uses). Used by the
+    /// (`conn_id` as `Handle.getConnId` reports it — the same grouping
+    /// `connectionLevelStall` uses; SONNY-6466). Used by the
     /// per-connection stall watchdog: the whole connection is wedged / the
     /// client is gone, so its in-flight executors must stop, while executors
     /// on other connections are untouched. Returns the number of readers
     /// whose cancel was requested.
-    pub fn cancelConnection(self: *Registry, peer: []const u8) usize {
+    pub fn cancelConnection(self: *Registry, conn_id: usize) usize {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.mu.lockUncancelable(io);
         defer self.mu.unlock(io);
         var n: usize = 0;
         for (self.entries.items) |entry| {
-            if (!std.mem.eql(u8, entry.getPeerAddr(entry.self), peer)) continue;
+            if (entry.getConnId(entry.self) != conn_id) continue;
             const cb = entry.requestCancel orelse continue;
             cb(entry.self);
             n += 1;
@@ -284,6 +300,9 @@ const FakeReader = struct {
     activity: u64,
     stream_id: u64,
     peer: []const u8,
+    /// Connection identity; defaults to one connection per distinct peer
+    /// string (`connIdOf`) so the older cases read as before.
+    conn: ?usize = null,
     cancel_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     fn getActivity(ptr: *anyopaque) u64 {
@@ -298,6 +317,13 @@ const FakeReader = struct {
         const self: *FakeReader = @ptrCast(@alignCast(ptr));
         return self.peer;
     }
+    fn getConnId(ptr: *anyopaque) usize {
+        const self: *FakeReader = @ptrCast(@alignCast(ptr));
+        return self.conn orelse connIdOf(self.peer);
+    }
+    fn connIdOf(peer: []const u8) usize {
+        return @truncate(std.hash.Wyhash.hash(0, peer));
+    }
     fn requestCancel(ptr: *anyopaque) void {
         const self: *FakeReader = @ptrCast(@alignCast(ptr));
         self.cancel_requested.store(true, .release);
@@ -309,6 +335,7 @@ const FakeReader = struct {
             .getActivityNs = FakeReader.getActivity,
             .getStreamId = FakeReader.getStreamId,
             .getPeerAddr = FakeReader.getPeerAddr,
+            .getConnId = FakeReader.getConnId,
             .requestCancel = FakeReader.requestCancel,
         };
     }
@@ -454,7 +481,7 @@ test "GAP-ENT-0045: cancelConnection cancels only the wedged connection's reader
     try reg.register(testing.allocator, wedged1.handle());
     try reg.register(testing.allocator, healthy.handle());
 
-    try testing.expectEqual(@as(usize, 2), reg.cancelConnection("conn-W"));
+    try testing.expectEqual(@as(usize, 2), reg.cancelConnection(FakeReader.connIdOf("conn-W")));
     try testing.expect(wedged0.cancel_requested.load(.acquire));
     try testing.expect(wedged1.cancel_requested.load(.acquire));
     try testing.expect(!healthy.cancel_requested.load(.acquire));
@@ -486,4 +513,27 @@ test "GAP-0895: a fully-wedged connection IS still reported" {
     const snap = reg.connectionLevelStall(1000, 500) orelse return error.NoSnapshot;
     try testing.expect(snap.idle_ns >= 500);
     try testing.expectEqualStrings("conn-B", snap.peer_addr);
+}
+
+// SONNY-6466: two connections from ONE peer IP (every loopback client, every
+// client behind a NAT). Connection 1's only stream is executing an abandoned
+// read (idle past the threshold); connection 2 is a live client polling its
+// idle stream. Grouping by peer IP made connection 2 hide connection 1's
+// stall; grouping by connection reports connection 1 and cancels only it.
+test "SONNY-6466: a live connection from the same IP does not hide another connection's stall" {
+    var reg = Registry.init();
+    defer reg.deinit(testing.allocator);
+
+    var abandoned = FakeReader{ .activity = 100, .stream_id = 0, .peer = "127.0.0.1", .conn = 1 };
+    var live = FakeReader{ .activity = 990, .stream_id = 0, .peer = "127.0.0.1", .conn = 2 };
+    try reg.register(testing.allocator, abandoned.handle());
+    try reg.register(testing.allocator, live.handle());
+
+    const snap = reg.connectionLevelStall(1000, 500) orelse return error.NoSnapshot;
+    try testing.expectEqual(@as(usize, 1), snap.conn_id);
+    try testing.expectEqual(@as(u64, 900), snap.idle_ns);
+
+    try testing.expectEqual(@as(usize, 1), reg.cancelConnection(snap.conn_id));
+    try testing.expect(abandoned.cancel_requested.load(.acquire));
+    try testing.expect(!live.cancel_requested.load(.acquire));
 }

@@ -19,12 +19,19 @@
 // CANARY: REQ=GAP-0531; FEATURE="DB/DBMS Introspection Procedures"; ASPECT=Dispatch; STATUS=TESTED; TEST=tests/test_meta_procedures.zig; OWNER=execution; UPDATED=2026-04-10
 
 const std = @import("std");
+const result_utils = @import("result_utils.zig");
 const ast = @import("../gql/ast.zig");
 const graph_store = @import("../graph_store.zig");
 const value_types = @import("../value_types.zig");
 const language_metadata = @import("../gql/language_metadata.zig");
 // GAP-0840: shared strict-tenancy decision (opt-in rejection of unscoped reads).
 const tenancy = @import("tenancy.zig");
+const session_graph = @import("session_graph.zig");
+const catalog_mod = @import("../schema/catalog.zig");
+const tenant_visibility = @import("tenant_visibility.zig");
+const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
+// SONNY-6351 item 2: the session's RLS label policies.
+const rls_types = @import("rls_types");
 
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
@@ -107,6 +114,47 @@ pub fn executeDbLabelsForTest(allocator: std.mem.Allocator, store: *graph_store.
     return executeDbLabels(allocator, store, ctx);
 }
 
+// CANARY: REQ=REQ-SONNY-6351-DB-LABELS-RLS; FEATURE="GPS Metadata Isolation"; ASPECT=DbLabelsRLSDeny; STATUS=TESTED; TEST=tests/test_sonny6351_labels_parse_default.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6351 item 2: the RLS label policies that apply to the session's user
+/// in the session's graph, or null when no RLS engine is configured or the
+/// session has no user (no policy applies, as for a MATCH: `passesRLSFilter`).
+/// The user is the forwarded principal's when one is attached (GPS Phase 7),
+/// else the connection's.
+fn sessionLabelPolicies(allocator: std.mem.Allocator, ctx: ExecutionContext) !?rls_types.RLSFilterEngine.LabelPolicySnapshot {
+    const engine = rls_types.getGlobalRLSFilterEngine() orelse return null;
+    const principal_user: ?[]const u8 = if (ctx.principal) |p| p.username else null;
+    const username = principal_user orelse ctx.user orelse return null;
+    const graph: []const u8 = if (ctx.session_state) |session| session.graph orelse graph_store.DEFAULT_GRAPH_NAME else graph_store.DEFAULT_GRAPH_NAME;
+    return try engine.snapshotLabelPolicies(allocator, graph, username);
+}
+
+// CANARY: REQ=REQ-SONNY-6606-META-SCHEMA-SCOPE; FEATURE="GPS Metadata Isolation"; ASPECT=SessionGraphOnly; STATUS=TESTED; TEST=tests/test_sonny6606_meta_schema_scope.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6606 (1): the graph whose schema `db.labels`, `db.relationshipTypes`
+/// and `db.propertyKeys` (and SHOW TABLES) list: the one the session is on,
+/// which it was allowed to bind and read. They listed every graph's, the
+/// internal `__geode_security` included (`User`, `Role`, `password_hash`,
+/// `hmac`), to every session. Null for an internal graph (no session is
+/// on one): its listing is empty.
+pub fn listingGraph(ctx: ExecutionContext) ?[]const u8 {
+    const graph = session_graph.current(ctx);
+    if (graph_store.isInternalGraphName(graph)) return null;
+    return graph;
+}
+
+/// SONNY-6606 (1): is a node or edge of `item_graph` in `graph`? One written
+/// with no graph name is in the default graph.
+fn inGraph(item_graph: []const u8, graph: []const u8) bool {
+    if (std.mem.eql(u8, item_graph, graph)) return true;
+    return item_graph.len == 0 and std.mem.eql(u8, graph, graph_store.DEFAULT_GRAPH_NAME);
+}
+
+/// SONNY-6606 (1): the session graph's node labels visible to the tenant
+/// scope (none for an internal graph). Caller frees.
+pub fn sessionGraphLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext, filter_tenant: ?[]const u8) ![][]const u8 {
+    const graph = listingGraph(ctx) orelse return try allocator.alloc([]const u8, 0);
+    return tenant_visibility.listNodeLabelsVisibleInGraph(allocator, store, graph, filter_tenant);
+}
+
 fn executeDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
     // GAP-0840: route through the shared strict-tenancy decision instead of
     // passing raw ctx.tenant_id. An unscoped/"default" session would otherwise
@@ -114,34 +162,36 @@ fn executeDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
     // error.TenantScopeRequired (propagated to the wire via the !ExecutionResult).
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
     // Use the tenant-indexed helper; filter_tenant == null → admin all-tenant view.
-    const labels = try store.listNodeLabels(allocator, filter_tenant);
+    // SONNY-6344: a parent tenant also sees its descendants' labels, as its MATCH does.
+    // SONNY-6606 (1): of the session's graph only.
+    const labels = try sessionGraphLabels(allocator, store, ctx, filter_tenant);
     defer {
         for (labels) |lbl| allocator.free(lbl);
         allocator.free(labels);
     }
 
+    // SONNY-6351 item 2: a label the session's RLS policy denies is omitted.
+    // A deny entry hides every node carrying the label (`passesRLSFilter`:
+    // every label's policies apply), so no row of it is visible; the label
+    // was listed all the same.
+    var policies = try sessionLabelPolicies(allocator, ctx);
+    defer if (policies) |*p| p.deinit();
+
     // listNodeLabels returns labels in hash-iteration order; sort for stability.
     var sorted = try std.ArrayList([]const u8).initCapacity(allocator, labels.len);
     defer sorted.deinit(allocator);
-    for (labels) |lbl| try sorted.append(allocator, lbl);
+    for (labels) |lbl| {
+        if (policies) |*p| if (p.entries(lbl).denied) continue;
+        try sorted.append(allocator, lbl);
+    }
     std.mem.sort([]const u8, sorted.items, {}, lessThanString);
 
-    const columns = try allocator.alloc([]const u8, 1);
-    columns[0] = try allocator.dupe(u8, "label");
-
-    const rows = try allocator.alloc([]Value, sorted.items.len);
-    for (sorted.items, 0..) |lbl, i| {
-        const row = try allocator.alloc(Value, 1);
-        row[0] = .{ .Str = try allocator.dupe(u8, lbl) };
-        rows[i] = row;
-    }
-
-    return ExecutionResult{
-        .columns = columns,
-        .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
-        .owns_value_memory = true,
-    };
+    // SONNY-6498: built so that a failed allocation frees what was made.
+    var b = result_utils.ResultBuilder.init(allocator);
+    errdefer b.deinit();
+    try b.column("label");
+    for (sorted.items) |lbl| try b.textRow(&.{lbl});
+    return b.finish();
 }
 
 // ===========================================================================
@@ -155,20 +205,60 @@ pub fn executeDbRelationshipTypesForTest(allocator: std.mem.Allocator, store: *g
     return executeDbRelationshipTypes(allocator, store, ctx);
 }
 
+// CANARY: REQ=REQ-SONNY-6437-META-RLS; FEATURE="GPS Metadata Isolation"; ASPECT=DbRelationshipTypesRLSDeny; STATUS=TESTED; TEST=tests/test_sonny6437_query_residuals.zig; OWNER=security; UPDATED=2026-11-12
 fn executeDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
     // GAP-0840: route through the shared strict-tenancy decision (see executeDbLabels).
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
     // Use the tenant-indexed helper; filter_tenant == null → admin all-tenant view.
-    const types = try store.listEdgeTypes(allocator, filter_tenant);
+    // SONNY-6344: hierarchy-aware, as executeDbLabels.
+    // SONNY-6606 (1): of the session's graph only.
+    const graph = listingGraph(ctx);
+    const types = if (graph) |g|
+        try tenant_visibility.listEdgeTypesVisibleInGraph(allocator, store, g, filter_tenant)
+    else
+        try allocator.alloc([]const u8, 0);
     defer {
         for (types) |t| allocator.free(t);
         allocator.free(types);
     }
 
+    // SONNY-6437 item 5: an edge type the session's RLS policy denies is
+    // omitted, as `executeDbLabels` omits a denied label: a type is a table as
+    // a label is (SONNY-2710), and a deny on it hides every edge of it.
+    var policies = try sessionLabelPolicies(allocator, ctx);
+    defer if (policies) |*p| p.deinit();
+
+    // SONNY-6460 item 5: under a deny, a type is listed only when one of its
+    // edges is visible (`edgeVisible`): the type index also counts edges
+    // whose endpoint the policy hides, which a MATCH never reaches.
+    const reached = try allocator.alloc(bool, types.len);
+    defer allocator.free(reached);
+    @memset(reached, true);
+    if (policies) |*p| if (p.denied.count() > 0) {
+        @memset(reached, false);
+        const edge_ids = try store.allEdgeIds(allocator);
+        defer allocator.free(edge_ids);
+        for (edge_ids) |edge_id| {
+            // SONNY-6567 (2): an edge that cannot be read fails the listing
+            // (it was skipped, as if absent).
+            const edge = (try store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
+            if (!inGraph(edge.graph_name, graph orelse break)) continue;
+            if (!tenant_visibility.passesTenantFilterSlice(edge.tenant_id, filter_tenant)) continue;
+            if (!try edgeVisible(store, p, edge)) continue;
+            for (types, reached) |t, *r| {
+                if (std.mem.eql(u8, t, edge.label)) r.* = true;
+            }
+        }
+    };
+
     // listEdgeTypes returns types in hash-iteration order; sort for stability.
     var sorted = try std.ArrayList([]const u8).initCapacity(allocator, types.len);
     defer sorted.deinit(allocator);
-    for (types) |t| try sorted.append(allocator, t);
+    for (types, reached) |t, r| {
+        if (policies) |*p| if (p.entries(t).denied) continue;
+        if (!r) continue;
+        try sorted.append(allocator, t);
+    }
     std.mem.sort([]const u8, sorted.items, {}, lessThanString);
 
     const columns = try allocator.alloc([]const u8, 1);
@@ -203,6 +293,7 @@ pub fn executeDbPropertyKeysForTest(allocator: std.mem.Allocator, store: *graph_
     return executeDbPropertyKeys(allocator, store, ctx);
 }
 
+// CANARY: REQ=REQ-SONNY-6437-META-RLS; FEATURE="GPS Metadata Isolation"; ASPECT=DbPropertyKeysRLSDeny; STATUS=TESTED; TEST=tests/test_sonny6437_query_residuals.zig; OWNER=security; UPDATED=2026-11-12
 fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
     // Use a StringHashMap to deduplicate. The map OWNS each key string so that
     // freeing the intermediate label/prop-key slices returned by the store
@@ -223,9 +314,44 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
     // rather than serving the all-tenants property-key view.
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
 
+    // SONNY-6437 item 5: the keys of rows the session's RLS label policies
+    // hide are omitted, as `executeDbLabels` omits a denied label. A deny on
+    // any of a node's labels hides the node (SONNY-2690), so the per-label
+    // key index, which lists a `:Pub:Sec` node's keys under `:Pub` too,
+    // cannot answer under a deny: the visible nodes are read instead.
+    var policies = try sessionLabelPolicies(allocator, ctx);
+    defer if (policies) |*p| p.deinit();
+    const denies = if (policies) |p| p.denied.count() > 0 else false;
+    // SONNY-6606 (1): the session graph's keys only (none for an internal graph).
+    const graph = listingGraph(ctx);
+
+    if (denies) if (graph) |g| {
+        // Every graph's nodes, those of the session's graph, then the MATCH
+        // tenant rule (a parent sees its descendants' rows, SONNY-6344).
+        const node_ids = try store.getAllNodesForTenant(allocator, null);
+        defer allocator.free(node_ids);
+        for (node_ids) |node_id| {
+            const node = (try store.getNodePtrHydratedChecked(node_id)) orelse continue;
+            if (!inGraph(node.graph_name, g)) continue;
+            if (!tenant_visibility.passesTenantFilterSlice(node.tenant_id, filter_tenant)) continue;
+            if (nodeDenied(&policies.?, node.labels)) continue;
+            var prop_iter = node.properties.iterator();
+            while (prop_iter.next()) |p| {
+                const key = p.key_ptr.*;
+                if (!graph_storage_adapter.shouldExposePropertyKey(key)) continue;
+                if (seen.contains(key)) continue;
+                const owned = try allocator.dupe(u8, key);
+                errdefer allocator.free(owned);
+                try seen.put(owned, {});
+                try ordered.append(allocator, owned);
+            }
+        }
+    };
+
     // --- Node property keys via the tenant-indexed PERF-C structures ---
     // 1. Get the labels visible to this tenant (or all if admin).
-    const labels = try store.listNodeLabels(allocator, filter_tenant);
+    // SONNY-6344: hierarchy-aware (a parent also sees its descendants' rows).
+    const labels = try sessionGraphLabels(allocator, store, ctx, filter_tenant);
     defer {
         for (labels) |lbl| allocator.free(lbl);
         allocator.free(labels);
@@ -233,7 +359,8 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
 
     // 2. For each label, collect the property keys indexed under that label+tenant.
     for (labels) |label| {
-        const keys = try store.listPropertiesForLabel(allocator, filter_tenant, label);
+        if (denies) break;
+        const keys = try tenant_visibility.listPropertiesForLabelVisibleInGraph(allocator, store, graph.?, filter_tenant, label);
         defer {
             for (keys) |k| allocator.free(k);
             allocator.free(keys);
@@ -257,11 +384,16 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
     const edge_ids_for_keys = try store.allEdgeIds(allocator);
     defer allocator.free(edge_ids_for_keys);
     for (edge_ids_for_keys) |__eid| {
-        const edge = store.getEdgePtrHydrated(__eid) orelse continue;
-        // Honour tenant filter; null means admin sees everything.
-        if (filter_tenant) |tid| {
-            if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
-        }
+        const edge = (try store.getEdgePtrHydratedChecked(__eid)) orelse continue;
+        if (!inGraph(edge.graph_name, graph orelse break)) continue;
+        // Honour tenant filter; null means admin sees everything. SONNY-6344:
+        // the edge's own tag by the MATCH rule (a parent sees its
+        // descendants' edges), not the exact tag.
+        if (!tenant_visibility.passesTenantFilterSlice(edge.tenant_id, filter_tenant)) continue;
+        // SONNY-6437 item 5: an edge of a denied type is hidden.
+        // SONNY-6460 item 5: and so is one with an endpoint the policy
+        // hides (`edgeVisible`), as a MATCH does not reach it.
+        if (denies) if (!try edgeVisible(store, &policies.?, edge)) continue;
         var prop_iter = edge.properties.iterator();
         while (prop_iter.next()) |p| {
             const key = p.key_ptr.*;
@@ -295,6 +427,30 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
     };
 }
 
+// CANARY: REQ=REQ-SONNY-6460-META-ENDPOINT-RLS; FEATURE="GPS Metadata Isolation"; ASPECT=EdgeEndpointVisibility; STATUS=TESTED; TEST=tests/test_sonny6460_meta_rls.zig; OWNER=security; UPDATED=2026-11-13
+/// SONNY-6460 item 5: whether a session under the label policies `policies`
+/// reaches `edge`, as a MATCH does (SONNY-2679): its type is not denied and
+/// neither endpoint is hidden (`nodeDenied`). An endpoint that is absent
+/// counts as hidden (fail closed); one that cannot be read fails the listing
+/// (SONNY-6567 (2)).
+fn edgeVisible(store: *graph_store.GraphStore, policies: *const rls_types.RLSFilterEngine.LabelPolicySnapshot, edge: anytype) !bool {
+    if (policies.entries(edge.label).denied) return false;
+    for ([_]u64{ edge.from_id, edge.to_id }) |node_id| {
+        const node = (try store.getNodePtrHydratedChecked(node_id)) orelse return false;
+        if (nodeDenied(policies, node.labels)) return false;
+    }
+    return true;
+}
+
+/// SONNY-6437 item 5: whether a label policy hides a node with `labels`: a
+/// deny on any of them (SONNY-2690). A node with no label is the table
+/// "default", as `passesRLSFilter` looks it up.
+fn nodeDenied(policies: *const rls_types.RLSFilterEngine.LabelPolicySnapshot, labels: []const []const u8) bool {
+    if (labels.len == 0) return policies.entries("default").denied;
+    for (labels) |label| if (policies.entries(label).denied) return true;
+    return false;
+}
+
 // ===========================================================================
 // db.indexes() — list all indexes from the catalog
 // Columns: name, type, label, properties (comma-joined)
@@ -302,8 +458,31 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
 
 fn executeDbIndexes(allocator: std.mem.Allocator, context: ExecutionContext) !ExecutionResult {
     const catalog = context.catalog;
-    const indexes = try catalog.listAllIndexes(allocator);
-    defer allocator.free(indexes);
+    // CANARY: REQ=REQ-SONNY-2795-DROP-INDEX-CATALOG; FEATURE="SchemaCatalog"; ASPECT=DbIndexesLocked; STATUS=TESTED; TEST=tests/test_sonny2795_drop_index_catalog.zig; OWNER=catalog; UPDATED=2026-11-11
+    // SONNY-1319: the session's graph's catalog, as SHOW INDEXES lists it.
+    // SONNY-2795: each row's strings are copied under the catalog lock, as
+    // SHOW INDEXES does. `listIndexesForGraph` hands back rows that borrow
+    // the catalog's strings, and they were read after the lock was dropped,
+    // while DROP INDEX could free them.
+    var catalog_rows = std.ArrayList([]Value).empty;
+    defer catalog_rows.deinit(allocator);
+    {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const graph = session_graph.current(context);
+        catalog.rwlock.lockSharedUncancelable(io);
+        defer catalog.rwlock.unlockShared(io);
+        var it = catalog.indexes.valueIterator();
+        while (it.next()) |idx| {
+            if (!catalog_mod.rowInGraph(idx.graph, graph)) continue;
+            const row = try allocator.alloc(Value, 4);
+            row[0] = .{ .Str = try allocator.dupe(u8, idx.name) };
+            row[1] = .{ .Str = try allocator.dupe(u8, idx.index_type) };
+            row[2] = .{ .Str = try allocator.dupe(u8, idx.table_name) };
+            row[3] = .{ .Str = try joinStrings(allocator, idx.columns, ", ") };
+            try catalog_rows.append(allocator, row);
+        }
+    }
+    const indexes = catalog_rows.items;
 
     // #844: FULLTEXT indexes live in IndexManager.fulltext_indexes and were
     // never registered with the Catalog -- so SHOW INDEXES couldn't see them
@@ -327,14 +506,7 @@ fn executeDbIndexes(allocator: std.mem.Allocator, context: ExecutionContext) !Ex
     columns[3] = try allocator.dupe(u8, "properties");
 
     const rows = try allocator.alloc([]Value, total);
-    for (indexes, 0..) |idx, i| {
-        const row = try allocator.alloc(Value, 4);
-        row[0] = .{ .Str = try allocator.dupe(u8, idx.name) };
-        row[1] = .{ .Str = try allocator.dupe(u8, idx.index_type) };
-        row[2] = .{ .Str = try allocator.dupe(u8, idx.table_name) };
-        row[3] = .{ .Str = try joinStrings(allocator, idx.columns, ", ") };
-        rows[i] = row;
-    }
+    @memcpy(rows[0..indexes.len], indexes);
     for (fts_names.items, 0..) |name, j| {
         const row = try allocator.alloc(Value, 4);
         row[0] = .{ .Str = try allocator.dupe(u8, name) };
@@ -359,8 +531,33 @@ fn executeDbIndexes(allocator: std.mem.Allocator, context: ExecutionContext) !Ex
 
 fn executeDbConstraints(allocator: std.mem.Allocator, context: ExecutionContext) !ExecutionResult {
     const catalog = context.catalog;
-    const constraints = try catalog.listAllConstraints(allocator);
-    defer allocator.free(constraints);
+    // CANARY: REQ=REQ-SHOW-CONSTRAINTS-001; FEATURE="SHOW CONSTRAINTS"; ASPECT=CatalogList; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=catalog; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-SONNY-6270-DROP-CONSTRAINT; FEATURE="SchemaCatalog"; ASPECT=DbConstraintsLocked; STATUS=TESTED; TEST=tests/test_sonny6270_drop_constraint.zig; OWNER=catalog; UPDATED=2026-11-11
+    // SONNY-1319: the session's graph's catalog, as SHOW CONSTRAINTS lists it.
+    // SONNY-6270: each row's strings are copied under the catalog lock, as
+    // SHOW CONSTRAINTS does (and db.indexes(), SONNY-2795). The rows were
+    // borrowed from the catalog and read after the lock was released, which
+    // DROP CONSTRAINT, now that it frees them, would have made a
+    // use-after-free.
+    var catalog_rows = std.ArrayList([]Value).empty;
+    defer catalog_rows.deinit(allocator);
+    {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const graph = session_graph.current(context);
+        catalog.rwlock.lockSharedUncancelable(io);
+        defer catalog.rwlock.unlockShared(io);
+        var it = catalog.constraints.valueIterator();
+        while (it.next()) |c| {
+            if (!catalog_mod.rowInGraph(c.graph, graph)) continue;
+            const row = try allocator.alloc(Value, 5);
+            row[0] = .{ .Str = try allocator.dupe(u8, c.name) };
+            row[1] = .{ .Str = try allocator.dupe(u8, constraintTypeName(c.constraint_type)) };
+            row[2] = .{ .Str = try allocator.dupe(u8, c.label) };
+            row[3] = .{ .Str = try joinStrings(allocator, c.properties, ", ") };
+            row[4] = .{ .Bool = c.is_enforced };
+            try catalog_rows.append(allocator, row);
+        }
+    }
 
     const columns = try allocator.alloc([]const u8, 5);
     columns[0] = try allocator.dupe(u8, "name");
@@ -369,16 +566,7 @@ fn executeDbConstraints(allocator: std.mem.Allocator, context: ExecutionContext)
     columns[3] = try allocator.dupe(u8, "properties");
     columns[4] = try allocator.dupe(u8, "enforced");
 
-    const rows = try allocator.alloc([]Value, constraints.len);
-    for (constraints, 0..) |c, i| {
-        const row = try allocator.alloc(Value, 5);
-        row[0] = .{ .Str = try allocator.dupe(u8, c.name) };
-        row[1] = .{ .Str = try allocator.dupe(u8, constraintTypeName(c.constraint_type)) };
-        row[2] = .{ .Str = try allocator.dupe(u8, c.label) };
-        row[3] = .{ .Str = try joinStrings(allocator, c.properties, ", ") };
-        row[4] = .{ .Bool = c.is_enforced };
-        rows[i] = row;
-    }
+    const rows = try catalog_rows.toOwnedSlice(allocator);
 
     return ExecutionResult{
         .columns = columns,

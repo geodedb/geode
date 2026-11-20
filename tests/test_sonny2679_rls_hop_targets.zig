@@ -469,6 +469,14 @@ const cases = [_]Case{
     .{ .q = "MATCH (g:G) RETURN COUNT { (g)-[:R]->(h) } AS c", .secure = &.{"1"}, .open = &.{"2"} },
     .{ .q = "MATCH (g:G) RETURN COUNT { (g)-[:R*1..3]->(h) } AS c", .secure = &.{"2"}, .open = &.{"5"} },
     .{ .q = "MATCH (g:G) RETURN EXISTS { (g)-[:R]->(h {s: 'leak'}) } AS e", .secure = &.{"false"}, .open = &.{"true"} },
+    // SONNY-2707: the subqueries walk incoming and undirected relationships
+    // (they walked outgoing ones only), through the same scope: `leak` and
+    // the SECRET edge break every path through them in those directions too.
+    .{ .q = "MATCH (g:G) RETURN COUNT { (g)-[:R*1..3]-(h) } AS c", .secure = &.{"2"}, .open = &.{"5"} },
+    .{ .q = "MATCH (f:Doc) WHERE f.s = 'far' RETURN COUNT { (f)<-[:R*1..2]-(x) } AS c", .secure = &.{"0"}, .open = &.{"2"} },
+    .{ .q = "MATCH (f:Doc) WHERE f.s = 'far' RETURN EXISTS { (f)<-[:R]-() } AS e", .secure = &.{"false"}, .open = &.{"true"} },
+    .{ .q = "MATCH (v:Doc) WHERE v.s = 'viaSecret' RETURN COUNT { (v)-[]-() } AS c", .secure = &.{"1"}, .open = &.{"2"} },
+    .{ .q = "MATCH (f:Doc) WHERE f.s = 'far2' RETURN size([(f)<-[:R*1..3]-(x) | x.s]) AS n", .secure = &.{"1"}, .open = &.{"3"} },
     .{ .q = "RETURN [(h {s: 'leak'}) | h.s] AS xs", .secure = &.{"[]"}, .open = &.{"[leak]"} },
     .{ .q = "RETURN shortestPath((a:G {s: 'g1'})-[*]-(b {s: 'far'})) AS p", .secure = &.{"null"}, .open = &.{"p(g1>leak>far)"} },
     // shortestPath with endpoints bound by the MATCH, and assigned to a path.
@@ -508,9 +516,9 @@ fn intProp(s: []const u8, key: []const u8) !?i64 {
 fn hasEdge(from: []const u8, to: []const u8, rel: []const u8) !bool {
     const store = graph_store.getGlobalStore(testing.allocator);
     const to_id = try idOf(to);
-    const ids = store.getOutgoingEdgeIds(try idOf(from)) orelse return false;
+    const ids = (store.getOutgoingEdgeIdsOrError(try idOf(from)) catch @panic("SONNY-6621: unexpected read failure")) orelse return false;
     for (ids) |eid| {
-        const e = store.getEdgeHydrated(eid) orelse continue;
+        const e = (try store.getEdgeHydratedChecked(eid)) orelse continue;
         if (e.to_id == to_id and std.mem.eql(u8, e.label, rel)) return true;
     }
     return false;
@@ -610,8 +618,8 @@ test "SONNY-2679: while a traversal's label-deny snapshot is current, the checks
 
     const store = graph_store.getGlobalStore(testing.allocator);
     const g1 = try idOf("g1");
-    const secret = for (store.getOutgoingEdgeIds(g1) orelse &.{}) |eid| {
-        const e = store.getEdgeHydrated(eid) orelse continue;
+    const secret = for ((try store.getOutgoingEdgeIdsOrError(g1)) orelse &.{}) |eid| {
+        const e = (try store.getEdgeHydratedChecked(eid)) orelse continue;
         if (std.mem.eql(u8, e.label, "SECRET")) break e;
     } else return error.SecretEdgeMissing;
 

@@ -3,7 +3,7 @@ const testing = std.testing;
 const eval = @import("../../src/eval.zig");
 const ast = @import("../../src/gql/ast.zig");
 
-// CANARY: REQ=REQ-GQL-PATH; FEATURE="Path Type Unit Tests"; ASPECT=Testing; STATUS=TESTED; TEST=test_path_type; OWNER=graph; UPDATED=2025-10-10
+// CANARY: REQ=REQ-GQL-PATH; FEATURE="Path Type Unit Tests"; ASPECT=Testing; STATUS=IMPL; TEST=test_path_type; OWNER=graph; UPDATED=2026-11-14
 
 test "Path type equality - identical paths" {
     const allocator = testing.allocator;

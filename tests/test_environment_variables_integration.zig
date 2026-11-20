@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-// CANARY: REQ=REQ-CLIENT-ENV-001; FEATURE="ClientEnvironmentVariables"; ASPECT=IntegrationTests; STATUS=TESTED; TEST=TestCANARY_ClientEnvVar_Integration; OWNER=clients; UPDATED=2025-10-04
+// CANARY: REQ=REQ-CLIENT-ENV-001; FEATURE="ClientEnvironmentVariables"; ASPECT=IntegrationTests; STATUS=IMPL; TEST=TestCANARY_ClientEnvVar_Integration; OWNER=clients; UPDATED=2026-11-14
 
 /// Re-implement the environment variable resolution function for testing
 /// This mirrors the implementation in src/client/main.zig

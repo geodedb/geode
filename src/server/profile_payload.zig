@@ -1,5 +1,4 @@
 const std = @import("std");
-const parallel_wrapper = @import("parallel/thread_pool_parallel");
 const planned_read_runtime = @import("../execution/planned_read_runtime.zig");
 const query_traits = @import("../query/query_traits.zig");
 const schema = @import("schema");
@@ -8,7 +7,6 @@ pub const ProfileOptions = struct {
     compact: bool = false,
     include_mem_curve: bool = false,
     disable_estimates: bool = false,
-    spill_threshold: usize = 0,
     committed_txns: u64 = 0,
     graph_store_nodes: u64 = 0,
     graph_store_edges: u64 = 0,
@@ -16,297 +14,128 @@ pub const ProfileOptions = struct {
     flagger_findings: []const []const u8 = &.{},
     union_part_count: usize = 0,
     // CANARY: REQ=REQ-AUTO-INDEX-PROFILE-001; FEATURE="AutoIdIndex"; ASPECT=ProfileIndexName; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+    // SONNY-1335: the catalog index the executor seeked, set only by a caller
+    // that knows it did. Null means no index operator.
     index_name: ?[]const u8 = null,
+    /// The nodes the seek on `index_name` returned.
+    index_rows: u64 = 0,
+    /// SONNY-6596: the wall-clock time of the legacy execution, measured by
+    /// the transport (`monotonicNs`) around it.
+    execute_time_ns: u64 = 0,
 };
+
+/// SONNY-6596: the monotonic clock the transports read around a legacy
+/// execution for its version-1 PROFILE.
+pub fn monotonicNs() u64 {
+    var ts: std.posix.timespec = undefined;
+    _ = if (comptime @import("builtin").os.tag == .linux)
+        std.os.linux.clock_gettime(.MONOTONIC, &ts)
+    else
+        std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
+    const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
+    return sec * std.time.ns_per_s + nsec;
+}
 
 const OpSpec = struct {
     name: []const u8,
     phase: []const u8,
-    has_index_meta: bool = false,
+    rows: u64,
+    time_ns: u64,
     index_name: ?[]const u8 = null,
 };
 
+// CANARY: REQ=REQ-SONNY-6596-PROFILE-V1-MEASURED; FEATURE="PROFILE"; ASPECT=NoSyntheticOperators; STATUS=TESTED; TEST=tests/test_sonny6596_profile_v1_measured.zig; OWNER=engine; UPDATED=2026-11-15
+/// The version-1 payload: a statement the legacy executor ran (the planned
+/// read runtime's trace is version 2). SONNY-6596: it reports what was
+/// measured and nothing else. The executor has no operator hooks, so the
+/// statement is one `LegacyExecute` operator (the version-2 trace's name for
+/// the same thing) with `opts.execute_time_ns`, the wall-clock time the
+/// transport measured around it, and the rows it returned. What was not
+/// measured is 0 or absent: CPU time, bytes, memory, a UNION's input rows,
+/// planner estimates (there is no planner here). It was a fixed model: a
+/// CREATE listed NodeScan, Expand and Project, a UNION four phase operators,
+/// each with `time_ns = 10 * (i + 1)`, 64 bytes allocated and estimates.
 pub fn buildProfilePayload(
     allocator: std.mem.Allocator,
     traits: query_traits.QueryTraits,
     row_count: usize,
     opts: ProfileOptions,
 ) !schema.ProfilePayload {
-    var ops = std.ArrayList(OpSpec).initCapacity(allocator, 10) catch return error.OutOfMemory;
-    defer ops.deinit(allocator);
-
-    if (traits.has_where_eq or traits.has_filter_eq) {
-        try ops.append(allocator, .{ .name = "NodeIndexScan", .phase = "SCAN", .has_index_meta = true, .index_name = opts.index_name });
+    const rows: u64 = @intCast(row_count);
+    var specs_buf: [2]OpSpec = undefined;
+    var op_count: usize = 0;
+    // CANARY: REQ=REQ-SONNY-1335-PROFILE-ACCESS-PATH; FEATURE="PROFILE"; ASPECT=NoFabricatedIndexScan; STATUS=TESTED; TEST=tests/test_sonny1335_profile_access_path.zig; OWNER=engine; UPDATED=2026-11-11
+    // SONNY-1335: an index operator only for an index the executor used.
+    // Its time is part of the statement's (not measured apart).
+    if (opts.index_name) |name| {
+        specs_buf[op_count] = .{ .name = "NodeIndexScan", .phase = "SCAN", .rows = opts.index_rows, .time_ns = 0, .index_name = name };
+        op_count += 1;
     }
-    try ops.append(allocator, .{ .name = "NodeScan", .phase = "SCAN" });
-    try ops.append(allocator, .{ .name = "Expand", .phase = "EXPAND" });
-    if (traits.has_group_by) {
-        try ops.append(allocator, .{ .name = "AggregateBuild", .phase = "AGGREGATE" });
-        try ops.append(allocator, .{ .name = "AggregateEmit", .phase = "AGGREGATE" });
-    }
-    if (traits.distinct) {
-        try ops.append(allocator, .{ .name = "Distinct", .phase = "DISTINCT" });
-    }
-    if (traits.ordered) {
-        try ops.append(allocator, .{ .name = "Sort", .phase = "ORDER" });
-    }
-    try ops.append(allocator, .{ .name = "Project", .phase = "PROJECT" });
-    if (traits.limit != null or traits.offset != null) {
-        try ops.append(allocator, .{ .name = "Limit", .phase = "PAGE" });
-    }
-    if (traits.has_union) {
-        try ops.append(allocator, .{ .name = "UnionLeft", .phase = "OTHER" });
-        try ops.append(allocator, .{ .name = "UnionTails", .phase = "OTHER" });
-        if (traits.union_mode == .distinct) {
-            try ops.append(allocator, .{ .name = "UnionDedup", .phase = "OTHER" });
-        }
-        try ops.append(allocator, .{ .name = "SetOpUnion", .phase = "OTHER" });
-    }
-
-    const op_count = ops.items.len;
-    var bytes_alloc = try allocator.alloc(u64, op_count);
-    defer allocator.free(bytes_alloc);
-    var time_ns = try allocator.alloc(u64, op_count);
-    defer allocator.free(time_ns);
-    var cpu_time_ns = try allocator.alloc(u64, op_count);
-    defer allocator.free(cpu_time_ns);
-    var bytes_out = try allocator.alloc(u64, op_count);
-    defer allocator.free(bytes_out);
-    var estimate_bytes = try allocator.alloc(u64, op_count);
-    defer allocator.free(estimate_bytes);
-    var estimate_vs_actual = try allocator.alloc(u64, op_count);
-    defer allocator.free(estimate_vs_actual);
-
-    const MetricsContext = struct {
-        bytes_alloc: []u64,
-        time_ns: []u64,
-        cpu_time_ns: []u64,
-        bytes_out: []u64,
-        estimate_bytes: []u64,
-        estimate_vs_actual: []u64,
-        row_count: usize,
-        disable_estimates: bool,
-    };
-
-    const ctx = MetricsContext{
-        .bytes_alloc = bytes_alloc,
-        .time_ns = time_ns,
-        .cpu_time_ns = cpu_time_ns,
-        .bytes_out = bytes_out,
-        .estimate_bytes = estimate_bytes,
-        .estimate_vs_actual = estimate_vs_actual,
-        .row_count = row_count,
-        .disable_estimates = opts.disable_estimates,
-    };
-
-    if (parallel_wrapper.shouldUseParallelism(op_count, parallel_wrapper.Thresholds.forEach)) {
-        var pool = parallel_wrapper.ParallelPool.init(allocator, null);
-        pool.start();
-        defer pool.deinit();
-        parallel_wrapper.parallelForEach(&pool, 0, op_count, ctx, struct {
-            fn work(_: *parallel_wrapper.Task, idx: usize, c: MetricsContext) void {
-                const base_alloc: u64 = if (idx == 0 and c.row_count > 0) 0 else 64;
-                c.bytes_alloc[idx] = base_alloc;
-                c.time_ns[idx] = 10 * @as(u64, @intCast(idx + 1));
-                c.cpu_time_ns[idx] = 5 * @as(u64, @intCast(idx + 1));
-                c.bytes_out[idx] = @as(u64, @intCast(c.row_count)) * 8;
-                if (c.disable_estimates) {
-                    c.estimate_bytes[idx] = 0;
-                    c.estimate_vs_actual[idx] = 0;
-                } else {
-                    const est = c.bytes_out[idx] + base_alloc;
-                    c.estimate_bytes[idx] = est;
-                    c.estimate_vs_actual[idx] = if (est >= c.bytes_out[idx]) est - c.bytes_out[idx] else c.bytes_out[idx] - est;
-                }
-            }
-        }.work, parallel_wrapper.Thresholds.forEach);
-    } else {
-        for (ops.items, 0..) |_, idx| {
-            const base_alloc: u64 = if (idx == 0 and row_count > 0) 0 else 64;
-            bytes_alloc[idx] = base_alloc;
-            time_ns[idx] = 10 * @as(u64, @intCast(idx + 1));
-            cpu_time_ns[idx] = 5 * @as(u64, @intCast(idx + 1));
-            bytes_out[idx] = @as(u64, @intCast(row_count)) * 8;
-            if (opts.disable_estimates) {
-                estimate_bytes[idx] = 0;
-                estimate_vs_actual[idx] = 0;
-            } else {
-                const est = bytes_out[idx] + base_alloc;
-                estimate_bytes[idx] = est;
-                estimate_vs_actual[idx] = if (est >= bytes_out[idx]) est - bytes_out[idx] else bytes_out[idx] - est;
-            }
-        }
-    }
-
-    var cumulative_time: u64 = 0;
-    var net_after_op = try allocator.alloc(u64, op_count);
-    defer allocator.free(net_after_op);
-    for (ops.items, 0..) |_, idx| {
-        cumulative_time += time_ns[idx];
-        const prev = if (idx == 0) 0 else net_after_op[idx - 1];
-        net_after_op[idx] = prev + bytes_alloc[idx];
-    }
-
-    var total_alloc_bytes: u64 = 0;
-    var peak_bytes: u64 = 0;
-    for (bytes_alloc) |b| total_alloc_bytes += b;
-    peak_bytes = total_alloc_bytes;
-    const total_time_ns = cumulative_time;
+    specs_buf[op_count] = .{ .name = "LegacyExecute", .phase = "EXECUTE", .rows = rows, .time_ns = opts.execute_time_ns };
+    op_count += 1;
+    const specs = specs_buf[0..op_count];
 
     var op_list = std.ArrayList(schema.ProfileOp).initCapacity(allocator, op_count) catch return error.OutOfMemory;
     errdefer {
         for (op_list.items) |*item| item.deinit(allocator);
         op_list.deinit(allocator);
     }
-
-    for (ops.items, 0..) |spec, op_idx| {
-        const input_rows = @as(u64, @intCast(row_count));
-        const rows = @as(u64, @intCast(row_count));
-        const percent_peak = if (peak_bytes > 0 and bytes_alloc[op_idx] > 0)
-            @as(u64, @intCast(@min(@as(u64, 100), bytes_alloc[op_idx] * 100 / peak_bytes)))
-        else
-            0;
-        const percent_net = if (total_alloc_bytes > 0)
-            @as(u64, @intCast(@min(@as(u64, 100), net_after_op[op_idx] * 100 / total_alloc_bytes)))
-        else
-            0;
-
-        const op_entry = schema.ProfileOp{
-            .op = try allocator.dupe(u8, spec.name),
-            .phase = try allocator.dupe(u8, spec.phase),
+    var cumulative_time: u64 = 0;
+    for (specs, 0..) |spec, op_idx| {
+        cumulative_time += spec.time_ns;
+        const op_name = try allocator.dupe(u8, spec.name);
+        errdefer allocator.free(op_name);
+        const phase = try allocator.dupe(u8, spec.phase);
+        errdefer allocator.free(phase);
+        const index_name: []const u8 = if (spec.index_name) |name| try allocator.dupe(u8, name) else "";
+        errdefer if (index_name.len > 0) allocator.free(index_name);
+        try op_list.append(allocator, .{
+            .op = op_name,
+            .phase = phase,
             .id = 0,
             .op_index = @intCast(op_idx),
-            .input_rows = input_rows,
-            .rows = rows,
-            .time_ns = time_ns[op_idx],
-            .cpu_time_ns = cpu_time_ns[op_idx],
-            .bytes_out = bytes_out[op_idx],
-            .bytes_alloc = bytes_alloc[op_idx],
-            .estimate_bytes = estimate_bytes[op_idx],
-            .estimate_vs_actual = estimate_vs_actual[op_idx],
-            .percent_peak = percent_peak,
-            .percent_net = percent_net,
-            .cumulative_time_ns = cumulative_timeFor(op_idx, time_ns),
+            .input_rows = 0,
+            .rows = spec.rows,
+            .time_ns = spec.time_ns,
+            .cpu_time_ns = 0,
+            .bytes_out = 0,
+            .bytes_alloc = 0,
+            .estimate_bytes = 0,
+            .estimate_vs_actual = 0,
+            .percent_peak = 0,
+            .percent_net = 0,
+            .cumulative_time_ns = cumulative_time,
             .freed_bytes = 0,
-            .net_after_op = net_after_op[op_idx],
+            .net_after_op = 0,
             .error_bytes = 0,
             .error_abs_pct = 0,
-            .index_name = if (spec.has_index_meta)
-                try allocator.dupe(u8, spec.index_name orelse opts.index_name orelse "heuristic_index")
-            else
-                "",
-            .selectivity_est = if (spec.has_index_meta)
-                if (spec.index_name != null or opts.index_name != null) 0.10 else 0.50
-            else
-                0,
-        };
-        try op_list.append(allocator, op_entry);
-    }
-
-    var peak_contributors = try buildPeakContributors(allocator, ops.items, bytes_alloc);
-    errdefer {
-        for (peak_contributors.items) |*item| item.deinit(allocator);
-        peak_contributors.deinit(allocator);
-    }
-
-    const totals = schema.ProfileTotals{
-        .time_ns = total_time_ns,
-        .peak_bytes = peak_bytes,
-    };
-
-    const spill_active = opts.spill_threshold > 0 and peak_bytes > opts.spill_threshold;
-    const spill_reason: ?[]const u8 = if (spill_active) "threshold" else null;
-    const spill_sort: u64 = if (spill_active and traits.ordered) 1 else 0;
-    const spill_distinct: u64 = if (spill_active and traits.distinct) 1 else 0;
-    const spill_union: u64 = if (spill_active and traits.has_union) 1 else 0;
-
-    var spills = schema.ProfileSpills{
-        .sort_spills = spill_sort,
-        .distinct_spills = spill_distinct,
-        .union_spills = spill_union,
-        .spill_reason = "",
-        .peak_bytes_at_spill = 0,
-        .first_spill_op_index = 0,
-    };
-    if (spill_reason) |reason| {
-        spills.spill_reason = try allocator.dupe(u8, reason);
-        spills.peak_bytes_at_spill = peak_bytes;
-        if (firstSpillIndex(ops.items, .{ .sort = spill_sort, .distinct = spill_distinct, .set_union = spill_union })) |first_idx| {
-            spills.first_spill_op_index = @intCast(first_idx);
-        }
-    }
-    errdefer spills.deinit(allocator);
-
-    const memory = schema.ProfileMemory{
-        .net_bytes = total_alloc_bytes,
-        .peak_bytes = peak_bytes,
-        .total_alloc_bytes = total_alloc_bytes,
-    };
-
-    var planner_estimates_opt: ?schema.ProfilePlannerEstimates = null;
-    if (!opts.disable_estimates) {
-        const sum_est = sumU64(estimate_bytes);
-        const sum_actual = sumU64(bytes_out);
-        planner_estimates_opt = schema.ProfilePlannerEstimates{
-            .sum_estimate_bytes = sum_est,
-            .sum_actual_bytes = sum_actual,
-            .count_estimated_ops = @intCast(op_count),
-            .min_error_abs_pct = 0,
-            .max_error_abs_pct = 0,
-            .mean_error_abs_pct = 0,
-            .median_error_abs_pct = 0,
-            .stddev_error_abs_pct = 0,
-            .adjusted_estimate_factor = 1,
-        };
+            .index_name = index_name,
+            .selectivity_est = 0,
+        });
     }
 
     var mem_curve = std.ArrayList(schema.ProfileMemCurvePoint).initCapacity(allocator, if (opts.include_mem_curve) op_count else 0) catch return error.OutOfMemory;
     errdefer mem_curve.deinit(allocator);
     if (opts.include_mem_curve) {
-        var i: usize = 0;
-        while (i < op_count) : (i += 1) {
-            const point = schema.ProfileMemCurvePoint{
-                .op_index = @intCast(i),
-                .net_after_op = net_after_op[i],
-            };
-            try mem_curve.append(allocator, point);
-        }
+        for (0..op_count) |i| mem_curve.appendAssumeCapacity(.{ .op_index = @intCast(i), .net_after_op = 0 });
     }
 
+    // The output rows of a set operation are counted; its parts' are not.
     var setop_opt: ?schema.ProfileSetOp = null;
     if (traits.has_union) {
-        const mode_str = unionModeToString(traits.union_mode);
-        const input_rows = if (opts.union_part_count > 0)
-            @as(u64, @intCast(opts.union_part_count)) * @as(u64, @intCast(row_count))
-        else
-            @as(u64, @intCast(row_count));
-        const output_rows = @as(u64, @intCast(row_count));
-
-        var setop = schema.ProfileSetOp{
-            .type = try allocator.dupe(u8, "UNION"),
-            .mode = try allocator.dupe(u8, mode_str),
-            .input_rows = input_rows,
-            .output_rows = output_rows,
+        const set_type = try allocator.dupe(u8, "UNION");
+        errdefer allocator.free(set_type);
+        setop_opt = .{
+            .type = set_type,
+            .mode = try allocator.dupe(u8, unionModeToString(traits.union_mode)),
+            .input_rows = 0,
+            .output_rows = rows,
             .hash_dedup_size = 0,
             .distinct_fill_pct = 0,
         };
-        if (traits.union_mode == .distinct) {
-            setop.hash_dedup_size = output_rows;
-            if (input_rows > 0) {
-                setop.distinct_fill_pct = @min(@as(u64, 100), (output_rows * 100) / input_rows);
-            }
-        }
-        setop_opt = setop;
     }
-    // Note: setop_opt ownership transfers to the returned ProfilePayload
-
-    var hashagg_spills: u64 = 0;
-    var hashagg_reason: []const u8 = "";
-    if (traits.has_group_by and spill_reason != null) {
-        hashagg_spills = 1;
-        hashagg_reason = try allocator.dupe(u8, spill_reason.?);
-    }
-    // Note: hashagg_reason ownership transfers to the returned ProfilePayload
+    errdefer if (setop_opt) |*so| so.deinit(allocator);
 
     var findings = std.ArrayList([]const u8).initCapacity(allocator, opts.flagger_findings.len) catch return error.OutOfMemory;
     errdefer {
@@ -314,22 +143,30 @@ pub fn buildProfilePayload(
         findings.deinit(allocator);
     }
     for (opts.flagger_findings) |flag| {
-        try findings.append(allocator, try allocator.dupe(u8, flag));
+        findings.appendAssumeCapacity(try allocator.dupe(u8, flag));
     }
 
     return schema.ProfilePayload{
         .profile_version = 1,
         .ops = op_list,
-        .peak_contributors = peak_contributors,
-        .totals = totals,
-        .total_time_ns = total_time_ns,
-        .spills = spills,
-        .memory = memory,
-        .planner_estimates = planner_estimates_opt,
+        .peak_contributors = .empty,
+        .totals = .{ .time_ns = cumulative_time, .peak_bytes = 0 },
+        .total_time_ns = cumulative_time,
+        // SONNY-6562: the executor never spills.
+        .spills = .{
+            .sort_spills = 0,
+            .distinct_spills = 0,
+            .union_spills = 0,
+            .spill_reason = "",
+            .peak_bytes_at_spill = 0,
+            .first_spill_op_index = 0,
+        },
+        .memory = .{ .net_bytes = 0, .peak_bytes = 0, .total_alloc_bytes = 0 },
+        .planner_estimates = null,
         .mem_curve = mem_curve,
         .setop = setop_opt,
-        .hashagg_spills = hashagg_spills,
-        .hashagg_spill_reason = hashagg_reason,
+        .hashagg_spills = 0,
+        .hashagg_spill_reason = "",
         .committed_txns = opts.committed_txns,
         .graph_store_nodes = opts.graph_store_nodes,
         .graph_store_edges = opts.graph_store_edges,
@@ -356,6 +193,10 @@ pub fn buildProfilePayloadFromTrace(
     var cumulative_time: u64 = 0;
     for (trace.ops, 0..) |op, idx| {
         cumulative_time += op.time_ns;
+        // SONNY-1335: the catalog index the executor seeked (set on an
+        // IndexSeek by `planned_read_runtime.recordStartAccess`), else none.
+        const index_name: []const u8 = if (op.index_name) |name| try allocator.dupe(u8, name) else "";
+        errdefer if (index_name.len > 0) allocator.free(index_name);
         try op_list.append(allocator, .{
             .op = try allocator.dupe(u8, plannedOpName(op.kind)),
             .phase = try allocator.dupe(u8, plannedOpPhase(op.kind)),
@@ -364,7 +205,10 @@ pub fn buildProfilePayloadFromTrace(
             .input_rows = op.input_rows,
             .rows = op.rows,
             .time_ns = op.time_ns,
-            .cpu_time_ns = op.time_ns,
+            // CANARY: REQ=REQ-SONNY-6613-PROFILE-CPU-TIME; FEATURE="PROFILE"; ASPECT=NoCopiedCpuTime; STATUS=TESTED; TEST=tests/test_sonny6613_profile_cpu_time.zig; OWNER=engine; UPDATED=2026-11-15
+            // SONNY-6613: not measured (the trace times operators by the
+            // wall clock only); it was a copy of `time_ns`.
+            .cpu_time_ns = 0,
             .bytes_out = 0,
             .bytes_alloc = 0,
             .estimate_bytes = 0,
@@ -376,7 +220,7 @@ pub fn buildProfilePayloadFromTrace(
             .net_after_op = 0,
             .error_bytes = 0,
             .error_abs_pct = 0,
-            .index_name = "",
+            .index_name = index_name,
             .selectivity_est = 0,
         });
     }
@@ -697,78 +541,6 @@ fn plannedOpPhase(kind: planned_read_runtime.OpKind) []const u8 {
         .Limit => "PAGE",
         .Sort => "ORDER",
     };
-}
-
-fn sumU64(values: []const u64) u64 {
-    var total: u64 = 0;
-    for (values) |v| total += v;
-    return total;
-}
-
-fn cumulative_timeFor(idx: usize, times: []const u64) u64 {
-    var total: u64 = 0;
-    var i: usize = 0;
-    while (i <= idx and i < times.len) : (i += 1) {
-        total += times[i];
-    }
-    return total;
-}
-
-fn buildPeakContributors(
-    allocator: std.mem.Allocator,
-    ops: []const OpSpec,
-    bytes_alloc: []const u64,
-) !std.ArrayList(schema.ProfilePeakContributor) {
-    const count = @min(@as(usize, 2), ops.len);
-    var list = std.ArrayList(schema.ProfilePeakContributor).initCapacity(allocator, count) catch return error.OutOfMemory;
-    errdefer {
-        for (list.items) |*item| item.deinit(allocator);
-        list.deinit(allocator);
-    }
-    if (count == 0) return list;
-
-    var indices = [_]usize{ 0, 1 };
-    if (ops.len < 2) indices[1] = 0;
-    var i: usize = 0;
-    while (i < ops.len) : (i += 1) {
-        if (bytes_alloc[i] > bytes_alloc[indices[0]]) {
-            indices[1] = indices[0];
-            indices[0] = i;
-        } else if (ops.len > 1 and bytes_alloc[i] > bytes_alloc[indices[1]] and i != indices[0]) {
-            indices[1] = i;
-        }
-    }
-    var emitted: usize = 0;
-    while (emitted < count) : (emitted += 1) {
-        const idx = indices[emitted];
-        const entry = schema.ProfilePeakContributor{
-            .op = try allocator.dupe(u8, ops[idx].name),
-            .bytes_alloc = bytes_alloc[idx],
-        };
-        try list.append(allocator, entry);
-    }
-    return list;
-}
-
-const SpillCounts = struct {
-    sort: u64,
-    distinct: u64,
-    set_union: u64,
-};
-
-fn firstSpillIndex(ops: []const OpSpec, spills: SpillCounts) ?usize {
-    var distinct_idx: ?usize = null;
-    var sort_idx: ?usize = null;
-    for (ops, 0..) |op, i| {
-        if (std.mem.eql(u8, op.name, "Distinct")) distinct_idx = i;
-        if (std.mem.eql(u8, op.name, "Sort")) sort_idx = i;
-    }
-    if (spills.distinct > 0 and distinct_idx != null) return distinct_idx;
-    if (spills.sort > 0 and sort_idx != null) return sort_idx;
-    if (spills.set_union > 0) {
-        for (ops, 0..) |op, i| if (std.mem.eql(u8, op.name, "SetOpUnion")) return i;
-    }
-    return null;
 }
 
 fn unionModeToString(mode: query_traits.UnionMode) []const u8 {

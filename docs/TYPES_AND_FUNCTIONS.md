@@ -72,14 +72,16 @@
 - **Storage**: 1 byte tag + 4 bytes LE
 - **Tag**: `0x22`
 - **Constraints**: Forbids NaN/Inf (returns `ERR_FLOAT_NAN`)
-- **Constructor**: `Real(value)`
+- **Constructor**: `Real(value)` (an integer, a decimal literal such as
+  `3.14159`, or a DOUBLE; a value past the f32 range is 22003)
 
 #### Double (f64)
 
 - **Storage**: 1 byte tag + 8 bytes LE
 - **Tag**: `0x23`
 - **Constraints**: Forbids NaN/Inf (returns `ERR_FLOAT_NAN`)
-- **Constructor**: `Double(value)`
+- **Constructor**: `Double(value)` (an integer, a decimal literal such as
+  `2.5`, or a REAL)
 
 #### Decimal128
 
@@ -136,7 +138,9 @@
 - **Tag**: `0x29`
 - **Precision**: Microseconds
 - **Format**: "HH:MM:SS[.us]"
-- **Constructor**: `Time("HH:MM:SS[.us]")`
+- **Constructor**: `Time("HH:MM[:SS[.us]]")`; a string with a zone
+  (`Z`, `+HH:MM`, `-HH:MM`) gives a TimeTZ that keeps its offset; trailing
+  text is a TimeParse error (SONNY-2808)
 
 #### TimeTZ
 
@@ -158,14 +162,19 @@
 - **Tag**: `0x2C`
 - **Storage**: Always UTC internally
 - **Format**: ISO-8601 with timezone
-- **Constructor**: `TimestampTZ("YYYY-MM-DD HH:MM:SS[.us] [±HH:MM]")`
+- **Constructor**: `TimestampTZ("YYYY-MM-DDTHH:MM:SS[.us](Z|±HH:MM)")`; the
+  zone designator ends the string. `datetime(str)` takes the same string
+  (its offset gives the instant), or one without a zone (read as UTC), or a
+  date (midnight UTC) (SONNY-2808)
 
 #### Interval
 
 - **Storage**: Tag + 4 bytes months + 4 bytes days + 8 bytes microseconds
 - **Tag**: `0x2D`
 - **Components**: months, days, microseconds
-- **Format**: ISO-8601 duration "P1Y2M3DT4H5M6S"
+- **Format**: ISO-8601 duration "P1Y2M3DT4H5M6S"; every component
+  optional, a component may be negative (`P-1D`), seconds may carry a
+  fraction (`PT1.5S`, microsecond precision) (SONNY-2808)
 - **Constructor**: `Interval("P...")` or `MakeInterval(months, days, micros)`
 
 ### Binary and JSON Types
@@ -175,10 +184,14 @@
 - **Storage**: Tag + 4 bytes length + raw bytes
 - **Tag**: `0x2E`
 - **I/O Format**: `\xDEADBEEF` (hex)
-- **Constructor**: `Bytea(hex_string)`
+- **Constructor**: `Bytea(hex_string)` - the hex digits, in either case, with
+  or without the `\x` prefix (`Bytea('deadbeef')`, `Bytea('\\xDEADBEEF')`);
+  an odd digit count or a character that is not a hex digit is 22018. In a
+  GQL string literal the backslash is written `\\` (an unknown escape such as
+  `\x` drops its backslash)
 - **Functions**:
-  - `to_hex(bytea)` - Convert to hex string
-  - `from_hex(str)` - Parse hex string
+  - `to_hex(bytea)` - Convert to hex string (`\xDEADBEEF`)
+  - `from_hex(str)` - Parse hex string (same forms as `Bytea(hex_string)`)
 
 #### Json
 
@@ -194,9 +207,12 @@
 - **Features**: Keys sorted, duplicates removed, canonical form
 - **Constructor**: `Jsonb(text)`
 - **Functions**:
-  - `jsonb_get(obj, path)` - Extract value by path
+  - `jsonb_get(obj, path)` - Extract value by path (`$.a.b.0`): a number is a
+    DOUBLE, a string TEXT, a boolean BOOL, an object or array a JSONB; JSON
+    null, a missing path or a path without the `$.` prefix is NULL
   - `jsonb_exists(obj, key)` - Check key existence
-  - `jsonb_typeof()` - Get JSON type
+  - `jsonb_typeof(x)` - Get the JSON type name: `object`, `array`, `string`,
+    `number`, `boolean` or `null` (NULL for NULL)
   - `jsonb_set(obj, path, value)` - Update value
 
 #### XML
@@ -459,9 +475,11 @@
 - **Tag**: `0x36`
 - **Constraint**: Homogeneous element type
 - **NULL Handling**: NULL for entire array, not elements
-- **Constructor**: `Array(elem_list)`
+- **Constructor**: `Array(elem_list)` - a list of integers, booleans, strings
+  or decimals; an empty list is an empty array; mixed element types or a NULL
+  element are 22G03
 - **Functions**:
-  - `array_length(a)` - Get length
+  - `array_length(a)` - Get length (an array, or a list such as `[1, 2, 3]`)
   - `array_contains(a, x)` - Check membership
   - `array_get(a, i)` - Get element by index
 
@@ -503,6 +521,24 @@
 
 ### Date/Time Arithmetic
 
+Operators (ISO/IEC 39075:2024 20.26 and 20.28; SONNY-2797):
+
+- `instant + duration`, `duration + instant`, `instant - duration` for a
+  date, time, zoned time, local or zoned datetime: the months as calendar
+  months, the day clamped to the target month (`2024-01-31 + P1M` is
+  `2024-02-29`), then the day-to-second part; a date takes its whole days,
+  a time of day wraps at 24 hours.
+- `duration + duration`, `duration - duration`: part by part, the
+  day-to-second part normalized (`PT20H + PT20H` is `P1DT16H`).
+- `duration * number`, `number * duration`, `duration / number`: a result
+  with a fraction of a month is refused (22023: a month has no fixed length);
+  a fraction of a microsecond is truncated; `/ 0` is 22012.
+- `instant - instant` (one type): the day-to-second duration between them
+  (Geode extension for `DURATION_BETWEEN`); two types are 22G04.
+- A result out of range is 22003.
+
+Functions:
+
 - `date_add(date, interval)` - Add interval to date
 - `date_sub(date, interval)` - Subtract interval
 - `ts_add(timestamp, interval)` - Add to timestamp
@@ -513,12 +549,42 @@
 
 - `date_part(part, date|timestamp)` - Extract year/month/day/hour/etc.
 - `time_part(part, time)` - Extract hour/minute/second
+- Member access `v.year`, `.month`, `.day`, `.hour`, `.minute`, `.second`,
+  `.millisecond`, `.microsecond` on a date, time, zoned time, local or zoned
+  datetime: the fields of the value's ISO 8601 representation, the time of
+  day taken modulo 24 hours (so a datetime before 1970 has hours 0-23); a
+  zoned datetime is held as its UTC instant, so its fields are UTC's; a
+  field the value lacks (`date(...).hour`) is NULL (SONNY-2796).
+
+## List Functions
+
+### `range(start, end[, step])`
+
+A Geode extension (ISO/IEC 39075:2024 has no `range` function): the list of
+integers from `start` up to, **not including**, `end`, stepping by `step`
+(default 1). The end is exclusive, as in Python's `range`; openCypher's
+`range()` includes its end, so a query ported from Cypher must move the end
+by one step.
+
+| Call | Result |
+|---|---|
+| `range(1, 4)` | `[1, 2, 3]` |
+| `range(1, 7, 2)` | `[1, 3, 5]` |
+| `range(5, 1, -2)` | `[5, 3]` |
+| `range(3, 3)` | `[]` |
+| `range(1, 4, 0)` | error 22023 (a zero step) |
+| `range(1, NULL)` | `NULL` |
+| `range(1.5, 3)` | error 22G03 |
+
+A `NULL` argument returns `NULL`; an argument that is not an integer is
+refused (22G03) and a zero step too (22023): both returned `NULL` until
+SONNY-6587. More than 10,000,000 elements is refused (`RangeTooLarge`). `FOR i IN range(1, 1500)` runs 1,499 times.
 
 ## Distance and Spatial Functions
 
 ### Haversine Distance
 
-```gql
+```text
 distance_haversine(point1, point2)
 ```
 
@@ -664,6 +730,21 @@ distance_haversine(point1, point2)
    - Char ignores trailing spaces
    - Enum compares by ordinal
    - UUID compares bytewise
+   - Numbers (INT, SMALLINT, BIGINT, DECIMAL, REAL, DOUBLE) compare by their
+     exact numerical value, whatever their types (ISO/IEC 39075:2024 19.3,
+     General Rule 3a). `=`, the order operators, IN, GROUP BY, DISTINCT,
+     ORDER BY, joins, inline property maps, MERGE and index seeks share this
+     one rule: `1 = 1.0 = DOUBLE 1.0`, `DOUBLE 0.5 = 0.5`, but the DOUBLE
+     nearest 0.1 (0.1000000000000000055...) is not the DECIMAL 0.1 and is
+     greater than it. NaN equals nothing under `=` (IEEE 754) and is one
+     value for GROUP BY and DISTINCT, sorting after every number
+     (SONNY-2807).
+   - Strings (STRING, TEXT, VARCHAR, CHAR values) compare by the UTF-8 bytes
+     of their Unicode Normalization Form C (UAX #15, Unicode 15.1): a
+     precomposed `'é'` equals `'e'` + U+0301, U+212B ANGSTROM SIGN equals
+     `'Å'`. `=`, the order operators, IN, GROUP BY, DISTINCT, ORDER BY,
+     joins, inline property maps, MERGE, UNIQUE and the index seeks share
+     this one rule; values are stored as written (SONNY-3055).
 
 ## Performance Characteristics
 

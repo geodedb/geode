@@ -12,9 +12,10 @@ All three transport sites (QUIC, gRPC, distributed coordinator) now call
 `derivePrincipal()` instead of each constructing a `Principal` literal
 independently.
 
-`execution.checkPermission()` is now a thin adapter: it builds a
-`DecisionRequest` from the `ExecutionContext` and delegates to `decide()`.
-The function body no longer contains any authorization logic of its own.
+`execution.checkPermission()` was then a thin adapter that built a
+`DecisionRequest` from the `ExecutionContext` and delegated to `decide()`.
+It never gained a caller and was removed in SONNY-2781; the handlers' gates
+call `decide()` (see "What each action enforces").
 
 The two direct `user_mgmt.hasPermission()` calls in
 `src/transport/grpc_server.zig` (formerly at lines 1506 and 2077) have been
@@ -66,8 +67,9 @@ existing CLI/test fixtures that do not pass `--insecure-allow-all`. Phase 3
 will remove this shim and require the explicit flag.
 
 **Closure status:** partially closed. The `decide()` code path is fully
-fail-closed; the `checkPermission` shim remains for compatibility.
-Closing commit: `36742374`.
+fail-closed; the `checkPermission` shim remained for compatibility.
+Closing commit: `36742374`. (SONNY-2781 removed `checkPermission`, shim
+included: it had no callers.)
 
 ### Site #4 — RLS VM no-result implicit allow (fully closed)
 
@@ -87,6 +89,45 @@ accessors. `src/server/cli_args.zig` parses `--insecure-allow-all` and calls
 is intended exclusively for development environments and must NEVER be set in
 production. It is NOT the same as "auth disabled" — it bypasses authorization
 but does not disable authentication.
+
+## Authentication disabled (SONNY-2782)
+
+Authentication disabled (`user_management.setAuthEnabled(false)`) is the
+in-process, single-user mode: embedders and tests. It is not a serving
+mode. `geode serve` enables authentication at startup whatever its flags
+(`src/server/main.zig`); `geode serve --no-auth` fails at startup in
+every build mode (SONNY-6329; it used to log "Authentication disabled" in a
+Debug build and leave authentication enabled).
+`--insecure-allow-all` is a different switch: authentication stays on and
+`decide` allows everything (see above).
+
+With authentication disabled, on every transport (QUIC and gRPC alike):
+
+- no request is authenticated: a session has no user and no role;
+- no request is authorized per user: the handlers authorize, and give the
+  executor, no principal (`session_graph.requestPrincipal`), and with no
+  principal every gate answers yes, as for an in-process caller: the
+  handlers' write and read gates (`requestChangePermitted`,
+  `requestReadPermitted`), graph binding and schema (`mayBind`,
+  `maySchema`), the procedure gate, and the executor's admin gates (policy
+  DDL, `geode.auth.*`, `geode.rls.*`, `geode.tenant.*`), which check
+  `isAuthEnabled` themselves. Every request runs as if by an administrator;
+- GPS policies (allow and deny), per-graph grants and roles are not
+  consulted, and RLS policies that name a user have no user to apply to;
+- `--insecure-allow-all` changes nothing;
+- tenant scoping is unchanged: a session's `tenant_id` still scopes what it
+  sees, and strict tenancy still refuses an unscoped request;
+- the read-only request floor (`ExecuteRequest.read_only`) still refuses a
+  change.
+
+With authentication enabled both handlers gate every session through the
+same functions, whatever its role (a session with none is refused). Before
+SONNY-2782 the QUIC handler gated only a session with a role, and the gRPC
+handler skipped its read gate likewise but ran its write gate for every
+session, so with authentication disabled gRPC refused every change (42501:
+`decide` answered `unauthenticated`) unless `--insecure-allow-all` was set,
+while QUIC ran it; and both handed the executor an anonymous principal,
+which refused DDL and changing procedures on both.
 
 ## `resolveRoleFromGraph` — auth cache and HAS_ROLE edge lookup
 
@@ -160,25 +201,25 @@ as fast.
    `reason_code = "graph_grant"`. A builtin role still allows the action on
    every graph. A request on no graph in particular (the database, a
    tenant, a procedure, metadata, `*`) is never allowed by a grant.
-2. Allow policies match resources by `allowPolicyCovers`: a policy scoped
+2. Allow policies match resources by `policyCovers`: a policy scoped
    to `*` covers everything; one scoped to graph `g` covers `g` and its
-   nodes and edges, and nothing else. Deny policies keep the broad
-   `policyMatchesResource` match, so a deny on `g` still refuses a request
-   on the whole database.
+   nodes and edges, and nothing else. Since SONNY-2753 deny policies match
+   by the same rule (see "Policy scope").
 3. A deny policy is evaluated before both, so it overrides a grant.
 
 GRANT and REVOKE update the live table at once (`server_init.grantApply`,
 `grantRevoke`) and bump the policy version, so no cached decision outlives
 them. The table is guarded by a mutex: every request reads it now.
 
-**Handler gates.** QUIC and gRPC gate a program that changes data with
-`gps.writePermittedOn(principal, lock_graph)`, `decide(write, graph)`, for
-every principal, and a self-locking CALL (which takes each graph's lock
-itself) with the database-wide `writePermitted`. Schema DDL goes through
+**Handler gates.** QUIC and gRPC gate a program that changes data on the
+graph it changes (`lock_graph`), for every principal: originally
+`gps.writePermittedOn`, `decide(write, graph)`; since SONNY-2781
+`gps.changePermittedOn`, by the program's actions (see "What each action
+enforces"). A self-locking CALL (which takes each graph's lock itself) goes
+through the database-wide `writePermitted`. Schema DDL goes through
 `session_graph.maySchema` (`decide(schema, graph)`), so a SCHEMA grant
 counts there at once; `maySchemaDatabase` (index and constraint DDL) asks
-for schema on `*`, which no grant gives. `execution.checkPermission` asks
-on the active graph when there is one.
+for schema on `*`, which no grant gives.
 
 **Restart.** Grants are hydrated from the `(:GraphGrant)` nodes into the
 live table (`wireAuthDDLCallbacks`). They are no longer migrated to
@@ -225,7 +266,9 @@ schedule in that document.
 - `decide()` with empty Principal → unauthenticated
 - Builtin-role grant table (Admin/User/ReadWrite/ReadOnly × Read/Write/Schema)
 - Graph-grant widening (ReadOnly + GRANT WRITE ON GRAPH hr)
-- `checkPermission` / `decide()` parity across all 4 roles × 2 permissions
+- the handlers' read, write and schema gates follow the builtin role table
+  for all 4 roles (it replaced the `checkPermission` / `decide()` parity
+  test when SONNY-2781 removed `checkPermission`)
 
 `tests/test_gps_principal_derive.zig` — covers `derivePrincipal()` for QUIC
 and anonymous inputs.
@@ -247,7 +290,7 @@ that always returned `.ReadWrite` for non-superusers.
 not a library module. The file carries heavy binary-only dependencies:
 QUIC transport, gRPC server, LSP server, cert generator, metrics server,
 thread pool, and multiple named modules that are only wired for `geode_exe`
-(e.g. `index_selectivity`, `text_formatter`, `otel_metrics`, `txn`). There
+(e.g. `index_selectivity`, `otel_metrics`, `txn`). There
 is no named module wrapper for `src/server/main.zig` accessible to a
 standalone test executable.
 
@@ -291,49 +334,129 @@ check, before every path that can allow:
 4. The special cases (Admin shortcuts, bind_graph, admin_tenant), the
    builtin roles and the allow policies, as before.
 
-### What a deny enforces today (SONNY-2781)
+### What each action enforces (SONNY-2781)
 
-A policy can name read, match, write, create, update, delete, schema,
-decrypt_field and unwrap_key, and `decide()` evaluates a deny for any of them.
-But a deny only takes effect where enforcement calls `decide()`, and it calls
-it for few actions:
+Every action a policy can name is asked for by an enforcement point, so a
+deny naming it takes effect, and an allow naming it allows exactly that. A
+statement's actions come from the one write walk that also decides the
+lock and the read-only floor (`write_walk.Actions`, `StatementPlan.actions`),
+so "does it change anything" and "which action is it" cannot disagree.
 
-- **DENY WRITE** refuses every request that changes data on the graphs it
-  covers. The QUIC and gRPC write gate (`gps.writePermittedOn`,
-  `decide(write, graph)` on the graph the program changes; for a
-  self-locking CALL `gps.writePermitted`, `decide(write, database)`) runs
-  for every program that `isMutatingProgram` counts as a change. That is all DML
-  (CREATE, MERGE, SET, REMOVE, DELETE, INSERT), the graph, graph type,
-  schema, index and constraint DDL, BACKUP and RESTORE, and CALLs of
-  procedures that change data.
-  - Not covered: the security DDL (CREATE/ALTER/DROP USER, CREATE/DROP ROLE,
-    GRANT, REVOKE, CREATE/ALTER/DROP POLICY). It is counted as read-only
-    (SONNY-2751) and has its own Admin role check, so a DENY WRITE does not
-    reach it.
-- **DENY READ and DENY WRITE** apply to `CALL` procedures. A read-only
-  procedure asks for read on the procedure, and one that changes data asks
-  for write.
-- **DENY DECRYPT_FIELD** applies to field-level decryption.
+| Policy action | Requests it matches (`policyMatchesAction`) | Where they are asked |
+|---|---|---|
+| `READ` | `read`, `match_` | the read gate; read-only `CALL`s |
+| `MATCH` | `match_` | the read gate |
+| `WRITE` (umbrella) | `write`, `create`, `update`, `delete` | the write gate |
+| `CREATE` | `create` | the write gate |
+| `UPDATE` | `update` | the write gate |
+| `DELETE` | `delete` | the write gate |
+| `SCHEMA` | `schema` | the write gate for DDL; the executor's DDL gates |
+| `DECRYPT_FIELD` | `decrypt_field` | field-level decryption |
+| `UNWRAP_KEY` | `unwrap_key` | nothing: a deny naming it is refused |
 
-A deny on any other action is accepted but **not enforced**, because nothing
-calls `decide()` with that action:
+**Field decryption:** every read of an encrypted field asks
+`decide(decrypt_field, graph)` for the authenticated principal on the
+session's graph (SONNY-6334; `fle_integration.readStoredString`).
+Plaintext needs the request's FLE role in the field's visibility roles and
+an allow; a refusal reads as a role not in the list (`[REDACTED]`, 42501
+for an `n.p` read of a searchable field). Before SONNY-6334 nothing called
+it.
 
-- DENY READ does not stop a plain MATCH.
-- DENY MATCH, CREATE, UPDATE, DELETE, SCHEMA and UNWRAP_KEY stop nothing.
-- `execution.checkPermission()` would ask for read, write or schema, but it
-  has no callers.
+**The read gate** (`session_graph.programReadPermitted`, both handlers)
+asks `decide(match_, g)` for every principal, on every graph `g` the
+program touches (`query_traits.programReadGraphList`): every statement on
+graph data, subqueries and UNION arms with it, the MATCH of a data change
+included, a PROFILE's statement, and the statement an EXPLAIN plans (its
+plan reports the graph's indexes and estimates). A builtin role with Read,
+a READ grant on `g`, or an allow naming READ or MATCH on `g` passes it. A
+program that reads no store (`RETURN 1`) or touches no graph data (a lone
+`USE GRAPH`; the security DDL) passes. A data change passes it too, on the
+graph it changes, since it reads that graph: an allow-only principal needs
+READ (or MATCH) there as well as the change action. The gate skipped
+`decide` for every principal whose builtin role holds Read, so a DENY READ
+or DENY MATCH did not stop a plain MATCH.
 
-SONNY-2781 tracks wiring the rest (v0.8.24). bind_graph, admin_tenant,
-execute_procedure and show_metadata have no policy analogue, so no policy
-names them.
+**The write gate** (`gps.changePermittedOn`, both handlers, on the graph
+the program changes) asks, by what the program does:
 
-Resources match more broadly than for allow policies. `*` matches
-everything. A graph-scoped deny matches that graph and every non-graph
-resource (database, tenant, node, edge, procedure, metadata). So a deny
-scoped to one graph refuses writes to that graph, the database-level write
-check (self-locking CALLs), and, for DENY READ, every read-only procedure
-(SONNY-2753). A graph-scoped allow covers only its graph
-(REQ-SEC-PER-GRAPH-GRANTS).
+| Statement | Asks |
+|---|---|
+| `CREATE`, `INSERT`, `INSERT VALUE`, `MERGE` | `create` |
+| `SET`, `REMOVE`, a `MERGE`'s `ON MATCH SET` (or bare `SET`) | `update` |
+| `DELETE`, `DETACH DELETE` | `delete` |
+| graph, graph type, schema, index, constraint DDL | `write` and `schema` |
+| a `CALL` of a procedure that changes data, `BACKUP`, `RESTORE` | `write`, `create`, `update` and `delete` |
+
+So a DENY CREATE stops CREATE, INSERT and MERGE (and their PROFILE) and
+nothing else; a DENY UPDATE stops SET, REMOVE and a MERGE that updates; a
+DENY DELETE stops DELETE; a DENY WRITE stops all of them and the DDL; a
+change the engine cannot break down (a procedure, BACKUP, RESTORE) is
+stopped by a deny of WRITE, CREATE, UPDATE or DELETE. An allow naming
+CREATE (and READ for the read gate) lets a principal create and nothing
+more; an allow naming WRITE allows every data change but not DDL, which also
+needs SCHEMA. A builtin role with Write, and a per-graph WRITE grant, allow
+create, update, delete and write. A self-locking CALL, which writes every
+graph, is gated by `gps.writePermitted` (see "Policy scope").
+
+**DDL** also passes the executor's gates: `session_graph.maySchema` asks
+`decide(schema, g)` on the graph a CREATE / DROP GRAPH names or index /
+constraint DDL runs on, and `maySchemaDatabase` asks schema on every graph
+for index, constraint and CREATE / DROP SCHEMA DDL.
+
+**Procedures** ask `read` (read-only) or `write` (changes data) on the
+procedure (`gps.procedurePermitted`), besides the read and write gates on
+the graph they run on.
+
+**Not covered:** the security DDL (CREATE/ALTER/DROP USER, CREATE/DROP
+ROLE, GRANT, REVOKE, CREATE/ALTER/DROP POLICY). It changes stored security
+state, not graph data: a read-only request refuses it (SONNY-2751), but it
+takes no graph lock and no write gate, and keeps its own Admin (or self)
+check, so a DENY WRITE does not reach it.
+
+**Refused:** a deny naming UNWRAP_KEY, which no enforcement point asks for,
+is refused when it is added (`PolicyCatalog.addPolicy*`,
+`error.PolicyActionNotEnforced`), in DDL and at startup hydration alike (a
+stored record has no bit for it, so hydration never meets one). An allow
+naming it grants nothing and is accepted.
+
+bind_graph, admin_tenant, execute_procedure and show_metadata have no policy
+analogue, so no policy names them. `execution.checkPermission`, which had no
+callers, was removed. Regression:
+`zig build test-sonny2781-gps-action-enforcement`.
+
+### Policy scope (SONNY-2753)
+
+Allow and deny policies cover resources by one rule (`policyCovers`):
+
+- A policy scoped to `*` covers everything.
+- A policy scoped to graph `g` covers `g` and the nodes and edges in it,
+  and nothing else: not another graph, not `*`, and not a request on no
+  graph in particular (the database, a tenant, a procedure as such,
+  metadata).
+
+Where a request runs or changes:
+
+- **One graph** (the handlers' write gate on the graph a program changes,
+  schema DDL on a graph, field decryption, which asks on the node in the
+  graph being read): the policies of that graph and `*` decide.
+- **A procedure**: the procedure is no one graph's resource, so only a `*`
+  policy (or a builtin role) allows it; and a deny scoped to the graph the
+  procedure runs on (the session's graph; the default graph for the
+  fulltext procedures) refuses it (`gps.procedurePermitted`).
+- **Every graph at once** (a self-locking procedure CALL,
+  `gps.writePermitted`; index, constraint and schema DDL, catalogued
+  database-wide, `session_graph.maySchemaDatabase` /
+  `gps.schemaPermittedEverywhere`): only a `*` policy (or a builtin role)
+  allows it, and a deny on any graph refuses it, since it changes that graph
+  too (`denyOnAnyGraph`). For the self-locking CALL that is a deny of WRITE,
+  CREATE, UPDATE or DELETE; for the DDL a deny of SCHEMA.
+
+A deny scoped to one graph used to match every non-graph resource, so a DENY
+READ on `g` refused every read-only procedure on every graph, a deny on `g` a
+node or edge of any graph, and a DENY DECRYPT_FIELD on `g` every decryption;
+and a graph-scoped allow of DECRYPT_FIELD never applied. A DENY SCHEMA on
+`g` did not refuse index DDL run from another graph, which binds `g` as well.
+Regression: `zig build test-sonny2753-graph-scoped-deny`.
 
 A deny whose USING expression does not compile (a record loaded fail-closed)
 keeps denying until it is rewritten, and so does a deny when the principal's
@@ -354,8 +477,23 @@ always creates allow policies. A deny reaches the catalog in two ways:
 - `CALL` procedures (read or write on the procedure);
 - FLE decryption (`decrypt_field`).
 
-EXPLAIN POLICY reports the decision a statement would get, but enforces
-nothing.
+EXPLAIN POLICY reports the decisions a statement would get, but enforces
+nothing. Since SONNY-6313 it asks what the gates ask, for the session's
+graph: one row per question, the read gate's `decide(match_, graph)` on
+every graph the statement reads, then the write gate's per-action
+questions on the graph it changes (`changePermittedOn`, or
+`writePermitted` on the database for a self-locking procedure). Since
+SONNY-6369 it also reports the checks the executor makes itself: for
+`USE GRAPH g`, `bind_graph` on `graph:g` (none for the default graph or a
+DSN-bound session); for `CALL p()`, the procedure gate, `read` or `write`
+on `procedure:p` (refused too by a deny of that action on the graph the
+procedure runs on); for graph, index and constraint DDL, `schema` and
+`bind_graph` on the graph it names or runs on; and for index, constraint
+and schema DDL, `schema` on `graph:*` (refused too by a DENY SCHEMA on any
+graph). A statement nothing asks about reports the one action it names on
+`database`. The admin-only checks of the `geode.auth.*` / `geode.rls.*`
+procedures and of policy DDL are role checks, not GPS decisions, and are
+not reported.
 
 Regression suite:
 [`tests/test_sonny2744_gps_deny.zig`](../../tests/test_sonny2744_gps_deny.zig)

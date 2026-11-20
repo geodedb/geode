@@ -15,6 +15,7 @@
 // would be ~36 ms, far above the 2 ms budget.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 
@@ -91,6 +92,8 @@ const Harness = struct {
 };
 
 test "GAP-0811: count(p:LT_Person) uses label-index cardinality" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
@@ -137,6 +140,8 @@ test "GAP-0811: count(p:LT_Person) uses label-index cardinality" {
 }
 
 test "GAP-0811: count(c:LT_Company) on different label returns correct count" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
@@ -156,6 +161,8 @@ test "GAP-0811: count(c:LT_Company) on different label returns correct count" {
 }
 
 test "GAP-0811: count of absent label returns 0" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 

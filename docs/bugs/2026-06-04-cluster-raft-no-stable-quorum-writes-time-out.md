@@ -2745,3 +2745,18 @@ The k8s gate is met: the 3-node Raft cluster survives sustained extreme churn (2
 kills) with no acceptor wedge, no no-leader livelock, automatic rejoin to clean 3/3 without
 operator action, and zero data loss. **Tagged `geode v0.7.0` on `c5c0b833`.** Prod still on
 single-node `0.6.14` — the operator decides when to roll prod onto a clustered release.
+
+## Follow-up: SONNY-6451 (2026-11-12) — RC1 / RC-A did not reach the multiplexed stream
+
+The RC1 idle reap and the RC-A sweeper flag are checked in `handleQuicConnection`'s
+`acceptStream` loop, between streams. Since the 2026-06-08 multiplexed-stream change a
+handler spends its life one level down, inside `dispatchRaftFrameFromAdaptedStream`, which
+re-parked on `WouldBlock` without checking either (or the shutdown flag). The vendor
+`readStream` answers `WouldBlock` forever for a stream whose sender vanished without FIN or
+CONNECTION_CLOSE, so RC1's "4 zombie workers" starvation came back for any peer that died
+silently mid-stream: the netns membership-churn harness lost node3 at M6-M8 after the earlier
+phases' restarts and IP moves. The stream loop now ends on shutdown, a closed connection, an
+RC-A request, or no frame for the RC1 deadline, releases the worker and closes the connection
+(the raft sender rebuilds a connection its peer closed). Regression:
+`zig build test-sonny6451-raft-restarted-peer` (real receiver, real QUIC senders that vanish:
+RED stalled at the fifth incarnation with 4 handlers pinned).

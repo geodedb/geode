@@ -10,7 +10,8 @@
 #
 # Environment Variables:
 #   TEST_MODE: quick|standard|extended|continuous (default: standard)
-#   GEODE_LOG_LEVEL: error|warn|info|debug (default: info)
+#   GEODE_LOG_LEVEL: error|warn|info|debug (default: info), passed to the
+#     server as --log-level (geode reads no such variable itself)
 
 networks:
   geode-integration-network:
@@ -49,10 +50,18 @@ services:
     - geode-data:/data
     - geode-certs:/certs
     - integration-logs:/logs
+    # SONNY-6442: the log level and listen address are geode serve options;
+    # geode reads no GEODE_LOG_LEVEL or GEODE_LISTEN.
+    command:
+    - --data-dir
+    - /data
+    - --listen
+    - 0.0.0.0:3141
+    - --log-level
+    - ${GEODE_LOG_LEVEL:-info}
+    - --enable-auth
     environment:
-    - GEODE_LOG_LEVEL=${GEODE_LOG_LEVEL:-info}
     - GEODE_DATA_DIR=/data
-    - GEODE_LISTEN=0.0.0.0:3141
     healthcheck:
       # Shared probe: unauthenticated GET /health on GEODE_METRICS_PORT, off
       # the QUIC query path. This image is built ReleaseSafe, so the CLI
@@ -66,11 +75,12 @@ services:
       nproc:
         soft: 4096
         hard: 4096
-    pids_limit: 4096
     restart: on-failure
     deploy:
       resources:
         limits:
+          # SONNY-6448: here, not pids_limit (Compose refuses both).
+          pids: 4096
           memory: 4G
           cpus: '4'
         reservations:

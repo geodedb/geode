@@ -1,10 +1,12 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
 fn runOne(allocator: std.mem.Allocator, server: []const u8, query: []const u8) ![]u8 {
-    const res = try cli_test_util.runAgainstServer(allocator, server, &.{ "./zig-out/bin/geode", "query", query, "--format", "json" });
+    const res = try cli_test_util.runAgainstServer(allocator, server, &.{ geode_test_bin.geode_exe, "query", query, "--format", "json" });
     defer allocator.free(res.err);
     try testing.expectEqual(@as(i32, 0), res.code);
     return res.out;
@@ -14,6 +16,8 @@ fn runOne(allocator: std.mem.Allocator, server: []const u8, query: []const u8) !
 // Expected: schema lists columns a, c (heuristic type INT); rows contain distinct a values with counts.
 
 test "group by basic non-profile" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("group by basic non-profile");
     errdefer util.testFail();
 

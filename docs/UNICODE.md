@@ -13,6 +13,19 @@ Geode integrates a _minimal_ Unicode pipeline focused on:
 
 The implementation deliberately vendors only a reduced UCD subset sufficient for current normalization/folding coverage. Full canonical combining class and composition tables are **not** yet included (future expansion). A generator tool builds small tables at build time (non-fatal if it fails; promotion to enforced step tracked by REQ-GQL-UNICODE-006).
 
+### String identity (SONNY-3055)
+
+String equality, ordering and keys use the **full** Unicode 15.1 Normalization
+Form C (UAX #15) from the `strings` dependency, through
+`src/unicode/canonical_string.zig`: `=`, the order operators, IN, GROUP BY,
+DISTINCT, ORDER BY, joins, inline property maps, MERGE, UNIQUE and the exact
+property index all compare the NFC forms' UTF-8 bytes (ASCII and NFC strings
+take a no-allocation fast path). Values are stored as written. The subset
+normalizer `nfcNormalize` below is no longer used by `=`, any key or any
+ORDER BY (the `exec.zig` text fallback uses `canonical_string` since
+SONNY-6499); it remains in the FTS tokenizer (`src/index/fts_tokenizer.zig`,
+index and query terms).
+
 ## Features & Requirement IDs
 
 | REQ                 | Feature           | Aspect            | Status | Notes                                              |
@@ -20,7 +33,7 @@ The implementation deliberately vendors only a reduced UCD subset sufficient for
 | REQ-GQL-UNICODE-004 | Normalization     | NFC Subset        | TESTED | Basic decompositions & recomposition.              |
 | REQ-GQL-UNICODE-005 | Case Folding      | Fold Selected     | TESTED | Sharp S, Greek sigma, sample accents.              |
 | REQ-GQL-UNICODE-006 | Build Integration | Generator Step    | IMPL   | Non-fatal system command in `build.zig`.           |
-| REQ-GQL-UNICODE-008 | FTS Normalization | Analyzer Pipeline | TESTED | Fold + NFC on terms.                               |
+| REQ-GQL-UNICODE-008 | FTS Normalization | Analyzer Pipeline | REMOVED | src/fts/advanced.zig removed (SONNY-6499); terms are folded in `fts_tokenizer.zig`. |
 | REQ-GQL-UNICODE-009 | Eval Compare      | NFC Compare       | TESTED | Expression comparator normalizes.                  |
 | REQ-GQL-UNICODE-010 | ORDER BY Compare  | NFC Ordering      | TESTED | Deterministic ordering via NFC.                    |
 | REQ-GQL-UNICODE-011 | Unique Keys       | NFC Key Canon     | TESTED | Constraint normalization.                          |

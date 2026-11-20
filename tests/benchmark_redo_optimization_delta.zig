@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const graph_store = @import("geode").graph_store;
 const varcfg = @import("geode").benchmarks.variance_config;
 
@@ -201,6 +202,8 @@ pub fn runRedoOptimizationDeltaVarianceEnvelope() !void {
 }
 
 test "BenchmarkCANARY_REQ_GQL_022_GraphStoreLoadOptimizationDeltaVarianceEnvelope" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try runRedoOptimizationDeltaVarianceEnvelope();
 }
 

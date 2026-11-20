@@ -24,12 +24,14 @@
 //     error.DataCorruption. The graph is quarantined, and every read or write
 //     of a quarantined graph fails closed (GraphQuarantineError) instead of
 //     answering OK from its partial indexes.
-// NOT guaranteed (engine-level gaps, root fix tracked as SONNY-2409: the pager
-// must not treat a zeroed page below the written high-water mark as fresh):
-//   * zeroed pages read by an UNLABELED engine-direct scan before anything
-//     hydrates the graph: partial rows, status OK;
-//   * a page whose 32-byte HEADER alone is zeroed: CRC verification is
-//     skipped, so damage in the rest of that page can go undetected.
+//   * an UNLABELED engine-direct scan (`StorageAdapter.scanAllNodes`) checks
+//     the live records it finds against the shard manifests' counts and fails
+//     with error.DataCorruption (SONNY-2409);
+//   * a page whose 32-byte HEADER alone is zeroed fails its read
+//     (graph_storage 0.4.12 verifies the CRC of a zeroed header's body).
+// Still an engine-level gap (graph_storage): the pager reads an all-zero page
+// below the written high-water mark as fresh; geode detects the loss only by
+// counting (see tests/test_sonny2409_zeroed_page_header.zig).
 //
 // CANARY: REQ=REQ-GQL-028; FEATURE="SnapshotCompaction"; ASPECT=CorruptPageRecoveryLatency; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency; OWNER=storage; UPDATED=2026-09-23
 // CANARY: REQ=REQ-GQL-028; FEATURE="SnapshotCompaction"; ASPECT=CorruptPageRecoveryLatency; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope; OWNER=storage; UPDATED=2026-09-23
@@ -191,7 +193,10 @@ test "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency" {
 }
 
 test "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope" {
-    const allocator = std.testing.allocator;
+    // SONNY-2439: the production allocator (not std.testing's debug one),
+    // perf_gate.nowNs and robust statistics (median, IQR): a reopen is I/O
+    // bound, and one slow reopen on a loaded host moved the mean and CV.
+    const allocator = perf_gate.bench_allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
@@ -202,31 +207,22 @@ test "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope" {
     _ = try damageFiles(data_dir, "nodes.store", .zero_page);
 
     // Each sample: reopen the damaged store until the corruption is DETECTED.
-    const iters: usize = 24;
-    var samples: [iters]f64 = undefined;
+    var samples: [24]f64 = undefined;
     for (&samples) |*sample| {
-        const t0 = monotonicNs();
+        const t0 = perf_gate.nowNs();
         const outcome = try reopenAndReadAll(allocator, data_dir);
-        sample.* = @floatFromInt(monotonicNs() - t0);
+        sample.* = @floatFromInt(perf_gate.nowNs() - t0);
         // Correctness (always enforced): every reopen detects the damage.
         switch (outcome) {
             .rows => return error.CorruptionSilentlyAccepted,
             .failed => |err| try std.testing.expect(isTypedCorruptionError(err)),
         }
     }
-
-    var sum: f64 = 0;
-    for (samples) |s| sum += s;
-    const mean = sum / @as(f64, @floatFromInt(iters));
-    var var_acc: f64 = 0;
-    for (samples) |s| var_acc += (s - mean) * (s - mean);
-    const cv = @sqrt(var_acc / @as(f64, @floatFromInt(iters))) / mean;
-    std.sort.block(f64, &samples, {}, comptime std.sort.asc(f64));
-    const p95 = samples[(iters * 95) / 100 - 1];
-    std.debug.print("CORRUPT_RECOVERY_DETECT mean_ns={d:.0} cv={d:.4} p95/mean={d:.2}\n", .{ mean, cv, p95 / mean });
+    const r = perf_gate.robust(&samples);
+    std.debug.print("CORRUPT_RECOVERY_DETECT median_ns={d:.0} rel_iqr={d:.4} p95/median={d:.2}\n", .{ r.median, r.rel_iqr, r.p95_over_median });
     // Perf claims go through the shared gate (SONNY-2394): reported unless
     // GEODE_PERF_GATES=enforce (SONNY-2439) -- see tests/perf_gate.zig.
-    try perf_gate.envelope("corrupt-page reopen-to-detection", cv, p95 / mean, 0.22, 2.55);
+    try perf_gate.robustEnvelope("corrupt-page reopen-to-detection", r, 0.30, 2.55);
 }
 
 /// Reopen the store, run `hook` against it before any query (it may
@@ -333,8 +329,8 @@ test "TestCANARY_REQ_GQL_028_QuarantinedGraphFailsClosed" {
 // with error.DataCorruption, which quarantines the graph and fails the read.
 test "TestCANARY_REQ_GQL_028_ZeroedPagesFailHydrationRebuild" {
     const allocator = std.testing.allocator;
-    // The label scan only: an UNLABELED scan of zeroed pages still reads the
-    // engine without hydrating and returns partial rows (SONNY-2409).
+    // The label scan; the UNLABELED scan of zeroed pages, which reads the
+    // engine without hydrating, is covered by test-sonny2409-zeroed-page-header.
     const queries = [_][]const u8{ READ_ALL_NAMES, "MATCH (n:Person) RETURN count(n) AS c" };
     for (queries) |q| {
         var tmp = std.testing.tmpDir(.{});

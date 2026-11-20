@@ -18,10 +18,6 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
-// Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
-fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
-    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
-}
 const builtin = @import("builtin");
 const logging = @import("logging");
 const log = logging.scoped("security");
@@ -30,6 +26,9 @@ const Attr = logging.Attr;
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-005; FEATURE="External Library Migration"; ASPECT=ExternalKMS; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 // External JSON library for RFC 8259 compliant encoding in KMS API requests
 const json_lib = @import("json");
+// SONNY-6465: AWS KMS requests are SigV4-signed with the same core the S3
+// client uses (checked against the published AWS vectors in test-s3-sigv4).
+const sigv4 = @import("s3_sigv4");
 
 /// JSON structure for Vault Transit decrypt request
 const VaultDecryptRequest = struct {
@@ -42,9 +41,10 @@ const AwsKmsEncryptRequest = struct {
     Plaintext: []const u8,
 };
 
-/// JSON structure for AWS KMS Decrypt request
-const AwsKmsDecryptRequest = struct {
+/// JSON structure for AWS KMS Decrypt request (KeyId pins the key)
+const AwsKmsDecryptWithKeyRequest = struct {
     CiphertextBlob: []const u8,
+    KeyId: []const u8,
 };
 
 /// JSON structure for AWS KMS GenerateDataKey request
@@ -71,7 +71,7 @@ pub const KmsBackend = enum {
     GcpKms, // Google Cloud KMS (future)
 
     /// Check if this backend is safe for production use
-    /// CANARY: REQ=REQ-GQL-KMS-BACKEND-001; FEATURE="KMS Backend Safety Check"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
+    /// CANARY: REQ=REQ-GQL-KMS-BACKEND-001; FEATURE="KMS Backend Safety Check"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_sonny6386_key_rotation_truth.zig; OWNER=security; UPDATED=2026-11-12
     pub fn isProductionSafe(self: KmsBackend) bool {
         return switch (self) {
             .LocalSimulated => false, // Never safe for production
@@ -88,7 +88,7 @@ pub const is_production_build = @import("builtin").mode == .ReleaseFast or
     @import("builtin").mode == .ReleaseSafe;
 
 /// KMS Configuration for enterprise backends
-/// CANARY: REQ=REQ-GQL-KMS-CONFIG-001; FEATURE="KMS Configuration"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
+/// CANARY: REQ=REQ-GQL-KMS-CONFIG-001; FEATURE="KMS Configuration"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_sonny6386_key_rotation_truth.zig; OWNER=security; UPDATED=2026-11-12
 pub const KmsConfig = struct {
     backend: KmsBackend = .VaultTransit, // Default to Vault (requires configuration)
     // Vault Transit configuration
@@ -107,7 +107,7 @@ pub const KmsConfig = struct {
     tls_skip_verify: bool = false, // Skip TLS verification (insecure, testing only)
 
     // GAP-0135: Production safety check for TLS configuration
-    // CANARY: REQ=REQ-KMS-TLS-SAFETY-001; FEATURE="KMS TLS Production Guard"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-KMS-TLS-SAFETY-001; FEATURE="KMS TLS Production Guard"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_sonny6386_key_rotation_truth.zig; OWNER=security; UPDATED=2026-11-12
     /// Check if this configuration is safe for production use
     pub fn isSecureForProduction(self: KmsConfig) bool {
         // tls_skip_verify should never be true in production
@@ -154,7 +154,15 @@ pub const KmsProvider = struct {
         generateKey: *const fn (ctx: *anyopaque) anyerror![32]u8,
         rotateKey: *const fn (ctx: *anyopaque) anyerror!void,
         getKeyVersion: *const fn (ctx: *anyopaque) anyerror!u32,
+        /// SONNY-6465: frees what `createKmsProvider` allocated (it used to
+        /// leak: nothing could free the client behind a provider).
+        destroy: *const fn (ctx: *anyopaque, allocator: std.mem.Allocator) void,
     };
+
+    /// Free a provider made by `createKmsProvider` (with the same allocator).
+    pub fn deinit(self: KmsProvider, allocator: std.mem.Allocator) void {
+        self.vtable.destroy(self.ctx, allocator);
+    }
 
     pub fn wrap(self: KmsProvider, plaintext: [32]u8) !Envelope {
         return self.vtable.wrap(self.ctx, plaintext);
@@ -175,13 +183,13 @@ pub const KmsProvider = struct {
 
 /// Vault Transit client with actual HTTP implementation
 /// GAP-0086: HashiCorp Vault Transit backend implementation
-/// CANARY: REQ=REQ-GQL-TDE-VAULT-001; FEATURE="VaultTransitKMS"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
+/// CANARY: REQ=REQ-GQL-TDE-VAULT-001; FEATURE="VaultTransitKMS"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
 pub const VaultTransitClient = struct {
     allocator: std.mem.Allocator,
     config: KmsConfig,
+    /// The Transit key version of the most recent wrap (from Vault's
+    /// "vault:v<N>:" ciphertext prefix); 1 before any wrap.
     key_version: u32 = 1,
-    // Cached vault ciphertext prefix for this key (to avoid re-parsing)
-    last_ciphertext: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator, config: KmsConfig) VaultTransitClient {
         return .{
@@ -191,71 +199,35 @@ pub const VaultTransitClient = struct {
     }
 
     pub fn deinit(self: *VaultTransitClient) void {
-        if (self.last_ciphertext) |ct| {
-            self.allocator.free(ct);
-        }
+        _ = self;
     }
 
     /// Wrap key using Vault Transit encrypt endpoint
     /// POST /v1/transit/encrypt/:key_name
+    /// SONNY-6465: the envelope carries Vault's ciphertext
+    /// (`kms_ciphertext`, owned by the caller: `Envelope.deinitKmsCiphertext`),
+    /// so any client can unwrap it later, after a restart too.
     pub fn wrap(self: *VaultTransitClient, plaintext: [32]u8) !Envelope {
         if (self.config.vault_addr == null or self.config.vault_token == null or self.config.vault_key_name == null) {
             return error.InvalidConfiguration;
         }
 
-        // Base64 encode the plaintext
-        var b64_buf: [64]u8 = undefined;
-        const b64_plaintext = std.base64.standard.Encoder.encode(&b64_buf, &plaintext);
+        var body_buf: [128]u8 = undefined;
+        const body = try vaultEncryptRequestBody(&body_buf, plaintext);
+        defer std.crypto.secureZero(u8, &body_buf);
 
-        // Build request body: {"plaintext": "base64data"}
-        var body_buf: [256]u8 = undefined;
-        const body = std.fmt.bufPrint(&body_buf, "{{\"plaintext\":\"{s}\"}}", .{b64_plaintext}) catch return error.BufferOverflow;
-
-        // Build URL: {vault_addr}/v1/transit/encrypt/{key_name}
         var url_buf: [512]u8 = undefined;
-        const url = std.fmt.bufPrint(&url_buf, "{s}/v1/transit/encrypt/{s}", .{
-            self.config.vault_addr.?,
-            self.config.vault_key_name.?,
-        }) catch return error.BufferOverflow;
+        const url = try vaultTransitUrl(&url_buf, self.config.vault_addr.?, "encrypt", self.config.vault_key_name.?);
 
-        // Make HTTP request
-        const response = try self.httpPost(url, body, self.config.vault_token.?);
+        const response = try self.httpPost(url, body);
         defer self.allocator.free(response);
 
-        // Parse response: {"data": {"ciphertext": "vault:v1:..."}}
-        const ciphertext = try self.extractVaultCiphertext(response);
+        // Response: {"data": {"ciphertext": "vault:v1:...", "key_version": N}, ...}
+        const ciphertext = try jsonStringField(self.allocator, response, "data", "ciphertext");
         defer self.allocator.free(ciphertext);
 
-        // Store ciphertext in envelope (vault ciphertexts are opaque blobs)
-        // We store a hash of the vault ciphertext as a reference and the actual
-        // ciphertext in a separate field that gets serialized
-        var env = Envelope{
-            .version = @intCast(self.key_version),
-            .nonce = undefined,
-            .tag = undefined,
-            .ct = undefined,
-            .alg = "VAULT-TRANSIT",
-        };
-
-        // Store truncated ciphertext hash for identification (routed through FIPS seam)
-        var hash: [32]u8 = undefined;
-        _ = try cb.Hash.digest(.sha256, ciphertext, &hash);
-        @memcpy(&env.ct, &hash);
-
-        // Store nonce as hash of key_name for consistency checks (routed through FIPS seam)
-        var key_hash: [32]u8 = undefined;
-        _ = try cb.Hash.digest(.sha256, self.config.vault_key_name.?, &key_hash);
-        @memcpy(&env.nonce, key_hash[0..12]);
-
-        // Tag stores first 16 bytes for verification
-        @memcpy(&env.tag, hash[0..16]);
-
-        // Cache the actual ciphertext for later unwrap
-        if (self.last_ciphertext) |old| {
-            self.allocator.free(old);
-        }
-        self.last_ciphertext = try self.allocator.dupe(u8, ciphertext);
-
+        const env = try vaultEnvelope(self.allocator, self.config.vault_key_name.?, ciphertext);
+        self.key_version = env.version;
         return env;
     }
 
@@ -266,32 +238,33 @@ pub const VaultTransitClient = struct {
             return error.InvalidConfiguration;
         }
 
-        // Get the cached ciphertext (for now, we need to have wrapped first)
-        // In production, the ciphertext would be stored alongside the envelope
-        const ciphertext = self.last_ciphertext orelse return error.NoCachedCiphertext;
-
-        // Build request body using type-safe JSON encoding: {"ciphertext": "vault:v1:..."}
-        const request = VaultDecryptRequest{ .ciphertext = ciphertext };
-        const body = try json_lib.encode(self.allocator, request, .{});
+        // SONNY-6465: decrypt the ciphertext the envelope carries (it used to
+        // be the last wrap's, held in memory), after checking it is the one
+        // the envelope was made with.
+        try verifyKmsCiphertext(env, "VAULT-TRANSIT");
+        const body = try vaultDecryptRequestBody(self.allocator, env);
         defer self.allocator.free(body);
 
-        // Build URL
         var url_buf: [512]u8 = undefined;
-        const url = std.fmt.bufPrint(&url_buf, "{s}/v1/transit/decrypt/{s}", .{
-            self.config.vault_addr.?,
-            self.config.vault_key_name.?,
-        }) catch return error.BufferOverflow;
+        const url = try vaultTransitUrl(&url_buf, self.config.vault_addr.?, "decrypt", self.config.vault_key_name.?);
 
-        // Make HTTP request
-        const response = try self.httpPost(url, body, self.config.vault_token.?);
-        defer self.allocator.free(response);
+        const response = try self.httpPost(url, body);
+        defer {
+            std.crypto.secureZero(u8, response);
+            self.allocator.free(response);
+        }
 
-        // Parse response: {"data": {"plaintext": "base64data"}}
-        const b64_plaintext = try self.extractVaultPlaintext(response);
-        defer self.allocator.free(b64_plaintext);
+        // Response: {"data": {"plaintext": "<base64>"}, ...}
+        const b64_plaintext = try jsonStringField(self.allocator, response, "data", "plaintext");
+        defer {
+            std.crypto.secureZero(u8, b64_plaintext);
+            self.allocator.free(b64_plaintext);
+        }
 
-        // Base64 decode
+        // Base64 decode (exactly one 32-byte data key)
         var out: [32]u8 = undefined;
+        const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(b64_plaintext) catch return error.InvalidBase64;
+        if (decoded_len != out.len) return error.InvalidBase64;
         _ = std.base64.standard.Decoder.decode(&out, b64_plaintext) catch |e| {
             log.err("Vault Transit base64 decode failed", &.{
                 Attr.string("error", @errorName(e)),
@@ -299,7 +272,6 @@ pub const VaultTransitClient = struct {
             return error.InvalidBase64;
         };
 
-        _ = env; // Envelope used for verification in production
         return out;
     }
 
@@ -323,100 +295,23 @@ pub const VaultTransitClient = struct {
             self.config.vault_key_name.?,
         }) catch return error.BufferOverflow;
 
-        const response = try self.httpPost(url, "{}", self.config.vault_token.?);
+        const response = try self.httpPost(url, "{}");
         defer self.allocator.free(response);
-
-        self.key_version += 1;
+        // SONNY-6465: no local counter is bumped. The new version shows in
+        // the next wrap's "vault:v<N>:" ciphertext (`getKeyVersion`).
     }
 
+    /// The Transit key version of the most recent wrap.
     pub fn getKeyVersion(self: *VaultTransitClient) !u32 {
         return self.key_version;
     }
 
-    fn httpPost(self: *VaultTransitClient, url: []const u8, body: []const u8, token: []const u8) ![]u8 {
-        var client = std.http.Client{ .allocator = self.allocator };
-        defer client.deinit();
-
-        const uri = std.Uri.parse(url) catch return error.InvalidUrl;
-
-        // Set up headers
-        var headers = std.http.Client.Request.Headers{};
-        headers.content_type = .{ .override = "application/json" };
-
-        // Open request
-        var request = client.open(.POST, uri, headers, .{}) catch |err| {
-            log.err("Vault HTTP open failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return error.ConnectionFailed;
-        };
-        defer request.deinit();
-
-        // Add X-Vault-Token header via extra headers
-        try request.headers.append("X-Vault-Token", token);
-
-        // Send body
-        request.transfer_encoding = .{ .content_length = body.len };
-        request.write(body) catch |err| {
-            log.err("Vault HTTP write failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return error.WriteFailed;
-        };
-
-        request.finish() catch |err| {
-            log.err("Vault HTTP finish failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return error.RequestFailed;
-        };
-
-        request.wait() catch |err| {
-            log.err("Vault HTTP wait failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return error.Timeout;
-        };
-
-        // Check status
-        if (request.response.status != .ok) {
-            log.err("Vault HTTP status error", &.{
-                Attr.int("status_code", @intCast(@intFromEnum(request.response.status))),
-            });
-            return error.HttpError;
-        }
-
-        // Read response body
-        var response_body = std.ArrayList(u8).initCapacity(self.allocator, 4096) catch return error.OutOfMemory;
-        defer response_body.deinit();
-
-        var buffer: [4096]u8 = undefined;
-        var reader = request.reader();
-        while (true) {
-            const n = reader.read(&buffer) catch break;
-            if (n == 0) break;
-            response_body.appendSlice(buffer[0..n]) catch break;
-        }
-
-        return try response_body.toOwnedSlice(self.allocator);
-    }
-
-    fn extractVaultCiphertext(self: *VaultTransitClient, response: []const u8) ![]u8 {
-        // Find "ciphertext":"vault:v..."
-        const key = "\"ciphertext\":\"";
-        const start_idx = std.mem.indexOf(u8, response, key) orelse return error.InvalidResponse;
-        const start = start_idx + key.len;
-        const end = std.mem.indexOfScalarPos(u8, response, start, '"') orelse return error.InvalidResponse;
-        return try self.allocator.dupe(u8, response[start..end]);
-    }
-
-    fn extractVaultPlaintext(self: *VaultTransitClient, response: []const u8) ![]u8 {
-        // Find "plaintext":"base64..."
-        const key = "\"plaintext\":\"";
-        const start_idx = std.mem.indexOf(u8, response, key) orelse return error.InvalidResponse;
-        const start = start_idx + key.len;
-        const end = std.mem.indexOfScalarPos(u8, response, start, '"') orelse return error.InvalidResponse;
-        return try self.allocator.dupe(u8, response[start..end]);
+    /// POST to Vault with X-Vault-Token (and X-Vault-Namespace when set) as
+    /// privileged headers: they are dropped if a redirect leaves the host.
+    fn httpPost(self: *VaultTransitClient, url: []const u8, body: []const u8) ![]u8 {
+        var headers_buf: [2]std.http.Header = undefined;
+        const headers = vaultHeaders(&headers_buf, self.config);
+        return httpPostJson(self.allocator, self.config, url, "application/json", body, &.{}, headers, "Vault");
     }
 
     pub fn toProvider(self: *VaultTransitClient) KmsProvider {
@@ -428,6 +323,7 @@ pub const VaultTransitClient = struct {
                 .generateKey = vaultGenKey,
                 .rotateKey = vaultRotate,
                 .getKeyVersion = vaultGetVersion,
+                .destroy = vaultDestroy,
             },
         };
     }
@@ -456,17 +352,23 @@ pub const VaultTransitClient = struct {
         const self: *VaultTransitClient = @ptrCast(@alignCast(ctx));
         return self.getKeyVersion();
     }
+
+    fn vaultDestroy(ctx: *anyopaque, allocator: std.mem.Allocator) void {
+        const self: *VaultTransitClient = @ptrCast(@alignCast(ctx));
+        self.deinit();
+        allocator.destroy(self);
+    }
 };
 
 /// AWS KMS client with actual HTTP implementation
 /// GAP-0086: AWS Key Management Service backend implementation
-/// CANARY: REQ=REQ-GQL-TDE-AWS-001; FEATURE="AwsKmsIntegration"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
+/// CANARY: REQ=REQ-GQL-TDE-AWS-001; FEATURE="AwsKmsIntegration"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
 pub const AwsKmsClient = struct {
     allocator: std.mem.Allocator,
     config: KmsConfig,
+    /// AWS KMS keeps key versions to itself (rotation is AWS-managed); this
+    /// stays 1.
     key_version: u32 = 1,
-    // Cache the last encrypted blob for unwrap (AWS returns opaque ciphertext)
-    last_ciphertext_blob: ?[]u8 = null,
 
     pub fn init(allocator: std.mem.Allocator, config: KmsConfig) AwsKmsClient {
         return .{
@@ -476,9 +378,7 @@ pub const AwsKmsClient = struct {
     }
 
     pub fn deinit(self: *AwsKmsClient) void {
-        if (self.last_ciphertext_blob) |blob| {
-            self.allocator.free(blob);
-        }
+        _ = self;
     }
 
     /// Wrap key using AWS KMS Encrypt API
@@ -486,6 +386,7 @@ pub const AwsKmsClient = struct {
         if (self.config.aws_key_id == null) {
             return error.InvalidConfiguration;
         }
+        if (self.config.aws_access_key == null or self.config.aws_secret_key == null) return error.AwsCredentialsRequired;
 
         // Base64 encode the plaintext
         var b64_buf: [64]u8 = undefined;
@@ -503,48 +404,12 @@ pub const AwsKmsClient = struct {
         const response = try self.httpPost("TrentService.Encrypt", body);
         defer self.allocator.free(response);
 
-        // Parse response: {"CiphertextBlob": "base64..."}
-        const ciphertext_blob = try self.extractJsonField(response, "CiphertextBlob");
+        // Parse response: {"CiphertextBlob": "base64..."}. SONNY-6465: the
+        // envelope carries it (base64, as Decrypt takes it), so any client can
+        // unwrap it later; the caller owns it (`Envelope.deinitKmsCiphertext`).
+        const ciphertext_blob = try jsonStringField(self.allocator, response, null, "CiphertextBlob");
         defer self.allocator.free(ciphertext_blob);
-
-        // Decode the ciphertext blob from base64
-        const decoded_size = std.base64.standard.Decoder.calcSizeForSlice(ciphertext_blob) catch return error.InvalidBase64;
-        const decoded_blob = try self.allocator.alloc(u8, decoded_size);
-        _ = std.base64.standard.Decoder.decode(decoded_blob, ciphertext_blob) catch |e| {
-            self.allocator.free(decoded_blob);
-            log.err("Base64 decode of ciphertext failed", &.{
-                Attr.string("error", @errorName(e)),
-            });
-            return error.InvalidBase64;
-        };
-
-        // Store for later unwrap
-        if (self.last_ciphertext_blob) |old| {
-            self.allocator.free(old);
-        }
-        self.last_ciphertext_blob = decoded_blob;
-
-        // Build envelope with hash reference
-        var env = Envelope{
-            .version = @intCast(self.key_version),
-            .nonce = undefined,
-            .tag = undefined,
-            .ct = undefined,
-            .alg = "AWS-KMS",
-        };
-
-        // Store hash of ciphertext blob (routed through FIPS seam)
-        var hash: [32]u8 = undefined;
-        _ = try cb.Hash.digest(.sha256, decoded_blob, &hash);
-        @memcpy(&env.ct, &hash);
-
-        // Store key ID hash in nonce (routed through FIPS seam)
-        var key_hash: [32]u8 = undefined;
-        _ = try cb.Hash.digest(.sha256, self.config.aws_key_id.?, &key_hash);
-        @memcpy(&env.nonce, key_hash[0..12]);
-        @memcpy(&env.tag, hash[0..16]);
-
-        return env;
+        return awsEnvelope(self.allocator, self.config.aws_key_id.?, ciphertext_blob);
     }
 
     /// Unwrap key using AWS KMS Decrypt API
@@ -553,18 +418,10 @@ pub const AwsKmsClient = struct {
             return error.InvalidConfiguration;
         }
 
-        // Get cached ciphertext blob
-        const ciphertext_blob = self.last_ciphertext_blob orelse return error.NoCachedCiphertext;
-
-        // Base64 encode the ciphertext blob
-        const b64_size = std.base64.standard.Encoder.calcSize(ciphertext_blob.len);
-        const b64_buf = try self.allocator.alloc(u8, b64_size);
-        defer self.allocator.free(b64_buf);
-        _ = std.base64.standard.Encoder.encode(b64_buf, ciphertext_blob);
-
-        // Build request body for Decrypt using type-safe JSON encoding
-        const request = AwsKmsDecryptRequest{ .CiphertextBlob = b64_buf };
-        const body = try json_lib.encode(self.allocator, request, .{});
+        // SONNY-6465: decrypt the CiphertextBlob the envelope carries (it
+        // used to be the last wrap's, held in memory).
+        try verifyKmsCiphertext(env, "AWS-KMS");
+        const body = try awsDecryptRequestBody(self.allocator, self.config.aws_key_id.?, env);
         defer self.allocator.free(body);
 
         // Make HTTP request
@@ -572,19 +429,19 @@ pub const AwsKmsClient = struct {
         defer self.allocator.free(response);
 
         // Parse response: {"Plaintext": "base64..."}
-        const b64_plaintext = try self.extractJsonField(response, "Plaintext");
+        const b64_plaintext = try jsonStringField(self.allocator, response, null, "Plaintext");
         defer self.allocator.free(b64_plaintext);
 
-        // Base64 decode
+        // Base64 decode (exactly one 32-byte data key)
         var out: [32]u8 = undefined;
+        const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(b64_plaintext) catch return error.InvalidBase64;
+        if (decoded_len != out.len) return error.InvalidBase64;
         _ = std.base64.standard.Decoder.decode(&out, b64_plaintext) catch |e| {
             log.err("AWS KMS base64 decode failed", &.{
                 Attr.string("error", @errorName(e)),
             });
             return error.InvalidBase64;
         };
-
-        _ = env; // Used for verification
         return out;
     }
 
@@ -593,6 +450,7 @@ pub const AwsKmsClient = struct {
         if (self.config.aws_key_id == null) {
             return error.InvalidConfiguration;
         }
+        if (self.config.aws_access_key == null or self.config.aws_secret_key == null) return error.AwsCredentialsRequired;
 
         // Build request body for GenerateDataKey using type-safe JSON encoding
         const request = AwsKmsGenerateDataKeyRequest{ .KeyId = self.config.aws_key_id.? };
@@ -604,27 +462,16 @@ pub const AwsKmsClient = struct {
         defer self.allocator.free(response);
 
         // Parse response: {"Plaintext": "base64...", "CiphertextBlob": "base64..."}
-        const b64_plaintext = try self.extractJsonField(response, "Plaintext");
+        const b64_plaintext = try jsonStringField(self.allocator, response, null, "Plaintext");
         defer self.allocator.free(b64_plaintext);
 
-        // Also get and cache the ciphertext blob
-        const ciphertext_blob_b64 = try self.extractJsonField(response, "CiphertextBlob");
-        defer self.allocator.free(ciphertext_blob_b64);
+        // The response's CiphertextBlob is not kept: this returns the key
+        // only (the vtable has no place for it); the caller wraps the key.
 
-        const decoded_size = std.base64.standard.Decoder.calcSizeForSlice(ciphertext_blob_b64) catch return error.InvalidBase64;
-        const decoded_blob = try self.allocator.alloc(u8, decoded_size);
-        _ = std.base64.standard.Decoder.decode(decoded_blob, ciphertext_blob_b64) catch {
-            self.allocator.free(decoded_blob);
-            return error.InvalidBase64;
-        };
-
-        if (self.last_ciphertext_blob) |old| {
-            self.allocator.free(old);
-        }
-        self.last_ciphertext_blob = decoded_blob;
-
-        // Base64 decode the plaintext
+        // Base64 decode the plaintext (exactly one 32-byte data key)
         var out: [32]u8 = undefined;
+        const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(b64_plaintext) catch return error.InvalidBase64;
+        if (decoded_len != out.len) return error.InvalidBase64;
         _ = std.base64.standard.Decoder.decode(&out, b64_plaintext) catch |e| {
             log.err("AWS KMS GenerateDataKey base64 decode failed", &.{
                 Attr.string("error", @errorName(e)),
@@ -635,20 +482,25 @@ pub const AwsKmsClient = struct {
         return out;
     }
 
+    /// SONNY-6465: refused. AWS KMS rotates a key's material itself (enable
+    /// automatic rotation on the key, or RotateKeyOnDemand); envelopes keep
+    /// decrypting across rotations. This used to bump a local counter and
+    /// report success.
     pub fn rotateKey(self: *AwsKmsClient) !void {
-        // AWS KMS key rotation is automatic when enabled
-        // For manual rotation, you would create a new key
-        self.key_version += 1;
+        _ = self;
+        return error.AwsKmsRotationIsManagedByAws;
     }
 
     pub fn getKeyVersion(self: *AwsKmsClient) !u32 {
         return self.key_version;
     }
 
+    /// POST an AWS KMS JSON 1.1 request, SigV4-signed (SONNY-6465; it was
+    /// unsigned, so real AWS KMS refused it). Static credentials
+    /// (aws_access_key / aws_secret_key) are required: fetching instance-role
+    /// or SSO credentials is not implemented, and is refused clearly.
     fn httpPost(self: *AwsKmsClient, target: []const u8, body: []const u8) ![]u8 {
-        var client = std.http.Client{ .allocator = self.allocator };
-        defer client.deinit();
-
+        if (self.config.aws_access_key == null or self.config.aws_secret_key == null) return error.AwsCredentialsRequired;
         // Use custom endpoint or default AWS endpoint
         const endpoint = self.config.aws_endpoint orelse blk: {
             const region = self.config.aws_region orelse "us-east-1";
@@ -658,78 +510,25 @@ pub const AwsKmsClient = struct {
         defer if (endpoint_owned) self.allocator.free(endpoint);
 
         const uri = std.Uri.parse(endpoint) catch return error.InvalidUrl;
+        var host_buf: [std.Io.net.HostName.max_len]u8 = undefined;
+        const host_name = uri.getHost(&host_buf) catch return error.InvalidUrl;
+        const host = if (uri.port) |port|
+            try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ host_name.bytes, port })
+        else
+            try self.allocator.dupe(u8, host_name.bytes);
+        defer self.allocator.free(host);
 
-        // Set up headers
-        var headers = std.http.Client.Request.Headers{};
-        headers.content_type = .{ .override = "application/x-amz-json-1.1" };
+        const now_s: u64 = @intCast(@max(0, std.Io.Clock.real.now(std.Io.Threaded.global_single_threaded.io()).toSeconds()));
+        const amz_date = sigv4.formatAmzDate(now_s);
+        const authorization = try awsKmsAuthorization(self.allocator, self.config, host, target, body, &amz_date);
+        defer self.allocator.free(authorization);
 
-        // Open request
-        var request = client.open(.POST, uri, headers, .{}) catch |err| {
-            log.err("AWS KMS HTTP open failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return error.ConnectionFailed;
+        const extra = [_]std.http.Header{
+            .{ .name = "X-Amz-Target", .value = target },
+            .{ .name = "X-Amz-Date", .value = &amz_date },
         };
-        defer request.deinit();
-
-        // Add X-Amz-Target header
-        try request.headers.append("X-Amz-Target", target);
-
-        // Send body
-        request.transfer_encoding = .{ .content_length = body.len };
-        request.write(body) catch |err| {
-            log.err("AWS KMS HTTP write failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return error.WriteFailed;
-        };
-
-        request.finish() catch |err| {
-            log.err("AWS KMS HTTP finish failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return error.RequestFailed;
-        };
-
-        request.wait() catch |err| {
-            log.err("AWS KMS HTTP wait failed", &.{
-                Attr.string("error", @errorName(err)),
-            });
-            return error.Timeout;
-        };
-
-        // Check status
-        if (request.response.status != .ok) {
-            log.err("AWS KMS HTTP status error", &.{
-                Attr.int("status_code", @intCast(@intFromEnum(request.response.status))),
-            });
-            return error.HttpError;
-        }
-
-        // Read response body
-        var response_body = std.ArrayList(u8).initCapacity(self.allocator, 4096) catch return error.OutOfMemory;
-        defer response_body.deinit();
-
-        var buffer: [4096]u8 = undefined;
-        var reader = request.reader();
-        while (true) {
-            const n = reader.read(&buffer) catch break;
-            if (n == 0) break;
-            response_body.appendSlice(buffer[0..n]) catch break;
-        }
-
-        return try response_body.toOwnedSlice(self.allocator);
-    }
-
-    fn extractJsonField(self: *AwsKmsClient, response: []const u8, field: []const u8) ![]u8 {
-        // Build search key: "FieldName":"
-        var key_buf: [64]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "\"{s}\":\"", .{field}) catch return error.BufferOverflow;
-
-        const start_idx = std.mem.indexOf(u8, response, key) orelse return error.InvalidResponse;
-        const start = start_idx + key.len;
-        const end = std.mem.indexOfScalarPos(u8, response, start, '"') orelse return error.InvalidResponse;
-        return try self.allocator.dupe(u8, response[start..end]);
+        const privileged = [_]std.http.Header{.{ .name = "Authorization", .value = authorization }};
+        return httpPostJson(self.allocator, self.config, endpoint, aws_json_content_type, body, &extra, &privileged, "AWS KMS");
     }
 
     pub fn toProvider(self: *AwsKmsClient) KmsProvider {
@@ -741,6 +540,7 @@ pub const AwsKmsClient = struct {
                 .generateKey = awsGenKey,
                 .rotateKey = awsRotate,
                 .getKeyVersion = awsGetVersion,
+                .destroy = awsDestroy,
             },
         };
     }
@@ -769,12 +569,251 @@ pub const AwsKmsClient = struct {
         const self: *AwsKmsClient = @ptrCast(@alignCast(ctx));
         return self.getKeyVersion();
     }
+
+    fn awsDestroy(ctx: *anyopaque, allocator: std.mem.Allocator) void {
+        const self: *AwsKmsClient = @ptrCast(@alignCast(ctx));
+        self.deinit();
+        allocator.destroy(self);
+    }
 };
+
+// CANARY: REQ=REQ-SONNY-6465-KMS-TLS; FEATURE="ExternalKmsClients"; ASPECT=TlsOptionsHonoured; STATUS=TESTED; TEST=tests/test_sonny6465_external_kms.zig; OWNER=security; UPDATED=2026-11-13
+/// SONNY-6465: the HTTP client a KMS request uses. `tls_ca_cert` is the only
+/// trust anchor when set (the system store is not scanned);
+/// `tls_skip_verify` is refused (std.http.Client cannot skip verification,
+/// and both options used to be ignored silently).
+pub fn kmsHttpClient(allocator: std.mem.Allocator, config: KmsConfig) !std.http.Client {
+    if (config.tls_skip_verify) {
+        log.err("KMS tls_skip_verify is not supported; configure tls_ca_cert instead", &.{});
+        return error.TlsSkipVerifyUnsupported;
+    }
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var client = std.http.Client{ .allocator = allocator, .io = io };
+    errdefer client.deinit();
+    if (config.tls_ca_cert) |ca_path| {
+        const now = std.Io.Clock.real.now(io);
+        client.ca_bundle.addCertsFromFilePath(allocator, io, now, std.Io.Dir.cwd(), ca_path) catch |err| {
+            log.err("KMS tls_ca_cert cannot be read", &.{ Attr.string("path", ca_path), Attr.string("error", @errorName(err)) });
+            return error.KmsCaCertUnreadable;
+        };
+        if (client.ca_bundle.map.count() == 0) return error.KmsCaCertUnreadable;
+        // A set `now` stops the client rescanning the system CA store.
+        client.now = now;
+    }
+    return client;
+}
+
+/// One POST over std.http.Client (Zig 0.16). Returns the response body
+/// (caller owns) on 200 OK; any other status or a transport failure is an
+/// error.
+fn httpPostJson(
+    allocator: std.mem.Allocator,
+    config: KmsConfig,
+    url: []const u8,
+    content_type: []const u8,
+    body: []const u8,
+    extra_headers: []const std.http.Header,
+    privileged_headers: []const std.http.Header,
+    what: []const u8,
+) ![]u8 {
+    const uri = std.Uri.parse(url) catch return error.InvalidUrl;
+    var client = try kmsHttpClient(allocator, config);
+    defer client.deinit();
+
+    var response: std.Io.Writer.Allocating = .init(allocator);
+    defer response.deinit();
+    const result = client.fetch(.{
+        .location = .{ .uri = uri },
+        .method = .POST,
+        .payload = body,
+        .headers = .{ .content_type = .{ .override = content_type } },
+        .extra_headers = extra_headers,
+        .privileged_headers = privileged_headers,
+        .response_writer = &response.writer,
+        .keep_alive = false,
+    }) catch |err| {
+        log.err("KMS HTTP request failed", &.{
+            Attr.string("service", what),
+            Attr.string("error", @errorName(err)),
+        });
+        return error.ConnectionFailed;
+    };
+    if (result.status != .ok) {
+        log.err("KMS HTTP status error", &.{
+            Attr.string("service", what),
+            Attr.int("status_code", @intCast(@intFromEnum(result.status))),
+        });
+        return error.HttpError;
+    }
+    return response.toOwnedSlice();
+}
+
+const aws_json_content_type = "application/x-amz-json-1.1";
+
+// CANARY: REQ=REQ-SONNY-6465-AWS-SIGV4; FEATURE="ExternalKmsClients"; ASPECT=AwsKmsSigV4; STATUS=TESTED; TEST=tests/test_sonny6465_external_kms.zig; OWNER=security; UPDATED=2026-11-13
+/// The SigV4 signing key (kSecret -> kDate -> kRegion -> kService ->
+/// kSigning).
+pub fn awsSigningKey(secret: []const u8, date: []const u8, region: []const u8, service: []const u8) ![32]u8 {
+    return sigv4.signingKey(secret, date, region, service);
+}
+
+/// SONNY-6465: the `Authorization` header of an AWS KMS JSON 1.1 request
+/// (POST / with Content-Type application/x-amz-json-1.1 and X-Amz-Target),
+/// SigV4-signed for service "kms" over content-type, host, x-amz-date and
+/// x-amz-target and the body. `amz_date` is "YYYYMMDDTHHMMSSZ"; `host` is
+/// the Host header (with ":port" when the endpoint names one).
+pub fn awsKmsAuthorization(
+    allocator: std.mem.Allocator,
+    config: KmsConfig,
+    host: []const u8,
+    target: []const u8,
+    body: []const u8,
+    amz_date: []const u8,
+) ![]u8 {
+    const access_key = config.aws_access_key orelse return error.AwsCredentialsRequired;
+    const secret_key = config.aws_secret_key orelse return error.AwsCredentialsRequired;
+    const payload_hash = try sigv4.hashPayloadHex(body);
+    const headers = [_]sigv4.Header{
+        .{ .name = "Content-Type", .value = aws_json_content_type },
+        .{ .name = "Host", .value = host },
+        .{ .name = "X-Amz-Date", .value = amz_date },
+        .{ .name = "X-Amz-Target", .value = target },
+    };
+    return sigv4.authorizationHeader(allocator, .{
+        .method = "POST",
+        .canonical_uri = "/",
+        .canonical_query = "",
+        .headers = &headers,
+        .payload_hash_hex = &payload_hash,
+        .amz_date = amz_date,
+        .region = config.aws_region orelse "us-east-1",
+        .service = "kms",
+        .access_key_id = access_key,
+        .secret_access_key = secret_key,
+    });
+}
+
+// CANARY: REQ=REQ-SONNY-6465-ENVELOPE-CIPHERTEXT; FEATURE="ExternalKmsClients"; ASPECT=UnwrapFromEnvelope; STATUS=TESTED; TEST=tests/test_sonny6465_external_kms.zig; OWNER=security; UPDATED=2026-11-13
+/// True when `text` is safe to carry verbatim in the envelope's JSON (and in
+/// a request body): base64 / Vault ciphertext characters only.
+fn isPlainKmsCiphertext(text: []const u8) bool {
+    if (text.len == 0) return false;
+    for (text) |c| {
+        const ok = std.ascii.isAlphanumeric(c) or c == '+' or c == '/' or c == '=' or c == ':' or c == '-' or c == '_';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+/// An external-KMS envelope for `kms_ciphertext` (duplicated; the caller
+/// frees it with `Envelope.deinitKmsCiphertext`). `ct` is its SHA-256 and
+/// `tag` the first 16 bytes of it; `nonce` binds the key name.
+fn externalEnvelope(allocator: std.mem.Allocator, alg: []const u8, version: u8, key_name: []const u8, kms_ciphertext: []const u8) !Envelope {
+    var env = Envelope{ .version = version, .alg = alg, .nonce = undefined, .tag = undefined, .ct = undefined };
+    var hash: [32]u8 = undefined;
+    _ = try cb.Hash.digest(.sha256, kms_ciphertext, &hash);
+    @memcpy(&env.ct, &hash);
+    @memcpy(&env.tag, hash[0..16]);
+    var key_hash: [32]u8 = undefined;
+    _ = try cb.Hash.digest(.sha256, key_name, &key_hash);
+    @memcpy(&env.nonce, key_hash[0..12]);
+    env.kms_ciphertext = try allocator.dupe(u8, kms_ciphertext);
+    return env;
+}
+
+/// SONNY-6465: the envelope for a Vault Transit ciphertext
+/// ("vault:v<N>:<base64>"); its version is N.
+pub fn vaultEnvelope(allocator: std.mem.Allocator, key_name: []const u8, ciphertext: []const u8) !Envelope {
+    if (!std.mem.startsWith(u8, ciphertext, "vault:v") or !isPlainKmsCiphertext(ciphertext)) return error.InvalidVaultCiphertext;
+    const rest = ciphertext["vault:v".len..];
+    const colon = std.mem.indexOfScalar(u8, rest, ':') orelse return error.InvalidVaultCiphertext;
+    const version = std.fmt.parseInt(u8, rest[0..colon], 10) catch return error.InvalidVaultCiphertext;
+    if (version == 0 or colon + 1 >= rest.len) return error.InvalidVaultCiphertext;
+    return externalEnvelope(allocator, "VAULT-TRANSIT", version, key_name, ciphertext);
+}
+
+/// SONNY-6465: the envelope for an AWS KMS CiphertextBlob (base64, as the
+/// Encrypt response gives it and Decrypt takes it).
+pub fn awsEnvelope(allocator: std.mem.Allocator, key_id: []const u8, ciphertext_blob_b64: []const u8) !Envelope {
+    if (!isPlainKmsCiphertext(ciphertext_blob_b64)) return error.InvalidBase64;
+    return externalEnvelope(allocator, "AWS-KMS", 1, key_id, ciphertext_blob_b64);
+}
+
+/// The envelope must carry the KMS ciphertext it was made with.
+fn verifyKmsCiphertext(env: Envelope, alg: []const u8) !void {
+    if (!std.mem.eql(u8, env.alg, alg)) return error.UnsupportedAlgorithm;
+    if (env.kms_ciphertext.len == 0) return error.MissingKmsCiphertext;
+    if (!isPlainKmsCiphertext(env.kms_ciphertext)) return error.EnvelopeCiphertextMismatch;
+    var hash: [32]u8 = undefined;
+    _ = try cb.Hash.digest(.sha256, env.kms_ciphertext, &hash);
+    if (!std.crypto.timing_safe.eql([32]u8, hash, env.ct)) return error.EnvelopeCiphertextMismatch;
+}
+
+/// `{"ciphertext":"vault:v<N>:..."}` for the envelope's ciphertext (Vault
+/// Transit decrypt). Caller frees.
+pub fn vaultDecryptRequestBody(allocator: std.mem.Allocator, env: Envelope) ![]u8 {
+    return json_lib.encode(allocator, VaultDecryptRequest{ .ciphertext = env.kms_ciphertext }, .{});
+}
+
+/// `{"CiphertextBlob":"<base64>","KeyId":"<key>"}` for the envelope's
+/// ciphertext (AWS KMS Decrypt). Caller frees.
+pub fn awsDecryptRequestBody(allocator: std.mem.Allocator, key_id: []const u8, env: Envelope) ![]u8 {
+    return json_lib.encode(allocator, AwsKmsDecryptWithKeyRequest{ .CiphertextBlob = env.kms_ciphertext, .KeyId = key_id }, .{});
+}
+
+/// `{vault_addr}/v1/transit/{op}/{key_name}` (Vault Transit HTTP API).
+pub fn vaultTransitUrl(buf: []u8, vault_addr: []const u8, op: []const u8, key_name: []const u8) ![]const u8 {
+    const addr = std.mem.trimEnd(u8, vault_addr, "/");
+    return std.fmt.bufPrint(buf, "{s}/v1/transit/{s}/{s}", .{ addr, op, key_name }) catch error.BufferOverflow;
+}
+
+/// `{"plaintext":"<base64 of the 32-byte data key>"}` (Vault Transit encrypt).
+pub fn vaultEncryptRequestBody(buf: []u8, plaintext: [32]u8) ![]const u8 {
+    var b64_buf: [std.base64.standard.Encoder.calcSize(32)]u8 = undefined;
+    defer std.crypto.secureZero(u8, &b64_buf);
+    const b64 = std.base64.standard.Encoder.encode(&b64_buf, &plaintext);
+    return std.fmt.bufPrint(buf, "{{\"plaintext\":\"{s}\"}}", .{b64}) catch error.BufferOverflow;
+}
+
+/// The Vault request headers: X-Vault-Token, plus X-Vault-Namespace when a
+/// namespace is configured (Vault Enterprise). Both are privileged.
+pub fn vaultHeaders(buf: *[2]std.http.Header, config: KmsConfig) []const std.http.Header {
+    buf[0] = .{ .name = "X-Vault-Token", .value = config.vault_token orelse "" };
+    if (config.vault_namespace) |ns| {
+        buf[1] = .{ .name = "X-Vault-Namespace", .value = ns };
+        return buf[0..2];
+    }
+    return buf[0..1];
+}
+
+/// The string at `response[outer][field]` (or `response[field]` when
+/// `outer` is null), duplicated. error.InvalidResponse when the body is not
+/// a JSON object or the value is missing or not a string.
+pub fn jsonStringField(allocator: std.mem.Allocator, response: []const u8, outer: ?[]const u8, field: []const u8) ![]u8 {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, response, .{}) catch return error.InvalidResponse;
+    defer parsed.deinit();
+    var obj = switch (parsed.value) {
+        .object => |o| o,
+        else => return error.InvalidResponse,
+    };
+    if (outer) |name| {
+        obj = switch (obj.get(name) orelse return error.InvalidResponse) {
+            .object => |o| o,
+            else => return error.InvalidResponse,
+        };
+    }
+    return switch (obj.get(field) orelse return error.InvalidResponse) {
+        .string => |v| try allocator.dupe(u8, v),
+        else => error.InvalidResponse,
+    };
+}
 
 /// Factory function to create KMS provider based on configuration
 pub fn createKmsProvider(allocator: std.mem.Allocator, config: KmsConfig) !KmsProvider {
     switch (config.backend) {
         .LocalSimulated => {
+            // SONNY-6442: a simulated KMS exists in test builds only.
+            if (comptime !builtin.is_test) return error.SimulatedKmsUnavailable;
             const seed = blk: {
                 // Route through FIPS seam (cb.Hash.Stream) for incremental hash
                 var h = try cb.Hash.Stream.init(.sha256);
@@ -814,7 +853,14 @@ const local_vtable = KmsProvider.VTable{
     .generateKey = localGenKey,
     .rotateKey = localRotate,
     .getKeyVersion = localGetVersion,
+    .destroy = localDestroy,
 };
+
+fn localDestroy(ctx: *anyopaque, allocator: std.mem.Allocator) void {
+    const client: *Client = @ptrCast(@alignCast(ctx));
+    std.crypto.secureZero(u8, &client.kek);
+    allocator.destroy(client);
+}
 
 fn localWrap(ctx: *anyopaque, plaintext: [32]u8) anyerror!Envelope {
     const client: *Client = @ptrCast(@alignCast(ctx));
@@ -845,39 +891,38 @@ pub const Envelope = struct {
     alg: []const u8 = "AES-256-GCM",
     nonce: [12]u8,
     tag: [16]u8,
-    ct: [32]u8, // wrapped 32-byte data key (or hash reference for external KMS)
+    ct: [32]u8, // wrapped 32-byte data key (or SHA-256 of kms_ciphertext for external KMS)
+    /// SONNY-6465: the external KMS ciphertext (Vault "vault:v<N>:...", AWS
+    /// base64 CiphertextBlob) unwrap decrypts; empty for the local AEAD
+    /// envelope. Owned by whoever made the envelope (`wrap` allocates it with
+    /// the client's allocator; free it with `deinitKmsCiphertext`);
+    /// `envelopeFromJson` points it into the JSON text.
+    kms_ciphertext: []const u8 = "",
+
+    pub fn deinitKmsCiphertext(self: *Envelope, allocator: std.mem.Allocator) void {
+        if (self.kms_ciphertext.len > 0) allocator.free(self.kms_ciphertext);
+        self.kms_ciphertext = "";
+    }
 };
 
-/// LocalSimulated KMS Client - FOR DEVELOPMENT/TESTING ONLY
+const simulated_kms_test_only = "the LocalSimulated KMS client exists in test builds only (SONNY-6442): use VaultTransit or AwsKms";
+
+/// LocalSimulated KMS Client - TEST BUILDS ONLY
 /// Uses local AES-256-GCM with deterministic key derived from seed
 /// WARNING: This is NOT a real KMS integration. Production must use VaultTransit or AwsKms.
-/// CANARY: REQ=REQ-GQL-KMS-LOCALSIM-001; FEATURE="LocalSimulated KMS Client"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
-/// CANARY: REQ=REQ-GQL-KMS-PRODSAFE-001; FEATURE="LocalSimulated KMS Production Block"; ASPECT=SECURITY; STATUS=TESTED; TEST=test_gap_0216_localsim_production_block; OWNER=security; UPDATED=2026-01-16
-/// GAP-0216 SECURITY FIX: Block LocalSimulated KMS in production unless GEODE_ALLOW_LOCAL_KMS env var is set
+/// CANARY: REQ=REQ-GQL-KMS-LOCALSIM-001; FEATURE="LocalSimulated KMS Client"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_external_kms_provider.zig; OWNER=security; UPDATED=2026-11-12
+/// CANARY: REQ=REQ-GQL-KMS-PRODSAFE-001; FEATURE="LocalSimulated KMS Production Block"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_sonny6442_kms_channel.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6442: its constructors do not compile outside a test build, so no
+/// product binary -- release or debug -- can construct it. (GAP-0216 refused
+/// it in release builds only, behind an environment-variable override.)
 pub const Client = struct {
     allocator: std.mem.Allocator,
     kek: [32]u8, // simulated Key Encryption Key (would be remote / HSM-controlled)
     prng: std.Random.DefaultPrng,
 
-    /// Initialize LocalSimulated client
-    /// GAP-0216 SECURITY FIX: Block LocalSimulated in production builds unless GEODE_ALLOW_LOCAL_KMS is set
+    /// Initialize LocalSimulated client (test builds only).
     pub fn init(allocator: std.mem.Allocator, seed: u64) !Client {
-        // GAP-0216: Production safety check - block unless explicitly allowed
-        if (is_production_build) {
-            // Check for explicit override via environment variable
-            const allow_local_kms = if (comptime builtin.os.tag != .windows) posixGetenv("GEODE_ALLOW_LOCAL_KMS") else null;
-            if (allow_local_kms) |_| {
-                log.warn("LocalSimulated KMS allowed in production via GEODE_ALLOW_LOCAL_KMS - NOT secure", &.{
-                    Attr.string("recommendation", "Configure VaultTransit or AwsKms for production"),
-                });
-            } else {
-                log.err("LocalSimulated KMS cannot be used in production builds", &.{
-                    Attr.string("action", "Set GEODE_ALLOW_LOCAL_KMS=1 to override (NOT RECOMMENDED) or configure VaultTransit/AwsKms"),
-                });
-                return error.InsecureKmsInProduction;
-            }
-        }
-
+        if (comptime !builtin.is_test) @compileError(simulated_kms_test_only);
         var prng = std.Random.DefaultPrng.init(seed);
         var kek: [32]u8 = undefined;
         prng.random().bytes(&kek);
@@ -886,14 +931,9 @@ pub const Client = struct {
 
     /// Create a client with cryptographically secure key (for testing without deterministic seed)
     /// GAP-0107 SECURITY FIX: Use cryptographic random for all operations
-    /// GAP-0116 SECURITY FIX: Block LocalSimulated KMS in production builds
+    /// Test builds only (SONNY-6442).
     pub fn initSecure(allocator: std.mem.Allocator) !Client {
-        if (is_production_build) {
-            log.err("LocalSimulated KMS cannot be used in production builds", &.{
-                Attr.string("recommendation", "Configure VaultTransit or AwsKms for production"),
-            });
-            return error.InsecureKmsInProduction;
-        }
+        if (comptime !builtin.is_test) @compileError(simulated_kms_test_only);
 
         var kek: [32]u8 = undefined;
         try cb.Csprng.bytes(&kek);
@@ -935,6 +975,10 @@ pub fn envelopeToJson(env: Envelope, allocator: std.mem.Allocator) ![]u8 {
     for (env.tag) |b| try w.print("{x:0>2}", .{b});
     try w.print("\",\"ct\":\"", .{});
     for (env.ct) |b| try w.print("{x:0>2}", .{b});
+    if (env.kms_ciphertext.len > 0) {
+        if (!isPlainKmsCiphertext(env.kms_ciphertext)) return error.InvalidEnvelope;
+        try w.print("\",\"kms_ct\":\"{s}", .{env.kms_ciphertext});
+    }
     try w.print("\"}}", .{});
     var buf = aw.toArrayList();
     return try buf.toOwnedSlice(allocator);
@@ -959,7 +1003,7 @@ pub fn envelopeFromJson(json: []const u8) !Envelope {
         return error.UnsupportedAlgorithm;
     }
     // GAP-0141: Safe hex parsing with proper error handling
-    // CANARY: REQ=REQ-HEX-PARSE-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-HEX-PARSE-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_sonny6386_key_rotation_truth.zig; OWNER=security; UPDATED=2026-11-12
     const nonce_start = nonce_key + 9;
     const nonce_end = nonce_start + 24;
     if (nonce_end > json.len) return error.InvalidEnvelope;
@@ -976,6 +1020,14 @@ pub fn envelopeFromJson(json: []const u8) !Envelope {
     k = 0;
     while (k < 32) : (k += 1) env.ct[k] = std.fmt.parseInt(u8, json[ct_start + k * 2 .. ct_start + k * 2 + 2], 16) catch return error.InvalidHexInCiphertext;
     env.alg = alg_slice;
+    // SONNY-6465: the external KMS ciphertext, when present.
+    env.kms_ciphertext = "";
+    if (std.mem.indexOf(u8, json, "\"kms_ct\":\"")) |kk| {
+        const start = kk + 10;
+        const end = std.mem.indexOfScalarPos(u8, json, start, '"') orelse return error.InvalidEnvelope;
+        if (!isPlainKmsCiphertext(json[start..end])) return error.InvalidEnvelope;
+        env.kms_ciphertext = json[start..end];
+    }
     return env;
 }
 
@@ -998,13 +1050,16 @@ test "external kms client wrap/unwrap round trip" {
     var tampered = env1;
     tampered.tag[0] ^= 0xFF;
     const res = client.unwrap(tampered);
-    try std.testing.expectError(error.AuthenticationFailed, res);
+    // The crypto_backend AEAD reports a failed tag as AuthFailed (as
+    // tests/test_external_kms_provider.zig expects; SONNY-6465).
+    try std.testing.expectError(error.AuthFailed, res);
 }
 
 test "kms provider factory local simulation" {
     const allocator = std.testing.allocator;
     const config = KmsConfig{ .backend = .LocalSimulated };
     const provider = try createKmsProvider(allocator, config);
+    defer provider.deinit(allocator);
     const key = try provider.generateKey();
     const env = try provider.wrap(key);
     const recovered = try provider.unwrap(env);
@@ -1038,21 +1093,18 @@ test "aws kms client configuration validation" {
     try std.testing.expectError(error.InvalidConfiguration, result);
 }
 
-// Integration tests - require running Vault and local-kms containers
-// Run with: VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=geode-test-token AWS_KMS_ENDPOINT=http://127.0.0.1:8080 zig build test
+// Integration tests against a live service (SONNY-6465: they used to pass
+// when the service was missing OR when a call failed). Skipped unless the
+// environment names a service; once it does, any failure fails the test.
+//   VAULT_ADDR, VAULT_TOKEN (Transit engine with key geode-test-key)
+//   AWS_KMS_ENDPOINT, AWS_KMS_KEY_ID (default alias/testing),
+//   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION (default us-east-1)
 test "vault transit integration test" {
-    // Skip if no Vault available
-    const vault_addr = getEnvVarOwned(std.testing.allocator, "VAULT_ADDR") catch {
-        std.debug.print("SKIP: VAULT_ADDR not set\n", .{});
-        return;
-    };
-    defer std.testing.allocator.free(vault_addr);
-
-    const vault_token = getEnvVarOwned(std.testing.allocator, "VAULT_TOKEN") catch {
-        std.debug.print("SKIP: VAULT_TOKEN not set\n", .{});
-        return;
-    };
-    defer std.testing.allocator.free(vault_token);
+    const a = std.testing.allocator;
+    const vault_addr = getEnvVarOwned(a, "VAULT_ADDR") catch return error.SkipZigTest;
+    defer a.free(vault_addr);
+    const vault_token = getEnvVarOwned(a, "VAULT_TOKEN") catch return error.SkipZigTest;
+    defer a.free(vault_token);
 
     const config = KmsConfig{
         .backend = .VaultTransit,
@@ -1060,124 +1112,51 @@ test "vault transit integration test" {
         .vault_token = vault_token,
         .vault_key_name = "geode-test-key",
     };
-
-    var vault = VaultTransitClient.init(std.testing.allocator, config);
+    var vault = VaultTransitClient.init(a, config);
     defer vault.deinit();
-
     var key: [32]u8 = undefined;
     @memset(&key, 0x42);
-
-    const env = vault.wrap(key) catch |err| {
-        std.debug.print("Vault wrap failed (expected if Vault not running): {any}\n", .{err});
-        return;
-    };
-
-    const recovered = vault.unwrap(env) catch |err| {
-        std.debug.print("Vault unwrap failed: {any}\n", .{err});
-        return;
-    };
-
+    var env = try vault.wrap(key);
+    defer env.deinitKmsCiphertext(a);
+    // A second client (a restarted process) unwraps the envelope.
+    var fresh = VaultTransitClient.init(a, config);
+    defer fresh.deinit();
+    const recovered = try fresh.unwrap(env);
     try std.testing.expect(std.mem.eql(u8, &key, &recovered));
-    std.debug.print("VAULT_TRANSIT_INTEGRATION_OK\n", .{});
 }
 
 test "aws kms integration test" {
-    // Skip if no local-kms available
-    const aws_endpoint = getEnvVarOwned(std.testing.allocator, "AWS_KMS_ENDPOINT") catch {
-        std.debug.print("SKIP: AWS_KMS_ENDPOINT not set\n", .{});
-        return;
-    };
-    defer std.testing.allocator.free(aws_endpoint);
-
-    const aws_key_id = getEnvVarOwned(std.testing.allocator, "AWS_KMS_KEY_ID") catch {
-        // Use default test key ID from local-kms
-        std.debug.print("Using default test key ID\n", .{});
-        const config = KmsConfig{
-            .backend = .AwsKms,
-            .aws_endpoint = aws_endpoint,
-            .aws_key_id = "alias/testing", // local-kms default
-            .aws_region = "us-east-1",
-        };
-
-        var aws = AwsKmsClient.init(std.testing.allocator, config);
-        defer aws.deinit();
-
-        var key: [32]u8 = undefined;
-        @memset(&key, 0x55);
-
-        const env = aws.wrap(key) catch |err| {
-            std.debug.print("AWS wrap failed (expected if local-kms not running): {any}\n", .{err});
-            return;
-        };
-
-        const recovered = aws.unwrap(env) catch |err| {
-            std.debug.print("AWS unwrap failed: {any}\n", .{err});
-            return;
-        };
-
-        try std.testing.expect(std.mem.eql(u8, &key, &recovered));
-        std.debug.print("AWS_KMS_INTEGRATION_OK\n", .{});
-        return;
-    };
-    defer std.testing.allocator.free(aws_key_id);
+    const a = std.testing.allocator;
+    const endpoint = getEnvVarOwned(a, "AWS_KMS_ENDPOINT") catch return error.SkipZigTest;
+    defer a.free(endpoint);
+    const access = getEnvVarOwned(a, "AWS_ACCESS_KEY_ID") catch return error.SkipZigTest;
+    defer a.free(access);
+    const secret = getEnvVarOwned(a, "AWS_SECRET_ACCESS_KEY") catch return error.SkipZigTest;
+    defer a.free(secret);
+    const key_id = getEnvVarOwned(a, "AWS_KMS_KEY_ID") catch try a.dupe(u8, "alias/testing");
+    defer a.free(key_id);
+    const region = getEnvVarOwned(a, "AWS_REGION") catch try a.dupe(u8, "us-east-1");
+    defer a.free(region);
 
     const config = KmsConfig{
         .backend = .AwsKms,
-        .aws_endpoint = aws_endpoint,
-        .aws_key_id = aws_key_id,
-        .aws_region = "us-east-1",
+        .aws_endpoint = endpoint,
+        .aws_key_id = key_id,
+        .aws_region = region,
+        .aws_access_key = access,
+        .aws_secret_key = secret,
     };
-
-    var aws = AwsKmsClient.init(std.testing.allocator, config);
+    var aws = AwsKmsClient.init(a, config);
     defer aws.deinit();
-
     var key: [32]u8 = undefined;
     @memset(&key, 0x55);
-
-    const env = aws.wrap(key) catch |err| {
-        std.debug.print("AWS wrap failed: {any}\n", .{err});
-        return;
-    };
-
-    const recovered = aws.unwrap(env) catch |err| {
-        std.debug.print("AWS unwrap failed: {any}\n", .{err});
-        return;
-    };
-
+    var env = try aws.wrap(key);
+    defer env.deinitKmsCiphertext(a);
+    var fresh = AwsKmsClient.init(a, config);
+    defer fresh.deinit();
+    const recovered = try fresh.unwrap(env);
     try std.testing.expect(std.mem.eql(u8, &key, &recovered));
-    std.debug.print("AWS_KMS_INTEGRATION_OK\n", .{});
-}
 
-test "aws kms generate data key integration test" {
-    const aws_endpoint = getEnvVarOwned(std.testing.allocator, "AWS_KMS_ENDPOINT") catch {
-        std.debug.print("SKIP: AWS_KMS_ENDPOINT not set\n", .{});
-        return;
-    };
-    defer std.testing.allocator.free(aws_endpoint);
-
-    const config = KmsConfig{
-        .backend = .AwsKms,
-        .aws_endpoint = aws_endpoint,
-        .aws_key_id = "alias/testing",
-        .aws_region = "us-east-1",
-    };
-
-    var aws = AwsKmsClient.init(std.testing.allocator, config);
-    defer aws.deinit();
-
-    const key = aws.generateKey() catch |err| {
-        std.debug.print("AWS generateKey failed: {any}\n", .{err});
-        return;
-    };
-
-    // Key should be non-zero
-    var all_zero = true;
-    for (key) |b| {
-        if (b != 0) {
-            all_zero = false;
-            break;
-        }
-    }
-    try std.testing.expect(!all_zero);
-    std.debug.print("AWS_KMS_GENERATE_KEY_OK\n", .{});
+    const generated = try aws.generateKey();
+    try std.testing.expect(!std.mem.allEqual(u8, &generated, 0));
 }

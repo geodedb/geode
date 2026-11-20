@@ -1,10 +1,15 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 const parity = @import("transport_parity_util.zig");
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Order Metadata"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_OrderMetadata; OWNER=engine; UPDATED=2025-09-24
 test "protocol: transport parity order metadata (ordered + order_keys)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    // SONNY-6782: this compares QUIC with plaintext gRPC, which is served in Debug only.
+    if (!util.grpc_plaintext_served) return error.SkipZigTest;
     util.testStart("transport parity order metadata");
     errdefer util.testFail();
 
@@ -24,18 +29,19 @@ test "protocol: transport parity order metadata (ordered + order_keys)" {
         util.TestEnv.grpcPlaintext(),
     ) catch |err| {
         util.progress("Parity run failed: {}", .{err});
-        util.testSkip();
-        return;
+        // SONNY-6548: a failed parity run fails the smoke (it skipped and passed).
+        return err;
     };
     defer parity_run.server.deinit();
     defer parity_run.result.quic.deinit(allocator);
-    defer parity_run.result.grpc.deinit(allocator);
+    var grpc_res = parity_run.result.grpc.?;
+    defer grpc_res.deinit(allocator);
 
     util.progress("Comparing order metadata...", .{});
-    try testing.expectEqual(parity_run.result.quic.ordered, parity_run.result.grpc.ordered);
-    try testing.expectEqual(parity_run.result.quic.order_keys.len, parity_run.result.grpc.order_keys.len);
+    try testing.expectEqual(parity_run.result.quic.ordered, grpc_res.ordered);
+    try testing.expectEqual(parity_run.result.quic.order_keys.len, grpc_res.order_keys.len);
     for (parity_run.result.quic.order_keys, 0..) |key, i| {
-        try testing.expect(std.mem.eql(u8, key, parity_run.result.grpc.order_keys[i]));
+        try testing.expect(std.mem.eql(u8, key, grpc_res.order_keys[i]));
     }
 
     util.testPass();

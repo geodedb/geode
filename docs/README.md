@@ -4,7 +4,7 @@
 
 ## Overview
 
-Geode is a single-tenant graph database with strong ISO/IEC 39075:2024 GQL alignment — 96/96 named cases in its ISO conformance suite (`tests/gql_iso_conformance.zig`, `zig build test-iso-conformance`; parse-only scope). **Deployment status:** development-ready for single-tenant workloads. Multi-tenant and distributed deployments require operator review of the Known Limitations in [`../CLAUDE.md`](../CLAUDE.md) before production use. Canonical status: [GAP_ANALYSIS.md](GAP_ANALYSIS.md) + [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md).
+Geode is a single-tenant graph database with strong ISO/IEC 39075:2024 GQL alignment — 106/106 named cases in its ISO conformance suite (`tests/gql_iso_conformance.zig`, `zig build test-iso-conformance`; parse-only scope). **Deployment status:** development-ready for single-tenant workloads. Multi-tenant and distributed deployments require operator review of the Known Limitations in [`../CLAUDE.md`](../CLAUDE.md) before production use. Canonical status: [GAP_ANALYSIS.md](GAP_ANALYSIS.md) + [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md).
 
 ## Directory Structure
 
@@ -40,7 +40,7 @@ docs/
 ### Enterprise Features
 
 - **[KMS Provider System](KMS_PROVIDER_SYSTEM.md)** - Key management
-- **[User Authentication](USER_AUTH.md)** - RBAC/ABAC with MFA
+- **[User Authentication](USER_AUTH.md)** - RBAC/ABAC (MFA not enforced at login yet, SONNY-6604)
 - **[Audit Logging](AUDIT_LOGGING.md)** - Audit capabilities
 
 ### Advanced Features
@@ -48,8 +48,8 @@ docs/
 - **[ML Graph Embeddings](ML_GRAPH_EMBEDDINGS.md)** - Node2Vec, GraphSAGE, DeepWalk
 - **[Real-time Analytics](REAL_TIME_ANALYTICS.md)** - Streaming analytics
 - **[Materialized Views](MATERIALIZED_VIEWS.md)** - View management
-- **[Enhanced Transaction Isolation](ENHANCED_TRANSACTION_ISOLATION.md)** - MVCC
-- **[Distributed Query Coordination](DISTRIBUTED_QUERY_COORDINATION.md)** - Federation
+- **[Enhanced Transaction Isolation](ENHANCED_TRANSACTION_ISOLATION.md)** - Status note: not implemented (removed 2026-11-11, SONNY-6298)
+- **[Distributed Query Coordination](DISTRIBUTED_QUERY_COORDINATION.md)** - Status note: not implemented (removed 2026-11-11, SONNY-6279)
 
 ### Deployment
 
@@ -71,23 +71,23 @@ docs/
 
 ### Completed Features
 
-1. **S3 Cloud Backup** - Digital Ocean Spaces integration
+1. **Backup/Restore CLI** - local backup files (no S3 / Digital Ocean Spaces path in the binary; copy files with your own tool)
 2. **REPL QUIC Integration** - Interactive shell
 3. **Vector Operations** - HNSW indexing with SIMD
 4. **ML Graph Embeddings** - Node2Vec, GraphSAGE, DeepWalk
 5. **Real-time Analytics** - Streaming with pattern detection
-6. **Enhanced Transaction Isolation** - MVCC with SSI
-7. **Distributed Query Coordination** - Federation-aware optimization
+6. **Enhanced Transaction Isolation** - Not implemented (removed 2026-11-11, SONNY-6298; the code was never compiled)
+7. **Distributed Query Coordination** - Not implemented (removed 2026-11-11, SONNY-6279; the code was never compiled)
 8. **Materialized Views** - Refresh strategies with dependency tracking
 9. **CLI Subprocess Elimination** - Unified binary architecture
-10. **Advanced Security** - Enhanced RLS with policy evaluation
+10. **Advanced Security** - Row-level security with policy evaluation (`src/security/rls_core.zig`)
 
 ### Quality Metrics
 
 - **Local test baseline**: see [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) (canonical; expected ~175/179 named `zig build test-*` steps pass)
 - **Integration (geodetestlab)**: fresh harness run owed; last dated snapshot ~97% (1644/1688, historical)
-- **ISO conformance suite**: 96/96 named cases (`zig build test-iso-conformance`; parse-only scope); executed-query `gql_conformance` suite 20/20 (`zig build test-gql-conformance`)
-- **5,094 CANARY Markers** (223 IMPL / 4.4%; run `make status-generate`)
+- **ISO conformance suite**: 106/106 named cases (`zig build test-iso-conformance`; parse-only scope); executed-query `gql_conformance` suite 21/21 (`zig build test-gql-conformance`)
+- **5,937 CANARY Markers** (257 IMPL / 4.3%, 2026-11-11; run `make status-generate`)
 
 ### Known Issues
 

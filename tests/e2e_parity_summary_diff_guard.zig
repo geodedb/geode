@@ -4,7 +4,7 @@ const std = @import("std");
 // enforces CHANGED entry threshold (default 0) unless explicitly allowed via env
 //   GEODE_PARITY_CHANGED_MAX (integer)
 // Skips locally if diff file not present (developing outside nightly context).
-// CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity Summary Diff Guard"; ASPECT=GovernanceTest; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_018_ParitySummaryDiffGuard; OWNER=tooling; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity Summary Diff Guard"; ASPECT=GovernanceTest; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_018_ParitySummaryDiffGuard; OWNER=tooling; UPDATED=2026-11-14
 // NOTE: This complements e2e_parity_summary_guard.zig (coverage). This file focuses on regressions.
 
 test "governance: parity summary diff guard (optional)" {

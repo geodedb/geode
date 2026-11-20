@@ -132,7 +132,10 @@ test "SONNY-3041: every executor that reads a pattern refuses a write clause it 
         "executeMatchQueryImpl",
         "executeMultiNodeMatch",
         "executeMultiChainRelationshipMatch",
-        "executeMatchWithOptionalPatterns",
+        // SONNY-6437 item 4: `executeMatchWithOptionalPatterns` was removed
+        // (no parsed query reached it); OPTIONAL MATCH is read by
+        // `optional_match.readOptionalRows`, and a SET or REMOVE after one by
+        // the write step.
     };
     for (executors) |name| {
         const body = fnBody(source, name) orelse {

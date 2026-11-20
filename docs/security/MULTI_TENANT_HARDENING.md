@@ -17,8 +17,10 @@ mode). Source findings: [`docs/CAAST_TENANCY_FLE_FINDINGS_2026-06-08.md`](../CAA
 1. **Never set `--insecure-allow-all` in production.** It bypasses ALL
    authorization (see below). It exists only for local development / debugging.
 2. **Authentication must be enabled.** It is on by default (fail-closed);
-   `--no-auth` is only available in debug builds and must never be used in
-   production.
+   `geode serve --no-auth` is refused at startup in every build mode
+   (SONNY-6329). The authentication-disabled mode, in which every request
+   runs with full access on every transport, exists only in process: see
+   `docs/security/gps-decide.md`, "Authentication disabled".
 3. **Every session must present a concrete `tenant_id`.** A `Principal` with a
    real tenant scope is required for tenant isolation to apply. A session with
    no tenant scope — unset, empty, or the literal `"default"` — is treated as
@@ -280,7 +282,7 @@ Treat `CALL geode.tenant.*` as the standard, supported tenant DDL surface.
 |---|---|
 | `CALL geode.tenant.create(id[, parent])` | Register a tenant (durable) and add it to the hierarchy under `parent`. |
 | `CALL geode.tenant.list()` | One row per registered tenant (id, parent, active, effective quota). |
-| `CALL geode.tenant.show(id)` | 0 or 1 row for `id`. |
+| `CALL geode.tenant.show(id)` | 0 or 1 row for `id`. `list` and `show` are read-only procedures (SONNY-6313): a read-only request may run them. |
 | `CALL geode.tenant.set_quota(id, max_connections, max_concurrent_queries, max_graphs, max_nodes_per_graph)` | Set a per-tenant quota override (durable + live quota manager). |
 | `CALL geode.tenant.drop(id[, cascade])` | Drop a tenant — see safe drop semantics below. |
 | `CALL geode.tenant.backfill_edge_tags([dry_run])` | Re-tag legacy `default` edges from their endpoints and list mixed-tenant edges — see edge tenant tags below. |
@@ -294,8 +296,13 @@ tests — the gate short-circuits to allow, identical to every other admin op.)
 
 **Durability.** The registry persists to `{data_dir}/tenants/registry.jsonl`
 (atomic temp-file + rename per mutation) and is hydrated at startup, so the
-tenant set, parents, and quota overrides survive restart. A null `data_dir`
-(in-memory server / CLI) runs non-durable and logs that it is non-durable.
+tenant set, parents, and quota overrides survive restart. A server always
+has a resolved data directory (SONNY-6339), and it refuses to start when
+`{data_dir}/tenants` cannot be created or `registry.jsonl` cannot be read
+(SONNY-6346: it ran with an in-memory registry and a warning, so the
+tenants were lost at the next restart). Only a caller without a data
+directory (CLI, tests) gets the non-durable registry, which logs that it is
+non-durable.
 
 ### Safe drop semantics (GAP-0847)
 
@@ -328,16 +335,35 @@ dangling. The corrected semantics:
   expr-RLS hierarchy engine is wired — the durable registry's parent links are
   the source of truth for the hierarchy.
 
-> **Failure-path residual (operator note).** The adapter-tier `deleteEdge` /
-> `deleteNode` calls follow the codebase-wide delete posture: a *storage-adapter*
-> delete failure is logged and swallowed rather than propagated. Consequently a
-> cascade drop running against a failing adapter can **over-report** the
-> `nodes_deleted` / `edges_deleted` counts and still proceed to remove the
-> registry record. In-memory / out-of-memory failures, by contrast, surface
-> during the up-front per-tenant scan (`getAllEdgesForTenant` /
-> `getAllNodesForTenant`, which are fallible) and **abort the drop cleanly before
-> any registry record is removed**. Treat the returned counts as best-effort, not
-> a transactional guarantee, when investigating an adapter-error window.
+> **Failure path (operator note, SONNY-6302).** A cascade drop deletes the
+> tenant's rows with the checked store deletes. A delete that fails (the
+> storage engine refused it, or out of memory) **fails the drop before the
+> hierarchy node and the registry record are removed**: the tenant stays
+> registered, the rows already deleted stay deleted (each delete is atomic in
+> memory and in the engine), the rest remain, and
+> `tenant_admin.drop_delete_failed` is logged with the error and the deleted
+> and remaining counts. Re-run the drop to finish it. (Before SONNY-6302 an
+> engine delete failure was logged and swallowed, so the drop removed the
+> tenant and reported success with rows left behind.) A drop that removes a
+> parent's children first and then fails on the parent leaves those children
+> dropped.
+
+> **Order and retry (SONNY-6567).** A cascade drop first **marks the tenant
+> as being dropped** (`active = false` in `geode.tenant.list` / `show`,
+> written to the registry file before anything is removed; no child tenant
+> can be created under it: `error.TenantDropping`), then drops each child
+> the same way, deletes the tenant's rows, removes it from the hierarchy,
+> and removes its registry record. **Every step's failure fails the drop**:
+> the registry's write of its file (it was logged and the drop reported
+> success, and the tenant came back at the next restart; `create` and
+> `set_quota` had the same defect and now fail and take the change back
+> too), the hierarchy removal, and a child's registry lookup. The drop does
+> **not** take part in the statement's undo: what it removed stays removed
+> (a failed drop used to roll a child's rows back after the child had left
+> the registry, orphaning them), and it is **refused inside an explicit
+> transaction** (`error.TenantDropInTransaction`). A tenant left marked by a
+> failed drop is still registered; re-run the drop (also after a restart,
+> which rebuilds the hierarchy from the registry) to finish it.
 
 `drop` returns a row with `tenant_id`, `dropped`, `nodes_deleted`,
 `edges_deleted`. Examples:
@@ -365,9 +391,15 @@ multi-hop patterns, pattern comprehensions, `COUNT {}`, `EXISTS {}`,
 `shortestPath()` and the `CALL algo.*` procedures. An unscoped (admin) session
 sees every edge.
 
-There is **no exception for a `default` tag**. Unscoped and admin writes, and
-follower replication, write `default`, and a `default` node is already hidden
-from every tenant; a `default` edge is hidden the same way. Before SONNY-2693
+There is **no exception for a `default` tag**. Unscoped and admin writes
+write `default`, and a `default` node is already hidden from every tenant; a
+`default` edge is hidden the same way. In a cluster, a write's raft entry
+carries the writing session's tenant (SONNY-2726), so every node applies it
+under that tenant; data replicated before that change was applied as
+`default` on every node and is still tagged so. Geode cannot re-tag it (the
+writer's tenant was never recorded, and no replicated re-tag exists); the
+operator-driven repair is in `docs/MIGRATION_GUIDE.md` ("Cluster Data
+Written Before SONNY-2726 Stays Tagged `default`", SONNY-6425). Before SONNY-2693
 some read paths admitted an edge whose endpoints were visible whatever its tag
 (the GAP-0891 "endpoint bridge"). That showed a tenant another tenant's edge
 between its own nodes, with its properties. It also kept legacy edges visible

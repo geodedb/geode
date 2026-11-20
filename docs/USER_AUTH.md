@@ -11,28 +11,37 @@ Geode implements a comprehensive authentication system with post-quantum ready s
 **Supported today:**
 
 - Password-based authentication (Argon2id, RFC 9106)
-- Multi-factor authentication (TOTP)
-- Session tokens (with rotation)
-- API tokens (service accounts, automation)
-- mTLS certificate-based authentication
+- mTLS client-certificate requirement (a transport gate: the client then
+  still authenticates with a user name and password)
 - Role-based access control (RBAC)
 - Row-level security (RLS, single-tenant)
+
+**Not supported by the server (SONNY-6554; the CLI refuses the commands
+that claimed them, see "Session and API-key commands" below):**
+
+- Session tokens: the QUIC HELLO carries a user name and a password only,
+  and no server keeps the session ids it issues, so a session can be
+  neither reused, validated, rotated nor invalidated
+- API keys (see "API Key Authentication" below)
+- Multi-factor authentication at login (SONNY-6602; wiring it in is story
+  SONNY-6604): see "MFA is not enforced at login" below
 
 **Not supported (no implementation in `src/security/`):**
 
 - LDAP / Active Directory — see issue [#802](https://gitlab.com/devnw/codepros/geode/geode/-/issues/802) (GAP-0834). Will be implemented when a customer requires it.
 - OAuth2 / OIDC — see issue [#803](https://gitlab.com/devnw/codepros/geode/geode/-/issues/803) (GAP-0835). Will be implemented when a customer requires it.
 
-For enterprise SSO requirements today, use mTLS certificate-based authentication with your PKI infrastructure.
+For enterprise SSO requirements today, require mTLS client certificates from your PKI infrastructure in addition to user passwords.
 
 ## 1. Default User Configuration
 
 ### Basic Setup
 
 - **Default Username**: `geode` (configurable)
-- **Default Password**: generated (16 random bytes, 32 hex characters) unless
-  `GEODE_ADMIN_PASSWORD` or `GEODE_DEFAULT_PASSWORD` is set. There is no
-  fixed default password.
+- **Default Password**: generated unless `GEODE_ADMIN_PASSWORD` or
+  `GEODE_DEFAULT_PASSWORD` is set: a random passphrase that meets the
+  password policy (section 2), words of eight characters, with a reset forced
+  at first login. There is no fixed default password.
 - **Privileges**: Full superuser access
 - **Auto-Creation**: Created automatically on first system initialization
 
@@ -46,8 +55,24 @@ password, it is written once to a file in the data directory:
 ```
 
 `<data-dir>` is the directory the command runs on: `geode serve
---data-dir`, `geode auth init --data-dir`, or `GEODE_DATA_DIR`. `geode auth
-init` defaults to `/var/lib/geode`.
+--data-dir`, `geode auth init --data-dir`, or `GEODE_DATA_DIR`. With neither,
+`geode auth init` (like every offline `geode auth`, `geode user` and `geode
+role` command, SONNY-6345) uses the directory `geode serve` uses:
+`$XDG_STATE_HOME/geode`, else `~/.local/state/geode`, else
+`/tmp/geode-<uid>`. It used to default to `/var/lib/geode`, a different
+store than the server's.
+
+`geode auth verify` on a directory with no `__geode_security` graph (or no
+store at all) reports that there is no auth state and exits 1, creating
+nothing; it used to create the security graph and report `0 records,
+integrity OK` (SONNY-6345).
+
+On a store with auth state `geode auth verify` seals and saves nothing
+(SONNY-6359). It still takes the data-directory lock and opens the store, and
+opening the store writes: the storage engine checkpoints and truncates each
+graph's WAL, rewrites the graph registry and the timeseries WAL, and records
+the lock holder in `.geode.lock`. There is no read-only open of the store yet;
+run it with the server stopped, as it refuses a locked directory.
 
 - The file is created with `O_CREAT | O_EXCL | O_NOFOLLOW` and mode 0600, set
   again after the open, so the umask cannot widen it.
@@ -81,6 +106,14 @@ cat /var/lib/geode/.geode_admin_password && rm /var/lib/geode/.geode_admin_passw
   `geode user reset-password geode --new-password '...' --data-dir <data-dir>`.
   This verifies the security graph's HMAC chain first (SONNY-2798).
 
+An offline `geode user` or `geode role` change on a store with no auth
+records yet (nothing to verify) is sealed with the key the server would use
+there: `GEODE_AUTH_HMAC_KEY`, else `GEODE_TDE_KEY`, else
+`<data-dir>/.geode_hmac_key`, which is generated, as at the server's first
+start, when there is none. It used to be left unsealed, and the server then
+refused to start (SONNY-6358). Set the same key variables for the offline
+command as for `geode serve`.
+
 The file is not read again after bootstrap; deleting it changes nothing.
 
 ### Users with no stored role (fail-closed default, 2026-10)
@@ -93,6 +126,22 @@ gets that grant's privileges. Before 2026-10 such a user fell back to
 `readwrite` (fail-open). The bootstrap admin above and users with an
 assigned role are unaffected. See
 [GQL_AUTH_DDL.md](GQL_AUTH_DDL.md#users-with-no-stored-role-fail-closed-default).
+
+The offline `geode user create | import | update --role <role>` and `geode
+user assign-role <user> <role>` give the user a built-in role (`admin`,
+`readwrite`, `user`, `readonly`) as `ALTER USER ... SET ROLE` does: its other
+built-in role is replaced. `create` and `import` with no `--role` give
+`user`, as `CREATE USER` does. Any other role name is refused before
+anything is changed (a custom role carries no privileges), as is
+`assign-role` of a user that does not exist. Until SONNY-6367 these
+commands stored a role node, never gave it to the user, and reported
+success, so the user had no role. A user created offline before that holds
+no role: give it one. `geode user list` and `geode user show` print the
+role the server resolves at login (they printed `user` for everyone), and
+`geode user show | enable | disable` of a user that does not exist fail.
+`geode role create` stores the role under a new role id (it took the next
+user id, which could overwrite an existing role and move its users to the
+new name).
 
 ### Environment Configuration
 
@@ -129,6 +178,33 @@ export GEODE_ADMIN_USERNAME="test_user"
 - ✅ **Character Support**: Spaces, numbers, and symbols allowed
 - ✅ **No Exceptions**: Admin and regular users follow identical standards
 
+### Where It Applies (SONNY-6331)
+
+One policy (`PasswordPolicy.geodeSecure()`), on every path that sets a
+password:
+
+- `CREATE USER ... SET PASSWORD` and `CALL geode.auth.user_create(...)`
+- `ALTER USER ... SET PASSWORD` (the transport's own-password intercept and
+  the GQL route), `CALL geode.auth.user_reset_password(...)` and
+  `CALL geode.auth.user_change_password(...)`
+- the forced reset at first login
+- the offline `geode user create | update | change-password | reset-password`
+- the first-boot admin: a generated password meets the policy; a
+  `GEODE_ADMIN_PASSWORD` / `GEODE_DEFAULT_PASSWORD` seed that does not is
+  accepted with a forced reset (section 3)
+
+A password the policy refuses is an error, SQLSTATE `22000` on the server,
+whose message names the first rule it breaks with the configured limit, for
+example `Password too short (minimum 25 characters)` or `Password must be a
+passphrase with at least 4 words`. The message never contains the password.
+Words are separated by spaces. `GEODE_PASSWORD_MIN_LENGTH` above 256 (the
+longest password accepted) is read as 256.
+
+Passwords stored before the policy applied to a path (for example a user
+created with an 8-character password by an older server) keep working: the
+policy is checked when a password is set, not at login. The user is held to
+it at the next password change.
+
 ### Policy Configuration
 
 ```bash
@@ -161,11 +237,10 @@ export GEODE_PASSWORD_MIN_WORDS=1          # Becomes 2
 
 Password reset is **automatically required** when:
 
-- ✅ Using default password `"geodesic"`
-- ✅ Environment password < configured minimum length
-- ✅ Environment password lacks uppercase AND lowercase letters  
-- ✅ Environment password doesn't meet passphrase word requirements
-- ✅ Administrator manually forces reset via API
+- ✅ The first-boot admin password was generated
+- ✅ The first-boot `GEODE_ADMIN_PASSWORD` / `GEODE_DEFAULT_PASSWORD` seed
+  does not meet the password policy (shorter than the configured minimum, no
+  upper or no lower case letter, or fewer words than required)
 
 ### Reset Flow Process
 
@@ -222,9 +297,15 @@ geode auth login --user $GEODE_ADMIN_USERNAME
 ### Logout Command
 
 ```bash
-# Clear stored credentials
+# Remove the local saved session file (~/.geode/credentials.json)
 geode auth logout
 ```
+
+`auth logout` removes a local file and nothing else: no server keeps a
+session to end. It prints `Removed the local saved session file ...` (or
+`No saved session file to remove`); it used to print `Successfully logged
+out`. `auth logout --token <t>` is refused (exit 2): no token can be
+invalidated (SONNY-6554).
 
 ### Authentication Flow Examples
 
@@ -235,8 +316,14 @@ $ geode auth login --user geode
 Username: geode
 Password: [hidden input]
 Successfully authenticated as 'geode' on server '127.0.0.1:3141'
-Session token saved to ~/.geode/credentials.json
+Saved a record of this login to the local file ~/.geode/credentials.json. geode servers do not accept session tokens yet, so it does not log later commands in; pass -U and --password (or --dsn) to each command
 ```
+
+`auth login` checks the user name and password against the server
+(a real HELLO). Without `--save-session` it prints `Note: geode servers do
+not accept session tokens yet, ...`; it used to print the server's session
+id as a reusable `Session token: ...` with `Use --save-session to persist
+credentials locally` (SONNY-6554).
 
 **Password Reset Required:**
 
@@ -281,18 +368,127 @@ export GEODE_AUTH_RATE_LOCKOUT_SECS=60             # Default: 60, range 1-86400
 
 ### Password Hashing
 
-- **Current**: BLAKE2b-256 with salt (secure placeholder)
-- **Future**: Argon2id with OWASP parameters (when Zig API stabilizes)
-- **Security Level**: Post-quantum computational resistance
+- **Current**: Argon2id with OWASP parameters (`m=19456,t=2,p=1`), stored
+  as a PHC string (`$argon2id$v=19$...`) by every path that sets a password:
+  CREATE USER, ALTER USER SET PASSWORD, the `geode.auth.*` procedures, the
+  first-boot admin, and the offline `geode user create | update | change-password | reset-password`
+  (`geode_auth.hashPasswordArgon2id`). The offline `geode user create` and
+  `geode user update --password` stored the password itself until
+  SONNY-6358; such a record cannot log in: set its password again.
+- **Stored hash bounds**: a stored hash with other parameters still
+  verifies, within 1 <= t <= 10, 8*p <= m <= 262144 KiB (256 MiB) and
+  1 <= p <= 16; outside them, or unparseable, verification fails without
+  running Argon2, so a corrupt stored hash cannot burn CPU or memory on
+  every login (SONNY-6378)
+- **Stored hash format** (SONNY-6600): exactly
+  `$argon2id$v=19$m=<m>,t=<t>,p=<p>$<salt: 32 hex digits>$<hash: 64 hex digits>`,
+  the parameters in that order, each a decimal number with no sign and no
+  leading zero, and nothing after the hash. Anything else (a parameter
+  without `=`, an unknown, missing, duplicate or reordered parameter, a
+  trailing `$...`) is an unusable stored credential (`InvalidHashFormat`,
+  "the stored credential of this account cannot be used"). **Breaking:**
+  such hashes were parsed leniently (a missing parameter took the default,
+  the rest was ignored), so a record whose hash has extra text now cannot
+  log in until its password is reset. Every hash Geode writes has this form.
+- **Legacy**: an imported BLAKE2b hash (`geode user import --algorithm blake2b`,
+  `geode.auth.user_import(..., 'blake2b')`) is accepted for migration only:
+  64 hex digits of BLAKE2b-256 over the password followed by the static salt
+  `geode-salt-secure-v2`. The login verifies it (SONNY-6367; such a user
+  could not log in before). It is a fast hash with a fixed salt, far weaker
+  than Argon2id: have the user change its password (`ALTER USER <user> SET
+  PASSWORD`), which stores an Argon2id hash. FIPS builds refuse the import
+  and the verification.
+- **FIPS builds**: Argon2id is not FIPS-approved, so setting a password fails
+  closed (`FipsUnsupported`).
 - **Validation**: All passwords validated before hashing
 
 ### Session Management
 
 - **Duration**: 24-hour expiration
-- **Storage**: `~/.geode/credentials.json` (user home directory)
-- **Format**: Cryptographically secure random tokens
+- **Storage**: `~/.geode/credentials.json` (user home directory). HOME
+  (USERPROFILE on Windows when HOME is unset) must be an absolute path: a
+  relative or empty HOME is refused with `Error: HOME is empty or not an
+  absolute path ...`, never resolved against the working directory
+  (SONNY-6544). (The CLI state files of `geode session`, `authn` and
+  `apikey` are no longer written: those commands are refused, SONNY-6554.)
+- **Format**: the session id a server returns in HELLO is a random token;
+  the server keeps no record of it, so it is not reusable
 - **Cross-platform**: Windows and Unix support
-- **Policy Enforcement**: Sessions invalidated for policy violations
+- **No server-side session state**: no session is invalidated, rotated or
+  expired by a server; every connection authenticates in its own HELLO
+
+### Saved sessions (`--save-session`)
+
+`geode auth login --save-session` writes, and `geode query`, `geode auth
+token`, `geode session info` read, one file through one writer and
+one reader (`src/cli/security/session_storage.zig`, SONNY-6551):
+
+```json
+{"version":1,"server":"127.0.0.1:3141","username":"alice","token":"...","created_at":1763100000,"expires_at":1763186400,"system_fingerprint":"host:alice:1000"}
+```
+
+- **Encoding**: std.json, every string escaped. A file with a missing,
+  extra or mistyped field is not read. Files written before SONNY-6551 (the
+  `session_token` key, no fingerprint) are not read and not migrated:
+  `geode query` says `Warning: saved session ignored: ...`; run `geode auth
+  login --save-session` again.
+- **Times**: `created_at` / `expires_at` are Unix seconds; a session is
+  offered for 24 hours.
+- **`system_fingerprint`** (`hostname:USER:uid`) binds the file to the OS
+  account and host that saved it, so a file that travelled (a copied or
+  restored home directory, an NFS home shared between hosts) is ignored
+  with a warning. It is not a secret and not authentication.
+- **Server**: a session is offered only to the `--server` (or `--dsn`)
+  address it was saved for, compared as written (`localhost:3141` is not
+  `127.0.0.1:3141`).
+- **Writing**: `~/.geode` is created mode 0700, opened without following a
+  symbolic link, and must belong to you; group or other access on an
+  existing one (an older geode created it 0755) is removed. The file is
+  written to a new temporary file (mode 0600, `O_EXCL`) in that directory
+  and renamed over `credentials.json`, so a reader sees the old file or the
+  new one and a symbolic link at the final path is replaced, never
+  followed.
+- **Reading** creates nothing. The file is ignored, with the reason, when
+  `~/.geode` is a symbolic link, not yours, or writable by group or other,
+  or when `credentials.json` is a symbolic link, not a regular file, not
+  yours, accessible by group or other (as ssh treats a private key), over
+  16 KiB, not the format above, saved by another account or host, or
+  expired. A token is never printed by `geode query`.
+- **Not yet usable for authentication.** The QUIC HELLO carries a user name
+  and a password only, and the server keeps no record of the session ids
+  it returns, so a saved session cannot authenticate a query. When `geode
+  query` (no `-U` or `--dsn` credentials) finds a valid one for
+  its server it prints `Note: found a saved session for <server> (user
+  '<name>'), but geode servers do not accept a saved session token yet, so
+  it is not used; ...` and sends nothing from it; pass `-U` with
+  `--password` / `--password-file`, or `--dsn`. Server-side session
+  resumption (a token field in the HELLO, a server registry of issued
+  tokens with expiry and revocation on password or role change) is open
+  work (SONNY-6551, SONNY-6553).
+
+### Session and API-key commands (SONNY-6554)
+
+These commands claimed a server-side effect that no server performs. Each
+now exits 1 with `Error: ... is not supported by this server: <what>` and
+writes nothing:
+
+| Command | It printed | It did |
+|---------|------------|--------|
+| `geode session validate [--token t]` | `Session is valid for user: ...` for any 32+ character string | read a local state file no one writes |
+| `geode session rotate` | `Session token rotated successfully.` | replaced the saved token with random bytes made on the client |
+| `geode session invalidate-all --user u` | `All sessions for user 'u' have been invalidated.` | nothing |
+| `geode session check-idle` | `Session is active.` | checked that a saved file exists |
+| `geode auth validate --token t` | `Session token valid` for any non-empty string | nothing |
+| `geode authn config / test-access` | `anonymous access allowed for path`, `Access allowed` | wrote / read a local file no server reads |
+| `geode authn stepup-check` | `Step-up ... required` from an `admin:` prefix | nothing (the server decides step-up per statement, GAP-0884) |
+| `geode authn stepup-mark` | `Session elevated successfully.` | nothing |
+| `geode apikey create / list / revoke / revoke-all / check-scope` | `API key created`, `revoked`, `scope granted` | kept keys in a local file no server reads |
+
+`geode query --token <t>` (parsed and never sent) and `geode auth logout
+--token <t>` are refused with exit 2. What still works, locally:
+`geode session info` and `geode auth token` show the saved session file,
+`geode auth logout` removes it, and `geode apikey validate` checks a key's
+format (and says that no server accepts API keys).
 
 ### Audit Trail (CANARY Tracking)
 
@@ -325,7 +521,7 @@ export GEODE_PASSWORD_MIN_WORDS=5
 $ geode auth login --user prod_db_admin
 Password: [Production Database Administrative Access Phrase 2024]
 Successfully authenticated as 'prod_db_admin' on server '127.0.0.1:3141'
-Session token saved to ~/.geode/credentials.json
+Saved a record of this login to the local file ~/.geode/credentials.json. geode servers do not accept session tokens yet, ...
 ```
 
 ### Example 2: Development Environment (Requires Reset)
@@ -383,11 +579,11 @@ Successfully authenticated as 'cluster_admin' on server 'cluster-01.geode.intern
 
 ### Mandatory Policy Enforcement
 
-- **Non-Bypassable Validation**: Password policy violations cannot be circumvented
-- **Real-Time Enforcement**: Policy changes immediately affect all existing users
-- **Pre and Post Validation**: Passwords validated before hashing AND after authentication
-- **Dynamic Compliance**: Users with policy-violating passwords must reset immediately
-- **Zero Exceptions**: No user can maintain a password that violates current policy
+- **One Policy on Every Path**: every path that sets a password applies the
+  same policy before hashing (section 2)
+- **Set-Time Enforcement**: the policy is checked when a password is set. A
+  stored password that predates it (or a stricter configured limit) keeps
+  working until it is next changed; it does not force a reset at login
 
 ### Post-Quantum Readiness
 
@@ -468,7 +664,8 @@ echo "Current Min Words: $GEODE_PASSWORD_MIN_WORDS"
 # Ensure home directory is writable
 ls -la ~/.geode/
 
-# Check permissions
+# geode tightens ~/.geode to 0700 itself on save; it refuses a ~/.geode
+# that is a symbolic link or belongs to another user
 chmod 700 ~/.geode/
 chmod 600 ~/.geode/credentials.json
 ```
@@ -493,7 +690,7 @@ echo "Has lowercase: $(echo $PASSWORD | grep -q '[a-z]' && echo 'Yes' || echo 'N
 - **Backward Compatibility**: Existing `geode` username continues to work
 - **Automatic Migration**: Default user created on first startup
 - **Policy Enforcement**: All existing users subject to new password requirements
-- **Session Preservation**: Existing sessions remain valid until expiration
+- **Sessions**: no server keeps sessions, so there are none to preserve; every connection authenticates in HELLO
 
 ### Environment Migration
 
@@ -517,38 +714,76 @@ This authentication system provides **enterprise-grade security** with **complet
 | Method | Status | Use Case | Security Level | Implementation |
 |--------|--------|----------|----------------|----------------|
 | **Username/Password** | ✅ Implemented | Interactive login | High | `src/security/user_management.zig` |
-| **MFA (TOTP)** | ✅ Implemented | Two-factor auth | Very High | `src/security/mfa.zig` |
-| **Session Tokens** | ✅ Implemented | Session continuity with rotation | High | `src/security/authn.zig` |
-| **API Keys** | ✅ Implemented | Service accounts, automation | Medium-High | `src/security/api_keys.zig` |
-| **mTLS (Certificate)** | ✅ Implemented | Zero-trust, service mesh | Very High | `src/security/mtls_provider.zig` |
+| **MFA (TOTP)** | ❌ Not enforced at login | Two-factor auth | — | HELLO (QUIC and gRPC) never asks for a TOTP code or a recovery code; `SecurityManager.authenticateWithMFA` has no production caller. The `geode.auth.mfa_*` procedures enroll a secret and check a code on request only (SONNY-6602; login enforcement is SONNY-6604); see "MFA is not enforced at login" |
+| **Session Tokens** | ❌ Not on the server wire | Session continuity | — | The HELLO carries no token and no server keeps the session ids it issues (SONNY-6551, SONNY-6554); `src/security/authn.zig`'s session store is used only by the embedded LSP verifier, which nothing populates |
+| **API Keys** | ❌ Not on the server wire | Service accounts, automation | — | Library `auth_lib.api_keys` only; `geode apikey` refuses everything but a format check (SONNY-6554); see below |
+| **mTLS (Certificate)** | ⚠️ Transport gate only (see below) | Zero-trust, service mesh | Very High | `GEODE_MTLS_REQUIRED` + `GEODE_MTLS_CLIENT_CA`; `src/security/mtls_provider.zig` |
 
-### API Key Authentication
+### API Key Authentication (not implemented on the server)
 
-For programmatic access (CI/CD pipelines, automation, service accounts):
-
-```bash
-# API keys follow format: gk1.<token_id>.<secret>
-# Generate via CLI:
-geode admin create-api-key --user service_account --name "ci-pipeline" --scope "read,write"
-
-# Use in requests:
-curl -H "Authorization: Bearer gk1.XXXX.YYYY" https://geode.example.com:3141/api/query
-```
+**API keys are not implemented end to end (SONNY-6291).** A `geode serve`
+server has no API-key store, and its QUIC and gRPC handshakes authenticate
+by username and password (or mTLS), never by key. The
+`geode.auth.apikey_*` procedures (`apikey_create`, `apikey_list`,
+`apikey_revoke`, `apikey_check_scope`) answer SQLSTATE 0A000 (not
+supported); before SONNY-6291 they were stubs that answered `scope
+granted` for any key and `revoked` without revoking anything. What exists:
+the `auth_lib.api_keys` library (key format `gk1.<token_id>.<secret>`,
+SHA-256 digests, constant-time comparison), used in process by the MCP and
+LSP verifiers. The `geode apikey` CLI kept keys in a local state file the
+server never reads and reported `API key created` / `revoked`; since
+SONNY-6554 it refuses `create`, `list`, `revoke`, `revoke-all` and
+`check-scope` (exit 1, not supported by this server) and only checks a
+key's format (`validate`). Use service-account users with passwords, or
+mTLS, for programmatic access.
 
 ### mTLS Certificate Authentication
 
-For zero-trust environments and service mesh deployments:
+mTLS on the QUIC listener is a transport gate: with it on, a connection
+must present a client certificate that chains to a CA you configure, and
+then still authenticates with a username and password in HELLO.
 
 ```bash
-# Connect with client certificate
-geode shell --cert /path/to/client.crt --key /path/to/client.key --server geode.example.com:3141
-
-# Certificate identity is extracted from:
-# - Subject CN (Common Name)
-# - Subject DN (Distinguished Name)
-# - SAN (Subject Alternative Names)
-# - Certificate fingerprint
+# Server: require client certificates that chain to the CAs in this bundle
+GEODE_MTLS_REQUIRED=1 \
+GEODE_MTLS_CLIENT_CA=/etc/geode/client-ca.pem \
+geode serve --listen 0.0.0.0:3141 --cert /etc/geode/server.crt --key /etc/geode/server.key
 ```
+
+- `GEODE_MTLS_CLIENT_CA` is a PEM bundle of CA certificates
+  (basicConstraints `CA:TRUE`). It is the only trust anchor for client
+  certificates (SONNY-6453). `geode serve` refuses to start when
+  `GEODE_MTLS_REQUIRED` is set and the bundle is unset, cannot be read,
+  holds no certificate or holds a non-CA certificate.
+- The bundle authenticates clients of the listener and nothing else
+  (SONNY-6490). It is not a trust anchor for a server certificate: the
+  server's outbound connections (cluster peers, the remote KMS) verify the
+  server they reach against their own CA (`GEODE_CLUSTER_CA_CERT`, the KMS
+  CA bundle), never against the client CAs.
+- `GEODE_MTLS_REQUIRED` is QUIC only. The gRPC listener does not verify
+  client certificates, so `geode serve` refuses to start with both
+  `GEODE_MTLS_REQUIRED` and `--listen-grpc`.
+- A certificate is accepted only when the client proves it holds the key
+  (TLS CertificateVerify) and its chain ends in a CA from the bundle, with
+  every certificate within its validity period. The server completes the
+  chain from the bundle, so a client may send only its leaf (geode's Zig
+  clients do), its chain up to the CA, or a self-signed CA certificate that
+  is itself in the bundle (pinning). The bundle may hold several unrelated
+  CAs (SONNY-6457).
+- A leaf whose extendedKeyUsage extension does not list clientAuth is
+  rejected; a leaf with no extendedKeyUsage extension is accepted (RFC 5280:
+  any purpose).
+- `geode query` / `geode shell` / `geode backup` present the certificate
+  given with `--client-cert --client-key` (geode-client-zig v0.3.15,
+  SONNY-6457), as does geode's internal QUIC client
+  (`QuicClient.connectEx`).
+- **Identity mapping is not supported (SONNY-6458).** The server's
+  certificate-to-user mapping (`src/security/mtls_provider.zig`) starts
+  empty and nothing loads mappings, so a client certificate never selects
+  the user: the user is always the one that authenticates in HELLO. `geode
+  mtls map create|list|delete`, `config` and `status` are refused as
+  unsupported (non-zero exit); they used to write a local
+  `geode_mtls_state.db` the server never read (SONNY-6457).
 
 ### Not Supported (Tracking Issues Open)
 
@@ -557,7 +792,7 @@ geode shell --cert /path/to/client.crt --key /path/to/client.key --server geode.
 | **LDAP/Active Directory** | ❌ Not supported | [#802](https://gitlab.com/devnw/codepros/geode/geode/-/issues/802) (GAP-0834) | The previous documentation overstated current capability. Will be implemented when a customer requires it. |
 | **OAuth2/OIDC** | ❌ Not supported | [#803](https://gitlab.com/devnw/codepros/geode/geode/-/issues/803) (GAP-0835) | The previous documentation overstated current capability. Will be implemented when a customer requires it. |
 
-**Note**: LDAP/AD and OAuth2/OIDC are NOT supported. Earlier revisions of this document advertised them on a 2026 roadmap; that was inaccurate — no implementation exists in `src/security/`. For enterprise SSO requirements today, use mTLS certificate-based authentication with your PKI infrastructure.
+**Note**: LDAP/AD and OAuth2/OIDC are NOT supported. Earlier revisions of this document advertised them on a 2026 roadmap; that was inaccurate — no implementation exists in `src/security/`. For enterprise SSO requirements today, require mTLS client certificates from your PKI infrastructure in addition to user passwords.
 
 ---
 
@@ -681,6 +916,18 @@ the next source, so an operator typo can never disable brute-force protection.
   resolver reads are surfaced as the `geode_security_auth_store_unavailable_total`
   runtime metric so an operator can see a degraded store even though it never
   arms a lockout.)
+- **Only a password mismatch counts (SONNY-6598).** Every credential check has
+  three outcomes: match, mismatch, or an error. An error is a check the server
+  could not carry out: the Argon2id key derivation could not allocate its
+  memory (a loaded server), the stored hash cannot be used (not an Argon2id
+  PHC string or legacy BLAKE2b hash, unparseable or out-of-bounds parameters,
+  a salt or digest that is not hex), or the security store could not answer.
+  An error never authenticates, is not counted toward the lockout, is logged
+  at ERROR with the user name (never the password), and is audited as an
+  auth-system error rather than a failed login (below). Until SONNY-6598 an
+  Argon2id failure and a malformed stored hash read as a wrong password: a
+  correct password under memory pressure was answered "Authentication
+  failed" and counted, so server load could lock a user out.
 - **A correct credential does not clear an active lockout.** This is deliberate:
   verifying the password first would let an attacker force an unbounded number
   of Argon2id verifications from a locked principal (a CPU-amplification DoS).
@@ -698,3 +945,178 @@ the next source, so an operator typo can never disable brute-force protection.
   operator can see and release a misfiring lockout without restarting the server.
 
 CANARY: REQ=REQ-DOC-AUTH-LOCKOUT-CONFIG; FEATURE="AuthRateLimiting"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=security; UPDATED=2026-08-29
+
+### What a client sees when a login is refused (SONNY-6598)
+
+A refused HELLO answers `success=false` with one of these `error_message`
+values, the same on QUIC and gRPC:
+
+| `error_message` | Meaning | Counted toward the lockout | Retry? |
+|---|---|---|---|
+| `Authentication failed` | The credentials were checked and rejected (wrong password, unknown or disabled user). | Yes | With the right credentials |
+| `Authentication temporarily unavailable` | The server could not check the credentials: the password key derivation could not run (e.g. out of memory under load) or the security store could not answer. | No | Yes, after a back-off |
+| `Authentication unavailable: the stored credential of this account cannot be used (server-side error; contact the administrator)` | The account's stored password hash is malformed (e.g. a bad `geode.auth.user_import`). No password logs this account in until an administrator resets it. | No | No: reset the password (`geode.auth.user_reset_password` / `ALTER USER ... SET PASSWORD`) |
+| `Too many failed authentication attempts. ...` | The principal (or the source IP) is locked out. | (already locked) | After the lockout window |
+| `Authentication required` | The HELLO carried no user name or password. | No | With credentials |
+
+The last answer of the table but one names the account's state, so it tells a
+caller that a user with a malformed stored hash exists; only an administrator
+can create such a hash, and the server logs each occurrence at ERROR.
+
+With the process audit log enabled (`GEODE_AUDIT_ENABLED=1`), every refused
+HELLO credential check writes a record whose `details.username` is the user
+name sent:
+
+- a rejected credential: `event_type` `authentication_failure`, `action`
+  `LOGIN`, `result` `failure`;
+- a check the server could not run: `event_type` `system_event`, `action`
+  `AUTH_ERROR`, `result` `error_`, severity error, with the error name in
+  `details.details` (e.g. `auth-system error, not a failed login: OutOfMemory`).
+
+The same three-outcome rule applies to the other credential checks:
+`geode.auth.mfa_verify` and `mfa_enable` answer a TOTP check the server cannot
+run (MFA turned off, an unusable stored secret) with that error (e.g. 0A000),
+not 28000 "invalid code", and mfa_verify does not count it toward the MFA
+lockout; the offline `geode user change-password --old-password` says the old password
+could not be checked instead of "old password is incorrect"; and a
+`__geode_security` HMAC chain verification that could not run (out of memory,
+a store read error) is reported as unverifiable, not as tampering: the server
+refuses to start with `AuthChainUnverifiable` (the reseal override does not
+apply), the offline CLI refuses with "could not be verified", and the periodic
+check logs it without the tampering alarm.
+
+SONNY-6600 carries the rule to the remaining checks:
+
+- A GQL procedure whose credential check could not run answers what HELLO
+  answers: `geode.auth.user_change_password` with an old-password check
+  the server could not run is GQLSTATUS `53000` "Authentication temporarily
+  unavailable" (retryable), and with an unusable stored hash `58000`
+  "Authentication unavailable: the stored credential of this account cannot
+  be used (server-side error; contact the administrator)". Both were the
+  generic `58000` with the error's name. A wrong old password stays `28000`.
+- The LSP `initialize` token check (API key, then session token) answers a
+  check that could not run (e.g. out of memory) with JSON-RPC `-32603`
+  "authentication temporarily unavailable ...", logged as a warning, instead
+  of `-32002` "invalid auth token". The session is not bound either way.
+- A Raft frame whose nonce the replay check cannot record (out of memory)
+  is still dropped, but logged at ERROR as that, not as a replay, and
+  counted in `nonce_tracker.record_errors_total`.
+- MFA recovery codes are held as SHA-256 digests, never in plaintext:
+  the codes `geode.auth.mfa_setup` issues (it kept them in plaintext) and
+  the `SecurityManager` codes (`setRecoveryCodes`; codes stored in
+  plaintext before are converted the first time they are checked). A
+  presented code is compared with every stored digest in constant time
+  (it was a byte-by-byte `std.mem.eql`), and is redeemed at most once,
+  concurrent logins included. The MFA secret a check uses is copied under
+  the MFA store's lock and zeroed after use, and the store allocates from
+  the process allocator (it kept the allocator of the first `mfa_*`
+  request). Note: no procedure redeems the codes `mfa_setup` issues.
+
+### MFA is not enforced at login
+
+**No login is protected by MFA today (SONNY-6602).** The QUIC and gRPC
+HELLO authenticate with a user name and password only (mTLS is a
+transport gate in front of it): neither asks for a TOTP code or a
+recovery code, and
+`SecurityManager.authenticateWithMFA`, the library's MFA login path, has
+no production caller. Wiring MFA into HELLO is story SONNY-6604.
+
+What exists:
+
+- `geode.auth.mfa_setup(user)` generates a TOTP secret and recovery codes.
+  Every result carries a `warning` column saying MFA is not enforced at
+  login and that no procedure redeems the recovery codes.
+- `geode.auth.mfa_verify(user, code)` checks a code against the stored
+  secret when it is called (an application may use it for its own step-up
+  check). It is rate limited: five failures lock the user's verifications
+  out for five minutes. The attempt is counted in a record made before the
+  code is checked; if that record cannot be made (out of memory) the
+  verification is refused with `53000` and the code is not checked, so the
+  limit cannot be bypassed under memory pressure (it failed open).
+- `geode.auth.mfa_enable(user, code)` checks the code under the same
+  limiter as `mfa_verify` (SONNY-6623: one per-user count and lockout; it
+  had none; a malformed code from an enrolled user counts and is still
+  22023, a missing code is an argument error and does not) and turns the
+  user's stored `mfa_enabled` on, answering "MFA enabled for <user>" with the same
+  `warning` column; `mfa_disable(user)` turns it off. No login reads the
+  flag yet. `mfa_disable` needs no proof of possession (no code, or a code
+  checked for its format only: the Admin recovery route), so every disable
+  that takes effect is audited as `MFA_RESET_BY_ADMIN` with the actor
+  (`details.username`) and the target (`details.target_user`) (SONNY-6624),
+  beside the security graph's `MFA_DISABLE` record.
+- The offline `geode user mfa-setup` and `geode user mfa enable` print the
+  same warning. `geode user mfa enable` needs `--code` with a code that
+  verifies (SONNY-6608: without it, it turned MFA on).
+- The offline `geode user mfa-verify` applies the same limit as
+  `geode.auth.mfa_verify` (five failures, a five-minute lockout, reset by a
+  code that verifies), kept in a sealed `MfaAttempts` record in
+  `__geode_security` (SONNY-6614): the server keeps its count in process
+  memory, and each run of the command is a new process, so before it had
+  no limit at all. The attempt is counted and saved before the code is
+  checked; one that cannot be saved is refused unchecked. Being a store
+  write, it is refused while a server holds the data directory (or pass
+  `--force`, as the other offline writers). `geode user mfa enable
+  --code` counts against the same record (SONNY-6619; it had no limit),
+  malformed codes included (SONNY-6623).
+- The server's lockout survives a restart (SONNY-6619): the fifth failure
+  stores the lockout in the same `MfaAttempts` record, and the first
+  success after a stored lockout stores the reset; the server loads the
+  records at startup. A failure below the limit is counted in memory
+  only: storing it would re-seal the whole HMAC chain (every security
+  record's HMAC rewritten) on every wrong guess, a cost an attacker could
+  impose at will. The trade-off: a restart forgets up to four failures
+  that had not reached the limit.
+- SecurityManager (library-only until SONNY-6604) follows `mfa_setup`
+  (new secret and codes, MFA off) and `mfa_enable` / `mfa_disable`, and
+  `DROP USER` removes the user from it entirely (SONNY-6619).
+- `geode user show` prints the stored MFA state, e.g. `MFA: disabled
+  (enrolled, 8 recovery codes; not enforced at login yet, SONNY-6604)` or
+  `MFA: disabled (not enrolled)` (SONNY-6609).
+- At startup `SecurityManager` is loaded with each user's opened secret and
+  stored recovery codes, so `authenticateWithMFA` (library-only until
+  SONNY-6604) can redeem a stored code once (SONNY-6609).
+
+**Where an enrollment is stored (SONNY-6608).** `mfa_setup` (and the
+offline `geode user mfa-setup`) writes the enrollment through to the
+HMAC-chained `__geode_security` graph, all of it or none of it (a store
+that fails refuses the procedure with `58030`): the TOTP secret in the
+user record's `mfa_secret`, the recovery codes as SHA-256 digests in a
+sealed `MfaRecoveryCodes` record, and the user's `mfa_enabled` turned off
+until `mfa_enable` verifies a code against the new secret. The server
+loads every enrollment back at startup (a record that cannot be loaded
+fails startup), and `DROP USER` removes it, so a user made again under the
+name is not enrolled. Before, the procedures' enrollments lived in process
+memory only and a restart lost them, and the offline `mfa-setup` turned
+MFA on before any code was verified and kept no recovery code.
+
+**How the secret is protected at rest (SONNY-6609).** The user record's
+`mfa_secret` holds the secret sealed: AES-256-GCM (through the
+`crypto_backend` seam: std.crypto, or OpenSSL under `-Dfips`) with a random
+96-bit nonce, under a key derived with HKDF-SHA256 from the security graph's
+HMAC key (`GEODE_AUTH_HMAC_KEY`, else derived from `GEODE_TDE_KEY`, else
+`<data dir>/.geode_hmac_key`), with the user id as associated data. Stored
+as `aesgcm1$` + base64url(nonce, ciphertext, tag). A secret stored in
+plaintext by an older binary is sealed the first time the server loads it
+(no auth-version bump; the secret is the same). The loop2 hydration
+snapshots (`hydration_*.snap`), which copy property values out of the
+engine's pages unencrypted, are no longer written for `__geode_security`
+(a file an older binary wrote is deleted at the next checkpoint).
+
+Why the HMAC key: it is the one key every server has (it already seals the
+chain), backups do not carry it (SONNY-6299), and it may live outside the
+data directory (environment, e.g. `GEODE_AUTH_HMAC_KEY` or `GEODE_TDE_KEY` supplied by the deployment; geode fetches no key from a KMS). What that buys:
+someone who reads the data directory, a backup, a snapshot side-car or a
+WAL **without** the key cannot recover the secret; a sealed value copied to
+another user's record does not open; a changed one does not open.
+**What it does not buy:** whoever holds both the data directory and the
+key, which by default is `.geode_hmac_key` **inside the data directory**,
+can derive the key and open every secret, exactly as the server does. To
+separate them, supply the key through `GEODE_AUTH_HMAC_KEY` or
+`GEODE_TDE_KEY` from outside the data directory. TDE (`GEODE_TDE_KEY`) still
+encrypts the pages themselves. The secret is in process memory while the
+server runs. Recovery codes are stored only as SHA-256 digests.
+
+- `mfa.verifyRecoveryCode`, which matched 8-character codes only (the
+  issued codes are 32), was removed: it had no caller.
+
+CANARY: REQ=REQ-DOC-SONNY-6598-AUTH-ERRORS; FEATURE="AuthOutcomeClassification"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=security; UPDATED=2026-11-15

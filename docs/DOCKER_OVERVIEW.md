@@ -23,12 +23,12 @@ docker run -d \
   -p 9091:9091/tcp \
   -v geode-data:/data \
   -v ./certs:/certs:ro \
-  -e LOG_LEVEL=info \
   geodedb/geode:latest \
   --data-dir /data \
   --listen 0.0.0.0:3141 \
   --cert /certs/server.crt \
-  --key /certs/server.key
+  --key /certs/server.key \
+  --log-level info
 ```
 
 ## Image Variants
@@ -113,9 +113,12 @@ the container for future use (GAP-0878).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LOG_LEVEL` | `error` | Logging verbosity: `error`, `warn`, `info`, `debug` |
 | `GEODE_DATA_DIR` | `/data` | Data storage directory |
 | `GEODE_ENV` | - | Environment identifier (`development`, `production`) |
+
+The log level is the `--log-level` option (or the config file's
+`log_level`); geode reads no `LOG_LEVEL` variable (only the vendored QUIC
+library's own logger does). Corrected 2026-11-12, SONNY-6435.
 
 ### Query Engine
 
@@ -124,59 +127,58 @@ the container for future use (GAP-0878).
 | `GEODE_ENABLE_QUERY_OPTIMIZER` | `1` | Enable cost-based query optimization |
 | `GEODE_INLINE_RESULTS` | `1` | Enable inline result streaming |
 | `GEODE_INLINE_RESULTS_MAX_ROWS` | - | Maximum rows for inline results |
-| `GEODE_QUERY_MEM_LIMIT_BYTES` | - | Memory limit per query |
 | `GEODE_NULLS_LAST` | - | Sort NULLs last in ORDER BY |
 
 ### Storage & WAL
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GEODE_WAL_COMPACT_INTERVAL` | - | WAL compaction interval |
-| `GEODE_SPILL_THRESHOLD_BYTES` | - | Disk spill threshold |
-| `GEODE_FORCE_SORT_SPILL` | - | Force sort operations to disk |
-| `GEODE_FORCE_DISTINCT_SPILL` | - | Force DISTINCT to disk |
-| `GEODE_FORCE_UNION_SPILL` | - | Force UNION to disk |
+| `GEODE_WAL_SYNC` | `each_commit` | `each_commit` (fsync per commit) or `deferred` (durable at the next checkpoint; replayable bulk loads only) |
+
+The server reads none of `GEODE_WAL_COMPACT_INTERVAL`,
+`GEODE_FORCE_SORT_SPILL`, `GEODE_FORCE_DISTINCT_SPILL` or
+`GEODE_FORCE_UNION_SPILL` (corrected 2026-11-12, SONNY-6435).
 
 ### Clustering & Distribution
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GEODE_CLUSTER_NAME` | - | Cluster identifier for distributed deployments |
-| `GEODE_NODE_ID` | - | Unique node ID within the cluster |
-| `GEODE_MAX_SHARDS` | `16` | Maximum number of shards |
-| `GEODE_QUERY_TIMEOUT_MS` | `30000` | Distributed query timeout |
-| `GEODE_MAX_PARALLEL_QUERIES` | `10` | Maximum concurrent distributed queries |
-| `GEODE_CONNECTION_POOL_SIZE` | `20` | Connections per cluster node |
-| `GEODE_QUERY_CACHE_ENABLED` | `true` | Enable distributed query caching |
-| `GEODE_QUERY_CACHE_TTL_MS` | `300000` | Query cache TTL (5 minutes) |
-| `GEODE_QUERY_CACHE_MAX_ENTRIES` | `1000` | Maximum cached queries |
-| `GEODE_RETRY_ATTEMPTS` | `3` | Connection retry attempts |
-| `GEODE_CONNECTION_TIMEOUT_MS` | `5000` | Connection establishment timeout |
-| `GEODE_HEARTBEAT_INTERVAL_MS` | `10000` | Cluster heartbeat interval |
+| `GEODE_CLUSTER_TOKEN` | - | Turns cluster mode on (and authenticates cluster clients); without it the server is standalone. At least 16 bytes (e.g. `openssl rand -hex 32`), or the server refuses to start |
+| `GEODE_PEERS` | - | Comma-separated `host:port` of every node, the same list on each |
+| `GEODE_NODE_ID` | - | This node's number: its 1-based position in `GEODE_PEERS` (derived from `$HOSTNAME` when that matches an entry) |
+| `GEODE_CLUSTER_NAME` | - | Cluster name |
+| `GEODE_CLUSTER_PORT` | - | Intra-cluster (Raft) port |
+| `GEODE_CLUSTER_LISTEN_ADDRESS` | `0.0.0.0` | Intra-cluster bind address (an IPv6 address may be written bare, `::1`, or bracketed, `[::1]`) |
+
+See `src/server/cluster_bootstrap.zig`. The server reads none of
+`GEODE_MAX_SHARDS`, `GEODE_QUERY_TIMEOUT_MS`, `GEODE_MAX_PARALLEL_QUERIES`,
+`GEODE_CONNECTION_POOL_SIZE`, `GEODE_QUERY_CACHE_ENABLED`,
+`GEODE_QUERY_CACHE_TTL_MS`, `GEODE_QUERY_CACHE_MAX_ENTRIES`,
+`GEODE_RETRY_ATTEMPTS`, `GEODE_CONNECTION_TIMEOUT_MS` or
+`GEODE_HEARTBEAT_INTERVAL_MS` (corrected 2026-11-12, SONNY-6435).
 
 ### Encryption - Transparent Data Encryption (TDE)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GEODE_TDE_KEY` | - | AES-256-GCM encryption key (64 hex chars / 32 bytes) |
-| `GEODE_ENABLE_TDE` | `false` | Enable Transparent Data Encryption |
-| `GEODE_KMS_PROVIDER` | - | KMS provider: `local`, `vault`, `external`, `remote` |
-| `GEODE_MASTER_KEY` | - | Master encryption key (hex) |
+| `GEODE_ENABLE_TDE` | `false` | Enables the `tde.*` procedures; page and WAL encryption need only `GEODE_TDE_KEY` |
+| `GEODE_MASTER_KEY` | - | FLE master key. With `GEODE_MASTER_KEY_FORMAT` unset: at least 32 bytes, the first 32 used as raw bytes (a longer value warns; a shorter one refuses startup, SONNY-6422) |
+| `GEODE_MASTER_KEY_FORMAT` | - | How `GEODE_MASTER_KEY` is read: `hex` (64 hex characters), `base64` (32 bytes) or `raw` (exactly 32 bytes); a value that does not match refuses startup (SONNY-6430, docs/FIELD_LEVEL_ENCRYPTION.md) |
 
 ### Encryption - KMS Integration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `VAULT_ADDR` | - | HashiCorp Vault address |
-| `VAULT_TOKEN` | - | Vault authentication token |
-| `GEODE_VAULT_KEY_PATH` | - | Vault secret path for encryption keys |
+There is none. The server reads none of `GEODE_KMS_PROVIDER`,
+`GEODE_VAULT_KEY_PATH`, `VAULT_ADDR` or `VAULT_TOKEN`: the page key is
+`GEODE_TDE_KEY` and the FLE master key `GEODE_MASTER_KEY`, both from the
+environment (corrected 2026-11-12, SONNY-6435;
+[KMS_PROVIDER_SYSTEM.md](KMS_PROVIDER_SYSTEM.md)).
 
 ### Security & Access Control
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GEODE_ENABLE_ABAC` | - | Enable attribute-based access control |
-| `FIPS_MODE` | - | Enable FIPS 140-2 compliant cryptography |
+| `GEODE_ENABLE_ABAC` | `true` | Has no effect: no request path enforces ABAC policies (authorization is GPS; SONNY-6376). Only reported in a startup log line. |
 
 ### Monitoring & Telemetry
 
@@ -186,17 +188,19 @@ the container for future use (GAP-0878).
 | `GEODE_METRICS_BIND` | `127.0.0.1` | Bind address for the metrics/liveness listener |
 | `GEODE_AUDIT_LOG_PATH` | - | Audit log file path |
 | `GEODE_TELEMETRY_PAGING` | - | Enable telemetry paging |
-| `GEODE_CDC_ENABLE` | - | Enable Change Data Capture |
+
+FIPS is a build (`-Dfips=true`, the `fips` image), not a variable: geode
+reads no `FIPS_MODE`. `GEODE_CDC_ENABLE=1` starts the CDC engine at startup,
+as `CALL cdc.enable()` does (SONNY-6561; nothing read it before, SONNY-6435).
 
 ### Backup & Recovery
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `S3_ENDPOINT` | - | S3-compatible backup endpoint |
-| `S3_ACCESS_KEY` | - | S3 access key |
-| `S3_SECRET_KEY` | - | S3 secret key |
-| `S3_BUCKET` | - | S3 bucket for backups |
-| `REDIS_URL` | - | Redis cache connection string |
+| `S3_ENDPOINT` | - | Read by the MinIO service only: geode reads no `S3_*` variable and has no object-storage backup (backups are local files, SONNY-6290) |
+| `S3_ACCESS_KEY` | - | Read by the MinIO service only: geode reads no `S3_*` variable and has no object-storage backup (backups are local files, SONNY-6290) |
+| `S3_SECRET_KEY` | - | Read by the MinIO service only: geode reads no `S3_*` variable and has no object-storage backup (backups are local files, SONNY-6290) |
+| `S3_BUCKET` | - | Read by the MinIO service only: geode reads no `S3_*` variable and has no object-storage backup (backups are local files, SONNY-6290) |
 
 ### GPU Configuration (GPU image only)
 
@@ -209,12 +213,6 @@ currently executes all algorithms on the CPU path (GAP-0878).
 | `CUDA_VISIBLE_DEVICES` | - | GPU device selection (container runtime) |
 | `NVIDIA_VISIBLE_DEVICES` | `all` | NVIDIA device visibility (container runtime) |
 | `NVIDIA_DRIVER_CAPABILITIES` | `compute,utility` | NVIDIA capabilities (container runtime) |
-
-### QUIC Performance
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `QUIC_GO_DISABLE_GSO` | - | Disable Generic Segmentation Offload |
 
 ## Command-Line Arguments
 
@@ -236,7 +234,6 @@ docker run geodedb/geode:latest \
 | `--cert <path>` | TLS certificate path |
 | `--key <path>` | TLS private key path |
 | `--log-level <level>` | Log level: `error`, `warn`, `info`, `debug` |
-| `--gpu-acceleration` | Enable GPU acceleration (GPU image only) |
 
 ## Encryption Configuration
 
@@ -253,77 +250,31 @@ docker run -d \
   --name geode-encrypted \
   -p 3141:3141/udp \
   -v geode-data:/data \
-  -e GEODE_ENABLE_TDE=true \
   -e GEODE_TDE_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
   geodedb/geode:latest
 ```
 
 ### KMS Provider Integration
 
-For enterprise deployments, integrate with HashiCorp Vault or other KMS providers:
-
-```yaml
-services:
-  geode:
-    image: geodedb/geode:latest
-    environment:
-      - GEODE_ENABLE_TDE=true
-      - GEODE_KMS_PROVIDER=vault
-      - VAULT_ADDR=http://vault:8200
-      - VAULT_TOKEN=${VAULT_TOKEN}
-      - GEODE_VAULT_KEY_PATH=geode/encryption
-    depends_on:
-      - vault
-
-  vault:
-    image: hashicorp/vault:latest
-    cap_add:
-      - IPC_LOCK
-    environment:
-      - VAULT_DEV_ROOT_TOKEN_ID=${VAULT_TOKEN}
-    ports:
-      - "8200:8200"
-```
-
-### Vault Setup for TDE
-
-```bash
-# Enable KV secrets engine
-vault secrets enable -path=geode kv-v2
-
-# Store master encryption key
-vault kv put geode/encryption \
-  key="$(openssl rand -hex 32)"
-
-# Configure access policy
-vault policy write geode-tde - <<EOF
-path "geode/*" {
-  capabilities = ["create", "read", "update", "delete", "list"]
-}
-EOF
-```
+There is no KMS provider integration (no Vault, AWS, Azure or GCP key
+source): give the key in `GEODE_TDE_KEY`, from your own secret store
+(corrected 2026-11-12, SONNY-6435).
 
 ### Field-Level Encryption (FLE)
 
-Geode supports field-level encryption for sensitive properties:
+Field-level encryption uses the master key in `GEODE_MASTER_KEY` (not the
+TDE key):
 
 ```bash
 docker run -d \
   --name geode \
-  -e GEODE_ENABLE_TDE=true \
-  -e GEODE_TDE_KEY=${TDE_KEY} \
+  -e GEODE_MASTER_KEY_FORMAT=hex \
+  -e GEODE_MASTER_KEY=$(openssl rand -hex 32) \
   geodedb/geode:latest
 ```
 
-Use GQL to define encrypted fields:
-
-```gql
-CREATE NODE TYPE Person (
-  name STRING,
-  ssn STRING ENCRYPTED,
-  email STRING ENCRYPTED
-)
-```
+Declare an encrypted field with `CALL geode.fle.configureField('Person',
+'ssn')` ([FIELD_LEVEL_ENCRYPTION.md](FIELD_LEVEL_ENCRYPTION.md)).
 
 ## Clustering Configuration
 
@@ -333,153 +284,13 @@ Geode supports distributed query execution across multiple shards with automatic
 
 ### 3-Node Cluster with Docker Compose
 
-```yaml
-version: '3.8'
-
-services:
-  geode-node1:
-    image: geodedb/geode:latest
-    container_name: geode-node1
-    hostname: geode-node1
-    ports:
-      - "3141:3141/udp"
-      - "9091:9091/tcp"
-    environment:
-      - LOG_LEVEL=info
-      - GEODE_CLUSTER_NAME=production
-      - GEODE_NODE_ID=1
-      - GEODE_MAX_SHARDS=16
-      - GEODE_DATA_DIR=/data
-      - GEODE_HEARTBEAT_INTERVAL_MS=10000
-      - GEODE_CONNECTION_POOL_SIZE=20
-    volumes:
-      - geode-node1-data:/data
-      - ./certs:/certs:ro
-    networks:
-      - geode-cluster
-    sysctls:
-      - net.core.rmem_max=7340032
-      - net.core.wmem_max=7340032
-
-  geode-node2:
-    image: geodedb/geode:latest
-    container_name: geode-node2
-    hostname: geode-node2
-    ports:
-      - "3142:3141/udp"
-      - "9092:9091/tcp"
-    environment:
-      - LOG_LEVEL=info
-      - GEODE_CLUSTER_NAME=production
-      - GEODE_NODE_ID=2
-      - GEODE_MAX_SHARDS=16
-      - GEODE_DATA_DIR=/data
-      - GEODE_HEARTBEAT_INTERVAL_MS=10000
-      - GEODE_CONNECTION_POOL_SIZE=20
-    volumes:
-      - geode-node2-data:/data
-      - ./certs:/certs:ro
-    networks:
-      - geode-cluster
-    sysctls:
-      - net.core.rmem_max=7340032
-      - net.core.wmem_max=7340032
-
-  geode-node3:
-    image: geodedb/geode:latest
-    container_name: geode-node3
-    hostname: geode-node3
-    ports:
-      - "3143:3141/udp"
-      - "9093:9091/tcp"
-    environment:
-      - LOG_LEVEL=info
-      - GEODE_CLUSTER_NAME=production
-      - GEODE_NODE_ID=3
-      - GEODE_MAX_SHARDS=16
-      - GEODE_DATA_DIR=/data
-      - GEODE_HEARTBEAT_INTERVAL_MS=10000
-      - GEODE_CONNECTION_POOL_SIZE=20
-    volumes:
-      - geode-node3-data:/data
-      - ./certs:/certs:ro
-    networks:
-      - geode-cluster
-    sysctls:
-      - net.core.rmem_max=7340032
-      - net.core.wmem_max=7340032
-
-volumes:
-  geode-node1-data:
-  geode-node2-data:
-  geode-node3-data:
-
-networks:
-  geode-cluster:
-    driver: bridge
-```
-
-### Cluster with Encryption
-
-```yaml
-version: '3.8'
-
-services:
-  geode-node1:
-    image: geodedb/geode:latest
-    container_name: geode-node1
-    environment:
-      - GEODE_CLUSTER_NAME=secure-cluster
-      - GEODE_NODE_ID=1
-      - GEODE_ENABLE_TDE=true
-      - GEODE_KMS_PROVIDER=vault
-      - VAULT_ADDR=http://vault:8200
-      - VAULT_TOKEN=${VAULT_TOKEN}
-      - GEODE_VAULT_KEY_PATH=geode/cluster/node1
-    volumes:
-      - geode-node1-data:/data
-    depends_on:
-      - vault
-    networks:
-      - geode-cluster
-
-  geode-node2:
-    image: geodedb/geode:latest
-    container_name: geode-node2
-    environment:
-      - GEODE_CLUSTER_NAME=secure-cluster
-      - GEODE_NODE_ID=2
-      - GEODE_ENABLE_TDE=true
-      - GEODE_KMS_PROVIDER=vault
-      - VAULT_ADDR=http://vault:8200
-      - VAULT_TOKEN=${VAULT_TOKEN}
-      - GEODE_VAULT_KEY_PATH=geode/cluster/node2
-    volumes:
-      - geode-node2-data:/data
-    depends_on:
-      - vault
-    networks:
-      - geode-cluster
-
-  vault:
-    image: hashicorp/vault:latest
-    cap_add:
-      - IPC_LOCK
-    environment:
-      - VAULT_DEV_ROOT_TOKEN_ID=${VAULT_TOKEN}
-    ports:
-      - "8200:8200"
-    networks:
-      - geode-cluster
-
-volumes:
-  geode-node1-data:
-  geode-node2-data:
-
-networks:
-  geode-cluster:
-    driver: bridge
-```
+No validated Docker Compose cluster ships with this release. A cluster is
+configured with the variables of "Clustering & Distribution" above and the
+cluster TLS certificate (`src/server/cluster_bootstrap.zig`); the netns
+cluster tests (`tests/cluster/`) are the tested setup.
+`docker-compose.distributed.yml` runs three standalone nodes. Encrypt each
+node with its own `GEODE_TDE_KEY`; there is no Vault-backed key (corrected
+2026-11-12, SONNY-6435).
 
 ### Distributed Query Performance
 
@@ -568,6 +379,21 @@ Preferred resolution, in order:
    accepted, the CLI prints a loud `WARNING: TLS certificate verification
    DISABLED` banner. Never do this in production.
 
+`geode query`, `geode shell` and the REPL verify the server against a
+`--ca-cert` bundle whenever one is given, and refuse to connect if it
+cannot be loaded (SONNY-6448; before, they ignored `--ca-cert` unless
+`--client-cert`/`--client-key` were also given). With no `--ca-cert`, no
+client certificate and no insecure flag they follow the `geode auth`
+rule (SONNY-6453): a release build, or any build with
+`GEODE_ENV=production`, refuses to connect (`SECURITY: refusing to connect
+without TLS certificate verification`) unless `GEODE_ALLOW_INSECURE_TLS=1`
+is set; a Debug build outside `GEODE_ENV=production` connects without
+verification and prints `WARNING: TLS server certificate NOT verified (no
+--ca-cert given)` once on stderr. `geode backup` / `restore` and the
+`geode auth` login path refuse the same way up front instead of failing
+the handshake. Pass `--ca-cert` inside the container (the release image
+is a release build).
+
 A Debug build (the default of `zig build`) is not gated unless
 `GEODE_ENV=production` is set. This is why `.gitlab-ci.yml` deliberately
 builds Debug for the GQL compliance job — its test runner connects to
@@ -603,7 +429,6 @@ services:
       - "3141:3141/udp"
       - "9091:9091/tcp"
     environment:
-      - LOG_LEVEL=info
       - GEODE_DATA_DIR=/data
     volumes:
       - geode-data:/data
@@ -617,6 +442,8 @@ services:
       - "/certs/server.crt"
       - "--key"
       - "/certs/server.key"
+      - "--log-level"
+      - "info"
     sysctls:
       - net.core.rmem_max=7340032
       - net.core.wmem_max=7340032
@@ -646,8 +473,6 @@ services:
       - "3141:3141/udp"
       - "9091:9091/tcp"
     environment:
-      - LOG_LEVEL=info
-      - GPU_ENABLED=true
       - CUDA_VISIBLE_DEVICES=0
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
@@ -659,7 +484,6 @@ services:
       - "/data"
       - "--listen"
       - "0.0.0.0:3141"
-      - "--gpu-acceleration"
     deploy:
       resources:
         reservations:
@@ -684,52 +508,14 @@ services:
       - "3141:3141/udp"
       - "9091:9091/tcp"
     environment:
-      - LOG_LEVEL=info
-      - GEODE_ENABLE_TDE=true
-      - GEODE_KMS_PROVIDER=vault
-      - VAULT_ADDR=http://vault:8200
-      - VAULT_TOKEN=${VAULT_TOKEN}
-      - GEODE_VAULT_KEY_PATH=geode/encryption
-      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
-      - S3_ENDPOINT=http://minio:9000
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
-      - S3_SECRET_KEY=${S3_SECRET_KEY}
-      - S3_BUCKET=geode-backups
+      # Page and WAL key; geode reads no VAULT_*, REDIS_* or S3_* variable
+      # (SONNY-6435).
+      - GEODE_TDE_KEY=${GEODE_TDE_KEY}
     volumes:
       - geode-data:/data
       - geode-logs:/var/log/geode
       - ./certs:/certs:ro
-    depends_on:
-      - vault
-      - redis
-      - minio
-
-  vault:
-    image: hashicorp/vault:latest
-    cap_add:
-      - IPC_LOCK
-    environment:
-      - VAULT_DEV_ROOT_TOKEN_ID=${VAULT_TOKEN}
-    ports:
-      - "8200:8200"
-
-  redis:
-    image: redis:alpine
-    command: redis-server --requirepass ${REDIS_PASSWORD}
-    ports:
-      - "6379:6379"
-
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      - MINIO_ROOT_USER=${S3_ACCESS_KEY}
-      - MINIO_ROOT_PASSWORD=${S3_SECRET_KEY}
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - minio-data:/data
+    command: ["--data-dir", "/data", "--listen", "0.0.0.0:3141", "--cert", "/certs/server.crt", "--key", "/certs/server.key", "--log-level", "info"]
 
   prometheus:
     image: prom/prometheus:latest
@@ -748,16 +534,15 @@ services:
 volumes:
   geode-data:
   geode-logs:
-  minio-data:
 ```
 
 ## Security Considerations
 
 1. **TLS Certificates**: Always mount certificates read-only (`:ro`)
 2. **Non-root User**: Container runs as user `geode` (UID 10000)
-3. **Secret Management**: Use Docker secrets or Vault for sensitive values
+3. **Secret Management**: Pass `GEODE_TDE_KEY`, `GEODE_MASTER_KEY` and passwords from Docker secrets or your secret store; geode itself reads no secret store
 4. **Network Isolation**: Use Docker networks to isolate database traffic
-5. **FIPS Mode**: Set `FIPS_MODE=enabled` for FIPS 140-2 compliant cryptography
+5. **FIPS Mode**: Use the FIPS build (`-Dfips=true`, the `fips` image); there is no `FIPS_MODE` switch
 6. **Encryption at Rest**: Enable TDE for data protection
 7. **Key Rotation**: Use KMS providers for automated key rotation
 
@@ -837,8 +622,7 @@ echo -n "$GEODE_TDE_KEY" | wc -c  # Should output 64
 
 1. Increase UDP buffer sizes (see QUIC Performance Tuning)
 2. Check memory limits: `docker stats geode`
-3. Enable debug logging: `-e LOG_LEVEL=debug`
-4. For clusters, verify `GEODE_CONNECTION_POOL_SIZE` is adequate
+3. Enable debug logging: `--log-level debug`
 
 ## Additional Resources
 

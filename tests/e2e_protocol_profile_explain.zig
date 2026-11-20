@@ -1,11 +1,13 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
 fn runQuery(allocator: std.mem.Allocator, addr: []const u8, query: []const u8) ![]u8 {
     var child = std.process.Child.init(
         &.{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "query",
             query,
             "--server",
@@ -36,6 +38,8 @@ fn contains(hay: []const u8, needle: []const u8) bool {
 }
 
 test "protocol: EXPLAIN emits explain payload" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("EXPLAIN emits explain payload");
     errdefer util.testFail();
 
@@ -51,7 +55,7 @@ test "protocol: EXPLAIN emits explain payload" {
     defer allocator.free(addr);
 
     util.progress("Starting server on port {d}...", .{port});
-    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, util.TestEnv.standard()) catch |err| {
+    var server = util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr }, util.TestEnv.standard()) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
         util.testSkip();
         return;
@@ -74,6 +78,8 @@ test "protocol: EXPLAIN emits explain payload" {
 }
 
 test "protocol: PROFILE emits profile payload" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("PROFILE emits profile payload");
     errdefer util.testFail();
 
@@ -89,7 +95,7 @@ test "protocol: PROFILE emits profile payload" {
     defer allocator.free(addr);
 
     util.progress("Starting server on port {d}...", .{port});
-    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, util.TestEnv.standard()) catch |err| {
+    var server = util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr }, util.TestEnv.standard()) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
         util.testSkip();
         return;

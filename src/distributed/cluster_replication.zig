@@ -26,8 +26,12 @@
 
 const std = @import("std");
 const graph_store = @import("../graph_store.zig");
+const property_value_codec = @import("../property_value_codec.zig");
 const PropertyValue = graph_store.PropertyValue;
 const GraphStore = graph_store.GraphStore;
+const logging = @import("logging");
+const log = logging.scoped("cluster_replication");
+const Attr = logging.Attr;
 
 /// 4-byte magic prefix identifying a node-create payload in GraphMutation.data.
 /// (Legacy/MVP `_raft_data` payloads have no magic and take the fallback path.)
@@ -57,8 +61,10 @@ pub const MAGIC = [4]u8{ 'G', 'N', 'C', '1' };
 //   * `.upsert` appends current properties after GMRG on-match-set or GUPD
 //     set/remove, matching the executor's SET hook. It must not tombstone the
 //     id: the pinned engine's tombstones are permanent, so delete+reindex
-//     would hide the node. The documented stale-posting residual remains
-//     identical on leader and follower (see property_mutation.zig).
+//     would hide the node. Text the entry took away (a replaced or removed
+//     string) queues the covering indexes for a rebuild at the end of the
+//     entry, as the executor does at a statement's end (SONNY-6433,
+//     `FtsApplyTextHooks`).
 //   * `.delete` ↔ executor `.delete` — fired BEFORE the store node delete
 //     (mirroring crud_operations.zig:4161) so labels are still resolvable.
 // Edges carry no FTS content (the executor maintains FTS only on node paths),
@@ -95,7 +101,57 @@ inline fn fireFtsApplyHook(store: *GraphStore, graph: []const u8, node_id: u64, 
     if (g_fts_apply_hook) |hook| hook(store, graph, node_id, op);
 }
 
+// CANARY: REQ=REQ-SONNY-6433-FOLLOWER-FTS-REBUILD; FEATURE="DistributedCluster"; ASPECT=ApplyQueuesRemovedText; STATUS=TESTED; TEST=tests/test_sonny6433_follower_fts_rebuild.zig; OWNER=distributed; UPDATED=2026-11-12
+/// SONNY-6433: text a node lost in an applied entry. The fts engine cannot
+/// take words out of a document, so the executor queues each covering
+/// full-text index for a rebuild when a SET replaces a non-empty string or a
+/// REMOVE drops one (`fts_index_ops.queueRebuildForRemovedText`) and rebuilds
+/// them at the statement's end. The apply functions below report the same
+/// losses through `FtsApplyTextHooks.removed` (after the write; the
+/// property's key) and end each applied entry with `FtsApplyTextHooks.flush`,
+/// so a follower drops the old words as the leader does (it appended the
+/// new text and kept the old). Both run on the apply thread, a follower's
+/// only writer (every write on a follower is refused).
+pub const FtsApplyTextHooks = struct {
+    removed: *const fn (store: *GraphStore, graph: []const u8, node_id: u64, key: []const u8) void,
+    flush: *const fn (store: *GraphStore) void,
+};
+
+var g_fts_apply_text_hooks: ?FtsApplyTextHooks = null;
+
+/// Install (or clear with null) the hooks; `fts_index_ops.registerFtsApplyHook`.
+pub fn setFtsApplyTextHooks(hooks: ?FtsApplyTextHooks) void {
+    g_fts_apply_text_hooks = hooks;
+}
+
+inline fn fireFtsRemovedText(store: *GraphStore, graph: []const u8, node_id: u64, key: []const u8) void {
+    if (g_fts_apply_text_hooks) |h| h.removed(store, graph, node_id, key);
+}
+
+inline fn fireFtsFlush(store: *GraphStore) void {
+    if (g_fts_apply_text_hooks) |h| h.flush(store);
+}
+
+/// Does setting (or, `new` null, removing) `key` take a non-empty string
+/// away from the node? As `property_mutation.replacesText`.
+fn losesText(store: *GraphStore, node_id: u64, key: []const u8, new: ?PropertyValue) bool {
+    if (g_fts_apply_text_hooks == null) return false;
+    // SONNY-6612 (1): an old value that cannot be read may be indexed text.
+    const old = (store.getNodePropertyOrError(node_id, key) catch return true) orelse return false;
+    if (old != .String or old.String.len == 0) return false;
+    const n = new orelse return true;
+    return n != .String or !std.mem.eql(u8, n.String, old.String);
+}
+
 pub const Prop = struct { key: []const u8, value: PropertyValue };
+
+/// Property value tag of a DECIMAL (i128 coefficient little-endian, u8 scale).
+/// Tags 0-4 are null/int/float/bool/string (SONNY-6718 added 5).
+const TAG_DECIMAL: u8 = 5;
+/// Property value tag of an extended value (list, date/time, ...): the
+/// value's property-store encoding (`property_value_codec.encodePropertyValue`),
+/// u32 length prefixed. SONNY-6718.
+const TAG_ENCODED: u8 = 6;
 
 pub const CodecError = error{ UnsupportedPropertyType, CorruptPayload };
 
@@ -134,35 +190,7 @@ pub fn serializeNodeCreate(
     try appendStr16(&list, allocator, graph);
     try appendU16(&list, allocator, labels.len);
     for (labels) |l| try appendStr16(&list, allocator, l);
-    try appendU16(&list, allocator, props.len);
-    for (props) |p| {
-        try appendStr16(&list, allocator, p.key);
-        switch (p.value) {
-            .Null => try list.append(allocator, 0),
-            .Int => |i| {
-                try list.append(allocator, 1);
-                var b: [8]u8 = undefined;
-                std.mem.writeInt(i64, &b, i, .little);
-                try list.appendSlice(allocator, &b);
-            },
-            .Float => |f| {
-                try list.append(allocator, 2);
-                var b: [8]u8 = undefined;
-                std.mem.writeInt(u64, &b, @bitCast(f), .little);
-                try list.appendSlice(allocator, &b);
-            },
-            .Bool => |bo| {
-                try list.append(allocator, 3);
-                try list.append(allocator, if (bo) 1 else 0);
-            },
-            .String => |s| {
-                try list.append(allocator, 4);
-                try appendU32(&list, allocator, s.len);
-                try list.appendSlice(allocator, s);
-            },
-            else => return CodecError.UnsupportedPropertyType,
-        }
-    }
+    try appendProps(&list, allocator, props);
     return list.toOwnedSlice(allocator);
 }
 
@@ -192,6 +220,12 @@ const Reader = struct {
         self.pos += 8;
         return v;
     }
+    fn readI128(self: *Reader) !i128 {
+        if (self.pos + 16 > self.data.len) return CodecError.CorruptPayload;
+        const v = std.mem.readInt(i128, self.data[self.pos..][0..16], .little);
+        self.pos += 16;
+        return v;
+    }
     fn readU64(self: *Reader) !u64 {
         if (self.pos + 8 > self.data.len) return CodecError.CorruptPayload;
         const v = std.mem.readInt(u64, self.data[self.pos..][0..8], .little);
@@ -218,6 +252,13 @@ const Reader = struct {
         self.pos += n;
         return s;
     }
+    // CANARY: REQ=REQ-SONNY-6651-EMPTY-GRAPH-PAYLOAD; FEATURE="DistributedCluster"; ASPECT=DecodeEmptyGraphAsDefault; STATUS=TESTED; TEST=tests/test_sonny6651_empty_graph_payload.zig; OWNER=distributed; UPDATED=2026-11-16
+    /// SONNY-6651: a payload's graph name; an empty one is the default
+    /// graph, as raft_apply maps an entry's empty graph.
+    fn graphName(self: *Reader) ![]const u8 {
+        const g = try self.str16();
+        return if (g.len > 0) g else graph_store.DEFAULT_GRAPH_NAME;
+    }
 };
 
 /// Deterministically apply a node-create payload to `store`, using `node_id`
@@ -233,9 +274,11 @@ const Reader = struct {
 pub fn applyNodeCreatePayload(allocator: std.mem.Allocator, store: *GraphStore, data: []const u8, node_id: u64) !u64 {
     if (!isNodeCreatePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC.len };
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
 
-    const graph = try r.str16();
-    store.createGraph(graph) catch |err| switch (err) {
+    const graph = try r.graphName();
+    store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
     };
@@ -256,17 +299,8 @@ pub fn applyNodeCreatePayload(allocator: std.mem.Allocator, store: *GraphStore, 
     const nprops = try r.readU16();
     var pi: usize = 0;
     while (pi < nprops) : (pi += 1) {
-        const key = try r.str16();
-        const tag = try r.byte();
-        const val: PropertyValue = switch (tag) {
-            0 => .Null,
-            1 => .{ .Int = try r.readI64() },
-            2 => .{ .Float = @bitCast(try r.readU64()) },
-            3 => .{ .Bool = (try r.byte()) != 0 },
-            4 => .{ .String = try r.str32() },
-            else => return CodecError.CorruptPayload,
-        };
-        try store.setNodeProperty(node_id, key, val);
+        const p = try readProp(&r, scratch.allocator());
+        try store.setNodeProperty(node_id, p.key, p.value);
     }
 
     // FTS symmetry: maintain covering fulltext indexes exactly like the
@@ -393,7 +427,22 @@ fn appendProps(list: *std.ArrayList(u8), a: std.mem.Allocator, props: []const Pr
                 try appendU32(list, a, s.len);
                 try list.appendSlice(a, s);
             },
-            else => return CodecError.UnsupportedPropertyType,
+            // SONNY-6718: a DECIMAL travels as its coefficient and scale, so a
+            // follower stores exactly the value the leader evaluated.
+            .Decimal => |d| {
+                try list.append(a, TAG_DECIMAL);
+                var b: [16]u8 = undefined;
+                std.mem.writeInt(i128, &b, d.coeff, .little);
+                try list.appendSlice(a, &b);
+                try list.append(a, d.scale);
+            },
+            .ExtValue => {
+                const enc = property_value_codec.encodePropertyValue(a, p.value) catch return CodecError.UnsupportedPropertyType;
+                defer a.free(enc);
+                try list.append(a, TAG_ENCODED);
+                try appendU32(list, a, enc.len);
+                try list.appendSlice(a, enc);
+            },
         }
     }
 }
@@ -462,7 +511,9 @@ pub fn serializeMultiCreate(
     return list.toOwnedSlice(allocator);
 }
 
-fn readProp(r: *Reader) !Prop {
+/// `scratch` owns what an extended value decodes into (the caller frees it
+/// after the value is stored: the store deep-copies).
+fn readProp(r: *Reader, scratch: std.mem.Allocator) !Prop {
     const key = try r.str16();
     const tag = try r.byte();
     const val: PropertyValue = switch (tag) {
@@ -471,6 +522,8 @@ fn readProp(r: *Reader) !Prop {
         2 => .{ .Float = @bitCast(try r.readU64()) },
         3 => .{ .Bool = (try r.byte()) != 0 },
         4 => .{ .String = try r.str32() },
+        TAG_DECIMAL => .{ .Decimal = .{ .coeff = try r.readI128(), .scale = try r.byte() } },
+        TAG_ENCODED => property_value_codec.decodePropertyValue(scratch, try r.str32()) catch return CodecError.CorruptPayload,
         else => return CodecError.CorruptPayload,
     };
     return .{ .key = key, .value = val };
@@ -512,9 +565,11 @@ fn applyMultiCreatePayloadAt(
 ) !usize {
     if (!isMultiCreatePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC2.len };
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
 
-    const graph = try r.str16();
-    store.createGraph(graph) catch |err| switch (err) {
+    const graph = try r.graphName();
+    store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
     };
@@ -543,7 +598,7 @@ fn applyMultiCreatePayloadAt(
         const nprops = try r.readU16();
         var pi: usize = 0;
         while (pi < nprops) : (pi += 1) {
-            const p = try readProp(&r);
+            const p = try readProp(&r, scratch.allocator());
             try store.setNodeProperty(node_id, p.key, p.value);
         }
 
@@ -569,16 +624,26 @@ fn applyMultiCreatePayloadAt(
         const to_id = resolveEndpointAt(to_ep, lane_base, node_count) orelse return CodecError.CorruptPayload;
         const edge_id = lane_base + MAX_MULTI_NODES + @as(u64, @intCast(j));
 
+        // SONNY-6636 (b): an endpoint that is not there (a later entry
+        // deleted it, and a restarted node replays this one) skips the edge,
+        // not the rest of the entry: a GBAT batch's later writes must still
+        // land, or the store keeps what an earlier replayed entry put back.
+        // Every replica applies an entry onto the same state, so all of them
+        // skip it or none does.
+        var created = true;
         store.createEdgeWithId(edge_id, from_id, to_id, edge_type, graph) catch |err| switch (err) {
             error.EdgeAlreadyExists => {}, // idempotent re-apply
+            error.NodeSlotMappingMissing, error.NodeNotFound => created = false,
             else => return err,
         };
 
         var pi: usize = 0;
         while (pi < nprops) : (pi += 1) {
-            const p = try readProp(&r);
-            // Idempotent: setEdgeProperty no-ops if the edge is absent and
-            // overwrites in place otherwise (repairs a partial first-apply).
+            const p = try readProp(&r, scratch.allocator());
+            if (!created) continue;
+            // Idempotent: overwrites in place (repairs a partial first-apply).
+            // The edge exists (created or already there, above); a missing
+            // one is error.EdgeNotFound (SONNY-6302), not a no-op.
             try store.setEdgeProperty(edge_id, p.key, p.value);
         }
     }
@@ -673,13 +738,22 @@ pub fn applyDeletePayload(allocator: std.mem.Allocator, store: *GraphStore, data
     if (!isDeletePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC_DEL.len };
 
-    const graph = try r.str16();
-    store.createGraph(graph) catch |err| switch (err) {
+    const graph = try r.graphName();
+    store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
     };
 
     var removed: usize = 0;
+    // CANARY: REQ=REQ-SONNY-6302-WRITE-ERRORS; FEATURE="DistributedCluster"; ASPECT=ApplyDeleteFailure; STATUS=TESTED; TEST=tests/test_sonny6302_edge_write_and_delete_errors.zig; OWNER=distributed; UPDATED=2026-11-11
+    // SONNY-6302: a delete that fails is logged, the rest of the payload is
+    // still applied (the deletes are independent, and stopping would leave
+    // more of this node behind the leader), and the first error is returned
+    // so the raft apply loop logs the entry as not applied and counts it
+    // (`stats.apply_errors`). Apply stays idempotent, so a re-apply finishes
+    // it. (The void deletes only logged a failure, and the entry counted the
+    // id as removed and reported success.)
+    var first_err: ?anyerror = null;
 
     // Edges FIRST — a node-delete that precedes its incident-edge deletes in the
     // payload must not orphan those edges; deleting edges up front avoids it.
@@ -688,9 +762,16 @@ pub fn applyDeletePayload(allocator: std.mem.Allocator, store: *GraphStore, data
     var ei: usize = 0;
     while (ei < edge_count) : (ei += 1) {
         const edge_id = try r.readU64();
-        if (store.getEdgePtr(edge_id) != null) {
-            store.deleteEdge(edge_id);
-            removed += 1;
+        if ((try store.getEdgePtrHydratedChecked(edge_id)) != null) {
+            if (store.deleteEdgeChecked(edge_id)) |_| {
+                removed += 1;
+            } else |err| {
+                log.err("replicated delete: edge delete failed; the edge remains", &.{
+                    Attr.uint("edge_id", edge_id),
+                    Attr.string("error", @errorName(err)),
+                });
+                if (first_err == null) first_err = err;
+            }
         }
     }
 
@@ -704,11 +785,19 @@ pub fn applyDeletePayload(allocator: std.mem.Allocator, store: *GraphStore, data
             // crud_operations.zig:4161) so the wrapper can still resolve the
             // node's labels to find its covering indexes.
             fireFtsApplyHook(store, graph, node_id, .delete);
-            store.deleteNode(node_id);
-            removed += 1;
+            if (store.deleteNodeChecked(node_id)) |_| {
+                removed += 1;
+            } else |err| {
+                log.err("replicated delete: node delete failed; the node remains", &.{
+                    Attr.uint("node_id", node_id),
+                    Attr.string("error", @errorName(err)),
+                });
+                if (first_err == null) first_err = err;
+            }
         }
     }
 
+    if (first_err) |err| return err;
     return removed;
 }
 
@@ -768,12 +857,13 @@ pub fn serializeMerge(
 /// writes are clean no-ops. Returns the node id. Naturally idempotent across
 /// restart re-apply (set-by-id overwrites in place).
 pub fn applyMergePayload(allocator: std.mem.Allocator, store: *GraphStore, data: []const u8) !u64 {
-    _ = allocator;
     if (!isMergePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC_MERGE.len };
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
 
-    const graph = try r.str16();
-    store.createGraph(graph) catch |err| switch (err) {
+    const graph = try r.graphName();
+    store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
     };
@@ -783,10 +873,15 @@ pub fn applyMergePayload(allocator: std.mem.Allocator, store: *GraphStore, data:
     const nprops = try r.readU16();
     var pi: usize = 0;
     while (pi < nprops) : (pi += 1) {
-        const p = try readProp(&r);
-        // Idempotent: setNodeProperty no-ops if the node is absent and overwrites
-        // in place otherwise.
-        try store.setNodeProperty(node_id, p.key, p.value);
+        const p = try readProp(&r, scratch.allocator());
+        const lost = losesText(store, node_id, p.key, p.value); // SONNY-6433
+        // Idempotent: overwrites in place. SONNY-6636 (b): a node that is not
+        // there (deleted by a later entry, this one replayed) is skipped.
+        store.setNodeProperty(node_id, p.key, p.value) catch |err| switch (err) {
+            error.NodeNotFound => continue,
+            else => return err,
+        };
+        if (lost) fireFtsRemovedText(store, graph, node_id, p.key);
     }
 
     // FTS symmetry: ON MATCH SET mutates node content — maintain covering
@@ -795,6 +890,7 @@ pub fn applyMergePayload(allocator: std.mem.Allocator, store: *GraphStore, data:
     // Intentionally unconditional on re-apply: set-overwrite re-firing matches
     // the executor's repeated-SET semantics — symmetric with the leader.
     fireFtsApplyHook(store, graph, node_id, .upsert);
+    fireFtsFlush(store); // SONNY-6433
 
     return node_id;
 }
@@ -888,12 +984,13 @@ pub fn serializeUpdate(
 /// no-ops; a label add/remove on an absent node is swallowed). Returns the number
 /// of node-update records applied.
 pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data: []const u8) !usize {
-    _ = allocator;
     if (!isUpdatePayload(data)) return CodecError.CorruptPayload;
     var r = Reader{ .data = data, .pos = MAGIC_UPDATE.len };
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
 
-    const graph = try r.str16();
-    store.createGraph(graph) catch |err| switch (err) {
+    const graph = try r.graphName();
+    store.ensureGraphForReplicatedWrite(graph) catch |err| switch (err) {
         error.GraphAlreadyExists => {},
         else => return err,
     };
@@ -909,10 +1006,16 @@ pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data
         const nset = try r.readU16();
         var si: usize = 0;
         while (si < nset) : (si += 1) {
-            const p = try readProp(&r);
-            // Idempotent: setNodeProperty no-ops if the node is absent and
-            // overwrites in place otherwise.
-            try store.setNodeProperty(node_id, p.key, p.value);
+            const p = try readProp(&r, scratch.allocator());
+            const lost = losesText(store, node_id, p.key, p.value); // SONNY-6433
+            // Idempotent: overwrites in place. SONNY-6636 (b): a node that is
+            // not there (deleted by a later entry, this one replayed) is
+            // skipped, and the entry goes on to the next node.
+            store.setNodeProperty(node_id, p.key, p.value) catch |err| switch (err) {
+                error.NodeNotFound => continue,
+                else => return err,
+            };
+            if (lost) fireFtsRemovedText(store, graph, node_id, p.key);
         }
 
         // remove_props
@@ -920,8 +1023,10 @@ pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data
         var ri: usize = 0;
         while (ri < nrem) : (ri += 1) {
             const key = try r.str16();
+            const lost = losesText(store, node_id, key, null); // SONNY-6433
             // removeNodeProperty no-ops on an absent node OR an absent key.
             store.removeNodeProperty(node_id, key);
+            if (lost) fireFtsRemovedText(store, graph, node_id, key);
         }
 
         // add_labels
@@ -954,6 +1059,9 @@ pub fn applyUpdatePayload(allocator: std.mem.Allocator, store: *GraphStore, data
         // matches the executor's repeated-SET semantics — symmetric.
         fireFtsApplyHook(store, graph, node_id, .upsert);
     }
+    // SONNY-6433: rebuild the indexes this entry queued, as the executor
+    // does at a statement's end.
+    fireFtsFlush(store);
 
     return update_count;
 }
@@ -1018,6 +1126,13 @@ pub const IDEMPOTENCY_DEDUP_CAP: usize = 64 * 1024;
 /// reaches the same table and the same eviction state.
 ///
 /// The fixer owns the exact shape; the apply functions consult & populate it.
+///
+/// CANARY: REQ=REQ-SONNY-6667-DEDUP-OWNER-LOCK; FEATURE="DistributedCluster"; ASPECT=DedupSerialised; STATUS=TESTED; TEST=tests/test_sonny6667_dedup_restore_race.zig; OWNER=distributed; UPDATED=2026-11-16
+/// SONNY-6667: `mutex` serialises every use of the table: apply (`record`,
+/// `lookup`, under the Raft `inner_mutex`), a snapshot restore
+/// (`replaceFrom`, on the restore thread without `inner_mutex`), and a
+/// snapshot copy (`serialize`, on the snapshot thread). A leaf lock: held
+/// only inside these methods, never while taking another lock.
 pub const IdempotencyDedup = struct {
     allocator: std.mem.Allocator,
     /// key (owned copy) -> original raft index where the key was first applied.
@@ -1029,6 +1144,7 @@ pub const IdempotencyDedup = struct {
     /// Front cursor into `order` (the next key to evict). Entries before it have
     /// already been evicted (their slots are stale/null-equivalent).
     head: usize = 0,
+    mutex: std.Io.Mutex = .init,
 
     pub fn init(allocator: std.mem.Allocator) IdempotencyDedup {
         return .{
@@ -1038,6 +1154,17 @@ pub const IdempotencyDedup = struct {
         };
     }
 
+    fn lock(self: *const IdempotencyDedup) void {
+        @constCast(&self.mutex).lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    fn unlock(self: *const IdempotencyDedup) void {
+        @constCast(&self.mutex).unlock(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    /// Frees the table. Its owner calls it once nothing else can use it
+    /// (SONNY-6667: after the Raft node's restore and snapshot threads
+    /// were joined, `RaftNode.quiesce`).
     pub fn deinit(self: *IdempotencyDedup) void {
         var it = self.map.keyIterator();
         while (it.next()) |k| self.allocator.free(k.*);
@@ -1047,6 +1174,8 @@ pub const IdempotencyDedup = struct {
 
     /// The original raft index a key was first applied at, or null if unseen.
     pub fn lookup(self: *const IdempotencyDedup, key: []const u8) ?u64 {
+        self.lock();
+        defer self.unlock();
         return self.map.get(key);
     }
 
@@ -1055,6 +1184,12 @@ pub const IdempotencyDedup = struct {
     /// FIRST recorded index is authoritative and stable across replays. Evicts
     /// the oldest-inserted key once the cap is exceeded (deterministic LRU).
     pub fn record(self: *IdempotencyDedup, key: []const u8, raft_index: u64) !void {
+        self.lock();
+        defer self.unlock();
+        return self.recordLocked(key, raft_index);
+    }
+
+    fn recordLocked(self: *IdempotencyDedup, key: []const u8, raft_index: u64) !void {
         if (self.map.contains(key)) return; // first index wins; replay is a no-op
         const owned = try self.allocator.dupe(u8, key);
         errdefer self.allocator.free(owned);
@@ -1078,6 +1213,47 @@ pub const IdempotencyDedup = struct {
             self.order.shrinkRetainingCapacity(live.len);
             self.head = 0;
         }
+    }
+
+    // CANARY: REQ=REQ-SONNY-6633-DEDUP-IN-SNAPSHOT; FEATURE="DistributedCluster"; ASPECT=DedupSerialized; STATUS=TESTED; TEST=tests/test_sonny6633_snapshot_wire.zig; OWNER=distributed; UPDATED=2026-11-15
+    /// SONNY-6633 (6): append the live keys, oldest first, to `out`:
+    /// u32 count, then per key u16 length, the key, u64 raft index. A Raft
+    /// snapshot carries it: the table is otherwise rebuilt by replaying the
+    /// committed log, and a snapshot replaces the entries it covers.
+    pub fn serialize(self: *const IdempotencyDedup, out: *std.ArrayList(u8), allocator: std.mem.Allocator) !void {
+        self.lock();
+        defer self.unlock();
+        try appendU32(out, allocator, self.map.count());
+        for (self.order.items[self.head..]) |key| {
+            const index = self.map.get(key) orelse continue;
+            try appendStr16(out, allocator, key);
+            try appendU64(out, allocator, index);
+        }
+    }
+
+    /// SONNY-6633 (6): replace the table with one `serialize` wrote, in the
+    /// same order (so later evictions match the replicas'). `data` must be
+    /// exactly that encoding.
+    pub fn replaceFrom(self: *IdempotencyDedup, data: []const u8) !void {
+        var fresh = IdempotencyDedup.init(self.allocator);
+        errdefer fresh.deinit();
+        var r = Reader{ .data = data, .pos = 0 };
+        const count = try r.readU32();
+        for (0..count) |_| {
+            const key = try r.str16();
+            try fresh.record(key, try r.readU64());
+        }
+        if (r.pos != data.len) return CodecError.CorruptPayload;
+        // SONNY-6667: swapped in under the lock; the old table is freed
+        // outside it (`fresh` takes it).
+        {
+            self.lock();
+            defer self.unlock();
+            std.mem.swap(std.StringHashMap(u64), &self.map, &fresh.map);
+            std.mem.swap(std.ArrayList([]const u8), &self.order, &fresh.order);
+            std.mem.swap(usize, &self.head, &fresh.head);
+        }
+        fresh.deinit();
     }
 };
 
@@ -1273,6 +1449,11 @@ fn skipProps(r: *Reader) bool {
             1, 2 => _ = r.readU64() catch return false,
             3 => _ = r.byte() catch return false,
             4 => _ = r.str32() catch return false,
+            TAG_DECIMAL => {
+                _ = r.readI128() catch return false;
+                _ = r.byte() catch return false;
+            },
+            TAG_ENCODED => _ = r.str32() catch return false,
             else => return false,
         }
     }
@@ -1399,7 +1580,7 @@ fn parseBatch(allocator: std.mem.Allocator, data: []const u8) !ParsedBatch {
         const tag = try r.byte();
         if (tag > @intFromEnum(BatchMutation.merge)) return CodecError.CorruptPayload;
         const mutation: BatchMutation = @enumFromInt(tag);
-        const graph = try r.str16();
+        const graph = try r.graphName();
         const body = try r.str32();
         const ok = switch (mutation) {
             .create => isKeyedPayload(body) or isNodeCreatePayload(body) or isMultiCreatePayload(body),
@@ -1412,6 +1593,26 @@ fn parseBatch(allocator: std.mem.Allocator, data: []const u8) !ParsedBatch {
     }
     if (r.pos != data.len) return CodecError.CorruptPayload;
     return .{ .key = key, .entries = entries };
+}
+
+/// SONNY-6631: call `f(ctx, graph, payload)` for each entry of a batch: the
+/// graph it writes and its lone-entry payload (borrowing into `data`),
+/// without allocating: the Raft receive paths hydrate the graphs and intern
+/// the names before the apply. Stops at the first malformed entry
+/// (its apply refuses the batch); a version this build does not know is
+/// `UnsupportedBatchVersion`.
+pub fn forEachBatchGraph(data: []const u8, ctx: anytype, comptime f: fn (@TypeOf(ctx), []const u8, []const u8) void) !void {
+    if (!isBatchPayload(data)) return CodecError.CorruptPayload;
+    var r = Reader{ .data = data, .pos = MAGIC_BATCH.len };
+    if (try r.byte() != BATCH_VERSION) return BatchError.UnsupportedBatchVersion;
+    if (try r.byte() != 0) _ = try r.str16();
+    const count = try r.readU32();
+    if (count == 0 or count > MAX_BATCH_ENTRIES) return CodecError.CorruptPayload;
+    for (0..count) |_| {
+        _ = try r.byte();
+        const graph = try r.graphName();
+        f(ctx, graph, try r.str32());
+    }
 }
 
 /// The number of entries a batch carries, or an error when it is not one
@@ -1485,12 +1686,14 @@ pub const Effect = struct {
     /// Property keys and labels it sets or removes on existing nodes.
     written_keys: []const []const u8 = &.{},
     written_labels: []const []const u8 = &.{},
+    /// SONNY-6633 (4): relationship types the entry creates edges with.
+    edge_types: []const []const u8 = &.{},
 };
 
 fn readProps(allocator: std.mem.Allocator, r: *Reader) ![]const Prop {
     const n = try r.readU16();
     const props = try allocator.alloc(Prop, n);
-    for (props) |*p| p.* = try readProp(r);
+    for (props) |*p| p.* = try readProp(r, allocator);
     return props;
 }
 
@@ -1509,15 +1712,16 @@ pub fn effectOf(allocator: std.mem.Allocator, data: []const u8) !Effect {
     var ids = std.ArrayList(u64).empty;
     var keys = std.ArrayList([]const u8).empty;
     var labels = std.ArrayList([]const u8).empty;
+    var edge_types = std.ArrayList([]const u8).empty;
     if (isNodeCreatePayload(data)) {
         var r = Reader{ .data = data, .pos = MAGIC.len };
-        out.graph = try r.str16();
+        out.graph = try r.graphName();
         const created = try allocator.alloc(CreatedNode, 1);
         created[0] = .{ .labels = try readLabels(allocator, &r), .props = try readProps(allocator, &r) };
         out.created = created;
     } else if (isMultiCreatePayload(data)) {
         var r = Reader{ .data = data, .pos = MAGIC2.len };
-        out.graph = try r.str16();
+        out.graph = try r.graphName();
         const node_count = try r.readU16();
         const created = try allocator.alloc(CreatedNode, node_count);
         for (created) |*c| c.* = .{ .labels = try readLabels(allocator, &r), .props = try readProps(allocator, &r) };
@@ -1529,12 +1733,12 @@ pub fn effectOf(allocator: std.mem.Allocator, data: []const u8) !Effect {
             for ([_]Endpoint{ try readEndpoint(&r), try readEndpoint(&r) }) |ep| {
                 if (ep == .absolute_id) try ids.append(allocator, ep.absolute_id);
             }
-            _ = try r.str16();
+            try edge_types.append(allocator, try r.str16());
             _ = try readProps(allocator, &r);
         }
     } else if (isDeletePayload(data)) {
         var r = Reader{ .data = data, .pos = MAGIC_DEL.len };
-        out.graph = try r.str16();
+        out.graph = try r.graphName();
         const edge_count = try r.readU16();
         out.deletes_edges = edge_count > 0;
         var i: usize = 0;
@@ -1544,12 +1748,12 @@ pub fn effectOf(allocator: std.mem.Allocator, data: []const u8) !Effect {
         while (i < node_count) : (i += 1) try ids.append(allocator, try r.readU64());
     } else if (isMergePayload(data)) {
         var r = Reader{ .data = data, .pos = MAGIC_MERGE.len };
-        out.graph = try r.str16();
+        out.graph = try r.graphName();
         try ids.append(allocator, try r.readU64());
         for (try readProps(allocator, &r)) |p| try keys.append(allocator, p.key);
     } else if (isUpdatePayload(data)) {
         var r = Reader{ .data = data, .pos = MAGIC_UPDATE.len };
-        out.graph = try r.str16();
+        out.graph = try r.graphName();
         const count = try r.readU16();
         var i: usize = 0;
         while (i < count) : (i += 1) {
@@ -1563,7 +1767,64 @@ pub fn effectOf(allocator: std.mem.Allocator, data: []const u8) !Effect {
     out.ids = ids.items;
     out.written_keys = keys.items;
     out.written_labels = labels.items;
+    out.edge_types = edge_types.items;
     return out;
+}
+
+// ===========================================================================
+// SONNY-2726 — the writing session's tenant rides the replicated entry
+// ===========================================================================
+//
+// A replicated write is applied by the raft apply thread, which has no
+// request context, so every node and edge it created was tagged with the
+// default tenant on every node, and (since SONNY-2693's strict edge rule) a
+// tenant's replicated edges were hidden from it. The leader now wraps the
+// entry of a session whose tenant is not the default in a GTN1 envelope:
+//
+//   "GTN1" | str16 tenant | the unchanged inner payload (any graph-mutation
+//                           payload: GNC1/GNC2/GN1K/GN2K/GBAT/delete/merge/update)
+//
+// and the apply creates under that tenant. A default-tenant write is not
+// wrapped, so it is byte-identical to before, and entries already in the log
+// (no envelope) still apply as the default tenant. A node running a build
+// without this envelope logs and skips a GTN1 create (its unknown-magic arm)
+// and cannot decode a wrapped delete/merge/update: upgrade every node before
+// tenant-scoped sessions write in a cluster.
+//
+// CANARY: REQ=REQ-SONNY-2726-REPLICATED-TENANT; FEATURE="DistributedCluster"; ASPECT=TenantEnvelope; STATUS=TESTED; TEST=tests/test_sonny2726_replicated_tenant.zig; OWNER=distributed; UPDATED=2026-11-12
+
+/// 4-byte magic prefix of the tenant envelope.
+pub const MAGIC_TENANT = [4]u8{ 'G', 'T', 'N', '1' };
+
+/// True iff `data` is a GTN1 tenant envelope.
+pub fn isTenantPayload(data: []const u8) bool {
+    return data.len >= MAGIC_TENANT.len and std.mem.eql(u8, data[0..MAGIC_TENANT.len], &MAGIC_TENANT);
+}
+
+/// Wrap `inner` in a GTN1 envelope naming `tenant` (non-empty, at most
+/// 65535 bytes, else UnsupportedPropertyType). Caller owns the result.
+pub fn wrapWithTenant(allocator: std.mem.Allocator, tenant: []const u8, inner: []const u8) ![]u8 {
+    if (tenant.len == 0) return CodecError.UnsupportedPropertyType;
+    var list = std.ArrayList(u8).empty;
+    errdefer list.deinit(allocator);
+    try list.appendSlice(allocator, &MAGIC_TENANT);
+    try appendStr16(&list, allocator, tenant);
+    try list.appendSlice(allocator, inner);
+    return list.toOwnedSlice(allocator);
+}
+
+pub const TenantSplit = struct { tenant: []const u8, inner: []const u8 };
+
+/// Split a GTN1 envelope into its tenant and inner payload (both borrowed
+/// from `data`). An empty tenant or a nested envelope is CorruptPayload.
+pub fn splitTenant(data: []const u8) !TenantSplit {
+    if (!isTenantPayload(data)) return CodecError.CorruptPayload;
+    var r = Reader{ .data = data, .pos = MAGIC_TENANT.len };
+    const tenant = try r.str16();
+    if (tenant.len == 0) return CodecError.CorruptPayload;
+    const inner = data[r.pos..];
+    if (isTenantPayload(inner)) return CodecError.CorruptPayload;
+    return .{ .tenant = tenant, .inner = inner };
 }
 
 // ---------------------------------------------------------------------------
@@ -1593,9 +1854,9 @@ test "node-create payload round-trips through serialize -> apply" {
     try std.testing.expect(store.graphs.contains("g1"));
 
     // The node carries the replicated properties.
-    try std.testing.expectEqual(@as(i64, 42), (store.getNodeProperty(node_id, "v").?).Int);
-    try std.testing.expectEqualStrings("alice", (store.getNodeProperty(node_id, "name").?).String);
-    try std.testing.expectEqual(true, (store.getNodeProperty(node_id, "active").?).Bool);
+    try std.testing.expectEqual(@as(i64, 42), ((try store.getNodePropertyOrError(node_id, "v")).?).Int);
+    try std.testing.expectEqualStrings("alice", ((try store.getNodePropertyOrError(node_id, "name")).?).String);
+    try std.testing.expectEqual(true, ((try store.getNodePropertyOrError(node_id, "active")).?).Bool);
 }
 
 test "two committed entries get deterministic raft-index-derived ids on every node" {
@@ -1625,11 +1886,20 @@ test "two committed entries get deterministic raft-index-derived ids on every no
     try std.testing.expect(a1 != a0);
 }
 
-test "unsupported property type is rejected at serialize time" {
+test "SONNY-6718 an extended value (a list) round-trips through serialize -> apply" {
     const a = std.testing.allocator;
-    const labels = [_][]const u8{"N"};
-    const props = [_]Prop{.{ .key = "d", .value = .{ .Decimal = .{ .coeff = 1, .scale = 0 } } }};
-    try std.testing.expectError(CodecError.UnsupportedPropertyType, serializeNodeCreate(a, "g", &labels, &props));
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    const ExtValue = @import("../eval_extended.zig").ExtValue;
+    var items = [_]ExtValue{ .{ .Int = 1 }, .{ .Int = 2 }, .{ .Int = 3 } };
+    const props = [_]Prop{.{ .key = "l", .value = .{ .ExtValue = .{ .List = &items } } }};
+    const payload = try serializeNodeCreate(a, "g", &.{"N"}, &props);
+    defer a.free(payload);
+    const id = try applyNodeCreatePayload(a, &store, payload, 5);
+    const got = (try store.getNodePropertyOrError(id, "l")).?;
+    try std.testing.expect(got == .ExtValue and got.ExtValue == .List);
+    try std.testing.expectEqual(@as(usize, 3), got.ExtValue.List.len);
+    try std.testing.expectEqual(@as(i64, 2), got.ExtValue.List[1].Int);
 }
 
 test "truncated payload is rejected, not crashed" {
@@ -1675,8 +1945,8 @@ test "GNC2 edge-create round-trips: 2 nodes + 1 positional edge" {
     const n0 = deriveMultiNodeId(10, 0);
     const n1 = deriveMultiNodeId(10, 1);
     const e0 = deriveMultiEdgeId(10, 0);
-    try std.testing.expectEqual(@as(i64, 1), store.getNodeProperty(n0, "k").?.Int);
-    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(n1, "k").?.Int);
+    try std.testing.expectEqual(@as(i64, 1), (try store.getNodePropertyOrError(n0, "k")).?.Int);
+    try std.testing.expectEqual(@as(i64, 2), (try store.getNodePropertyOrError(n1, "k")).?.Int);
     const edge = store.edges.get(e0).?;
     try std.testing.expectEqual(n0, edge.from_id);
     try std.testing.expectEqual(n1, edge.to_id);
@@ -1876,7 +2146,7 @@ test "GDEL delete round-trips: detach delete removes node + incident edge" {
 
     const removed = try applyDeletePayload(a, &store, payload);
     try std.testing.expectEqual(@as(usize, 2), removed); // 1 edge + 1 node
-    try std.testing.expect(store.getEdgePtr(20) == null);
+    try std.testing.expect((try store.getEdgePtrHydratedChecked(20)) == null);
     try std.testing.expect(store.getNodePtr(10) == null);
     try std.testing.expect(store.getNodePtr(11) != null); // untouched
 }
@@ -1935,7 +2205,7 @@ test "GMRG merge round-trips: matched node + ON MATCH SET overwrites by id" {
 
     const node_id = try applyMergePayload(a, &store, payload);
     try std.testing.expectEqual(@as(u64, 77), node_id);
-    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(77, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 2), (try store.getNodePropertyOrError(77, "v")).?.Int);
 }
 
 test "GMRG apply is idempotent across restart re-apply (set-by-id overwrite)" {
@@ -1951,7 +2221,7 @@ test "GMRG apply is idempotent across restart re-apply (set-by-id overwrite)" {
     _ = try applyMergePayload(a, &store, payload);
     _ = try applyMergePayload(a, &store, payload); // restart replay — clean overwrite
     try std.testing.expectEqual(@as(usize, 1), store.nodes.count());
-    try std.testing.expectEqualStrings("bob", store.getNodeProperty(5, "name").?.String);
+    try std.testing.expectEqualStrings("bob", (try store.getNodePropertyOrError(5, "name")).?.String);
 }
 
 test "GMRG truncated payload is rejected, not crashed" {
@@ -1985,7 +2255,7 @@ test "GUPD set round-trips: SET n.v = 2 overwrites by stable id" {
 
     const applied = try applyUpdatePayload(a, &store, payload);
     try std.testing.expectEqual(@as(usize, 1), applied);
-    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(33, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 2), (try store.getNodePropertyOrError(33, "v")).?.Int);
 }
 
 test "GUPD apply is idempotent across restart re-apply (set-by-id overwrite)" {
@@ -2002,7 +2272,7 @@ test "GUPD apply is idempotent across restart re-apply (set-by-id overwrite)" {
     _ = try applyUpdatePayload(a, &store, payload);
     _ = try applyUpdatePayload(a, &store, payload); // restart replay — clean overwrite
     try std.testing.expectEqual(@as(usize, 1), store.nodes.count());
-    try std.testing.expectEqualStrings("carol", store.getNodeProperty(7, "name").?.String);
+    try std.testing.expectEqualStrings("carol", (try store.getNodePropertyOrError(7, "name")).?.String);
 }
 
 test "GUPD remove of an absent prop is a clean no-op" {
@@ -2021,8 +2291,8 @@ test "GUPD remove of an absent prop is a clean no-op" {
     _ = try applyUpdatePayload(a, &store, payload);
     _ = try applyUpdatePayload(a, &store, payload); // re-apply — still a no-op
     // The untouched property survives; the absent removes did nothing.
-    try std.testing.expectEqual(@as(i64, 5), store.getNodeProperty(9, "keep").?.Int);
-    try std.testing.expect(store.getNodeProperty(9, "ghost") == null);
+    try std.testing.expectEqual(@as(i64, 5), (try store.getNodePropertyOrError(9, "keep")).?.Int);
+    try std.testing.expect((try store.getNodePropertyOrError(9, "ghost")) == null);
 }
 
 test "GUPD remove of a present prop deletes it" {
@@ -2040,8 +2310,8 @@ test "GUPD remove of a present prop deletes it" {
     defer a.free(payload);
 
     _ = try applyUpdatePayload(a, &store, payload);
-    try std.testing.expect(store.getNodeProperty(11, "drop") == null);
-    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(11, "keep").?.Int);
+    try std.testing.expect((try store.getNodePropertyOrError(11, "drop")) == null);
+    try std.testing.expectEqual(@as(i64, 2), (try store.getNodePropertyOrError(11, "keep")).?.Int);
 }
 
 test "GUPD label add/remove round-trips by stable id" {
@@ -2091,9 +2361,9 @@ test "GUPD multi-node update payload sets every bound node" {
 
     const applied = try applyUpdatePayload(a, &store, payload);
     try std.testing.expectEqual(@as(usize, 3), applied);
-    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(100, "v").?.Int);
-    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(101, "v").?.Int);
-    try std.testing.expectEqual(@as(i64, 2), store.getNodeProperty(102, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 2), (try store.getNodePropertyOrError(100, "v")).?.Int);
+    try std.testing.expectEqual(@as(i64, 2), (try store.getNodePropertyOrError(101, "v")).?.Int);
+    try std.testing.expectEqual(@as(i64, 2), (try store.getNodePropertyOrError(102, "v")).?.Int);
 }
 
 test "GUPD cross-store convergence: two stores apply same payload -> identical state" {
@@ -2113,8 +2383,8 @@ test "GUPD cross-store convergence: two stores apply same payload -> identical s
 
     _ = try applyUpdatePayload(a, &s1, payload);
     _ = try applyUpdatePayload(a, &s2, payload);
-    try std.testing.expectEqual(@as(i64, 9), s1.getNodeProperty(50, "v").?.Int);
-    try std.testing.expectEqual(@as(i64, 9), s2.getNodeProperty(50, "v").?.Int);
+    try std.testing.expectEqual(@as(i64, 9), (try s1.getNodePropertyOrError(50, "v")).?.Int);
+    try std.testing.expectEqual(@as(i64, 9), (try s2.getNodePropertyOrError(50, "v")).?.Int);
 }
 
 test "GUPD over-cap update set is rejected at serialize time" {
@@ -2134,4 +2404,128 @@ test "GUPD truncated payload is rejected, not crashed" {
     const full = try serializeUpdate(a, "default", &updates);
     defer a.free(full);
     try std.testing.expectError(CodecError.CorruptPayload, applyUpdatePayload(a, &store, full[0 .. full.len - 3]));
+}
+
+// CANARY: REQ=REQ-SONNY-6718-CLUSTER-DECIMAL; FEATURE="DistributedCluster"; ASPECT=DecimalCodec; STATUS=TESTED; TEST=src/distributed/cluster_replication.zig; OWNER=distributed; UPDATED=2026-11-18
+/// SONNY-6718: DECIMAL values the codecs must carry exactly (coefficient AND
+/// scale): a plain literal, a negative with a leading-zero fraction, the widest
+/// i128 coefficient at the widest scale, an integral decimal of scale 0 and a
+/// trailing-zero decimal (1.50 is not 1.5: scale 2 vs 1).
+const decimal_cases = [_]struct { coeff: i128, scale: u8 }{
+    .{ .coeff = 35, .scale = 1 },
+    .{ .coeff = -1, .scale = 6 },
+    .{ .coeff = std.math.maxInt(i128), .scale = 38 },
+    .{ .coeff = std.math.minInt(i128) + 1, .scale = 38 },
+    .{ .coeff = 0, .scale = 0 },
+    .{ .coeff = 150, .scale = 2 },
+};
+
+fn expectDecimal(v: ?PropertyValue, coeff: i128, scale: u8) !void {
+    const got = v orelse return error.PropertyMissing;
+    try std.testing.expect(got == .Decimal);
+    try std.testing.expectEqual(coeff, got.Decimal.coeff);
+    try std.testing.expectEqual(scale, got.Decimal.scale);
+}
+
+test "SONNY-6718 GNC1 node create carries DECIMAL coefficient and scale exactly" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    var props: [decimal_cases.len]Prop = undefined;
+    var keys: [decimal_cases.len][4]u8 = undefined;
+    for (decimal_cases, 0..) |c, i| {
+        keys[i] = .{ 'd', '0' + @as(u8, @intCast(i)), 0, 0 };
+        props[i] = .{ .key = keys[i][0..2], .value = .{ .Decimal = .{ .coeff = c.coeff, .scale = c.scale } } };
+    }
+    const payload = try serializeNodeCreate(a, "default", &.{"Dec"}, &props);
+    defer a.free(payload);
+    const id = try applyNodeCreatePayload(a, &store, payload, 9);
+    for (decimal_cases, 0..) |c, i| try expectDecimal(try store.getNodePropertyOrError(id, keys[i][0..2]), c.coeff, c.scale);
+    // The payload's effect decodes (footprint of a held write).
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const eff = try effectOf(arena.allocator(), payload);
+    try std.testing.expectEqual(@as(usize, 1), eff.created.len);
+    try std.testing.expectEqual(decimal_cases.len, eff.created[0].props.len);
+}
+
+test "SONNY-6718 GNC2 multi-create carries DECIMAL node and edge properties" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    const la = [_][]const u8{"W"};
+    const nprops = [_]Prop{.{ .key = "d", .value = .{ .Decimal = .{ .coeff = 35, .scale = 1 } } }};
+    const eprops = [_]Prop{.{ .key = "w", .value = .{ .Decimal = .{ .coeff = -125, .scale = 3 } } }};
+    const nodes = [_]NodeSpec{ .{ .labels = &la, .props = &nprops }, .{ .labels = &la, .props = &.{} } };
+    const edges = [_]EdgeSpec{.{ .from = .{ .position = 0 }, .to = .{ .position = 1 }, .edge_type = "E", .props = &eprops }};
+    const payload = try serializeMultiCreate(a, "default", &nodes, &edges);
+    defer a.free(payload);
+    _ = try applyMultiCreatePayload(a, &store, payload, 3);
+    const n0 = deriveMultiNodeId(3, 0);
+    try expectDecimal(try store.getNodePropertyOrError(n0, "d"), 35, 1);
+    const e0 = deriveMultiEdgeId(3, 0);
+    const w = store.edges.get(e0).?.properties.get("w").?;
+    try std.testing.expect(w == .Decimal);
+    try std.testing.expectEqual(@as(i128, -125), w.Decimal.coeff);
+    try std.testing.expectEqual(@as(u8, 3), w.Decimal.scale);
+}
+
+test "SONNY-6718 GMRG merge and GUPD update carry DECIMAL values exactly" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    try store.createNodeWithId(77, &.{"M"}, "default");
+    const mp = [_]Prop{.{ .key = "v", .value = .{ .Decimal = .{ .coeff = 12345678901234567890, .scale = 9 } } }};
+    const mpay = try serializeMerge(a, "default", 77, &mp);
+    defer a.free(mpay);
+    _ = try applyMergePayload(a, &store, mpay);
+    try expectDecimal(try store.getNodePropertyOrError(77, "v"), 12345678901234567890, 9);
+
+    const up = [_]Prop{.{ .key = "v", .value = .{ .Decimal = .{ .coeff = 425, .scale = 2 } } }};
+    const updates = [_]NodeUpdate{.{ .node_id = 77, .set_props = &up }};
+    const upay = try serializeUpdate(a, "default", &updates);
+    defer a.free(upay);
+    _ = try applyUpdatePayload(a, &store, upay);
+    try expectDecimal(try store.getNodePropertyOrError(77, "v"), 425, 2);
+}
+
+test "SONNY-6718 GBAT batch carries DECIMAL values of its create, merge and update entries" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    const cp = [_]Prop{.{ .key = "d", .value = .{ .Decimal = .{ .coeff = 35, .scale = 1 } } }};
+    const create = try serializeNodeCreate(a, "default", &.{"B"}, &cp);
+    defer a.free(create);
+    try store.createNodeWithId(500, &.{"B"}, "default");
+    const mp = [_]Prop{.{ .key = "m", .value = .{ .Decimal = .{ .coeff = -7, .scale = 4 } } }};
+    const merge = try serializeMerge(a, "default", 500, &mp);
+    defer a.free(merge);
+    const up = [_]Prop{.{ .key = "u", .value = .{ .Decimal = .{ .coeff = 99, .scale = 0 } } }};
+    const updates = [_]NodeUpdate{.{ .node_id = 500, .set_props = &up }};
+    const update = try serializeUpdate(a, "default", &updates);
+    defer a.free(update);
+    const entries = [_]BatchEntry{
+        .{ .mutation = .create, .graph = "default", .data = create },
+        .{ .mutation = .merge, .graph = "default", .data = merge },
+        .{ .mutation = .update, .graph = "default", .data = update },
+    };
+    const payload = try serializeBatch(a, null, &entries);
+    defer a.free(payload);
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    for ([_][]const u8{ create, merge, update }) |entry| _ = try effectOf(arena.allocator(), entry);
+    _ = try applyBatchPayload(a, &store, payload, 41, null);
+    try expectDecimal(try store.getNodePropertyOrError(500, "m"), -7, 4);
+    try expectDecimal(try store.getNodePropertyOrError(500, "u"), 99, 0);
+    try expectDecimal(try store.getNodePropertyOrError(batchLaneBase(41, 0), "d"), 35, 1);
+}
+
+test "SONNY-6718 a DECIMAL payload cut short is rejected, not crashed" {
+    const a = std.testing.allocator;
+    var store = try GraphStore.init(a);
+    defer store.deinit();
+    const props = [_]Prop{.{ .key = "d", .value = .{ .Decimal = .{ .coeff = 35, .scale = 1 } } }};
+    const payload = try serializeNodeCreate(a, "default", &.{"Dec"}, &props);
+    defer a.free(payload);
+    try std.testing.expectError(CodecError.CorruptPayload, applyNodeCreatePayload(a, &store, payload[0 .. payload.len - 5], 1));
 }

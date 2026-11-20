@@ -10,6 +10,7 @@
 // Real store, real parser, real executor — no mocks.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 
@@ -76,10 +77,10 @@ const Harness = struct {
 
     pub fn runQuery(self: *Harness, query: []const u8) !execution.ExecutionResult {
         const aa = self.arena.allocator();
-        // Use `geode.parse` (rather than `geode.parseGql`) so ORDER BY over
-        // `p.<key>` property access is accepted — parseGql enforces
-        // `ident_order_only=true` which would reject the bench-scenario
-        // `ORDER BY p.lt_id` shape at parse time.
+        // `geode.parse` takes the parser's options as given, so ORDER BY over
+        // `p.<key>` property access is accepted whatever the environment.
+        // (`geode.parseGql` accepts it too since SONNY-6351; with
+        // GEODE_ORDER_KEYS_EXPR=0 it allows identifier keys only.)
         var parsed = try geode.parse(aa, query, .{});
         defer parsed.deinit();
         return execution.executeStatementWithContext(aa, parsed.program.statements[0], self.ctx);
@@ -87,6 +88,8 @@ const Harness = struct {
 };
 
 test "GAP-0812: ORDER BY DESC LIMIT 10 returns top-10 without full materialize" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
@@ -127,6 +130,8 @@ test "GAP-0812: ORDER BY DESC LIMIT 10 returns top-10 without full materialize" 
 }
 
 test "GAP-0812: ORDER BY ASC LIMIT 5" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
@@ -147,6 +152,8 @@ test "GAP-0812: ORDER BY ASC LIMIT 5" {
 }
 
 test "GAP-0812: fast path declines when ORDER BY key differs from RETURN" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // Correctness check — this shape must NOT use the fast path; falls back
     // to the regular executor. We don't have easy introspection, but the
     // result count + contents-set should still be correct regardless of

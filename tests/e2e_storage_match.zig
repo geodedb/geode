@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 const schema = @import("schema");
@@ -32,6 +34,8 @@ fn seedTinyPlus(client: *util.QuicProtoClient, allocator: std.mem.Allocator) !vo
 }
 
 test "storage: MATCH 1-hop ordered (GraphStore)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("MATCH 1-hop ordered (GraphStore)");
     errdefer util.testFail();
 
@@ -55,7 +59,7 @@ test "storage: MATCH 1-hop ordered (GraphStore)" {
 
     // Build args with data_dir
     const args = &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "serve",
         "--listen",
         addr,

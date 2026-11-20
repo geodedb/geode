@@ -77,7 +77,7 @@ test "bootstrapDefaultAdmin honours documented GEODE_DEFAULT_PASSWORD env (regre
     const allocator = testing.allocator;
 
     clearAdminPasswordEnv();
-    try setEnv(DEFAULT_PASSWORD_ENV, "doc-seeded-pw-12345");
+    try setEnv(DEFAULT_PASSWORD_ENV, "Doc Seeded Admin Passphrase");
     defer unsetEnv(DEFAULT_PASSWORD_ENV);
 
     var store = try graph_store.GraphStore.init(allocator);
@@ -96,7 +96,7 @@ test "bootstrapDefaultAdmin honours documented GEODE_DEFAULT_PASSWORD env (regre
     const user = mgr.storage.getUser(result.user_id) orelse return error.UserNotFound;
     const stored_hash = user.password_hash[0..user.password_hash_len];
 
-    const ok = try geode_auth.verifyPasswordArgon2id(allocator, "doc-seeded-pw-12345", stored_hash);
+    const ok = try geode_auth.verifyPasswordArgon2id(allocator, "Doc Seeded Admin Passphrase", stored_hash);
     try testing.expect(ok);
 }
 
@@ -109,7 +109,7 @@ test "bootstrapDefaultAdmin still honours legacy GEODE_ADMIN_PASSWORD env" {
     const allocator = testing.allocator;
 
     clearAdminPasswordEnv();
-    try setEnv(ADMIN_PASSWORD_ENV, "legacy-seeded-pw-67890");
+    try setEnv(ADMIN_PASSWORD_ENV, "Legacy Seeded Admin Passphrase");
     defer unsetEnv(ADMIN_PASSWORD_ENV);
 
     var store = try graph_store.GraphStore.init(allocator);
@@ -128,7 +128,7 @@ test "bootstrapDefaultAdmin still honours legacy GEODE_ADMIN_PASSWORD env" {
     const user = mgr.storage.getUser(result.user_id) orelse return error.UserNotFound;
     const stored_hash = user.password_hash[0..user.password_hash_len];
 
-    const ok = try geode_auth.verifyPasswordArgon2id(allocator, "legacy-seeded-pw-67890", stored_hash);
+    const ok = try geode_auth.verifyPasswordArgon2id(allocator, "Legacy Seeded Admin Passphrase", stored_hash);
     try testing.expect(ok);
 }
 
@@ -142,8 +142,8 @@ test "bootstrapDefaultAdmin: GEODE_ADMIN_PASSWORD wins when both env vars are se
     const allocator = testing.allocator;
 
     clearAdminPasswordEnv();
-    try setEnv(ADMIN_PASSWORD_ENV, "winner-from-admin-env");
-    try setEnv(DEFAULT_PASSWORD_ENV, "loser-from-default-env");
+    try setEnv(ADMIN_PASSWORD_ENV, "Winner From Admin Env");
+    try setEnv(DEFAULT_PASSWORD_ENV, "Loser From Default Env");
     defer unsetEnv(ADMIN_PASSWORD_ENV);
     defer unsetEnv(DEFAULT_PASSWORD_ENV);
 
@@ -164,11 +164,11 @@ test "bootstrapDefaultAdmin: GEODE_ADMIN_PASSWORD wins when both env vars are se
     const stored_hash = user.password_hash[0..user.password_hash_len];
 
     // The admin-env password must verify…
-    const wins = try geode_auth.verifyPasswordArgon2id(allocator, "winner-from-admin-env", stored_hash);
+    const wins = try geode_auth.verifyPasswordArgon2id(allocator, "Winner From Admin Env", stored_hash);
     try testing.expect(wins);
 
     // …and the default-env password must NOT.
-    const loses = try geode_auth.verifyPasswordArgon2id(allocator, "loser-from-default-env", stored_hash);
+    const loses = try geode_auth.verifyPasswordArgon2id(allocator, "Loser From Default Env", stored_hash);
     try testing.expect(!loses);
 }
 
@@ -224,7 +224,7 @@ test "offline reset-password persists across serve reload (regression)" {
     defer allocator.free(data_dir);
 
     clearAdminPasswordEnv();
-    try setEnv(ADMIN_PASSWORD_ENV, "initialpass1");
+    try setEnv(ADMIN_PASSWORD_ENV, "Initial Admin Seed Passphrase");
     defer unsetEnv(ADMIN_PASSWORD_ENV);
 
     const hmac_key = [_]u8{0xcd} ** 32;
@@ -265,7 +265,7 @@ test "offline reset-password persists across serve reload (regression)" {
         const new_ok = try geode_auth.verifyPasswordArgon2id(allocator, "newpass1234567", reloaded_hash);
         try testing.expect(new_ok);
 
-        const old_ok = try geode_auth.verifyPasswordArgon2id(allocator, "initialpass1", reloaded_hash);
+        const old_ok = try geode_auth.verifyPasswordArgon2id(allocator, "Initial Admin Seed Passphrase", reloaded_hash);
         try testing.expect(!old_ok);
     }
 }
@@ -288,7 +288,7 @@ test "offline reset-password writes a single graphs root (storage layout invaria
     defer allocator.free(data_dir);
 
     clearAdminPasswordEnv();
-    try setEnv(ADMIN_PASSWORD_ENV, "initialpass1");
+    try setEnv(ADMIN_PASSWORD_ENV, "Initial Admin Seed Passphrase");
     defer unsetEnv(ADMIN_PASSWORD_ENV);
 
     const hmac_key = [_]u8{0xee} ** 32;
@@ -348,7 +348,7 @@ test "offline reset-password leaves a verifiable HMAC chain on reload (atomicity
     defer allocator.free(data_dir);
 
     clearAdminPasswordEnv();
-    try setEnv(ADMIN_PASSWORD_ENV, "initialpass1");
+    try setEnv(ADMIN_PASSWORD_ENV, "Initial Admin Seed Passphrase");
     defer unsetEnv(ADMIN_PASSWORD_ENV);
 
     const hmac_key = [_]u8{0xfa} ** 32;
@@ -446,7 +446,7 @@ test "bootstrapDefaultAdmin refuses env re-seed when persisted admin records exi
     const hmac_key = [_]u8{0x11} ** 32;
 
     // ---- Boot 1: genuine first boot with env password A ----
-    try setEnv(ADMIN_PASSWORD_ENV, "restartpassA1");
+    try setEnv(ADMIN_PASSWORD_ENV, "Restart Pass Seed A1");
     {
         const store = try graph_store.initGlobalStore(allocator, data_dir);
         var mgr = try auth_graph_manager.AuthGraphManager.init(allocator, store);
@@ -460,7 +460,7 @@ test "bootstrapDefaultAdmin refuses env re-seed when persisted admin records exi
     }
 
     // ---- Boot 2: restart with env password B; in-memory load degraded ----
-    try setEnv(ADMIN_PASSWORD_ENV, "restartpassB2");
+    try setEnv(ADMIN_PASSWORD_ENV, "Restart Pass Seed B2");
     {
         const store = try graph_store.initGlobalStore(allocator, data_dir);
         var mgr = try auth_graph_manager.AuthGraphManager.init(allocator, store);
@@ -477,7 +477,7 @@ test "bootstrapDefaultAdmin refuses env re-seed when persisted admin records exi
         try testing.expect(!mgr.hasAuthRecords());
 
         // PRE-FIX: this call succeeded and silently rotated the persisted
-        // admin credential to "restartpassB2". POST-FIX: the engine-level
+        // admin credential to "Restart Pass Seed B2". POST-FIX: the engine-level
         // guard sees persisted :User records on disk and refuses.
         try testing.expectError(error.PersistedAdminExists, mgr.bootstrapDefaultAdmin(&hmac_key));
     }
@@ -490,8 +490,8 @@ test "bootstrapDefaultAdmin refuses env re-seed when persisted admin records exi
         const reloaded = user_storage.UserStorageBackend.findUserByUsernameInGraph(store, "geode") orelse return error.UserMissingOnReload;
         const hash = reloaded.password_hash[0..reloaded.password_hash_len];
 
-        try testing.expect(try geode_auth.verifyPasswordArgon2id(allocator, "restartpassA1", hash));
-        try testing.expect(!(try geode_auth.verifyPasswordArgon2id(allocator, "restartpassB2", hash)));
+        try testing.expect(try geode_auth.verifyPasswordArgon2id(allocator, "Restart Pass Seed A1", hash));
+        try testing.expect(!(try geode_auth.verifyPasswordArgon2id(allocator, "Restart Pass Seed B2", hash)));
     }
 }
 
@@ -515,7 +515,7 @@ test "healthy restart with changed GEODE_ADMIN_PASSWORD keeps the persisted admi
     const hmac_key = [_]u8{0x22} ** 32;
 
     // Boot 1: first boot, env A.
-    try setEnv(ADMIN_PASSWORD_ENV, "keeppassA1");
+    try setEnv(ADMIN_PASSWORD_ENV, "Keep Pass Seed Phrase A1");
     {
         const store = try graph_store.initGlobalStore(allocator, data_dir);
         var mgr = try auth_graph_manager.AuthGraphManager.init(allocator, store);
@@ -530,7 +530,7 @@ test "healthy restart with changed GEODE_ADMIN_PASSWORD keeps the persisted admi
     // Boot 2: env changed to B. Mirror the server-init decision: records
     // exist -> env ignored -> NO bootstrap call. Persisted hash must still
     // verify A and reject B.
-    try setEnv(ADMIN_PASSWORD_ENV, "keeppassB2");
+    try setEnv(ADMIN_PASSWORD_ENV, "Keep Pass Seed Phrase B2");
     {
         const store = try graph_store.initGlobalStore(allocator, data_dir);
         defer graph_store.deinitGlobalStore();
@@ -541,8 +541,8 @@ test "healthy restart with changed GEODE_ADMIN_PASSWORD keeps the persisted admi
 
         const reloaded = user_storage.UserStorageBackend.findUserByUsernameInGraph(store, "geode") orelse return error.UserMissingOnReload;
         const hash = reloaded.password_hash[0..reloaded.password_hash_len];
-        try testing.expect(try geode_auth.verifyPasswordArgon2id(allocator, "keeppassA1", hash));
-        try testing.expect(!(try geode_auth.verifyPasswordArgon2id(allocator, "keeppassB2", hash)));
+        try testing.expect(try geode_auth.verifyPasswordArgon2id(allocator, "Keep Pass Seed Phrase A1", hash));
+        try testing.expect(!(try geode_auth.verifyPasswordArgon2id(allocator, "Keep Pass Seed Phrase B2", hash)));
     }
 }
 
@@ -562,7 +562,7 @@ test "engine-backed first boot with env password still bootstraps (guard does no
 
     clearAdminPasswordEnv();
     defer clearAdminPasswordEnv();
-    try setEnv(ADMIN_PASSWORD_ENV, "firstbootpass1");
+    try setEnv(ADMIN_PASSWORD_ENV, "First Boot Admin Passphrase");
 
     const hmac_key = [_]u8{0x33} ** 32;
 
@@ -575,22 +575,23 @@ test "engine-backed first boot with env password still bootstraps (guard does no
     defer allocator.free(bootstrap.username);
     defer allocator.free(bootstrap.password);
 
-    try testing.expectEqualStrings("firstbootpass1", bootstrap.password);
+    try testing.expectEqualStrings("First Boot Admin Passphrase", bootstrap.password);
 
     const user = mgr.storage.getUser(bootstrap.user_id) orelse return error.UserNotFound;
     // Env-seeded password: operator already knows it — no forced reset.
     try testing.expect(!user.password_reset_required);
     const hash = user.password_hash[0..user.password_hash_len];
-    try testing.expect(try geode_auth.verifyPasswordArgon2id(allocator, "firstbootpass1", hash));
+    try testing.expect(try geode_auth.verifyPasswordArgon2id(allocator, "First Boot Admin Passphrase", hash));
 }
 
 // -- Persistence Test 4 ------------------------------------------------------
 //
-// First boot with NO env password: a random 32-hex password is generated and
-// the record demands a reset on first login. (The secret-free operator
+// First boot with NO env password: a random password is generated and the
+// record demands a reset on first login. SONNY-6331: it meets the password
+// policy (it was 32 hex characters, which the policy refuses). (The secret-free operator
 // breadcrumb for this path is covered end-to-end by
 // tests/test_first_boot_admin_password_breadcrumb.zig.)
-test "first boot without env password autogenerates a 32-hex password with forced reset" {
+test "first boot without env password autogenerates a policy-compliant password with forced reset" {
     const allocator = testing.allocator;
 
     clearAdminPasswordEnv();
@@ -606,10 +607,7 @@ test "first boot without env password autogenerates a 32-hex password with force
     defer allocator.free(bootstrap.username);
     defer allocator.free(bootstrap.password);
 
-    try testing.expectEqual(@as(usize, 32), bootstrap.password.len);
-    for (bootstrap.password) |c| {
-        try testing.expect(std.ascii.isHex(c));
-    }
+    try testing.expectEqual(@as(?[]const u8, null), geode_auth.PasswordPolicy.geodeSecure().validate(bootstrap.password));
 
     const user = mgr.storage.getUser(bootstrap.user_id) orelse return error.UserNotFound;
     try testing.expect(user.password_reset_required);
@@ -655,7 +653,7 @@ test "bootstrapDefaultAdmin fails CLOSED when the registered security graph cann
     const io = std.Io.Threaded.global_single_threaded.io();
 
     // ---- Boot 1: genuine first boot with env password A ----
-    try setEnv(ADMIN_PASSWORD_ENV, "enginefailpassA1");
+    try setEnv(ADMIN_PASSWORD_ENV, "Engine Fail Seed Pass A1");
     var security_uuid: [16]u8 = undefined;
     {
         const store = try graph_store.initGlobalStore(allocator, data_dir);
@@ -682,7 +680,7 @@ test "bootstrapDefaultAdmin fails CLOSED when the registered security graph cann
     }
 
     // ---- Boot 2: restart with env password B against the degraded store ----
-    try setEnv(ADMIN_PASSWORD_ENV, "enginefailpassB2");
+    try setEnv(ADMIN_PASSWORD_ENV, "Engine Fail Seed Pass B2");
     {
         const store = try graph_store.initGlobalStore(allocator, data_dir);
         defer graph_store.deinitGlobalStore();
@@ -750,7 +748,7 @@ test "half-bootstrap artifact (credential-less :User records) is recoverable: bo
     defer graph_store.deinitGlobalStore();
 
     // Persist an admin normally so the :User node is fully label-indexed…
-    try setEnv(ADMIN_PASSWORD_ENV, "halfbootseedA1");
+    try setEnv(ADMIN_PASSWORD_ENV, "Half Boot Seed Pass A1");
     var mgr = try auth_graph_manager.AuthGraphManager.init(allocator, store);
     defer mgr.deinit();
     const seeded = try mgr.bootstrapDefaultAdmin(&hmac_key);
@@ -774,15 +772,15 @@ test "half-bootstrap artifact (credential-less :User records) is recoverable: bo
     // exists anywhere, so the operator is locked out with no escape).
     // POST-FIX: zero credential-bearing records → treated as first boot; the
     // env password seeds a REAL, working admin credential.
-    try setEnv(ADMIN_PASSWORD_ENV, "halfbootpassB2");
+    try setEnv(ADMIN_PASSWORD_ENV, "Half Boot Seed Pass B2");
     const bootstrap = try mgr.bootstrapDefaultAdmin(&hmac_key);
     defer allocator.free(bootstrap.username);
     defer allocator.free(bootstrap.password);
-    try testing.expectEqualStrings("halfbootpassB2", bootstrap.password);
+    try testing.expectEqualStrings("Half Boot Seed Pass B2", bootstrap.password);
 
     const user = mgr.storage.getUser(bootstrap.user_id) orelse return error.UserNotFound;
     const hash = user.password_hash[0..user.password_hash_len];
-    try testing.expect(try geode_auth.verifyPasswordArgon2id(allocator, "halfbootpassB2", hash));
+    try testing.expect(try geode_auth.verifyPasswordArgon2id(allocator, "Half Boot Seed Pass B2", hash));
 }
 
 // -- Review-0016 Test 3 --------------------------------------------------------

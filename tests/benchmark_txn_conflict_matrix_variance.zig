@@ -1,7 +1,7 @@
 const std = @import("std");
 const txn = @import("txn");
 
-// CANARY: REQ=REQ-GQL-013; FEATURE="Transactions"; ASPECT=TxnConflictMatrixVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_013_TxnConflictMatrixVarianceEnvelope; OWNER=txn; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-013; FEATURE="Transactions"; ASPECT=TxnConflictMatrixVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_013_TxnConflictMatrixVarianceEnvelope; OWNER=txn; UPDATED=2026-11-14
 
 // This benchmark simulates a fixed set of concurrent writers contending on overlapping keys to
 // measure stability of conflict detection timings. It records multiple runs and enforces a

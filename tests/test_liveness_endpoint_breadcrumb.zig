@@ -13,13 +13,15 @@
 // `geode serve` emits a reliable `[startup]` breadcrumb to stdout/stderr that
 // names the out-of-band `GET /health` liveness URL (visible at all log levels).
 //
-// Depends on a pre-built ./zig-out/bin/geode (SKIPs if missing); Linux-only
+// Spawns the geode this build emitted (SONNY-2697); Linux-only
 // (non-blocking pipe reads).
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
+const test_ports = @import("test_ports.zig");
 
-const BINARY_PATH = "./zig-out/bin/geode";
+const BINARY_PATH = geode_test_bin.geode_exe;
 
 fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
     return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
@@ -63,7 +65,7 @@ fn buildChildEnv(aa: std.mem.Allocator, metrics_port: []const u8) !*std.process.
     if (posixGetenv("LD_LIBRARY_PATH")) |p| try env_ptr.put("LD_LIBRARY_PATH", p);
     try env_ptr.put("GEODE_METRICS_PORT", metrics_port);
     try env_ptr.put("GEODE_METRICS_BIND", "127.0.0.1");
-    try env_ptr.put("GEODE_ADMIN_PASSWORD", "livenesstest123");
+    try env_ptr.put("GEODE_ADMIN_PASSWORD", "Liveness Test Admin Passphrase");
     return env_ptr;
 }
 
@@ -87,9 +89,12 @@ test "serve advertises the out-of-band /health liveness endpoint to stdout/stder
     std.Io.Dir.cwd().createDirPath(io, data_dir) catch {};
     defer std.Io.Dir.cwd().deleteTree(io, data_dir) catch {};
 
-    const metrics_port = "31600";
+    // SONNY-6301: free ports, not constants: another run on the host held
+    // them. The metrics/health listener is TCP, the QUIC listener UDP.
+    const metrics_port = try std.fmt.allocPrint(aa, "{d}", .{try test_ports.freeTcpPort()});
+    const listen = try std.fmt.allocPrint(aa, "127.0.0.1:{d}", .{try test_ports.freeUdpPort()});
     const args = [_][]const u8{
-        BINARY_PATH,  "serve",  "--listen",    "127.0.0.1:31601",
+        BINARY_PATH,  "serve",  "--listen",    listen,
         "--data-dir", data_dir, "--log-level", "error",
     };
     const env_ptr = try buildChildEnv(aa, metrics_port);

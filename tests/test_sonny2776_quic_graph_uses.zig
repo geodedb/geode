@@ -12,6 +12,8 @@
 // CANARY: REQ=REQ-SONNY-2776-TXN-ONE-GRAPH; FEATURE="StatementAuthorization"; ASPECT=QuicE2E; STATUS=TESTED; TEST=tests/test_sonny2776_quic_graph_uses.zig; OWNER=security; UPDATED=2026-09-26
 
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -65,7 +67,7 @@ const Server = struct {
         errdefer allocator.free(self.addr);
         self.server = try util.spawnServer(
             allocator,
-            &.{ "./zig-out/bin/geode", "serve", "--listen", self.addr, "--data-dir", self.data_dir },
+            &.{ geode_test_bin.geode_exe, "serve", "--listen", self.addr, "--data-dir", self.data_dir },
             util.TestEnv.standard(),
         );
         try util.waitForServerReady(allocator, self.addr, 30000);
@@ -92,6 +94,8 @@ const Server = struct {
 };
 
 test "SONNY-2776: over QUIC the label-deny post-filter applies the policies of the graph a graph-switching read ran on" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var s: Server = .{ .server = undefined, .addr = undefined };
     try s.start(allocator, "rls");
@@ -101,7 +105,7 @@ test "SONNY-2776: over QUIC the label-deny post-filter applies the policies of t
     defer admin.deinit();
     try expectOk(&admin, allocator, "CREATE GRAPH g2");
     try expectOk(&admin, allocator, "USE GRAPH g2; CREATE (a:Secret {v: 1}), (b:Open {v: 2}), (a)-[:R]->(b)");
-    try expectOk(&admin, allocator, "CREATE USER alice SET PASSWORD 'Alice123!' ROLE readwrite");
+    try expectOk(&admin, allocator, "CREATE USER alice SET PASSWORD 'Alice Graph Uses Passphrase' ROLE readwrite");
     try expectOk(&admin, allocator, "CALL geode.rls.add_deny_policy('g2', 'Secret', 'alice')");
     try expectOk(&admin, allocator, "USE GRAPH default");
 
@@ -122,7 +126,7 @@ test "SONNY-2776: over QUIC the label-deny post-filter applies the policies of t
         try testing.expect(std.mem.indexOfScalar(i64, ids.items, secret_id) != null);
     }
 
-    var alice = try s.connect(allocator, "alice", "Alice123!");
+    var alice = try s.connect(allocator, "alice", "Alice Graph Uses Passphrase");
     defer alice.deinit();
     // alice's session starts on `default`; the request moves it to g2.
     {
@@ -142,6 +146,8 @@ test "SONNY-2776: over QUIC the label-deny post-filter applies the policies of t
 }
 
 test "SONNY-2776: over QUIC a transaction changes one graph" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var s: Server = .{ .server = undefined, .addr = undefined };
     try s.start(allocator, "txn");

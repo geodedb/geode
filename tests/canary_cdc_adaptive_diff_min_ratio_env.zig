@@ -1,8 +1,8 @@
 const std = @import("std");
 const cdc_mod = @import("../src/streaming/cdc_enhanced.zig");
 
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=AdaptiveDiffPerfThresholdEnv; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv; OWNER=streaming; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=AdaptiveDiffPerfThresholdEnvInvalidParse; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnvInvalidParse; OWNER=streaming; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=AdaptiveDiffPerfThresholdEnv; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv; OWNER=streaming; UPDATED=2026-11-14
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=AdaptiveDiffPerfThresholdEnvInvalidParse; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnvInvalidParse; OWNER=streaming; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerfThresholdEnv" {
     // Set env var to stricter threshold 0.80 (should still pass since adaptive should not regress that far)

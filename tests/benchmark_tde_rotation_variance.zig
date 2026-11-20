@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-046; FEATURE="TDE Multi-Key"; ASPECT=TDERotationVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_046_TDERotationVarianceEnvelope; OWNER=security; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-046; FEATURE="TDE Multi-Key"; ASPECT=TDERotationVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_046_TDERotationVarianceEnvelope; OWNER=security; UPDATED=2026-11-14
 
 fn simulateRotation(pages: usize, key_slots: usize) u64 {
     // Simulate decrypt(old)+encrypt(new) per page with key slot iteration overhead.

@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 
 fn run(args: []const []const u8) !struct { code: i32, out: []u8, err: []u8 } {
@@ -11,7 +13,9 @@ fn contains(hay: []const u8, needle: []const u8) bool {
 }
 
 test "protocol: ORDER BY alias and ordinal" {
-    const exe = "./zig-out/bin/geode";
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const exe = geode_test_bin.geode_exe;
     const res1 = try run(&.{ exe, "RETURN 1 AS x, 2 AS y ORDER BY y LIMIT 1" });
     defer std.testing.allocator.free(res1.out);
     defer std.testing.allocator.free(res1.err);
@@ -27,7 +31,9 @@ test "protocol: ORDER BY alias and ordinal" {
 }
 
 test "protocol: aggregates ORDER BY alias" {
-    const exe = "./zig-out/bin/geode";
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN SUM(v) AS s ORDER BY s LIMIT 1", "--param", "v", "[3,2,1]" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -37,7 +43,9 @@ test "protocol: aggregates ORDER BY alias" {
 }
 
 test "protocol: set ops LIMIT without ORDER triggers US001" {
-    const exe = "./zig-out/bin/geode";
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN 1 AS x UNION RETURN 2 AS x LIMIT 1" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -46,7 +54,9 @@ test "protocol: set ops LIMIT without ORDER triggers US001" {
 }
 
 test "protocol: GROUP BY illegality surfaces diagnostics" {
-    const exe = "./zig-out/bin/geode";
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN a, SUM(b) GROUP BY a, b" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -56,7 +66,9 @@ test "protocol: GROUP BY illegality surfaces diagnostics" {
 }
 
 test "protocol: pagination multi-page PULL final flag" {
-    const exe = "./zig-out/bin/geode";
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const exe = geode_test_bin.geode_exe;
     // Build a query with three rows using params array
     const res = try run(&.{ exe, "RETURN a AS v", "--param", "a", "[1,2,3]" });
     defer std.testing.allocator.free(res.out);
@@ -69,7 +81,9 @@ test "protocol: pagination multi-page PULL final flag" {
 }
 
 test "protocol: pagination multi-page pull-all sequence" {
-    const exe = "./zig-out/bin/geode";
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "RETURN a AS v", "--param", "a", "[10,11,12]", "--page-size", "1" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -93,9 +107,11 @@ test "protocol: pagination multi-page pull-all sequence" {
     try std.testing.expectEqual(@as(usize, 1), count12);
 }
 
-// CANARY: REQ=REQ-GQL-004; FEATURE="PaginationExecutionStreaming"; ASPECT=OrderedEmission; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_004_PaginationStreamingOrderedEmission; OWNER=planner; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-004; FEATURE="PaginationExecutionStreaming"; ASPECT=OrderedEmission; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_004_PaginationStreamingOrderedEmission; OWNER=planner; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_004_PaginationStreamingOrderedEmission" {
-    const exe = "./zig-out/bin/geode";
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const exe = geode_test_bin.geode_exe;
     // Build an ordered sequence with explicit ORDER BY to ensure stable order
     const res = try run(&.{ exe, "RETURN a AS x ORDER BY x", "--param", "a", "[3,1,2]", "--page-size", "1" });
     defer std.testing.allocator.free(res.out);
@@ -113,7 +129,9 @@ test "TestCANARY_REQ_GQL_004_PaginationStreamingOrderedEmission" {
 }
 
 test "protocol: pagination NoResult after final extra pull" {
-    const exe = "./zig-out/bin/geode";
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const exe = geode_test_bin.geode_exe;
     // page-size 1 so we get multiple pulls; ensure no NoResult errors in aggregated output
     const res = try run(&.{ exe, "RETURN a AS v", "--param", "a", "[7,8]", "--page-size", "1" });
     defer std.testing.allocator.free(res.out);
@@ -124,9 +142,11 @@ test "protocol: pagination NoResult after final extra pull" {
     try std.testing.expect(contains(res.out, "{\"v\":8}"));
 }
 
-// CANARY: REQ=REQ-GQL-090; FEATURE="StreamingTelemetry"; ASPECT=PagingEvents; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_090_TelemetryPagingPull; OWNER=wire; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-090; FEATURE="StreamingTelemetry"; ASPECT=PagingEvents; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_090_TelemetryPagingPull; OWNER=wire; UPDATED=2026-11-14
 test "TestCANARY_REQ_GQL_090_TelemetryPagingPull" {
-    const exe = "./zig-out/bin/geode";
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const exe = geode_test_bin.geode_exe;
     // Set env var to enable telemetry, then run with page_size=1 and pull-all to generate multiple pages.
     // Set minimal env vars; inherit for child process
     std.posix.setenvZ("GEODE_TELEMETRY_PAGING", "1", 1) catch {};
@@ -144,7 +164,9 @@ test "TestCANARY_REQ_GQL_090_TelemetryPagingPull" {
 }
 
 test "explain: query properties ordered limit offset" {
-    const exe = "./zig-out/bin/geode";
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "EXPLAIN RETURN 1 AS x ORDER BY x LIMIT 5 OFFSET 2" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -155,7 +177,9 @@ test "explain: query properties ordered limit offset" {
 }
 
 test "explain: union distinct properties" {
-    const exe = "./zig-out/bin/geode";
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const exe = geode_test_bin.geode_exe;
     // Simulate distinct union by adding DISTINCT tail (assuming syntax 'UNION DISTINCT')
     const res = try run(&.{ exe, "EXPLAIN RETURN 1 AS x UNION DISTINCT RETURN 2 AS x" });
     defer std.testing.allocator.free(res.out);
@@ -167,7 +191,9 @@ test "explain: union distinct properties" {
 }
 
 test "explain: union all properties" {
-    const exe = "./zig-out/bin/geode";
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "EXPLAIN RETURN 1 AS x UNION ALL RETURN 2 AS x" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -178,7 +204,9 @@ test "explain: union all properties" {
 }
 
 test "profile: union distinct metrics" {
-    const exe = "./zig-out/bin/geode";
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x UNION RETURN 1 AS x" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);
@@ -189,7 +217,9 @@ test "profile: union distinct metrics" {
 }
 
 test "profile: union all metrics" {
-    const exe = "./zig-out/bin/geode";
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x UNION ALL RETURN 1 AS x" });
     defer std.testing.allocator.free(res.out);
     defer std.testing.allocator.free(res.err);

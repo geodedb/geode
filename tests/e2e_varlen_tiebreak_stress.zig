@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 const schema = @import("schema");
@@ -10,9 +11,11 @@ fn execSimple(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query
 
 // Multi-branch varlen determinism via stable ordering across repeated runs.
 // Graph: A->B->C and A->D->C (two 2-hop paths). We validate that ORDER BY is stable.
-// CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Multi-branch UA005/UA006"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_VarLenMultiBranchDeterminism; OWNER=engine; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-017; FEATURE="VarLen Multi-branch UA005/UA006"; ASPECT=ProtocolE2E; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_017_VarLenMultiBranchDeterminism; OWNER=engine; UPDATED=2026-11-14
 
 test "protocol QUIC: varlen tie-break determinism multi-branch" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("varlen tie-break determinism multi-branch");
     errdefer util.testFail();
 

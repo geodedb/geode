@@ -9,7 +9,7 @@ services:
       context: .
       dockerfile: Dockerfile.gpu
       args:
-        ZIG_VERSION: "0.15.1"
+        ZIG_VERSION: "0.16.0"
         TARGETARCH: amd64
         CUDA_VERSION: "12.3.0"
     image: geode:gpu
@@ -36,16 +36,15 @@ services:
       - "3142:3141/udp"  # QUIC protocol (different port to avoid conflict)
       - "9092:9091/tcp"  # Metrics endpoint
     environment:
-      - LOG_LEVEL=info
-      - VAULT_ADDR=http://vault:8200
-      - VAULT_TOKEN=${VAULT_TOKEN:?set VAULT_TOKEN in .env}
-      - REDIS_URL=redis://${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
-      - S3_ENDPOINT=http://minio:9000
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env}
-      - S3_SECRET_KEY=${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
-      - S3_BUCKET=geode-backups-gpu
-      - FIPS_MODE=enabled
-      - GPU_ENABLED=true
+      # geode reads no LOG_LEVEL (the log level is --log-level, below), no
+      # VAULT_* (no KMS provider reads Vault), no REDIS_URL (no Redis cache),
+      # no FIPS_MODE (FIPS is the -Dfips=true build, i.e. the fips image) and
+      # no GPU_ENABLED (there is no GPU switch; algorithms run on the CPU,
+      # GAP-0878). The NVIDIA_* / CUDA_* variables are the container
+      # runtime's. SONNY-6435.
+      # geode reads no S3_* variable: backups are local files written by
+      # `geode backup create` (SONNY-6290); copy them to object storage yourself
+      # (scripts/init-minio.sh sets up the MinIO bucket). SONNY-6430.
       - CUDA_VISIBLE_DEVICES=0
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
@@ -63,34 +62,36 @@ services:
       - "/certs/server.crt"
       - "--key"
       - "/certs/server.key"
-      - "--gpu-enabled"
+      - "--log-level"
+      - "info"
     ulimits:
       nproc:
         soft: 4096
         hard: 4096
-    pids_limit: 4096
     deploy:
       resources:
+        limits:
+          # SONNY-6453: here, not pids_limit, so the two cannot conflict
+          # (Compose refuses both).
+          pids: 4096
         reservations:
           devices:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "geode", "query", "RETURN 1 AS health", "--server", "127.0.0.1:3141"]
+      # SONNY-6453: the image's shared probe (GET /health on
+      # GEODE_METRICS_PORT); a release `geode query` with no --ca-cert is
+      # refused.
+      test: ["CMD", "/usr/local/bin/health-check.sh"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
     networks:
       - geode-network
-    depends_on:
-      vault:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    # SONNY-6442: geode does not wait for Vault, MinIO or Redis: it uses none
+    # of them.
 
   # Prometheus with GPU metrics
   nvidia-exporter:

@@ -1,15 +1,9 @@
 const std = @import("std");
-// CANARY: REQ=REQ-GQL-016; FEATURE="Path Expansion Operator"; ASPECT=Planner; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_016_PathExpandBfs; OWNER=planner; UPDATED=2025-09-21
-// CANARY: REQ=REQ-GQL-016; FEATURE="Path Cycle Determinism"; ASPECT=Planner; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_016_PathCycleDeterminism; OWNER=planner; UPDATED=2025-09-21
-// CANARY: REQ=REQ-GQL-016; FEATURE="Path Expansion Cycle Pruning Perf"; ASPECT=PathCyclePruningPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_016_PathCyclePruningPerf; OWNER=planner; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-016; FEATURE="Path Expansion Pruning Stats Perf"; ASPECT=PathPruningStatsPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_016_PathPruningStatsPerf; OWNER=planner; UPDATED=2025-09-20
-// CANARY: REQ=REQ-GQL-016; FEATURE="Path Expansion Memory Perf"; ASPECT=PathExpandMemPerf; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_016_PathExpandMemPerf; OWNER=planner; UPDATED=2025-09-20
 // CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerSubPhaseHooks; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PlannerSubPhaseHooks; OWNER=planner; UPDATED=2025-09-21
 pub const ast = @import("gql/ast.zig");
 const mem = std.mem;
 const temporal = @import("temporal.zig");
 const printer = @import("gql/print.zig");
-const phase_timing = @import("planner/phase_timing.zig");
 
 pub const PlannerOptions = struct {
     attempt_pushdown: bool = true,
@@ -21,192 +15,6 @@ pub const Plan = struct {
 };
 
 pub const PlanError = error{ OffsetPushdownRequiresOrder, GroupByIllegal, PathPatternUnsupported };
-
-// Path pattern execution operator (REQ-GQL-017)
-pub const PathExpand = struct {
-    min_hops: u32 = 1,
-    max_hops: u32 = 1,
-    tie_break_policy: TieBreakPolicy = .LengthId,
-
-    pub const TieBreakPolicy = enum {
-        LengthId, // UA005/UA006: (length, start_id, end_id) deterministic ordering
-    };
-
-    pub const PathResult = struct {
-        start_id: u64,
-        end_id: u64,
-        path_length: u32,
-        edge_ids: []const u64,
-
-        pub fn compare(self: PathResult, other: PathResult, policy: TieBreakPolicy) std.math.Order {
-            return switch (policy) {
-                .LengthId => {
-                    // First compare by path length
-                    const len_cmp = std.math.order(self.path_length, other.path_length);
-                    if (len_cmp != .eq) return len_cmp;
-
-                    // Then by start_id
-                    const start_cmp = std.math.order(self.start_id, other.start_id);
-                    if (start_cmp != .eq) return start_cmp;
-
-                    // Finally by end_id
-                    return std.math.order(self.end_id, other.end_id);
-                },
-            };
-        }
-    };
-
-    const QueueItem = struct { node_id: u64, path: []const u64 };
-
-    pub const BFSState = struct {
-        current_level: u32 = 0,
-        visited: std.AutoHashMap(u64, void),
-        queue: std.ArrayList(QueueItem),
-        results: std.ArrayList(PathResult),
-        allocator: std.mem.Allocator,
-
-        pub fn init(allocator: std.mem.Allocator) BFSState {
-            return .{
-                .visited = std.AutoHashMap(u64, void).init(allocator),
-                .queue = std.ArrayList(QueueItem).init(allocator),
-                .results = std.ArrayList(PathResult).init(allocator),
-                .allocator = allocator,
-            };
-        }
-
-        pub fn deinit(self: *BFSState) void {
-            self.visited.deinit();
-
-            // Free path arrays
-            for (self.queue.items) |item| {
-                self.allocator.free(item.path);
-            }
-            self.queue.deinit(self.allocator);
-
-            for (self.results.items) |result| {
-                self.allocator.free(result.edge_ids);
-            }
-            self.results.deinit(self.allocator);
-        }
-    };
-
-    pub fn execute(self: PathExpand, start_nodes: []const u64, adjacency: *const AdjacencyList, allocator: std.mem.Allocator) ![]const PathResult {
-        var state = BFSState.init(allocator);
-        defer state.deinit();
-
-        // Initialize queue with start nodes
-        for (start_nodes) |start_id| {
-            const initial_path = try allocator.alloc(u64, 0);
-            try state.queue.append(allocator, .{ .node_id = start_id, .path = initial_path });
-        }
-
-        while (state.queue.items.len > 0 and state.current_level < self.max_hops) {
-            const level_size = state.queue.items.len;
-            state.current_level += 1;
-
-            var processed: usize = 0;
-            while (processed < level_size) {
-                const current = state.queue.orderedRemove(0);
-                processed += 1;
-
-                // Get neighbors from adjacency list
-                if (adjacency.getNeighbors(current.node_id)) |neighbors| {
-                    for (neighbors) |neighbor| {
-                        // Check if we've already visited this node in this path (simple path constraint)
-                        var already_in_path = false;
-                        for (current.path) |path_node| {
-                            if (path_node == neighbor.node_id) {
-                                already_in_path = true;
-                                break;
-                            }
-                        }
-
-                        if (!already_in_path) {
-                            // Create new path
-                            const new_path = try allocator.alloc(u64, current.path.len + 1);
-                            @memcpy(new_path[0..current.path.len], current.path);
-                            new_path[current.path.len] = neighbor.edge_id;
-
-                            // If within hop range, add to results
-                            if (state.current_level >= self.min_hops) {
-                                const result = PathResult{
-                                    .start_id = start_nodes[0], // Simplified - would need to track actual start
-                                    .end_id = neighbor.node_id,
-                                    .path_length = state.current_level,
-                                    .edge_ids = try allocator.dupe(u64, new_path),
-                                };
-                                try state.results.append(allocator, result);
-                            }
-
-                            // Continue BFS if not at max hops
-                            if (state.current_level < self.max_hops) {
-                                try state.queue.append(allocator, .{ .node_id = neighbor.node_id, .path = new_path });
-                            } else {
-                                allocator.free(new_path);
-                            }
-                        }
-                    }
-                }
-
-                allocator.free(current.path);
-            }
-        }
-
-        // Sort results by tie-break policy for deterministic ordering
-        std.sort.pdq(PathResult, state.results.items, self.tie_break_policy, struct {
-            fn lessThan(policy: TieBreakPolicy, a: PathResult, b: PathResult) bool {
-                return a.compare(b, policy) == .lt;
-            }
-        }.lessThan);
-
-        return try allocator.dupe(PathResult, state.results.items);
-    }
-};
-
-// Mock adjacency list for path expansion
-pub const AdjacencyList = struct {
-    neighbors: std.AutoHashMap(u64, []const Neighbor),
-
-    pub const Neighbor = struct {
-        node_id: u64,
-        edge_id: u64,
-    };
-
-    pub fn init(allocator: std.mem.Allocator) AdjacencyList {
-        return .{
-            .neighbors = std.AutoHashMap(u64, []const Neighbor).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *AdjacencyList, allocator: std.mem.Allocator) void {
-        var iter = self.neighbors.iterator();
-        while (iter.next()) |entry| {
-            allocator.free(entry.value_ptr.*);
-        }
-        self.neighbors.deinit();
-    }
-
-    pub fn addEdge(self: *AdjacencyList, from: u64, to: u64, edge_id: u64, allocator: std.mem.Allocator) !void {
-        const entry = try self.neighbors.getOrPut(from);
-        if (!entry.found_existing) {
-            entry.value_ptr.* = &[_]Neighbor{};
-        }
-
-        const old_neighbors = entry.value_ptr.*;
-        const new_neighbors = try allocator.alloc(Neighbor, old_neighbors.len + 1);
-        @memcpy(new_neighbors[0..old_neighbors.len], old_neighbors);
-        new_neighbors[old_neighbors.len] = .{ .node_id = to, .edge_id = edge_id };
-
-        if (old_neighbors.len > 0) {
-            allocator.free(old_neighbors);
-        }
-        entry.value_ptr.* = new_neighbors;
-    }
-
-    pub fn getNeighbors(self: *const AdjacencyList, node_id: u64) ?[]const Neighbor {
-        return self.neighbors.get(node_id);
-    }
-};
 
 fn hasEqPred(e: ast.Expr) bool {
     return switch (e) {
@@ -229,38 +37,6 @@ pub fn planQuery(allocator: std.mem.Allocator, q: ast.Query, opts: PlannerOption
     const note = if (use_index) "INDEX" else "";
     try validateGroupBy(allocator, q);
     return .{ .ordered = ordered, .note = note };
-}
-
-// Sub-phase orchestrated planner with timing segmentation for rewrite, group validation, cost heuristic.
-// CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerSubPhaseHooks; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PlannerSubPhaseHooks; OWNER=planner; UPDATED=2025-09-21
-/// P2-3: Now accepts allocator for temporary validation allocations
-pub fn planQueryPhasedTimed(allocator: std.mem.Allocator, q_in: ast.Query, opts: PlannerOptions) PlanError!struct { plan: Plan, timings: phase_timing.PhaseTimings } {
-    // Local reference (placeholder for future in-place rewrites)
-    const q = q_in;
-    var timings: phase_timing.PhaseTimings = .{};
-    var pt = phase_timing.PhaseTimer.init(&timings);
-
-    // Rewrite phase (placeholder for future normalization / predicate pushdown)
-    pt.begin(.rewrite);
-    const ordered = q.order_by != null;
-    if (opts.attempt_pushdown and q.offset != null and !ordered) {
-        pt.end();
-        return PlanError.OffsetPushdownRequiresOrder;
-    }
-    pt.end();
-
-    // Group validation phase mapped onto 'cardinality' timing bucket (reusing enum to avoid breaking benches)
-    pt.begin(.cardinality);
-    try validateGroupBy(allocator, q);
-    pt.end();
-
-    // Cost heuristic phase
-    pt.begin(.cost_eval);
-    const use_index = if (q.where_clause) |wc| hasEqPred(wc) else false;
-    const note = if (use_index) "INDEX" else "";
-    const plan = Plan{ .ordered = ordered, .note = note };
-    pt.end();
-    return .{ .plan = plan, .timings = pt.snapshot() };
 }
 
 // Session context used for temporal comparison policies (e.g., how to interpret local datetimes)
@@ -339,6 +115,9 @@ fn isAggregateCall(e: ast.Expr) bool {
             if (std.ascii.eqlIgnoreCase(name, "avg")) break :blk true;
             if (std.ascii.eqlIgnoreCase(name, "min")) break :blk true;
             if (std.ascii.eqlIgnoreCase(name, "max")) break :blk true;
+            // SONNY-6460 item 3: the COUNT DISTINCT spellings the gql
+            // engine's grouped executor computes (`exec.runGroupedQuery`).
+            if (std.ascii.eqlIgnoreCase(name, "countdistinct") or std.ascii.eqlIgnoreCase(name, "count_distinct")) break :blk true;
             break :blk false;
         },
         else => false,
@@ -409,7 +188,7 @@ fn validateGroupBy(allocator: std.mem.Allocator, q: ast.Query) PlanError!void {
 /// P2-3: Now accepts allocator for temporary string allocations
 fn exprAllowedInGroup(allocator: std.mem.Allocator, e: ast.Expr, allowed: *std.StringHashMap(void)) bool {
     return switch (e) {
-        .Int, .Bool, .Null, .String => true,
+        .Int, .Bool, .Null, .String, .Decimal, .DoubleLit => true,
         .Ident => |id| allowed.contains(id.orig),
         .Member => blk: {
             const ss = printer.stringifyExprAlloc(allocator, e, .{}) catch break :blk false;
@@ -442,9 +221,9 @@ test "planner: time compare invalid across zone mismatch" {
 
 // Adaptive planner heuristic tests
 test "planner: heuristic index on equality predicate" {
-    var left_expr = ast.Expr{ .Ident = "a" };
+    var left_expr = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
     var right_expr = ast.Expr{ .Int = 1 };
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = ast.Expr{ .Binary = .{ .op = .Eq, .left = &left_expr, .right = &right_expr } };
@@ -454,34 +233,14 @@ test "planner: heuristic index on equality predicate" {
     q.order_by = null;
     q.limit = null;
     q.offset = null;
-    const plan = try planQuery(q, .{});
+    const plan = try planQuery(std.testing.allocator, q, .{});
     try std.testing.expect(std.mem.eql(u8, plan.note, "INDEX"));
 }
 
-test "TestCANARY_REQ_GQL_021_PlannerSubPhaseHooks" {
-    var left_expr = ast.Expr{ .Ident = "a" };
-    var right_expr = ast.Expr{ .Int = 42 };
-    var q: ast.Query = undefined;
-    q.optional_match = false;
-    q.match = .{ .chains = &.{} };
-    q.where_clause = ast.Expr{ .Binary = .{ .op = .Eq, .left = &left_expr, .right = &right_expr } };
-    q.with_clause = null;
-    q.group_by = null;
-    q.ret = .{ .items = &.{}, .distinct = false };
-    q.order_by = null;
-    q.limit = null;
-    q.offset = null;
-    const phased = try planQueryPhasedTimed(q, .{});
-    try std.testing.expect(phased.timings.rewrite_ns >= 0);
-    try std.testing.expect(phased.timings.cardinality_ns >= 0);
-    try std.testing.expect(phased.timings.cost_eval_ns >= 0);
-    try std.testing.expect(phased.plan.ordered == false);
-}
-
 test "planner: no index without equality predicate" {
-    var left_expr = ast.Expr{ .Ident = "a" };
+    var left_expr = ast.Expr{ .Ident = .{ .orig = "a", .cnf = "A" } };
     var right_expr = ast.Expr{ .Int = 1 };
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = ast.Expr{ .Binary = .{ .op = .Gt, .left = &left_expr, .right = &right_expr } };
@@ -491,12 +250,12 @@ test "planner: no index without equality predicate" {
     q.order_by = null;
     q.limit = null;
     q.offset = null;
-    const plan = try planQuery(q, .{});
+    const plan = try planQuery(std.testing.allocator, q, .{});
     try std.testing.expect(std.mem.eql(u8, plan.note, ""));
 }
 
 test "planner: no index without where clause" {
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
@@ -506,12 +265,12 @@ test "planner: no index without where clause" {
     q.order_by = null;
     q.limit = null;
     q.offset = null;
-    const plan = try planQuery(q, .{});
+    const plan = try planQuery(std.testing.allocator, q, .{});
     try std.testing.expect(std.mem.eql(u8, plan.note, ""));
 }
 
 test "planner: offset pushdown rejected without order" {
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
@@ -521,11 +280,11 @@ test "planner: offset pushdown rejected without order" {
     q.order_by = null;
     q.limit = null;
     q.offset = 5;
-    try std.testing.expectError(PlanError.OffsetPushdownRequiresOrder, planQuery(q, .{ .attempt_pushdown = true }));
+    try std.testing.expectError(PlanError.OffsetPushdownRequiresOrder, planQuery(std.testing.allocator, q, .{ .attempt_pushdown = true }));
 }
 
 test "planner: offset allowed with explicit order" {
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
@@ -533,16 +292,16 @@ test "planner: offset allowed with explicit order" {
     q.group_by = null;
     q.ret = .{ .items = &.{}, .distinct = false };
     var keys: [1]ast.OrderBy.OrderKey = undefined;
-    keys[0] = .{ .expr = .{ .Ident = "n" }, .desc = false };
+    keys[0] = .{ .expr = .{ .Ident = .{ .orig = "n", .cnf = "N" } }, .desc = false };
     q.order_by = .{ .keys = keys[0..] };
     q.limit = null;
     q.offset = 5;
-    const plan = try planQuery(q, .{ .attempt_pushdown = true });
+    const plan = try planQuery(std.testing.allocator, q, .{ .attempt_pushdown = true });
     try std.testing.expect(plan.ordered);
 }
 
 test "planner: group by legality basic" {
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
@@ -552,15 +311,15 @@ test "planner: group by legality basic" {
     q.limit = null;
     q.offset = null;
     // GROUP BY n, RETURN n is legal
-    var keys: [1]ast.Expr = .{.{ .Ident = "n" }};
+    var keys: [1]ast.Expr = .{.{ .Ident = .{ .orig = "n", .cnf = "N" } }};
     q.group_by = .{ .keys = keys[0..] };
-    var items: [1]ast.ReturnItem = .{.{ .expr = .{ .Ident = "n" }, .alias = null }};
+    var items: [1]ast.ReturnItem = .{.{ .expr = .{ .Ident = .{ .orig = "n", .cnf = "N" } }, .alias = null }};
     q.ret = .{ .items = items[0..], .distinct = false };
-    _ = try planQuery(q, .{});
+    _ = try planQuery(std.testing.allocator, q, .{});
 }
 
 test "planner: group by illegal non-grouped return" {
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
@@ -570,15 +329,15 @@ test "planner: group by illegal non-grouped return" {
     q.limit = null;
     q.offset = null;
     // GROUP BY n, RETURN m (not grouped) should be illegal
-    var keys: [1]ast.Expr = .{.{ .Ident = "n" }};
+    var keys: [1]ast.Expr = .{.{ .Ident = .{ .orig = "n", .cnf = "N" } }};
     q.group_by = .{ .keys = keys[0..] };
-    var items: [1]ast.ReturnItem = .{.{ .expr = .{ .Ident = "m" }, .alias = null }};
+    var items: [1]ast.ReturnItem = .{.{ .expr = .{ .Ident = .{ .orig = "m", .cnf = "M" } }, .alias = null }};
     q.ret = .{ .items = items[0..], .distinct = false };
-    try std.testing.expectError(PlanError.GroupByIllegal, planQuery(q, .{}));
+    try std.testing.expectError(PlanError.GroupByIllegal, planQuery(std.testing.allocator, q, .{}));
 }
 
 test "planner: group by legal aggregate return" {
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
@@ -588,22 +347,22 @@ test "planner: group by legal aggregate return" {
     q.limit = null;
     q.offset = null;
     // GROUP BY n, RETURN n, count(m) should be legal (includes the GROUP BY key)
-    var keys: [1]ast.Expr = .{.{ .Ident = "n" }};
+    var keys: [1]ast.Expr = .{.{ .Ident = .{ .orig = "n", .cnf = "N" } }};
     q.group_by = .{ .keys = keys[0..] };
-    var callee = ast.Expr{ .Ident = "count" };
-    var arg = ast.Expr{ .Ident = "m" };
+    var callee = ast.Expr{ .Ident = .{ .orig = "count", .cnf = "COUNT" } };
+    var arg = ast.Expr{ .Ident = .{ .orig = "m", .cnf = "M" } };
     var args = [_]*ast.Expr{&arg};
     const call = ast.Expr{ .Call = .{ .callee = &callee, .args = args[0..] } };
     var items: [2]ast.ReturnItem = .{
-        .{ .expr = .{ .Ident = "n" }, .alias = null },
+        .{ .expr = .{ .Ident = .{ .orig = "n", .cnf = "N" } }, .alias = null },
         .{ .expr = call, .alias = null },
     };
     q.ret = .{ .items = items[0..], .distinct = false };
-    _ = try planQuery(q, .{});
+    _ = try planQuery(std.testing.allocator, q, .{});
 }
 
 test "planner: having legality" {
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
@@ -612,26 +371,26 @@ test "planner: having legality" {
     q.order_by = null;
     q.limit = null;
     q.offset = null;
-    var keys: [1]ast.Expr = .{.{ .Ident = "n" }};
+    var keys: [1]ast.Expr = .{.{ .Ident = .{ .orig = "n", .cnf = "N" } }};
     q.group_by = .{ .keys = keys[0..] };
-    var items: [1]ast.ReturnItem = .{.{ .expr = .{ .Ident = "n" }, .alias = null }};
+    var items: [1]ast.ReturnItem = .{.{ .expr = .{ .Ident = .{ .orig = "n", .cnf = "N" } }, .alias = null }};
     q.ret = .{ .items = items[0..], .distinct = false };
     // HAVING count(m) > 1 allowed
-    var callee = ast.Expr{ .Ident = "count" };
-    var arg = ast.Expr{ .Ident = "m" };
+    var callee = ast.Expr{ .Ident = .{ .orig = "count", .cnf = "COUNT" } };
+    var arg = ast.Expr{ .Ident = .{ .orig = "m", .cnf = "M" } };
     var one = ast.Expr{ .Int = 1 };
     var args = [_]*ast.Expr{&arg};
     var call = ast.Expr{ .Call = .{ .callee = &callee, .args = args[0..] } };
     const pred = ast.Expr{ .Binary = .{ .op = .Gt, .left = &call, .right = &one } };
     q.having = pred;
-    _ = try planQuery(q, .{});
+    _ = try planQuery(std.testing.allocator, q, .{});
     // HAVING m (non-grouped identifier) illegal
-    q.having = .{ .Ident = "m" };
-    try std.testing.expectError(PlanError.GroupByIllegal, planQuery(q, .{}));
+    q.having = .{ .Ident = .{ .orig = "m", .cnf = "M" } };
+    try std.testing.expectError(PlanError.GroupByIllegal, planQuery(std.testing.allocator, q, .{}));
 }
 
 test "planner: group-by illegality with mixed identifiers in RETURN/HAVING" {
-    var q: ast.Query = undefined;
+    var q: ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
     q.optional_match = false;
     q.match = .{ .chains = &.{} };
     q.where_clause = null;
@@ -639,82 +398,12 @@ test "planner: group-by illegality with mixed identifiers in RETURN/HAVING" {
     q.order_by = null;
     q.limit = null;
     q.offset = null;
-    var keys: [1]ast.Expr = .{.{ .Ident = "n" }};
+    var keys: [1]ast.Expr = .{.{ .Ident = .{ .orig = "n", .cnf = "N" } }};
     q.group_by = .{ .keys = keys[0..] };
     // RETURN n, m -> illegal (m not grouped and not aggregate)
-    const it0 = ast.Expr{ .Ident = "n" };
-    const it1 = ast.Expr{ .Ident = "m" };
+    const it0 = ast.Expr{ .Ident = .{ .orig = "n", .cnf = "N" } };
+    const it1 = ast.Expr{ .Ident = .{ .orig = "m", .cnf = "M" } };
     var items: [2]ast.ReturnItem = .{ .{ .expr = it0, .alias = null }, .{ .expr = it1, .alias = null } };
     q.ret = .{ .items = items[0..], .distinct = false };
-    try std.testing.expectError(PlanError.GroupByIllegal, planQuery(q, .{}));
-}
-
-test "path expand: basic BFS with tie-breaking" {
-    const allocator = std.testing.allocator;
-
-    // Create test adjacency list
-    var adj = AdjacencyList.init(allocator);
-    defer adj.deinit(allocator);
-
-    // Build a simple graph: 1 -> 2 -> 3, 1 -> 4
-    try adj.addEdge(1, 2, 101, allocator);
-    try adj.addEdge(2, 3, 102, allocator);
-    try adj.addEdge(1, 4, 103, allocator);
-
-    // Test path expansion from node 1 with max 2 hops
-    const path_expand = PathExpand{
-        .min_hops = 1,
-        .max_hops = 2,
-        .tie_break_policy = .LengthId,
-    };
-
-    const start_nodes = [_]u64{1};
-    const results = try path_expand.execute(start_nodes[0..], &adj, allocator);
-    defer {
-        for (results) |result| {
-            allocator.free(result.edge_ids);
-        }
-        allocator.free(results);
-    }
-
-    // Should find paths to nodes 2, 3, and 4
-    try std.testing.expect(results.len >= 2); // At least direct neighbors
-
-    // Results should be sorted by tie-break policy (length, start_id, end_id)
-    for (results[0 .. results.len - 1], results[1..]) |a, b| {
-        try std.testing.expect(a.compare(b, .LengthId) != .gt);
-    }
-}
-
-test "path expand: deterministic tie-breaking" {
-    const allocator = std.testing.allocator;
-
-    const result1 = PathExpand.PathResult{
-        .start_id = 1,
-        .end_id = 2,
-        .path_length = 1,
-        .edge_ids = &[_]u64{101},
-    };
-
-    const result2 = PathExpand.PathResult{
-        .start_id = 1,
-        .end_id = 3,
-        .path_length = 1,
-        .edge_ids = &[_]u64{102},
-    };
-
-    const result3 = PathExpand.PathResult{
-        .start_id = 1,
-        .end_id = 2,
-        .path_length = 2,
-        .edge_ids = &[_]u64{ 101, 103 },
-    };
-
-    // Same length, different end_id: result1 < result2
-    try std.testing.expect(result1.compare(result2, .LengthId) == .lt);
-
-    // Different length: shorter path wins
-    try std.testing.expect(result1.compare(result3, .LengthId) == .lt);
-
-    _ = allocator;
+    try std.testing.expectError(PlanError.GroupByIllegal, planQuery(std.testing.allocator, q, .{}));
 }

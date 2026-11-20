@@ -8,8 +8,8 @@
 // - M5: `GEODE_QUIC_ADMISSION_STACK_MB` took 1 MiB; its floor is 8 MiB.
 //   Pinned in main.zig, and a server started with 1 serves a first stream.
 // - M7: `clearNodes` (reload, Raft snapshot install) freed the caches with no
-//   shard lock, and the Raft install ran with no store lock. Readers of the
-//   caches race repeated snapshot installs here.
+//   shard lock, and the Raft install ran with no store lock. (Its test raced
+//   the JSON-lines snapshot install, removed with it in SONNY-6636.)
 // - M8: `createSessionAs` leaked the tenant's connection quota when the copy
 //   of the tenant id could not be made; every allocation of a Handshake with
 //   a tenant is failed in turn here, and the quota must come back each time.
@@ -17,6 +17,7 @@
 // CANARY: REQ=REQ-SONNY-3317-ROUND15-MINORS; FEATURE="MultiGraphIsolation"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny3317_round15_minors.zig; OWNER=storage; UPDATED=2026-09-28
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const util = @import("proto_test_util.zig");
@@ -25,7 +26,6 @@ const fx = @import("sonny738_r12_grpc_fixture.zig");
 
 const graph_store = geode.graph_store;
 const tenant_quota = geode.tenant_quota;
-const raft_snapshot_manager = geode.distributed.raft_snapshot_manager;
 
 fn createGraphUnderFailure(which: enum { create, open_with_uuid }) !void {
     var k: usize = 0;
@@ -88,55 +88,6 @@ test "SONNY-3317 (M8): a Handshake with a tenant that fails at any allocation gi
     try testing.expectEqual(@as(u32, 0), qm.getUsage("tenant-m8").connections);
 }
 
-const CacheReader = struct {
-    stop: *std.atomic.Value(bool),
-    reads: usize = 0,
-    failures: usize = 0,
-    fn run(self: *CacheReader) void {
-        while (!self.stop.load(.acquire)) {
-            var sess = graph_store.snapshotUnderReadLock(std.heap.smp_allocator, graph_store.DEFAULT_GRAPH_NAME) catch {
-                self.failures += 1;
-                continue;
-            };
-            sess.deinit();
-            self.reads += 1;
-        }
-    }
-};
-
-test "SONNY-3317 (M7): snapshot reads of the caches race repeated Raft snapshot installs (clear and rebuild under the store lock and each shard's lock)" {
-    var f: fx.Fixture = undefined;
-    try f.init();
-    defer f.deinit();
-    const ga = f.ga();
-    const s = try f.session("m7");
-    for (0..40) |_| try fx.expectRuns(ga, s, "CREATE (:M7 {v: 1})");
-    const snap = try raft_snapshot_manager.createSnapshotData(testing.allocator, f.st);
-    defer testing.allocator.free(snap.data);
-    var stop: std.atomic.Value(bool) = .init(false);
-    var readers: [3]CacheReader = undefined;
-    var threads: [3]std.Thread = undefined;
-    for (&readers, &threads) |*r, *t| {
-        r.* = .{ .stop = &stop };
-        t.* = try std.Thread.spawn(.{}, CacheReader.run, .{r});
-    }
-    var installs: usize = 0;
-    for (0..20) |_| {
-        raft_snapshot_manager.installSnapshotData(testing.allocator, f.st, snap.data, snap.checksum) catch |err| {
-            std.debug.print("SONNY-3317 M7: install failed: {s}\n", .{@errorName(err)});
-            break;
-        };
-        installs += 1;
-    }
-    stop.store(true, .release);
-    for (threads) |t| t.join();
-    var reads: usize = 0;
-    for (readers) |r| reads += r.reads;
-    std.debug.print("SONNY-3317 M7: {d} installs, {d} snapshot reads alongside\n", .{ installs, reads });
-    try testing.expectEqual(@as(usize, 20), installs);
-    try testing.expect(reads > 0);
-}
-
 test "SONNY-3317 (M5): the QUIC admission stack's floor is 8 MiB (pinned), and a server told 1 MiB serves" {
     const main_src = try std.Io.Dir.cwd().readFileAlloc(std.Io.Threaded.global_single_threaded.io(), "src/server/main.zig", testing.allocator, .limited(8 * 1024 * 1024));
     defer testing.allocator.free(main_src);
@@ -154,7 +105,7 @@ test "SONNY-3317 (M5): the QUIC admission stack's floor is 8 MiB (pinned), and a
     defer allocator.free(addr);
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir },
         &.{ "GEODE_QUIC_DETACHED_CONNECTION_ADMISSION=1", "GEODE_QUIC_ADMISSION_STACK_MB=1" },
     );
     defer server.deinit();

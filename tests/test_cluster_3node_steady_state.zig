@@ -9,7 +9,7 @@
 // peers verify a CA-signed TLS cert.
 //
 // This test brings up three real `geode serve` processes on DISTINCT loopback
-// IPs (127.0.0.11/12/13), all binding cluster port 4242, with a cert-manager-
+// IPs (127.0.0.11/12/13), all binding one free cluster port, with a cert-manager-
 // style CA + a shared CA-signed leaf (SANs covering the three IPs) and
 // GEODE_CLUSTER_CA_CERT pinned to the CA — i.e. secure peer TLS, exactly like
 // the arda k8s cluster. It asserts:
@@ -30,11 +30,20 @@
 // flaky CI runner.
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
+const test_ports = @import("test_ports.zig");
 const builtin = @import("builtin");
 
-const BINARY_PATH = "./zig-out/bin/geode";
+const BINARY_PATH = geode_test_bin.geode_exe;
 const NODE_IPS = [_][]const u8{ "127.0.0.11", "127.0.0.12", "127.0.0.13" };
-const CLUSTER_PORT: u16 = 4242;
+/// SONNY-6450 item 2: the nodes' client and cluster ports (both QUIC, so
+/// UDP), free ports from tests/test_ports.zig chosen when the cluster starts.
+/// They were 3141 and 4242: a second run on the host (parallel lanes, the
+/// pre-push shards), or any geode on those ports, answered this one. Each node
+/// keeps its own loopback address (127.0.0.11-13), which the peer TLS
+/// certificate names, and binds the same two ports on it.
+var client_port: u16 = 0;
+var cluster_port: u16 = 0;
 const STARTUP_DEADLINE_MS: i64 = 45_000;
 const HOLD_SECONDS: i64 = 15;
 
@@ -81,7 +90,7 @@ fn binaryPresent() bool {
     return true;
 }
 
-const ADMIN_PW = "SteadyStatePw123!";
+const ADMIN_PW = "Steady State Admin Passphrase";
 
 /// CA that signed the nodes' leaf cert; set by makeCerts. `geode query` trusts it
 /// via --ca-cert so the client VERIFIES the node's TLS certificate. The client
@@ -90,11 +99,11 @@ const ADMIN_PW = "SteadyStatePw123!";
 /// query of this suite came back empty.
 var query_ca_path: ?[]const u8 = null;
 
-/// Run `geode query` against `ip:3141` and return captured stdout (caller frees
+/// Run `geode query` against `ip:client_port` and return captured stdout (caller frees
 /// with `gpa`). Bounded by a hard timeout so a hung query can't wedge the suite.
 /// A client that exits non-zero has its stderr printed, so a failure says why.
 fn runQuery(gpa: std.mem.Allocator, io: std.Io, aa: std.mem.Allocator, ip: []const u8, q: []const u8) ![]u8 {
-    const server = try std.fmt.allocPrint(aa, "{s}:3141", .{ip});
+    const server = try std.fmt.allocPrint(aa, "{s}:{d}", .{ ip, client_port });
     const ca = query_ca_path orelse return error.NoQueryCa;
     const argv = [_][]const u8{
         BINARY_PATH, "query",  "--server", server,
@@ -311,7 +320,7 @@ fn currentLeaderIdx(captures: []const Capture) ?usize {
 }
 
 /// A node is "healthy" if it produced a raft state line — i.e. it actually
-/// started and joined raft. On a dev host where a node's client port (:3141) is
+/// started and joined raft. On a dev host where a node's client port is
 /// already bound by another geode it fails to start and is excluded here, so the
 /// surviving quorum is still asserted (and the dead node is never queried, which
 /// would otherwise stall the poll on a 15s client timeout).
@@ -452,9 +461,14 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
     };
     defer std.Io.Dir.cwd().deleteTree(io, certs.dir) catch {};
 
-    const peers = "127.0.0.11:4242,127.0.0.12:4242,127.0.0.13:4242";
+    client_port = try test_ports.freeUdpPort();
+    cluster_port = try test_ports.freeUdpPortExcept(&.{client_port});
+    const peers = try std.fmt.allocPrint(aa, "{s}:{d},{s}:{d},{s}:{d}", .{ NODE_IPS[0], cluster_port, NODE_IPS[1], cluster_port, NODE_IPS[2], cluster_port });
+    const cluster_port_str = try std.fmt.allocPrint(aa, "{d}", .{cluster_port});
     const token = "steady-state-cluster-token";
-    const hmac = "steady-hmac-0123456789abcdef0123456789abcdef";
+    // SONNY-6429: 64 hex characters. Since SONNY-6339 a GEODE_AUTH_HMAC_KEY
+    // that is not refuses startup (HmacKeyUnusable), and no node came up.
+    const hmac = "57ea" ** 16;
 
     var children: [3]std.process.Child = undefined;
     var spawned: usize = 0;
@@ -471,14 +485,14 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
         const ip = NODE_IPS[i];
         const data_dir = try std.fmt.allocPrint(aa, "{s}/data{d}", .{ certs.dir, i + 1 });
         std.Io.Dir.cwd().createDirPath(io, data_dir) catch {};
-        const listen = try std.fmt.allocPrint(aa, "{s}:3141", .{ip});
+        const listen = try std.fmt.allocPrint(aa, "{s}:{d}", .{ ip, client_port });
         const node_id = try std.fmt.allocPrint(aa, "{d}", .{i + 1});
 
         const args = [_][]const u8{
-            BINARY_PATH,      "serve",   "--listen",    listen,
-            "--cluster-port", "4242",    "--peers",     peers,
-            "--data-dir",     data_dir,  "--cert",      certs.leaf,
-            "--key",          certs.key, "--log-level", "info",
+            BINARY_PATH,      "serve",          "--listen",    listen,
+            "--cluster-port", cluster_port_str, "--peers",     peers,
+            "--data-dir",     data_dir,         "--cert",      certs.leaf,
+            "--key",          certs.key,        "--log-level", "info",
         };
         const env = try aa.create(std.process.Environ.Map);
         env.* = std.process.Environ.Map.init(aa);
@@ -486,10 +500,10 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
         try env.put("GEODE_AUTH_HMAC_KEY", hmac);
         try env.put("GEODE_NODE_ID", node_id);
         try env.put("GEODE_PEERS", peers);
-        try env.put("GEODE_CLUSTER_PORT", "4242");
+        try env.put("GEODE_CLUSTER_PORT", cluster_port_str);
         try env.put("GEODE_CLUSTER_LISTEN_ADDRESS", ip);
         try env.put("GEODE_CLUSTER_CA_CERT", certs.ca);
-        try env.put("GEODE_ADMIN_PASSWORD", "SteadyStatePw123!");
+        try env.put("GEODE_ADMIN_PASSWORD", "Steady State Admin Passphrase");
         if (posixGetenv("PATH")) |p| try env.put("PATH", p);
         if (posixGetenv("HOME")) |p| try env.put("HOME", p);
         if (posixGetenv("LD_LIBRARY_PATH")) |p| try env.put("LD_LIBRARY_PATH", p);
@@ -636,7 +650,7 @@ test "3 nodes on distinct IPs with CA-signed TLS elect and HOLD a single leader"
             continue;
         };
         // Pick a HEALTHY node whose latest state line says follower; never
-        // probe a node that failed to start (its :3141 would be answered by an
+        // probe a node that failed to start (its client port would be answered by an
         // unrelated process).
         var follower_idx: ?usize = null;
         for (0..3) |i| {

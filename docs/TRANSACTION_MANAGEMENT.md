@@ -21,11 +21,11 @@ START TRANSACTION
 **Example:**
 
 ```gql
-START TRANSACTION
-CREATE (p:Person {name: 'Alice'})
-CREATE (c:Company {name: 'Acme'})
-CREATE (p)-[:WORKS_FOR]->(c)
-COMMIT
+START TRANSACTION;
+CREATE (p:Person {name: 'Alice'});
+CREATE (c:Company {name: 'Acme'});
+CREATE (p)-[:WORKS_FOR]->(c);
+COMMIT;
 ```
 
 **Behavior:**
@@ -48,9 +48,9 @@ COMMIT
 **Example:**
 
 ```gql
-START TRANSACTION
-CREATE (n:Node {value: 123})
-COMMIT
+START TRANSACTION;
+CREATE (n:Node {value: 123});
+COMMIT;
 ```
 
 **Behavior:**
@@ -72,15 +72,23 @@ ROLLBACK
 **Example:**
 
 ```gql
-START TRANSACTION
-CREATE (n:TempNode {data: 'temporary'})
+START TRANSACTION;
+CREATE (n:TempNode {data: 'temporary'});
 -- Decide to discard
-ROLLBACK
+ROLLBACK;
 ```
 
 **Behavior:**
 
-- Discards all changes made during the transaction
+- Discards all changes made during the transaction: every statement's
+  creates, property SETs and REMOVEs, label changes and deletes are undone
+  through the store's write methods (SONNY-3059, SONNY-3348)
+- Rebuilds, from the store as the undo left it, every full-text and advanced
+  (vector, spatial, ...) index covering a property, label or node the undo
+  reverted, so a search after ROLLBACK answers for what the store holds
+  (SONNY-3381). The same holds for a statement that fails: its changes are
+  undone before its error is returned, and the same indexes are rebuilt. A
+  rebuild costs O(nodes of the index's label)
 - Clears transaction state
 - Returns error if no transaction is active
 
@@ -95,46 +103,14 @@ ROLLBACK
 
 ### State Persistence
 
-Transaction state is persisted across CLI invocations to support multi-command transactions:
-
-```bash
-# First command
-./geode query "START TRANSACTION"
-
-# Second command (in same session)
-./geode query "CREATE (n:Test {id: 1})"
-
-# Third command (in same session)
-./geode query "COMMIT"
-```
-
-**Implementation:**
-
-- Transaction state saved to disk in session file
-- Loaded before query execution (if not starting new transaction)
-- Cleared after COMMIT or ROLLBACK
-
-### Key Fix: START TRANSACTION State Handling
-
-**Problem Solved:**
-Previously, `START TRANSACTION` would fail with "TransactionAlreadyActive" error because the previous transaction's Active state persisted from disk.
-
-**Solution:**
-Transaction session is NOT loaded when executing START TRANSACTION, ensuring a clean slate.
-
-**Code Location:**
-`src/test_harness.zig:50-56`
-
-```zig
-// Check if starting new transaction BEFORE loading session
-const is_start_transaction = parse_result.program.statements.len > 0
-    and parse_result.program.statements[0] == .StartTransaction;
-
-// Only load session if NOT starting new transaction
-var transaction_session = if (!is_start_transaction)
-    txn_session.loadSession(allocator.*) catch null
-else null;
-```
+Transaction state is held by the server for the connection, not in a file:
+the QUIC handler keeps a per-connection `in_txn` flag
+(`src/server/quic_connection_handler.zig`) and passes it to the executor as
+`ExecutionContext.transaction_state` (`src/execution.zig`). A transaction
+therefore spans the statements sent on one connection, for example in
+`geode shell` or in one multi-statement `geode query` call. Separate
+`geode query` invocations open separate connections and do not share a
+transaction.
 
 ## Error Handling
 
@@ -143,9 +119,9 @@ else null;
 Returned when attempting to start a transaction while one is already active.
 
 ```gql
-START TRANSACTION
+START TRANSACTION;
 -- ERROR: Transaction already active
-START TRANSACTION
+START TRANSACTION;
 ```
 
 **Status Class**: `0A000` (Feature Not Supported)
@@ -169,8 +145,8 @@ Transactions can include multiple graph operations:
 START TRANSACTION
 
 -- Create nodes
-CREATE (p:Person {name: 'Bob', age: 30})
-CREATE (c:Company {name: 'TechCorp'})
+CREATE (p:Person {name: 'Bob', age: 30});
+CREATE (c:Company {name: 'TechCorp'});
 
 -- Create relationship
 MATCH (p:Person {name: 'Bob'}), (c:Company {name: 'TechCorp'})
@@ -245,20 +221,13 @@ pub const TransactionState = enum {
 
 ### Session Persistence
 
-Transaction state is persisted using the `TransactionSession` structure:
-
-```zig
-pub const TransactionSession = struct {
-    state: TransactionState,
-    // Future: transaction ID, isolation level, etc.
-};
-```
+There is no on-disk transaction session. See
+[State Persistence](#state-persistence).
 
 **Files:**
 
-- `src/txn_session.zig`: Load/save transaction session
-- `src/test_harness.zig:50-130`: Transaction session lifecycle
-- `src/execution.zig:474-551`: Transaction command execution
+- `src/server/quic_connection_handler.zig`: per-connection transaction flag
+- `src/execution.zig`: transaction command execution and undo log
 
 ## Testing
 
@@ -288,10 +257,292 @@ These features implement ISO/IEC 39075:2024 GQL standard:
 ## Limitations (Current Implementation)
 
 1. **Auto-commit Mode**: Changes are currently visible immediately (no true isolation)
-2. **No Rollback of Previous Changes**: ROLLBACK clears state but doesn't revert changes
-3. **Single User**: No multi-user concurrency control yet
-4. **No Isolation Levels**: Default isolation only
-5. **No Savepoints**: SAVEPOINT/RELEASE not yet implemented
+2. **Single User**: No multi-user concurrency control yet
+3. **No Isolation Levels**: Default isolation only
+4. **Savepoints on the wire only**: the client protocol's savepoint and
+   rollback-to-savepoint requests are implemented; GQL has no SAVEPOINT
+   statement here
+
+## Crash Durability and Atomicity (SONNY-2979, SONNY-6658)
+
+An explicit transaction (BEGIN or START TRANSACTION ... COMMIT, over one
+request or several) is atomic across a crash (kill -9, OOM kill, power
+loss): after the restart either all of it is there (it committed) or none
+of it (it was open, or rolled back). So is an auto-commit statement (one
+statement outside BEGIN ... COMMIT), SONNY-6658: below.
+
+How:
+
+- **Write-through.** Each change is written to the storage engine as it
+  runs. Within one request, the changes on the shard of the session's engine
+  transaction (opened by the request's first change; the request's new nodes
+  are allocated there, SONNY-6425) commit together, with one WAL fsync, when
+  the request's program ends. A change on any of the other 15 shards commits
+  its own engine transaction when it runs; so do a REMOVE of a property, a
+  DELETE of a node and a REMOVE of a relationship property, wherever they
+  are.
+- **No engine transaction outlives a request** (SONNY-2823). A transaction
+  over several requests is committed in the engine request by request.
+- **ROLLBACK, a failed statement and a session's teardown** undo the
+  transaction through the in-memory undo log (`txn_undo_log`, and a
+  statement's own record, `statement_undo`), which writes compensating
+  changes to the engine. Inside an explicit transaction each entry is
+  also written ahead to the durable undo log (below).
+- **The undo joins the open engine transaction** (SONNY-6529). A failed
+  statement's engine transaction, a transaction body's and the session's
+  are ended AFTER the undo replays, by a commit: the replay's compensating
+  writes join them, so the failed writes and their undo reach the WAL as
+  one unit, and a crash before that commit loses both. Where the undo runs
+  after the request (the handler's rollback of a request that failed in an
+  explicit transaction), the request's engine transaction is committed at
+  its end and the undo commits its compensations on its own, as for every
+  committed request of an open transaction (the window above). geode used to
+  abort the engine transaction first (SONNY-2823, SONNY-3135); graph-storage
+  0.4.16 makes `abortTxn` undo the transaction's writes, and the replay then
+  undid them a second time (a node it created was gone, its delete failed
+  with 40003, and the server kept the node in memory).
+- **The engine's own undo** is used for a transaction the adapter opened
+  for one write call that failed before the server's in-memory copy took
+  the write: graph-storage 0.4.16 `abortTxn` undoes it (node record, slot,
+  count and id, properties, labels, relationships). An abort its undo
+  journal cannot undo exactly (a page the caller imaged itself, a property
+  change on a legacy chain, a chain pointer of an existing node moved, more
+  than 1,048,576 writes) is, from graph-storage v0.4.24 (SONNY-6657),
+  completed by discarding the transaction's pages and redoing the committed
+  state: the abort succeeds, the shard keeps serving, and geode does not
+  quarantine the graph (counter
+  `geode.runtime.storage_txn_aborts_discarded_total`). Only an abort it can
+  neither undo nor discard fails with `AbortNotUndone`: another transaction
+  was open on the shard at some point during it, the shard's WAL tail holds
+  cross-shard (2PC) records, or the engine runs with `abort_undo =
+  .keep_writes`. That one leaves the writes in the shard's pages and makes
+  the shard refuse every write, commit and checkpoint; geode then refuses the
+  graph's reads and writes with 58000 `AbortNotUndone` until the server
+  restarts, which reopens the graph at its committed state (nothing
+  uncommitted reached disk). The same holds for a write graph-storage
+  commits on its own (a label add or remove, a relationship create or
+  delete, a relationship property remove outside a statement transaction on
+  its shard): graph-storage aborts it when it fails and returns the write's
+  error, and geode reads the shard's `abort_not_undone` after the failure
+  and quarantines the graph (SONNY-6601 (3)). A commit that fails after
+  the in-memory copy took the writes aborts the transaction and refuses the
+  graph the same way
+  (58000 `CommitFailed`). Neither is reopened in place: geode keeps the
+  graph's nodes, relationships, label counts and indexes in memory beside
+  the engine and has no path that rebuilds them for one graph while the
+  server runs. Counters: `geode.runtime.storage_txn_aborts_undone_total`,
+  `geode.runtime.storage_txn_aborts_not_undone_total`,
+  `geode.runtime.storage_txn_aborts_discarded_total`.
+- **Durable undo log, `<data dir>/txn_undo.wal`** (`src/txn_durable_undo.zig`).
+  Inside an explicit transaction every change's undo entry (the
+  `txn_undo_log.UndoEntry` ROLLBACK uses: a created node or relationship, a
+  property's old value or its absence, a deleted node or relationship with
+  its labels, properties and tenant, a label added or removed) is appended
+  and fsynced **before** the change is made: `statement_undo.append` records
+  the state a write is about to change, and a create first logs an intent
+  naming the public id it is about to create (node creates, batch creates
+  and relationship creates; a relationship is written on shard(from), which
+  commits it at once when that is not the session's shard). So no engine
+  commit ever carries a change whose undo is not on disk.
+- **COMMIT** commits the request's engine transaction, then appends and
+  fsyncs a COMMITTED record. That record is the transaction's commit point:
+  COMMIT is acknowledged only after it, and if it cannot be written COMMIT
+  fails and the transaction is rolled back.
+- **ROLLBACK** (a ROLLBACK, a failed transaction body, a failed COMMIT, a
+  session's teardown) undoes the transaction through the in-memory undo log,
+  commits the undo's engine transaction, then writes a ROLLED_BACK record, so
+  a restart never undoes it again (a later committed change to the same value
+  survives).
+- **Recovery.** At startup, after the stores open and before anything else
+  reads or writes them (`server_init.openTxnUndoLog`), every transaction in
+  the log with entries and neither record is undone, newest entry first
+  across all of them, through the store's logged write methods (the ROLLBACK
+  path). Each entry checks what is there (a node never created is not
+  deleted, a property is set back to its old value), so a change whose entry
+  was written but which was never made, or never committed, costs nothing,
+  and a crash during recovery repeats it. Then the file is emptied. A torn
+  last record (its write never finished, so its change was never made) is
+  dropped. A log that cannot be opened, or a record that frames but does not
+  decode or authenticate, refuses startup. An entry that cannot be undone is
+  logged and counted (`txn_undo_wal_recovery_failures_total`) and the rest
+  are undone, as ROLLBACK does (where it answers 40003).
+- **At-rest encryption.** With `GEODE_TDE_KEY` each record is sealed with
+  graph-storage's side-file envelope (AES-256-GCM, kind consumer 3): an entry
+  holds property values. A sealed log without the key, a plaintext log with
+  one, or a record that fails authentication refuses startup.
+- **The file** is emptied whenever no transaction of the running server has
+  an open entry. Records carry a random per-start `boot` id beside the
+  transaction id, which restarts at 1 in every process.
+- **Cost.** One fsync of `txn_undo.wal` per change inside an explicit
+  transaction (one per batch of creates), plus one at COMMIT and one at
+  ROLLBACK. For auto-commit statements, below.
+- **COMMIT is durable.** Once COMMIT returns, every change of the
+  transaction has been fsynced to the engine WAL (per-commit fsync), and a
+  committed change made inside the transaction is never undone by recovery
+  (SONNY-2978: the session's engine transaction no longer batches its WAL
+  page images past other transactions' commits on its shard).
+
+Auto-commit statements (SONNY-6658), with the durable undo log installed
+(every `geode serve`):
+
+- **One engine transaction, committed at the statement's end.** The
+  statement's engine transaction (the one CREATE, MERGE and the batch
+  create open, or, for a statement that has none, such as `MATCH ... SET`,
+  `MATCH ... DELETE` or `MATCH ... REMOVE`, one opened by its first write
+  on that write's shard) is committed when the statement ends, after its
+  UNIQUE checks, not when the executor that opened it returns
+  (`graph_storage_adapter.commitAutoStatementTxn`). Every change of the
+  statement on that shard joins it, so they reach the WAL as one commit,
+  last. A change of `MATCH ... SET` used to commit an engine transaction of
+  its own each, so a one-node `SET n.a = 1, n.b = 2` now commits once
+  instead of twice.
+- **The undo goes to disk only when the statement spans engine
+  transactions.** A change that commits an engine transaction of its own
+  (one on another shard, a relationship from a node on another shard, a
+  batch create's nodes on other shards) is not the statement's last commit.
+  Before it, every entry of the statement's undo record (`statement_undo`)
+  not yet on disk, and the intents of the creates it is about to make, are
+  appended to `txn_undo.wal` under the statement's own id (top bit set, so
+  it never meets a transaction's) with one fsync
+  (`statement_undo.beforeOwnEngineCommit`). When the statement ends, the
+  rest is written, its engine transaction commits, and a COMMITTED record
+  seals it: its commit point (the statement fails, and is undone, if it
+  cannot be written). A statement whose changes all join its engine
+  transaction writes nothing to the log: no extra fsync.
+- **A failed statement** is undone through its record, as before; its
+  engine transaction, which the undo joined, commits; then, if it went to
+  the log, ROLLED_BACK is written.
+- **Recovery** is the transactions': a statement with entries and neither
+  record is undone at startup.
+- **Cost.** Nothing for a statement whose changes are on one shard. For one
+  that spans shards: one fsync of the log before each change that commits
+  on its own (that change's own engine commit was already an fsync), one
+  before the statement's engine commit and one for COMMITTED.
+- **Errors.** A write whose undo cannot be put on disk is refused and the
+  statement undone: 40000 ("The statement's undo could not be written to
+  the durable undo log"). An engine commit of the statement that fails:
+  40000 ("The statement's changes could not be committed to storage"), and
+  the graph is quarantined as for any failed commit (SONNY-6529).
+
+Residuals:
+
+- **Auto-commit statements outside the log or the statement scope.** An
+  embedding caller with no durable undo log installed, and the write paths
+  that run outside an executor statement (the bulk MERGE fast path, the
+  group-commit node path), commit as before; a program of several
+  auto-commit statements is atomic per statement, not as a whole. A
+  statement's write made on a worker thread that joined it (SONNY-6362)
+  commits on its own, after the statement's undo is on disk.
+- **Isolation is unchanged.** As at ROLLBACK, the undo at recovery restores
+  the values the transaction found; a change another session committed on
+  top of an uncommitted change of the transaction is overwritten by it.
+- **Write paths outside the statement undo record** (the bulk MERGE fast
+  path, the group-commit node path that allocates the engine slot before
+  the store records the create) log a create after it, not before; those
+  paths are not used inside an explicit transaction today.
+- **Why not one commit record in graph-storage (SONNY-2979 option B).** The
+  engine's WAL holds full page after-images, and transactions on one shard
+  share pages, so another transaction's committed image of a page carries an
+  open transaction's bytes: recovery that skips the open transaction's own
+  records still restores them (shown with a real crash: an open
+  transaction's node is resurrected by a second transaction's commit of the
+  same node page). Rolling them back inside the engine needs a complete,
+  durable logical undo there, and the engine refuses one for writes geode
+  makes (a label on an existing node, an edge-property page geode images
+  itself, a legacy property chain: `AbortNotUndone`). geode's own undo
+  entries are complete and logical, so the log lives in geode.
+
+`zig build test-sonny2979-txn-crash-atomicity` kills a real server with two
+transactions open and finds nothing of them after the restart;
+`zig build test-sonny2979-txn-commit-durable` checks that committed
+transactions survive whole, that a rolled-back one is not undone again, and
+the sealed log under `GEODE_TDE_KEY`; `zig build
+test-sonny2979-undo-wal-format` covers the record format, torn tails, the
+choice of transactions to undo, and the file's lifecycle.
+
+## One Open Writer per Shard (SONNY-6659)
+
+graph-storage logs full-page images, so a page has at most one open engine
+transaction writing it: from v0.4.25 a second open transaction's write to a
+page the first has written (a node page, or a shared slab block that
+labels, properties and adjacency fill) fails with `WriteConflict`, and that
+transaction cannot commit. Before, the image the second one committed
+carried the first one's uncommitted bytes and recovery replayed them.
+
+geode keeps at most one engine transaction open per shard for a request:
+
+- **Every write joins the open transaction on its shard.** While a
+  statement's or session's engine transaction is open on a shard, every
+  write geode makes there (node create, delete, property and label
+  changes, relationship create and delete, relationship properties, a node
+  batch's nodes on that shard) writes in it, so it commits or is rolled
+  back with that transaction and vanishes with it at a crash. A write on
+  another shard commits its own engine transaction, with no transaction of
+  the request open there. Until SONNY-6659 a relationship between nodes on
+  different shards (stored on its source's shard) and a node batch
+  (`CREATE (:L), (:L), (:L)`) committed their own transaction on the open
+  transaction's shard.
+- **A new node goes on a node page of its transaction's own.** Every node
+  geode creates (`createNode`, a node batch's, the bulk insert the
+  group-commit workers run) takes its id from the engine transaction it is
+  written in (`allocNodeTxn`): while another transaction is open on the
+  shard, that is a node page no other open transaction writes (graph-storage
+  also gives each open transaction slab pages of its own). Until v0.4.25 the
+  id came from the shard's shared tail page (`allocNode`), so two
+  transactions open on one shard that each created a node there conflicted
+  although they wrote unrelated data. What still conflicts between two
+  open transactions is a page with records of both: an update of the same
+  existing node (or of nodes on one node page), and relationships into
+  nearby nodes (one `in_dir` page).
+- **Writers are serialized per graph.** An executor statement holds the
+  graph's write lock, its engine transactions end before the lock is
+  released, and no thread holds it while a group-commit batch transaction is
+  open (SONNY-3029). The bulk fast paths take the graph SHARED and the
+  shard's lock for their own transaction.
+- **A concurrent writer's refusal is retryable.** Where two writers still
+  meet on a shard (an embedding caller that runs writes without the graph
+  lock, or a bulk fast-path write beside an open group-commit batch on the
+  same shard), the refused write's own engine transaction is aborted (the
+  engine undoes it; the store had not taken it) and the error answers
+  SQLSTATE 40001 (serialization failure, `WriteConflict: ... retry it`). An
+  auto-commit statement it refused is undone and runs again, up to 3 times
+  (after 1, 2 and 4 ms; `execution.write_conflict_retries_total`), before
+  the 40001 reaches the client. A statement in an explicit transaction is
+  not retried: the transaction fails, and the client retries it whole.
+- **Residual.** A conflict on the statement's or session's own engine
+  transaction (the other writer took the page first) makes that
+  transaction uncommittable: its commit fails, it is aborted and the graph
+  is quarantined, as for any failed commit (SONNY-6529), until a restart.
+  geode's locking keeps every other writer off a shard while such a
+  transaction is open, so no path is known to reach it.
+
+A ROLLBACK replays the transaction's undo through the store's write
+methods while the session's engine transaction may still be open (a ROLLBACK
+in the same request as the writes): each undo write on that transaction's
+shard joins it like any other write, so the undo never conflicts with the
+transaction it undoes, and the writes and their undo commit as one unit.
+Two sessions updating one node never meet in the engine: the graph's write
+lock admits one request at a time and each request ends its engine
+transaction before it lets go, so neither answers 40001 and no update is
+lost.
+
+`zig build test-sonny6659-open-writers` checks that four statement
+transactions open on one shard (as the group-commit workers open theirs),
+creating nodes there through `createNode`, a node batch and the bulk insert
+and setting their properties and labels, are never refused and all commit
+(graph-storage counts no conflict); and, over a real server, that explicit
+transactions of six sessions at once and two sessions incrementing one node
+answer no 40001 and lose no increment, that a ROLLBACK with the session's
+engine transaction open (and one in its own request) restores every kind of
+change to data that existed before, and that a SIGKILL keeps only what
+committed.
+
+`zig build test-sonny6659-geode-single-writer` checks, with a statement
+transaction open on a chosen shard, that a cross-shard relationship and a
+node batch begin no transaction on that shard and leave it not overlapped
+(graph-storage's own flag), that `WriteConflict` answers 40001, and, over a
+real server killed with SIGKILL, that both writes inside an explicit
+transaction commit, roll back and vanish at the kill with it.
 
 ## Future Enhancements
 
@@ -306,5 +557,5 @@ These features implement ISO/IEC 39075:2024 GQL standard:
 
 - [Session Management](SESSION_MANAGEMENT.md)
 - [MERGE Operations](MERGE_AND_LABEL_TESTS.md)
-- [Enhanced Transaction Isolation](ENHANCED_TRANSACTION_ISOLATION.md) - Advanced MVCC features
+- [Enhanced Transaction Isolation](ENHANCED_TRANSACTION_ISOLATION.md) - Status note: not implemented
 - [GQL Compliance](GQL_COMPLIANCE.md)

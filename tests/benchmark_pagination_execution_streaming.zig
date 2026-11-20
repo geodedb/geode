@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-004; FEATURE="Pagination"; ASPECT=PaginationExecutionStreaming; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_004_PaginationExecutionStreaming; OWNER=planner; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-004; FEATURE="Pagination"; ASPECT=PaginationExecutionStreaming; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_004_PaginationExecutionStreaming; OWNER=planner; UPDATED=2026-11-14
 
 fn simulate_page_emission(pages: usize, base_ms: i64, jitter_ms: i64) []i64 {
     var times: [256]i64 = undefined;

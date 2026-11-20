@@ -69,10 +69,10 @@ RUN chmod +x /usr/local/bin/health-check.sh
 USER geode
 WORKDIR /home/geode
 
-# Default environment
-ENV GEODE_LOG_LEVEL=info \
-    GEODE_DATA_DIR=/data \
-    GEODE_LISTEN=0.0.0.0:3141
+# Default environment. The listen address and log level are geode serve
+# options (CMD below): geode reads no GEODE_LISTEN or GEODE_LOG_LEVEL
+# (SONNY-6442).
+ENV GEODE_DATA_DIR=/data
 
 # Enable the out-of-band liveness endpoint the HEALTHCHECK probes:
 # GET http://127.0.0.1:$GEODE_METRICS_PORT/health (bound to loopback unless
@@ -90,4 +90,4 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
 
 # Entrypoint
 ENTRYPOINT ["/usr/local/bin/geode", "serve"]
-CMD ["--data-dir", "/data", "--listen", "0.0.0.0:3141", "--enable-auth"]
+CMD ["--data-dir", "/data", "--listen", "0.0.0.0:3141", "--log-level", "info", "--enable-auth"]

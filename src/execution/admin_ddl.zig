@@ -25,8 +25,8 @@ const value_types = @import("../value_types.zig");
 const Value = value_types.Value;
 
 // Step 1 finding: build_options IS wired into root_mod (build.zig:543) which includes
-// all execution submodules. The fallback in src/build_options.zig is "dev"; at build time
-// addOption("version", ...) injects the real value from build.zig.zon ("0.1.4").
+// all execution submodules. addOption("version", ...) in build.zig injects the value
+// of `git describe --tags --always` (getGitVersion) at build time.
 const build_options = @import("build_options");
 
 fn emptyResult(allocator: std.mem.Allocator) !ExecutionResult {
@@ -89,15 +89,16 @@ pub fn executeAlterUser(allocator: std.mem.Allocator, s: ast.AlterUserStatement,
 }
 
 pub fn executeDropUser(allocator: std.mem.Allocator, s: ast.DropUserStatement, ctx: ExecutionContext) !ExecutionResult {
-    // Step 1 finding: handleUserDelete in auth_dispatch.zig swallows all errors internally
-    // (logs via log.warn then continues) and always returns a result row with status="deleted <name>".
-    // It never propagates a Zig error. Therefore IF EXISTS is structurally a no-op at the Zig
-    // error level — there is no error to catch. We pass through the result in both cases.
-    // This means DROP USER IF EXISTS on a non-existent user still returns status="deleted <name>",
-    // which is safe and idempotent — the handler already degrades gracefully.
-    _ = s.if_exists;
+    // SONNY-6609: handleUserDelete answers a user that does not exist with
+    // UserNotFound (42704; it answered "deleted <name>"), and every other
+    // failure with its error (a delete that could not be saved:
+    // UserNotPersisted, 58030). DROP USER IF EXISTS of a missing user is a
+    // no-op that says so.
     try cluster_mod.gateUnreplicatedWrite(); // cluster fail-closed (see executeCreateUser)
-    return auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_delete", &.{s.name});
+    return auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_delete", &.{s.name}) catch |err| {
+        if (s.if_exists and err == error.UserNotFound) return auth_dispatch.dropUserAbsentResult(allocator, s.name);
+        return err;
+    };
 }
 
 pub fn executeCreateRole(allocator: std.mem.Allocator, s: ast.CreateRoleStatement, ctx: ExecutionContext) !ExecutionResult {
@@ -109,9 +110,9 @@ pub fn executeCreateRole(allocator: std.mem.Allocator, s: ast.CreateRoleStatemen
 }
 
 pub fn executeDropRole(allocator: std.mem.Allocator, s: ast.DropRoleStatement, ctx: ExecutionContext) !ExecutionResult {
-    // Step 1 finding: handleRoleDelete also never propagates a Zig error — it uses
-    // fetchRemove (which is a no-op on missing keys) and always returns status="deleted <name>".
-    // IF EXISTS is structurally a no-op; pass through.
+    // handleRoleDelete answers status="deleted <name>" for a missing role
+    // (fetchRemove is a no-op), so IF EXISTS changes nothing. It propagates a
+    // removal that could not be saved (SONNY-3038, RoleNotPersisted, 58030).
     _ = s.if_exists;
     try cluster_mod.gateUnreplicatedWrite(); // cluster fail-closed (see executeCreateUser)
     return auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.role_delete", &.{s.name});
@@ -157,10 +158,85 @@ pub fn executeShowPermissions(allocator: std.mem.Allocator, target: ?[]const u8,
     return auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_permissions", &.{username});
 }
 
+// CANARY: REQ=REQ-GPS-DDL-004; FEATURE="GPS SHOW GRANTS FOR"; ASPECT=ShowGrantsColumns; STATUS=TESTED; TEST=tests/test_gps_show_grants_for.zig; OWNER=security; UPDATED=2026-05-21
+// CANARY: REQ=REQ-SONNY-1333-SHOW-GRANTS; FEATURE="GQL Auth DDL"; ASPECT=ShowGrants; STATUS=TESTED; TEST=tests/test_sonny1333_grant_persist_show_grants.zig; OWNER=security; UPDATED=2026-11-11
+/// SHOW GRANTS [ FOR <username> ]: columns policy_name, graph, actions,
+/// effect, enabled. First the GPS policies that apply to the user, then
+/// (SONNY-1333) one row per graph the user holds per-graph grants on (GRANT
+/// ... ON GRAPH), as stored in __geode_security, with a null policy_name and
+/// the granted privileges in `actions`. Without FOR, the current user. The
+/// grants come from `geode.auth.grant_list`, which carries the authorization:
+/// a user may list its own; another user's need the Admin role.
+pub fn executeShowGrants(allocator: std.mem.Allocator, target: ?[]const u8, ctx: ExecutionContext) !ExecutionResult {
+    const user_name = target orelse (ctx.user orelse "");
+    var grants = try auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.grant_list", &.{user_name});
+    defer grants.deinit(allocator);
+
+    const column_list = [_][]const u8{ "policy_name", "graph", "actions", "effect", "enabled" };
+    const columns = try allocator.alloc([]const u8, column_list.len);
+    for (column_list, 0..) |col, i| columns[i] = try allocator.dupe(u8, col);
+    var rows_list = std.ArrayList([]Value).empty;
+
+    // CANARY: REQ=REQ-GPS-DDL-004; FEATURE="GPS SHOW GRANTS FOR"; ASPECT=ShowGrantsRows; STATUS=TESTED; TEST=tests/test_gps_show_grants_for.zig; OWNER=security; UPDATED=2026-05-21
+    // Policies applicable to the user: (a) expression_source == "true"
+    // (universally applicable), or (b) expression_source containing the
+    // literal "current_user() = '<username>'" (a text match).
+    const policy_catalog_mod = @import("../security/policy_catalog.zig");
+    if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
+        const user_expr = try std.fmt.allocPrint(allocator, "current_user() = '{s}'", .{user_name});
+        defer allocator.free(user_expr);
+        // SONNY-2756: copied under a shared hold of the catalog.
+        const view = pol_cat.acquireRead();
+        defer view.release();
+        for (view.policies()) |pol| {
+            const is_universal = std.mem.eql(u8, pol.expression_source, "true");
+            const is_user_specific = std.mem.indexOf(u8, pol.expression_source, user_expr) != null;
+            if (!is_universal and !is_user_specific) continue;
+
+            var actions_buf = std.ArrayList(u8).empty;
+            for (pol.actions, 0..) |a, ai| {
+                if (ai > 0) try actions_buf.appendSlice(allocator, ", ");
+                try actions_buf.appendSlice(allocator, @tagName(a));
+            }
+            const row = try allocator.alloc(Value, 5);
+            row[0] = Value{ .Str = try allocator.dupe(u8, pol.name) };
+            row[1] = Value{ .Str = try allocator.dupe(u8, pol.scope_graph) };
+            row[2] = Value{ .Str = try actions_buf.toOwnedSlice(allocator) };
+            row[3] = Value{ .Str = try allocator.dupe(u8, @tagName(pol.effect)) };
+            row[4] = Value{ .Bool = pol.enabled };
+            try rows_list.append(allocator, row);
+        }
+    }
+
+    // The per-graph grants: grant_list rows are (username, graph, action),
+    // by graph then action; one row per graph.
+    var i: usize = 0;
+    while (i < grants.rows.len) {
+        const graph = grants.rows[i][1].Str;
+        var actions_buf = std.ArrayList(u8).empty;
+        while (i < grants.rows.len and std.mem.eql(u8, grants.rows[i][1].Str, graph)) : (i += 1) {
+            if (actions_buf.items.len > 0) try actions_buf.appendSlice(allocator, ", ");
+            try actions_buf.appendSlice(allocator, grants.rows[i][2].Str);
+        }
+        const row = try allocator.alloc(Value, 5);
+        row[0] = .Null;
+        row[1] = Value{ .Str = try allocator.dupe(u8, graph) };
+        row[2] = Value{ .Str = try actions_buf.toOwnedSlice(allocator) };
+        row[3] = Value{ .Str = try allocator.dupe(u8, "allow") };
+        row[4] = Value{ .Bool = true };
+        try rows_list.append(allocator, row);
+    }
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = try rows_list.toOwnedSlice(allocator),
+        .flags = std.ArrayList([]const u8).empty,
+        .owns_value_memory = true,
+    };
+}
+
 pub fn executeShowVersion(allocator: std.mem.Allocator) !ExecutionResult {
     // build_options.version is injected by build.zig addOption("version", ...) at build time.
-    // In debug/dev builds where the option is not overridden, the fallback from
-    // src/build_options.zig is "dev".
     return oneRowResult(allocator, "version", build_options.version);
 }
 
@@ -218,7 +294,11 @@ pub fn executeShowCapabilities(allocator: std.mem.Allocator) !ExecutionResult {
         // GEO-UP-001 (ENG-4653): Sonny GraphRAG capability profile rows.
         // CANARY: REQ=REQ-SONNY-CAPABILITY-PROFILE-001; FEATURE="SonnyCapabilityProfile"; ASPECT=DiscoveryRows; STATUS=TESTED; TEST=tests/test_sonny_capability_profile.zig; OWNER=execution; UPDATED=2026-09-08
         .{ .name = "sonny_profile_version", .value = .{ .profile_version = {} } },
-        .{ .name = "read_only_covers_admin_ddl", .value = .{ .boolean = false } },
+        // SONNY-2751: a read-only request refuses the security DDL (users,
+        // roles, grants, policies, a password change) and every procedure not
+        // on the read-only list (tenant, FLE, TDE, CDC mutators), as it
+        // refuses data and schema changes.
+        .{ .name = "read_only_covers_admin_ddl", .value = .{ .boolean = true } },
         .{ .name = "strict_tenancy_production_default", .value = .{ .boolean = false } },
         .{ .name = "tenant_scope_fail_closed", .value = .{ .boolean = false } },
         .{ .name = "tenant_binding_server_verified", .value = .{ .boolean = false } },
@@ -312,7 +392,8 @@ pub fn executeShowCapabilities(allocator: std.mem.Allocator) !ExecutionResult {
 // CANARY: REQ=REQ-DIST-SHOW-CLUSTER-STATUS; FEATURE="SHOW CLUSTER STATUS"; ASPECT=ExecuteHandler; STATUS=TESTED; TEST=tests/test_show_cluster_status.zig; OWNER=distributed; UPDATED=2026-05-26
 //
 // SHOW CLUSTER STATUS handler.  Returns one row per cluster member with
-// columns (node_id, role, term, leader_id, endpoint, last_contact_ms).
+// columns (node_id, role, term, leader_id, endpoint, last_contact_ms;
+// last_contact_ms is NULL for a peer never heard from, SONNY-6463).
 //
 // In standalone mode (no ClusterCoordinator wired via
 // `cluster.setGlobalClusterCoordinator` during boot), returns exactly one
@@ -384,9 +465,8 @@ pub fn executeShowClusterStatus(allocator: std.mem.Allocator, ctx: ExecutionCont
     // Emit one row for this node, plus one per peer in coord.raft.peers.
     // raft.peers is the authoritative cluster membership populated from
     // PeerConfig at init time (resolvePeers in cluster.zig). The previous
-    // implementation read cluster_state.nodes, which is mutated at runtime
-    // by handleJoinCluster and was observed empty in subprocess runs even
-    // though raft.peers was populated correctly. Using raft.peers guarantees
+    // implementation read cluster_state.nodes, which was observed empty in
+    // subprocess runs even though raft.peers was populated correctly. Using raft.peers guarantees
     // SHOW CLUSTER STATUS reflects the configured membership immediately.
     // Self is intentionally NOT in that list so we emit it explicitly.
     const peer_count = coord.raft.peers.len;
@@ -415,7 +495,7 @@ pub fn executeShowClusterStatus(allocator: std.mem.Allocator, ctx: ExecutionCont
     rows[0][5] = Value{ .Int = 0 };
 
     // Rows 1..N: peers as recorded in coord.raft.peers.
-    for (coord.raft.peers, 0..) |peer, i| {
+    for (coord.raft.peers, 0..) |*peer, i| {
         const row = try allocator.alloc(Value, column_names.len);
         row[0] = Value{ .Int = @intCast(peer.id) };
 
@@ -441,9 +521,13 @@ pub fn executeShowClusterStatus(allocator: std.mem.Allocator, ctx: ExecutionCont
         row[4] = Value{ .Str = peer_endpoint };
 
         // last_contact_ms = now - last_contact (raft.peers tracks this
-        // separately from cluster_state).
-        const delta_ms: i64 = if (peer.last_contact == 0) 0 else now_ms - peer.last_contact;
-        row[5] = Value{ .Int = @max(@as(i64, 0), delta_ms) };
+        // separately from cluster_state). SONNY-6459: last_contact is the
+        // last authenticated raft frame from the peer, stored atomically by
+        // the cluster's inbound handlers. SONNY-6463: 0 means the peer was
+        // never heard from, reported as NULL (it used to start at the
+        // node's start time, so "never" read as "heard at startup").
+        const last_contact = @atomicLoad(i64, &peer.last_contact, .monotonic);
+        row[5] = if (last_contact == 0) Value{ .Null = {} } else Value{ .Int = @max(@as(i64, 0), now_ms - last_contact) };
         rows[i + 1] = row;
     }
 

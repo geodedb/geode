@@ -95,6 +95,8 @@ const REWRAP_SAMPLES = 256;
 const PAGE_SIZE = 4096;
 
 test "BenchmarkCANARY_REQ_GQL_046_KeyRotateThroughput" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();

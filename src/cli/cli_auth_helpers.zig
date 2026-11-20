@@ -2,7 +2,6 @@
 //! Shared helpers for CLI commands that need offline access to auth data.
 //!
 //! Provides:
-//! - `resolveStatePath` — resolve a state file path (for non-auth state files like authn, session, apikey, mtls)
 //! - `isPasswordStrong` — password strength validation
 //! - `initCliAuthManager` — initialise AuthGraphManager for offline CLI operations
 //! - `generateSecurePassword` — generate a cryptographically secure random password
@@ -20,17 +19,9 @@ fn compat_fillRandom(buf: []u8) void {
     }
 }
 
-// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
-fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
-    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
-    defer allocator.free(name_z);
-    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
-    return allocator.dupe(u8, std.mem.span(ptr));
-}
-
 const builtin = @import("builtin");
 const geode = @import("geode");
-const graph_store = geode.graph_store;
+pub const graph_store = geode.graph_store;
 const auth_graph_manager = @import("auth_graph_manager");
 const data_dir_lock = @import("data_dir_lock");
 pub const AuthGraphManager = auth_graph_manager.AuthGraphManager;
@@ -63,64 +54,84 @@ pub fn createRlsPolicyRecord(mgr: *AuthGraphManager, name: []const u8, table: []
     return policy_id;
 }
 
-// -- State Path Resolution (for non-auth flat files) --
+// -- Offline record removal (SONNY-6352) --
 
-const STATE_DIR_ENV = "GEODE_STATE_DIR";
+pub const RemoveOutcome = enum { removed, not_found };
 
-fn secureChmod(path: []const u8, mode: std.Io.File.Permissions) void {
-    if (builtin.os.tag == .windows) return;
-    const io_sc = std.Io.Threaded.global_single_threaded.io();
-    if (std.Io.Dir.openFileAbsolute(io_sc, path, .{})) |file| {
-        defer file.close(io_sc);
-        file.setPermissions(io_sc, mode) catch {};
-        return;
-    } else |_| {}
-
-    if (std.Io.Dir.openDirAbsolute(io_sc, path, .{ .iterate = true })) |opened_dir| {
-        var dir = opened_dir;
-        defer dir.close(io_sc);
-        dir.setPermissions(io_sc, mode) catch {};
-    } else |_| {}
+// CANARY: REQ=REQ-SONNY-6352-CLI-REMOVAL-ERRORS; FEATURE="OfflineAuthStoreSafety"; ASPECT=RemovalErrorsReported; STATUS=TESTED; TEST=tests/test_sonny6352_auth_writer_and_removals.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6352: `geode user delete <username>`'s removal. `geode user
+/// delete`, `geode role delete` and `geode policy delete` dropped the
+/// removal's error (`catch {}`) and reported the record deleted while it
+/// stayed stored (a node delete that fails leaves the record, SONNY-6293).
+/// An error here means nothing was removed.
+pub fn removeUserByName(mgr: *AuthGraphManager, username: []const u8) !RemoveOutcome {
+    const id = mgr.storage.findUserIdByUsername(username) orelse return .not_found;
+    try mgr.storage.removeUser(id);
+    return .removed;
 }
 
-fn resolveStateDir(allocator: std.mem.Allocator) ![]u8 {
-    if (getEnvVarOwned(allocator, STATE_DIR_ENV)) |raw| {
-        defer allocator.free(raw);
-        if (std.fs.path.isAbsolute(raw)) return allocator.dupe(u8, raw);
+/// SONNY-6352: `geode role delete <rolename>`'s removal (see
+/// `removeUserByName`).
+pub fn removeRoleByName(mgr: *AuthGraphManager, name: []const u8) !RemoveOutcome {
+    const role = mgr.storage.getRoleByName(name) orelse return .not_found;
+    try mgr.storage.removeRole(role.id);
+    return .removed;
+}
 
-        const cwd = try std.process.currentPathAlloc(std.Io.Threaded.global_single_threaded.io(), allocator);
-        defer allocator.free(cwd);
-        return std.fs.path.join(allocator, &.{ cwd, raw });
-    } else |_| {}
+/// SONNY-6352: `geode policy delete <name>`'s removal: the RLS policy of
+/// that name, never a GPS policy (SONNY-2750; see `removeUserByName`).
+pub fn removeRlsPolicyByName(mgr: *AuthGraphManager, name: []const u8) !RemoveOutcome {
+    const id = blk: {
+        var it = mgr.storage.policy_cache.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.effectiveKind() != .rls) continue;
+            if (std.mem.eql(u8, entry.value_ptr.getName(), name)) break :blk entry.key_ptr.*;
+        }
+        return .not_found;
+    };
+    try mgr.storage.removePolicy(id);
+    return .removed;
+}
 
-    if (getEnvVarOwned(allocator, "XDG_STATE_HOME")) |xdg_state_home| {
-        defer allocator.free(xdg_state_home);
-        return std.fs.path.join(allocator, &.{ xdg_state_home, "geode" });
-    } else |_| {}
+// -- Offline role assignment (SONNY-6367) --
 
-    if (getEnvVarOwned(allocator, "HOME")) |home| {
-        defer allocator.free(home);
-        return std.fs.path.join(allocator, &.{ home, ".local", "state", "geode" });
-    } else |_| {}
+/// The built-in roles, as `server_init.writerSetRole` stores them.
+pub const builtin_role_names = [_][]const u8{ "admin", "readwrite", "user", "readonly" };
 
-    if (builtin.os.tag != .windows) {
-        const uid = if (builtin.os.tag == .linux) std.os.linux.getuid() else std.c.getuid();
-        return std.fmt.allocPrint(allocator, "/tmp/geode-{d}", .{uid});
+/// The stored (lower-case) name of the built-in role `name` names, matched
+/// without regard to case as `user_management.Role.fromString` matches it;
+/// null for any other name.
+pub fn builtinRoleName(name: []const u8) ?[]const u8 {
+    for (builtin_role_names) |b| {
+        if (std.ascii.eqlIgnoreCase(b, name)) return b;
     }
-    return std.fs.path.join(allocator, &.{ ".", ".geode", "state" });
+    return null;
 }
 
-/// Resolve the full filesystem path for a state file.
-/// Used by authn_cli, session_cli, apikey_cli, and mtls_cli for their own
-/// flat-file state (NOT user credentials, which live in the graph store).
-pub fn resolveStatePath(allocator: std.mem.Allocator, filename: []const u8) ![]u8 {
-    const state_dir = try resolveStateDir(allocator);
-    defer allocator.free(state_dir);
+// CANARY: REQ=REQ-SONNY-6369-SUPERUSER-ROLE-FIXED; FEATURE="OfflineAuthStoreSafety"; ASPECT=OfflineSuperuserKeepsAdmin; STATUS=TESTED; TEST=tests/test_sonny6369_query_exit_and_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6369: `error.SuperuserRoleFixed` when `username` is a stored
+/// superuser and `role` is not admin: a superuser always resolves to admin
+/// (`role_resolver`), so the role would be stored and never take effect.
+pub fn requireRoleTakesEffect(mgr: *AuthGraphManager, username: []const u8, role: []const u8) !void {
+    const record = mgr.storage.getUserByUsername(username) orelse return;
+    if (record.is_superuser and !std.ascii.eqlIgnoreCase(role, "admin")) return error.SuperuserRoleFixed;
+}
 
-    try std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), state_dir);
-    secureChmod(state_dir, std.Io.File.Permissions.fromMode(0o700));
-
-    return std.fs.path.join(allocator, &.{ state_dir, filename });
+// CANARY: REQ=REQ-SONNY-6367-OFFLINE-ROLE-ASSIGN; FEATURE="OfflineAuthStoreSafety"; ASPECT=BuiltinRoleAssigned; STATUS=TESTED; TEST=tests/test_sonny6367_offline_user_cli.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6367: give `username` the built-in role `role` offline, as ALTER
+/// USER ... SET ROLE does (`AuthGraphManager.setBuiltinRoleWriteThrough`:
+/// its HAS_ROLE edges to the other built-in roles revoked, one to `role`
+/// assigned, sealed with the key the chain verified with). `geode user
+/// create --role`, `user update --role` and `user assign-role` stored a role
+/// node and no edge, so the user had no role. `error.CustomRoleMembershipNotSupported`
+/// for a role that is not built in (SONNY-6292: a custom role carries no
+/// privileges); `error.UserNotFound` when the user is not stored.
+pub fn assignBuiltinRole(allocator: std.mem.Allocator, mgr: *AuthGraphManager, username: []const u8, role: []const u8) !void {
+    const name = builtinRoleName(role) orelse return error.CustomRoleMembershipNotSupported;
+    if (mgr.storage.findUserIdByUsername(username) == null) return error.UserNotFound;
+    try requireRoleTakesEffect(mgr, username, name);
+    const key = try changeKey(allocator);
+    try mgr.setBuiltinRoleWriteThrough(&key, username, name, &builtin_role_names);
 }
 
 // -- Password Strength Validation --
@@ -150,12 +161,24 @@ pub fn passwordPolicyError(password: []const u8) ?[]const u8 {
 
 // -- Secure Password Generation --
 
-/// Generate a cryptographically secure random password.
-/// Returns a 32-character hex string (16 random bytes converted to hex).
-pub fn generateSecurePassword() ![32]u8 {
-    var random_bytes: [16]u8 = undefined;
-    try cb.Csprng.bytes(&random_bytes);
-    return std.fmt.bytesToHex(random_bytes, .lower);
+/// A generated password: `slice()` is the password.
+pub const GeneratedPassword = struct {
+    buf: [geode_auth.max_password_length]u8 = undefined,
+    len: usize = 0,
+
+    pub fn slice(self: *const GeneratedPassword) []const u8 {
+        return self.buf[0..self.len];
+    }
+};
+
+/// Generate a cryptographically secure random password. SONNY-6331: one
+/// that meets the password policy (`PasswordPolicy.generate`); it was a
+/// 32-character hex string the policy refuses, so `change-password
+/// --generate-password` failed its own policy check.
+pub fn generateSecurePassword() !GeneratedPassword {
+    var out: GeneratedPassword = .{};
+    out.len = (try geode_auth.PasswordPolicy.geodeSecure().generate(&out.buf)).len;
+    return out;
 }
 
 // -- Offline Data Directory Lock (ENG-3921) --
@@ -199,6 +222,9 @@ fn releaseCliDataDirLock() void {
 /// The data directory `initCliAuthManager` resolved (flag, GEODE_DATA_DIR, or
 /// the default); the HMAC key file lives there.
 var g_resolved_data_dir: ?[]const u8 = null;
+/// The allocator `initCliAuthManager` copied it with (SONNY-6345);
+/// `deinitAndSaveCliAuth` frees it.
+var g_resolved_data_dir_alloc: ?std.mem.Allocator = null;
 
 /// The key the chain verified with, set by `verifyChainBeforeChange`;
 /// `deinitAndSaveCliAuth` seals the command's change with it.
@@ -207,7 +233,13 @@ var g_verified_key: ?[32]u8 = null;
 /// Why the last `verifyChainBeforeChange` refused (for the message).
 var g_verify_failure: ?anyerror = null;
 
-pub const ChainCheckError = error{ AuthChainTampered, HmacKeyUnavailable };
+/// SONNY-6358: `verifyChainBeforeChange` found a store with no auth records
+/// and no chain root, so there was nothing to verify and no key was kept.
+/// `deinitAndSaveCliAuth` then seals what the command stored with the key
+/// the server would use (`changeKey`).
+var g_empty_store: bool = false;
+
+pub const ChainCheckError = error{ AuthChainTampered, AuthChainUnverifiable, HmacKeyUnavailable };
 
 // CANARY: REQ=REQ-SONNY-2798-OFFLINE-VERIFY-FIRST; FEATURE="OfflineAuthStoreSafety"; ASPECT=VerifyBeforeChange; STATUS=TESTED; TEST=tests/test_sonny2798_offline_verify.zig; OWNER=security; UPDATED=2026-09-26
 /// SONNY-2798: may an offline command change this auth store? Only when its
@@ -228,16 +260,62 @@ pub const ChainCheckError = error{ AuthChainTampered, HmacKeyUnavailable };
 /// new key, which then failed to verify, although the refusal said nothing
 /// was changed.
 pub fn verifyChainBeforeChange(allocator: std.mem.Allocator, mgr: *AuthGraphManager) ChainCheckError!void {
-    if (mgr.countAuthRecords() == 0 and mgr.storage.loadChainRoot() == null) return;
+    g_empty_store = false;
+    // SONNY-6594 (5): a chain root that cannot be read is not "no root": the
+    // store is not taken for empty, and `verifyChain` below fails with the
+    // read's error (`g_verify_failure`).
+    const no_root = if (mgr.storage.loadChainRoot()) |root| root == null else |_| false;
+    if (mgr.countAuthRecords() == 0 and no_root) {
+        g_empty_store = true;
+        return;
+    }
     const kr = AuthGraphManager.resolveExistingHmacKey(allocator, g_resolved_data_dir) catch |err| {
         g_verify_failure = err;
         return error.HmacKeyUnavailable;
     };
     mgr.verifyChain(&kr.key) catch |err| {
         g_verify_failure = err;
+        // SONNY-6598: a verification that could not run is no tampering verdict.
+        if (!AuthGraphManager.isChainTamperVerdict(err)) return error.AuthChainUnverifiable;
         return error.AuthChainTampered;
     };
     g_verified_key = kr.key;
+}
+
+// CANARY: REQ=REQ-SONNY-6358-OFFLINE-PASSWORD-HASH; FEATURE="OfflineAuthStoreSafety"; ASPECT=ChangeKey; STATUS=TESTED; TEST=tests/test_sonny6358_offline_password_hash.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6358: the key an offline command signs its change with, once
+/// `verifyChainBeforeChange` has let it change the store: the key the chain
+/// verified with, or, on a store with no auth records and no chain root, the
+/// key the server would use there (`resolveHmacKey`: the environment, else
+/// `.geode_hmac_key`, written as the server's first start would when there is
+/// none). Kept for `deinitAndSaveCliAuth`'s seal. `error.ChainNotVerified`
+/// when the chain was not checked.
+pub fn changeKey(allocator: std.mem.Allocator) ![32]u8 {
+    if (g_verified_key) |key| return key;
+    if (!g_empty_store) return error.ChainNotVerified;
+    const kr = try AuthGraphManager.resolveHmacKey(allocator, g_resolved_data_dir);
+    g_verified_key = kr.key;
+    return kr.key;
+}
+
+/// SONNY-6614: seal the command's change into the chain and write it out
+/// NOW (before a step that may end the process with `std.process.exit`,
+/// which runs no defer, so `deinitAndSaveCliAuth` would not). The chain
+/// must have verified first (`requireIntactChain`).
+pub fn sealAndSaveNow(allocator: std.mem.Allocator, mgr: *AuthGraphManager) !void {
+    const key = try changeKey(allocator);
+    try mgr.sealChain(&key);
+    graph_store.getGlobalStore(allocator).saveIfDirty();
+}
+
+/// SONNY-6609: the key the store's sealed MFA secrets open with, for a
+/// command that reads one without changing the store (`geode user
+/// mfa-verify`): the verified key, else the store's existing key (never
+/// generated).
+pub fn readKey(allocator: std.mem.Allocator) ![32]u8 {
+    if (g_verified_key) |key| return key;
+    const kr = try AuthGraphManager.resolveExistingHmacKey(allocator, g_resolved_data_dir);
+    return kr.key;
 }
 
 /// `verifyChainBeforeChange` for a CLI command (`command` and `subcommand`
@@ -254,6 +332,11 @@ pub fn requireIntactChain(allocator: std.mem.Allocator, mgr: *AuthGraphManager, 
                     "'geode auth policy list'); then accept them with 'geode auth reseal', or restore the data directory from a backup.\n",
                 .{ command, subcommand, why },
             ),
+            error.AuthChainUnverifiable => std.debug.print(
+                "Error: refusing to run '{s} {s}': the __geode_security HMAC chain could not be verified ({s}); nothing was changed.\n" ++
+                    "This is not a tampering verdict (the check itself failed, e.g. out of memory or a store read error). Retry once the cause is fixed.\n",
+                .{ command, subcommand, why },
+            ),
             error.HmacKeyUnavailable => std.debug.print(
                 "Error: refusing to run '{s} {s}': there is no HMAC key to verify the __geode_security chain with ({s}); nothing was changed.\n" ++
                     "Set GEODE_AUTH_HMAC_KEY or GEODE_TDE_KEY, or place .geode_hmac_key in the data directory.\n",
@@ -264,7 +347,61 @@ pub fn requireIntactChain(allocator: std.mem.Allocator, mgr: *AuthGraphManager, 
     };
 }
 
+// CANARY: REQ=REQ-SONNY-6345-CLI-DEFAULT-DATA-DIR; FEATURE="OfflineAuthStoreSafety"; ASPECT=ServerDefaultDataDir; STATUS=TESTED; TEST=tests/test_sonny6345_auth_cli_and_grant.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6345: the data directory the offline auth CLI (`geode auth init |
+/// reseal | verify | policy | grant`, `geode user`, `geode role`) opens:
+/// `--data-dir`, else the directory `geode serve` opens with no flag
+/// (`graph_store.getPersistenceFilePath`: GEODE_DATA_DIR, else the per-user
+/// `graph_store.defaultDataDir`). It was GEODE_DATA_DIR, else /var/lib/geode,
+/// so with neither set the CLI inspected and changed a different store than
+/// the server's. Caller owns the result.
+pub fn resolveCliDataDir(allocator: std.mem.Allocator, flag: ?[]const u8) ![]u8 {
+    if (flag) |dir| return allocator.dupe(u8, dir);
+    return graph_store.getPersistenceFilePath(allocator);
+}
+
+/// The data directory `initCliAuthManager` opened, once it has.
+pub fn resolvedDataDir() ?[]const u8 {
+    return g_resolved_data_dir;
+}
+
+/// SONNY-6345: whether `data_dir` holds auth state (a registered
+/// `__geode_security` graph), read without creating or locking anything.
+pub fn hasAuthState(allocator: std.mem.Allocator, data_dir: []const u8) !bool {
+    // SONNY-6616: the registry is sealed under GEODE_TDE_KEY.
+    const key = try geode.tde_file_encryption.loadKey(allocator);
+    return geode.graph_storage_adapter.graphRegisteredOnDisk(allocator, data_dir, graph_store.SECURITY_GRAPH_NAME, key);
+}
+
 // -- Offline Auth Manager Initialization --
+
+// CANARY: REQ=REQ-SONNY-6586-CLI-MISSING-DATA-DIR; FEATURE="OfflineAuthStoreSafety"; ASPECT=MissingDataDirNamed; STATUS=TESTED; TEST=tests/test_sonny6586_cli_truth.zig; OWNER=cli; UPDATED=2026-11-15
+/// SONNY-6586: an offline auth command opens a data directory that exists.
+/// With a missing one it failed with DataDirLockUnavailable (the lock file
+/// cannot be created in it), which does not name the cause; creating the
+/// directory would run the command against an empty store at a mistyped
+/// path. `geode auth init` creates the directory before it gets here.
+fn requireExistingDataDir(dir: []const u8) error{ DataDirNotFound, DataDirNotADirectory }!void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const opened = std.Io.Dir.cwd().openDir(io, dir, .{}) catch |err| switch (err) {
+        error.FileNotFound => {
+            std.debug.print(
+                "Error: the data directory {s} does not exist; nothing was changed.\n" ++
+                    "Pass the server's --data-dir (or set GEODE_DATA_DIR), or create a store there with 'geode auth init'.\n",
+                .{dir},
+            );
+            return error.DataDirNotFound;
+        },
+        error.NotDir => {
+            std.debug.print("Error: the data directory {s} is not a directory; nothing was changed.\n", .{dir});
+            return error.DataDirNotADirectory;
+        },
+        // Anything else (permissions, ...) is reported by the lock and the
+        // store open that follow, as before.
+        else => return,
+    };
+    opened.close(io);
+}
 
 /// Initialise an AuthGraphManager for CLI offline operations.
 ///
@@ -273,13 +410,12 @@ pub fn requireIntactChain(allocator: std.mem.Allocator, mgr: *AuthGraphManager, 
 ///
 /// The caller must call `deinit()` on the returned manager when done.
 pub fn initCliAuthManager(allocator: std.mem.Allocator, data_dir: ?[]const u8) !AuthGraphManager {
-    // Resolve the data directory from the flag, env var, or default
-    const resolved_dir: []const u8 = if (data_dir) |dir|
-        dir
-    else if (getEnvVarOwned(allocator, "GEODE_DATA_DIR")) |env_dir|
-        env_dir
-    else |_|
-        "/var/lib/geode";
+    // SONNY-6345: the flag, else the directory `geode serve` opens (it was
+    // GEODE_DATA_DIR, else /var/lib/geode). Kept until
+    // `deinitAndSaveCliAuth` (`resolvedDataDir` reads it).
+    const resolved_dir: []const u8 = try resolveCliDataDir(allocator, data_dir);
+    errdefer allocator.free(resolved_dir);
+    try requireExistingDataDir(resolved_dir);
 
     // CANARY: REQ=REQ-ENG-3921-DATA-DIR-LOCK-002; FEATURE="DataDirLock"; ASPECT=OfflineCliWriter; STATUS=TESTED; TEST=tests/test_datadir_lock_subprocess.zig; OWNER=storage; UPDATED=2026-08-29
     // ENG-3921: these offline CLI entry points open the data directory
@@ -292,16 +428,22 @@ pub fn initCliAuthManager(allocator: std.mem.Allocator, data_dir: ?[]const u8) !
     errdefer releaseCliDataDirLock();
     // SONNY-2798: where `requireIntactChain` finds the HMAC key.
     g_resolved_data_dir = resolved_dir;
+    g_resolved_data_dir_alloc = allocator;
+    errdefer {
+        g_resolved_data_dir = null;
+        g_resolved_data_dir_alloc = null;
+    }
 
     // Use initGlobalStore which initializes the storage adapter so that
     // saveIfDirty actually persists node/edge data to disk.  Without the
     // adapter, saveToFile is a no-op and user mutations are lost between
     // CLI invocations (GAP-0266).
+    // SONNY-6422: a data directory that cannot be opened is an error. This
+    // fell back to an empty in-memory store, so the command ran against no
+    // users and its changes were discarded at exit.
     const store = graph_store.initGlobalStore(allocator, resolved_dir) catch |err| {
-        // Fall back to getGlobalStore if adapter init fails (e.g., permissions)
-        graph_store.setDataDirOverride(allocator, resolved_dir);
-        std.log.warn("Failed to init storage adapter for CLI auth (falling back): {}", .{err});
-        return AuthGraphManager.init(allocator, graph_store.getGlobalStore(allocator));
+        std.debug.print("Error: cannot open the data directory {s} ({s}); nothing was changed.\n", .{ resolved_dir, @errorName(err) });
+        return err;
     };
     return AuthGraphManager.init(allocator, store);
 }
@@ -319,6 +461,18 @@ pub fn deinitAndSaveCliAuth(allocator: std.mem.Allocator, mgr: *AuthGraphManager
     // command's own: seal them, so the next command and the next server start
     // verify the change. Most offline writers stored their records unsigned,
     // and the server refused to start until someone ran `geode auth reseal`.
+    // SONNY-6358: on a store that had no auth records there was no chain to
+    // verify and no key; what the command stored was left unsealed, and the
+    // server refused to start (no chain root). Seal it with the server's key.
+    if (g_verified_key == null and g_empty_store and mgr.countAuthRecords() > 0) {
+        _ = changeKey(allocator) catch |err| {
+            std.debug.print(
+                "Warning: the change was saved but could not be sealed into the __geode_security HMAC chain: no HMAC key ({s}); set GEODE_AUTH_HMAC_KEY or GEODE_TDE_KEY as the server does, then run 'geode auth reseal'.\n",
+                .{@errorName(err)},
+            );
+        };
+    }
+    g_empty_store = false;
     if (g_verified_key) |key| {
         g_verified_key = null;
         mgr.sealChain(&key) catch |err| {
@@ -334,6 +488,29 @@ pub fn deinitAndSaveCliAuth(allocator: std.mem.Allocator, mgr: *AuthGraphManager
     // ENG-3921: drop the data-dir lock only after the flush has landed, so a
     // server starting up behind us never reads a half-written store.
     releaseCliDataDirLock();
+    if (g_resolved_data_dir_alloc) |a| {
+        if (g_resolved_data_dir) |d| a.free(d);
+        g_resolved_data_dir = null;
+        g_resolved_data_dir_alloc = null;
+    }
+}
+
+/// SONNY-6359: `deinitAndSaveCliAuth` for a command that changes nothing
+/// (`geode auth verify`): no seal and no save, then the same teardown.
+/// Opening the store still has its own side effects on disk (the storage
+/// engine checkpoints and truncates each graph's WAL, rewrites the graph
+/// registry and records the lock holder): the store has no read-only open.
+pub fn deinitCliAuthWithoutSaving(allocator: std.mem.Allocator, mgr: *AuthGraphManager) void {
+    _ = allocator;
+    g_verified_key = null;
+    g_empty_store = false;
+    mgr.deinit();
+    releaseCliDataDirLock();
+    if (g_resolved_data_dir_alloc) |a| {
+        if (g_resolved_data_dir) |d| a.free(d);
+        g_resolved_data_dir = null;
+        g_resolved_data_dir_alloc = null;
+    }
 }
 
 // -- Tests --
@@ -376,7 +553,7 @@ test "passwordPolicyError explains the rejection" {
     try std.testing.expect(std.mem.indexOf(u8, reason, "too short") != null);
 }
 
-test "generateSecurePassword returns 32 chars" {
+test "generateSecurePassword meets the password policy" {
     const pw = try generateSecurePassword();
-    try std.testing.expectEqual(@as(usize, 32), pw.len);
+    try std.testing.expect(passwordPolicyError(pw.slice()) == null);
 }

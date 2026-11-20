@@ -176,7 +176,65 @@ pub fn analyzeProgram(program: *const ast.Program) ProgramAnalysis {
         }
     }
     if (selector_only) analysis.preamble_graph_selector = selector_graph;
+    // SONNY-6562: a result's rows are ordered by the ORDER BY of the statement
+    // that produces them, whatever its shape (FOR, CALL, a chain); `target`
+    // is only ever a Query or a UNION, so it alone missed a FOR's.
+    if (analysis.kind == .rows) analysis.traits.ordered = resultOrderBy(program) != null;
     return analysis;
+}
+
+// CANARY: REQ=REQ-SONNY-6562-RESULT-ORDER; FEATURE="ResultMetadata"; ASPECT=OrderedTruthful; STATUS=TESTED; TEST=tests/test_sonny6562_wire_metadata.zig; OWNER=query; UPDATED=2026-11-15
+/// SONNY-6562: the ORDER BY that orders the rows a program returns, or null
+/// when the server does not guarantee their order. The result is the last
+/// statement's (transaction control returns none), and its rows are ordered
+/// only by that statement's final ORDER BY (ISO/IEC 39075:2024 14.10 <order by
+/// and page statement>; 14.2 for a UNION's trailing ORDER BY). A WITH's ORDER
+/// BY earlier in a chain does not order the result. The transports send
+/// `ordered` / `order_keys` from this, so the flag is set exactly when the
+/// keys are.
+pub fn resultOrderBy(program: *const ast.Program) ?*const ast.OrderBy {
+    var idx: usize = program.statements.len;
+    while (idx > 0) : (idx -= 1) {
+        const stmt = &program.statements[idx - 1];
+        switch (stmt.*) {
+            .StartTransaction, .Commit, .Rollback => continue,
+            else => return statementOrderBy(stmt),
+        }
+    }
+    return null;
+}
+
+/// SONNY-6562: the ORDER BY that orders the rows `stmt` returns (see
+/// `resultOrderBy`), for every statement that returns rows.
+pub fn statementOrderBy(stmt: *const ast.Statement) ?*const ast.OrderBy {
+    return switch (stmt.*) {
+        .Query => |*q| queryOrderBy(q),
+        .Union => |*u| u.order_by,
+        .For => |*f| forOrderBy(f),
+        .Call => |*c| switch (c.*) {
+            .Procedure => |*p| if (p.order_by) |*ob| ob else null,
+            .Subquery => null,
+        },
+        .Values => |*v| if (v.next_statement) |next| statementOrderBy(next) else null,
+        else => null,
+    };
+}
+
+/// The last part of a chain returns the rows (`next_query` links the parts;
+/// the head's `order_by` is an initial WITH's when it has a next part).
+fn queryOrderBy(head: *const ast.Query) ?*const ast.OrderBy {
+    var q = head;
+    while (q.next_query) |next| q = next;
+    if (q.for_statement) |f| {
+        if (f.body != null) return forOrderBy(f);
+    }
+    return if (q.order_by) |*ob| ob else null;
+}
+
+/// A FOR's RETURN, or the last part of the body that follows it.
+fn forOrderBy(f: *const ast.ForStatement) ?*const ast.OrderBy {
+    if (f.body) |body| return queryOrderBy(body);
+    return if (f.order_by) |*ob| ob else null;
 }
 
 // CANARY: REQ=REQ-SONNY-2805-TXN-PROGRAM-ORDER; FEATURE="TransactionManagement"; ASPECT=TxnControl; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
@@ -298,7 +356,7 @@ fn preambleGraphSelectorName(stmt: *const ast.Statement) ?[]const u8 {
 fn analyzeStatement(stmt: *const ast.Statement, analysis: *ProgramAnalysis) void {
     switch (stmt.*) {
         .Query => |q| {
-            analysis.traits.ordered = q.order_by != null;
+            analysis.traits.ordered = statementOrderBy(stmt) != null;
             analysis.traits.limit = if (q.limit) |l| @as(?usize, @intCast(l)) else null;
             analysis.traits.offset = if (q.offset) |o| @as(?usize, @intCast(o)) else null;
             analysis.traits.has_group_by = q.group_by != null;
@@ -312,7 +370,7 @@ fn analyzeStatement(stmt: *const ast.Statement, analysis: *ProgramAnalysis) void
         },
         .Union => |u| {
             analysis.traits.has_union = true;
-            analysis.traits.ordered = u.order_by != null;
+            analysis.traits.ordered = statementOrderBy(stmt) != null;
             analysis.traits.limit = if (u.limit) |l| @as(?usize, @intCast(l)) else null;
             analysis.traits.offset = if (u.offset) |o| @as(?usize, @intCast(o)) else null;
             analysis.union_part_count = u.tails.len + 1;
@@ -425,6 +483,30 @@ pub fn isMutatingProgram(program: *const ast.Program) bool {
     return false;
 }
 
+/// SONNY-2751, SONNY-2781: what the GPS actions a program needs say it
+/// changes, over every statement (`write_walk.Actions`). The one derivation
+/// behind `isMutatingProgram` (its data changes), the read-only floors
+/// (`changesStoredState`) and the handlers' write gate
+/// (`gps.changePermittedOn`).
+pub fn programActions(program: *const ast.Program) write_walk.Actions {
+    var actions: write_walk.Actions = .{};
+    for (program.statements) |*stmt| actions = actions.merge(write_walk.statementActions(stmt, .{}));
+    return actions;
+}
+
+// CANARY: REQ=REQ-SONNY-2751-READ-ONLY-SECURITY-DDL; FEATURE="ReadOnlyExecute"; ASPECT=StateChangeClassifier; STATUS=TESTED; TEST=tests/test_sonny2751_readonly_security_ddl.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-2751: does `program` change stored state of any kind: graph data or
+/// schema (`isMutatingProgram`), a procedure that changes something (any
+/// procedure not on the read-only list, `procedure_access`), BACKUP or
+/// RESTORE, or the security DDL (users, roles, grants, policies)? What a
+/// read-only request and the MCP read-only mode refuse. The security DDL
+/// counted as a read, so a read-only request ran CREATE USER and GRANT.
+/// Session statements (USE GRAPH, SESSION SET / RESET / CLOSE) and
+/// transaction control change no stored state and are not counted.
+pub fn changesStoredState(program: *const ast.Program) bool {
+    return programActions(program).changesState();
+}
+
 /// Check if a single statement is a mutation (DML write, DDL, or a Query
 /// containing inline CREATE/SET/REMOVE/DELETE clauses).
 ///
@@ -498,6 +580,12 @@ pub const StatementPlan = struct {
     /// a snapshot of `lock_graph` alone answered `USE GRAPH g2; MATCH ...` from
     /// an empty copy of g2.
     reads_several_graphs: bool = false,
+    /// SONNY-2751, SONNY-2781: every change the program makes, as GPS actions
+    /// (`programActions`). `is_mutation` is `actions.writesData()`.
+    actions: write_walk.Actions = .{},
+    /// SONNY-2751: the program changes stored state of any kind, the security
+    /// DDL included (`changesStoredState`). A read-only request refuses it.
+    changes_state: bool = false,
 };
 
 /// SONNY-2749: what the handlers answer (SQLSTATE 0A000) to a program whose
@@ -545,7 +633,8 @@ pub fn statementPlan(
     transport: HandlerTransport,
 ) StatementPlan {
     const self_locking = isSelfLockingProgram(program);
-    const is_mutation = isMutatingProgram(program);
+    const actions = programActions(program);
+    const is_mutation = actions.writesData();
     const rest_is_noop = restOfProgramIsNoop(analysis, session_graph);
     const store_free = transport == .quic and analysis.kind == .rows and analysis.is_store_free and rest_is_noop;
     const needs_store_lock = !self_locking and analysis.kind != .explain and !store_free;
@@ -560,6 +649,8 @@ pub fn statementPlan(
         .lock_graph_may_be_missing = programOnlyGraphDdl(program, session_graph, home_graph),
         .graph_ddl_has_company = programMixesGraphDdl(program),
         .reads_several_graphs = !is_mutation and needs_store_lock and program_graph == null,
+        .actions = actions,
+        .changes_state = actions.changesState(),
     };
 }
 
@@ -650,12 +741,18 @@ fn moveTo(current: []const u8, target: GraphTarget, home_graph: []const u8) []co
 /// none.
 ///
 /// SONNY-2790: fulltext search is default-graph-only by design
-/// (docs/FULLTEXT_SEARCH.md, "Graph scope"). CREATE INDEX ... USING fulltext,
-/// DROP INDEX (the index may be a fulltext one, whose engine lives in the
-/// default graph) and CALL geode.fts.* run on `default` whatever the current
-/// graph, and so count as statements on `default`: the handlers lock
-/// `default` for them. They used to lock the session's graph while reading
-/// and writing the default graph's nodes and fulltext engine.
+/// (docs/FULLTEXT_SEARCH.md, "Graph scope"). CREATE INDEX ... USING fulltext
+/// and CALL geode.fts.* run on `default` whatever the current graph, and so
+/// count as statements on `default`: the handlers lock `default` for them.
+/// They used to lock the session's graph while reading and writing the
+/// default graph's nodes and fulltext engine.
+///
+/// SONNY-6294: DROP INDEX counts as a statement on the current graph, as
+/// constraint DDL and CREATE INDEX of other types do: the index it drops is
+/// that graph's (or an engine-wide one). It counted as one on `default`
+/// (the index might be fulltext), so in graph g it ran beside g's writers
+/// and blocked default's. The executor refuses to drop a fulltext index
+/// from a session on another graph (`USE GRAPH default; DROP INDEX i`).
 ///
 /// The handlers used to lock the session graph whatever the program selected,
 /// so `USE GRAPH g2; MERGE (:K {id: 1})` wrote g2 holding another graph's
@@ -696,9 +793,22 @@ pub fn programDataGraph(program: *const ast.Program, start_graph: []const u8, ho
 /// `start_graph` or `home_graph`; the caller frees the slice. Empty when no
 /// statement touches graph data.
 pub fn programDataGraphList(allocator: std.mem.Allocator, program: *const ast.Program, start_graph: []const u8, home_graph: []const u8) ![]const []const u8 {
+    return graphList(allocator, program, start_graph, home_graph, false);
+}
+
+// CANARY: REQ=REQ-SONNY-2781-GPS-ACTION-ENFORCEMENT; FEATURE="GPS Policy Evaluation"; ASPECT=ReadGraphList; STATUS=TESTED; TEST=tests/test_sonny2781_gps_action_enforcement.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-2781: the graphs the handlers' read gate checks: `programDataGraphList`
+/// plus the graph an EXPLAIN'd statement would run on. An EXPLAIN runs
+/// nothing and takes no lock, but its plan reports the graph's indexes and
+/// estimates, so a DENY READ on the graph refuses it too.
+pub fn programReadGraphList(allocator: std.mem.Allocator, program: *const ast.Program, start_graph: []const u8, home_graph: []const u8) ![]const []const u8 {
+    return graphList(allocator, program, start_graph, home_graph, true);
+}
+
+fn graphList(allocator: std.mem.Allocator, program: *const ast.Program, start_graph: []const u8, home_graph: []const u8, explain_reads: bool) ![]const []const u8 {
     var list: GraphList = .{ .allocator = allocator };
     errdefer list.names.deinit(allocator);
-    var walk: DataGraphWalk = .{ .current = start_graph, .home_graph = home_graph, .collect = &list };
+    var walk: DataGraphWalk = .{ .current = start_graph, .home_graph = home_graph, .collect = &list, .explain_reads = explain_reads };
     for (program.statements) |*stmt| _ = walk.statement(stmt);
     if (list.oom) return error.OutOfMemory;
     const names = try list.names.toOwnedSlice(allocator);
@@ -754,6 +864,10 @@ const DataGraphWalk = struct {
     /// SONNY-3312: when set, every graph a statement touches is added here,
     /// and a second graph is not a conflict.
     collect: ?*GraphList = null,
+    /// SONNY-2781: an EXPLAIN'd statement counts on the graph it would run
+    /// on (the read gate's list, `programReadGraphList`); otherwise EXPLAIN
+    /// touches nothing (it takes no lock).
+    explain_reads: bool = false,
 
     fn note(self: *DataGraphWalk, graph: []const u8) bool {
         self.only_graph_ddl = false;
@@ -781,7 +895,14 @@ const DataGraphWalk = struct {
                 if (sessionResetClearsGraph(sr)) self.current = self.home_graph;
             },
             .SessionClose => self.current = self.home_graph,
-            .Commit, .Rollback, .Explain => {},
+            .Commit, .Rollback => {},
+            .Explain => |e| if (self.explain_reads) return self.statement(e.query),
+            // SONNY-2781: the security DDL and EXPLAIN POLICY touch no
+            // graph's data (the security DDL writes `__geode_security`
+            // through its owners; EXPLAIN POLICY runs nothing). They counted
+            // as statements on the session's graph, so a DENY READ on that
+            // graph refused CREATE USER.
+            .CreateUser, .AlterUser, .DropUser, .CreateRole, .DropRole, .Grant, .Revoke, .CreatePolicy, .DropPolicy, .AlterPolicy, .ExplainPolicy => {},
             // SONNY-3026: a PROFILE runs the statement it wraps: that
             // statement's graph is the program's. `PROFILE USE GRAPH g` moved
             // the session to g with no statement counted at all.
@@ -801,7 +922,8 @@ const DataGraphWalk = struct {
                 const on = if (ci.index_type == .fulltext) graph_store.DEFAULT_GRAPH_NAME else self.current;
                 return self.note(on);
             },
-            .DropIndex => return self.note(graph_store.DEFAULT_GRAPH_NAME),
+            // CANARY: REQ=REQ-SONNY-6294-DROP-INDEX-RULES; FEATURE="SchemaCatalog"; ASPECT=DropIndexSessionGraphLock; STATUS=TESTED; TEST=tests/test_sonny6294_drop_index_rules.zig; OWNER=catalog; UPDATED=2026-11-11
+            .DropIndex => return self.note(self.current),
             .Call => |call| {
                 const on = switch (call) {
                     .Procedure => |proc| if (procedure_access.isDefaultGraphProcedure(proc)) graph_store.DEFAULT_GRAPH_NAME else self.current,

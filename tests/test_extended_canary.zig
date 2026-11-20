@@ -2,7 +2,7 @@ const std = @import("std");
 const extf = @import("../src/types/extended_functions.zig");
 const eval_ext = @import("../src/eval_extended.zig");
 
-// CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=ADAPTER_BRIDGE; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_082_AdapterBridgeUuidV4; OWNER=engine; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=ADAPTER_BRIDGE; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_082_AdapterBridgeUuidV4; OWNER=engine; UPDATED=2026-11-14
 // Verifies adapterFactory wiring exposes uuid_v4 via main function registry.
 
 pub fn main() !void {}

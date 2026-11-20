@@ -16,12 +16,17 @@ const graph_store = @import("../graph_store.zig");
 const fle_integration = @import("../fle_integration.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_order = @import("../execution/value_order.zig");
+const canonical_string = @import("../unicode/canonical_string.zig");
 // SONNY-2806 (round 8): value equality without importing the executor.
 const value_equality = @import("../execution/value_equality.zig");
 const audit = @import("../security/audit.zig");
 const ts_mod = @import("../timeseries/timeseries.zig");
 const fulltext = @import("../index/fulltext.zig");
 const adapter_mod = @import("fts_storage_adapter.zig");
+const label_dict_divergence = @import("label_dict_divergence.zig");
+const graph_restore_intent = @import("graph_restore_intent.zig");
+const txn_durable_undo = @import("../txn_durable_undo.zig");
+const statement_undo = @import("../statement_undo.zig");
 // GAP-ENT-0048 DEFECT B: the deferred exact-index rebuild polls the read
 // executor's cancel flags so a client disconnect / stall-watchdog abort frees a
 // handler wedged inside the O(graph) first-access rebuild. `read_budget` is a
@@ -312,18 +317,367 @@ pub const exact_node_property_index_shard_count: usize = 64;
 /// the SAME (checkpoint_epoch, covered_lsn) as `prop_exact.idx`.
 const prop_rev_index_file_name = "prop_rev.idx";
 // GENRVIX2 (SONNY-2806): numbers hash by value; a GENRVIX1 file is stale.
-const prop_rev_index_magic = "GENRVIX2";
+// GENRVIX3 (SONNY-3055): strings hash by their NFC form; a GENRVIX2 file is
+// stale.
+const prop_rev_index_magic = "GENRVIX3";
+const prop_exact_index_file_name = "prop_exact.idx";
 
-const graph_store_file_names = [_][]const u8{
-    "nodes.store",
-    "adj_out.store",
-    "adj_in.store",
-    "props.store",
-    "var.store",
+// CANARY: REQ=REQ-SONNY-6590-EXACT-INDEX-SEALED; FEATURE="TDEFileLevelEncryption"; ASPECT=SealedExactIndexFiles; STATUS=TESTED; TEST=tests/test_sonny6590_tde_side_files.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6590: under at-rest encryption (`GraphConfig.encryption_key`) geode's
+/// own exact-index files, `prop_exact.idx` and `prop_rev.idx`, hold property
+/// key names and unkeyed value hashes (a guessable value is recoverable from
+/// its hash). They are sealed whole with graph-storage's side-file envelope
+/// (`side_file_crypto.Cipher`: AES-256-GCM under the HKDF side-file key of the
+/// configured key, random nonce, associated data = header + the graph's uuid
+/// + the file name), the format graph-storage 0.4.17 seals its own side
+/// files with (docs/format-spec.md §1.6). SONNY-6616: with consumer kinds
+/// (graph-storage 0.4.20 opened kinds 128..255 to consumers): `prop_exact.idx`
+/// is `side_kind_prop_exact`, `prop_rev.idx` `side_kind_prop_rev` (until then
+/// both borrowed graph-storage's `.prop_chain_index`; such a file now fails
+/// authentication and is rebuilt). They are derived indexes:
+/// a file that is absent, plaintext, fails authentication (wrong key,
+/// modified, copied from another graph) or is stale is rebuilt from the
+/// pages, never served. A plaintext pair left by an earlier geode (a store
+/// written before 0.4.17) is deleted when the graph opens under a key
+/// (`dropPlaintextExactIndexFiles`), and the rebuilt index is saved sealed.
+pub const side_kind_prop_exact = gs.side_file_crypto.Kind.consumer(0);
+pub const side_kind_prop_rev = gs.side_file_crypto.Kind.consumer(1);
+/// SONNY-6616: `dropped_graphs.dat` (the names of dropped graphs).
+pub const side_kind_dropped_graphs = gs.side_file_crypto.Kind.consumer(2);
+/// SONNY-6636 (1): `graph_restore.intent` (`graph_restore_intent.zig`).
+pub const side_kind_graph_restore = gs.side_file_crypto.Kind.consumer(3);
+/// SONNY-6636 (3): a Raft log position (`graph_restore_intent.RaftPoint`).
+pub const RaftPoint = graph_restore_intent.RaftPoint;
+/// SONNY-6689: `data_dir.seal` (`DataDirSealMarker`).
+pub const side_kind_data_dir_seal = gs.side_file_crypto.Kind.consumer(4);
+
+// CANARY: REQ=REQ-SONNY-6689-DATA-DIR-SEAL-MARKER; FEATURE="TDEFileLevelEncryption"; ASPECT=UpgradeMarkerRefusesTransplant; STATUS=TESTED; TEST=tests/test_sonny6689_data_dir_transplant.zig; OWNER=security; UPDATED=2026-11-16
+/// SONNY-6689: the record, under a key, that a data directory has been
+/// upgraded: `data_dir.seal`, owner-only, sealed under the key and bound to
+/// graph-storage's `SEAL_UUID` (it must be readable with the identity file
+/// gone), holding the identity's uuid and flags. With the marker present
+/// the directory is refused when `data_dir.identity` is missing
+/// (`DataDirIdentityMissing`: a `SEAL_UUID`-sealed registry, which any
+/// directory under the key could have written, was adopted then) or names
+/// another uuid (`DataDirIdentityMismatch`: a donor's identity copied in
+/// with its registry). `side_files_bound`: the restore intent and
+/// `txn_undo.wal` are sealed under the identity, and a `SEAL_UUID`-sealed
+/// one is refused. Layout: magic `GEODSEAL` (8) | version u32 (1) | flags
+/// u32 | uuid (16) | CRC32 u32 over the preceding 32 bytes.
+pub const DataDirSealMarker = struct {
+    uuid: [16]u8,
+    flags: u32 = 0,
+
+    pub const file_name = "data_dir.seal";
+    pub const side_files_bound: u32 = 1;
+    const magic = "GEODSEAL".*;
+    const size: usize = 8 + 4 + 4 + 16 + 4;
+    const version: u32 = 1;
+
+    fn path(allocator: Allocator, data_dir: []const u8) ![]u8 {
+        return std.fmt.allocPrint(allocator, "{s}/" ++ file_name, .{data_dir});
+    }
+
+    /// The marker of `data_dir` under `key`; null when there is none. One
+    /// that is not sealed, does not authenticate or does not parse is an
+    /// error.
+    pub fn load(allocator: Allocator, data_dir: []const u8, key: [32]u8) !?DataDirSealMarker {
+        const p = try path(allocator, data_dir);
+        defer allocator.free(p);
+        const raw = gs.side_file_crypto.readWholeFile(allocator, p) catch |err| switch (err) {
+            error.FileNotFound => return null,
+            else => return err,
+        };
+        var c = gs.side_file_crypto.Cipher.init(key, gs.registry.SEAL_UUID);
+        defer c.deinit();
+        // `decode` owns `raw` from here.
+        const decoded = try gs.side_file_crypto.decode(allocator, .{ .cipher = &c, .require_sealed = true }, side_kind_data_dir_seal, file_name, raw);
+        defer allocator.free(decoded.bytes);
+        const d = decoded.bytes;
+        if (d.len != size or !std.mem.eql(u8, d[0..8], &magic)) return error.InvalidData;
+        if (std.mem.readInt(u32, d[32..36], .little) != std.hash.Crc32.hash(d[0..32])) return error.ChecksumMismatch;
+        if (std.mem.readInt(u32, d[8..12], .little) != version) return error.UnsupportedVersion;
+        var m = DataDirSealMarker{ .uuid = undefined, .flags = std.mem.readInt(u32, d[12..16], .little) };
+        @memcpy(&m.uuid, d[16..32]);
+        return m;
+    }
+
+    /// Write the marker atomically (owner-only) and fsync the directory.
+    pub fn save(self: DataDirSealMarker, allocator: Allocator, data_dir: []const u8, key: [32]u8) !void {
+        var buf: [size]u8 = undefined;
+        @memcpy(buf[0..8], &magic);
+        std.mem.writeInt(u32, buf[8..12], version, .little);
+        std.mem.writeInt(u32, buf[12..16], self.flags, .little);
+        @memcpy(buf[16..32], &self.uuid);
+        std.mem.writeInt(u32, buf[32..36], std.hash.Crc32.hash(buf[0..32]), .little);
+        var c = gs.side_file_crypto.Cipher.init(key, gs.registry.SEAL_UUID);
+        defer c.deinit();
+        const disk = try gs.side_file_crypto.encode(allocator, &c, side_kind_data_dir_seal, file_name, &buf);
+        defer allocator.free(disk);
+        const p = try path(allocator, data_dir);
+        defer allocator.free(p);
+        try gs.side_file_crypto.writeAtomic(allocator, p, disk);
+        try graph_restore_intent.syncDir(data_dir);
+    }
+
+    /// SONNY-6689: refuse `identity` when the marker says the directory was
+    /// upgraded and it is missing or another directory's.
+    pub fn check(marker: ?DataDirSealMarker, identity: ?gs.registry.DataDirIdentity) !void {
+        const m = marker orelse return;
+        const id = identity orelse return error.DataDirIdentityMissing;
+        if (!std.mem.eql(u8, &id.uuid, &m.uuid)) return error.DataDirIdentityMismatch;
+    }
 };
 
-const free_store_header_size: usize = 16;
-const free_store_path_name = "free.store";
+fn exactIndexSealKind(name: []const u8) gs.side_file_crypto.Kind {
+    return if (std.mem.eql(u8, name, prop_rev_index_file_name)) side_kind_prop_rev else side_kind_prop_exact;
+}
+
+// CANARY: REQ=REQ-SONNY-6616-DATA-DIR-NAMES-SEALED; FEATURE="TDEFileLevelEncryption"; ASPECT=SealedGraphNames; STATUS=TESTED; TEST=tests/test_sonny6616_tde_residuals.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6616: the data directory's own files under at-rest encryption -
+/// `graph_registry.dat` (every graph's name, uuid and counts) and
+/// `dropped_graphs.dat` (the names of dropped graphs) - are sealed (the file
+/// name and kind in the associated data keep them apart). SONNY-6635: bound
+/// to the directory's identity, not graph-storage's shared `SEAL_UUID`.
+
+// CANARY: REQ=REQ-SONNY-6635-REGISTRY-BINDING; FEATURE="TDEFileLevelEncryption"; ASPECT=DataDirIdentityAndSealedMarker; STATUS=TESTED; TEST=tests/test_sonny6635_registry_binding.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6635: how a data-directory file (`graph_registry.dat`,
+/// `dropped_graphs.dat`) under a key is to be read.
+///
+/// `SEAL_UUID` is the same in every data directory, so a file sealed under
+/// it in one directory authenticated in any other under the key, and a
+/// plaintext file was read at every open, so anyone who could write the
+/// directory could substitute one (rename or swap graphs, hide them). The
+/// files are now sealed under the directory's own identity
+/// (`gs.registry.DataDirIdentity`, `data_dir.identity`, sealed). Once its
+/// `registry_bound` flag is set only that is read (`.identity`). Before
+/// (a store from an earlier build, upgraded once by `init`):
+///   - sealed: under the identity when it opens (an upgrade cut short after
+///     the reseal), else under `SEAL_UUID` (`.legacy_seal`: SONNY-6616's
+///     build, graph-storage 0.4.20 to 0.4.25);
+///   - plaintext (`.plaintext`: before SONNY-6616) only when no graph
+///     manifest in the directory is at format_version 5
+///     (`sealedStoreEvidence`): the flag's own file can be deleted, a
+///     graph's authenticated manifest cannot without losing the graph, and
+///     no released build wrote V5 manifests with a plaintext registry
+///     (side files and the registry were first sealed in the same release).
+const DataDirFileSource = enum { identity, legacy_seal, plaintext };
+
+fn classifyDataDirFile(
+    allocator: Allocator,
+    data_dir: []const u8,
+    key: [32]u8,
+    identity: ?gs.registry.DataDirIdentity,
+    kind: gs.side_file_crypto.Kind,
+    name: []const u8,
+    raw: []const u8,
+) !DataDirFileSource {
+    const sealed = gs.side_file_crypto.isSealed(raw);
+    if (identity) |id| {
+        if (id.registry_bound) {
+            if (!sealed) return error.SideFileNotSealed;
+            return .identity;
+        }
+        if (sealed and try opensUnder(allocator, gs.side_file_crypto.Cipher.init(key, id.uuid), kind, name, raw)) return .identity;
+    }
+    if (sealed) {
+        if (try opensUnder(allocator, gs.side_file_crypto.Cipher.init(key, gs.registry.SEAL_UUID), kind, name, raw)) return .legacy_seal;
+        return error.SideFileAuthFailed;
+    }
+    if (try sealedStoreEvidence(allocator, data_dir, key)) {
+        log.warn("refusing the plaintext {s} under the TDE key: this data directory was written by a build that seals it (a graph manifest is at format_version 5), so a plaintext copy was put there (SONNY-6635)", .{name});
+        return error.SideFileNotSealed;
+    }
+    return .plaintext;
+}
+
+/// Whether `raw` authenticates under `cipher` (consumed).
+fn opensUnder(allocator: Allocator, cipher_in: gs.side_file_crypto.Cipher, kind: gs.side_file_crypto.Kind, name: []const u8, raw: []const u8) !bool {
+    var cipher = cipher_in;
+    defer cipher.deinit();
+    const plain = cipher.open(allocator, kind, name, raw) catch |err| switch (err) {
+        error.SideFileAuthFailed => return false,
+        else => return err,
+    };
+    std.crypto.secureZero(u8, plain);
+    allocator.free(plain);
+    return true;
+}
+
+/// SONNY-6635: true when any graph manifest slot in `data_dir` that
+/// authenticates under `key` is at format_version >= 5 (sealed side files):
+/// the directory was written by a build that seals its registry. A slot
+/// that does not authenticate, or does not parse, is skipped: a graph
+/// written before the key was set (its manifests carry no HMAC) is not
+/// evidence, and forging one shows nothing either (only an authenticated
+/// V5 slot counts).
+/// Both layouts: `<data_dir>/<graph uuid>/graphs/<shard uuid>/manifest.{a,b}`
+/// and the single-engine `<data_dir>/graphs/<graph uuid>/manifest.{a,b}`.
+fn sealedStoreEvidence(allocator: Allocator, data_dir: []const u8, key: [32]u8) !bool {
+    const sio = std.Io.Threaded.global_single_threaded.io();
+    var root = std.Io.Dir.cwd().openDir(sio, data_dir, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    defer root.close(sio);
+    var it = root.iterate();
+    while (try it.next(sio)) |entry| {
+        if (entry.kind != .directory) continue;
+        const is_graph_root = entry.name.len == 32 and for (entry.name) |c| {
+            if (!std.ascii.isHex(c)) break false;
+        } else true;
+        if (!is_graph_root and !std.mem.eql(u8, entry.name, "graphs")) continue;
+        const shards_parent = if (is_graph_root)
+            try std.fmt.allocPrint(allocator, "{s}/{s}/graphs", .{ data_dir, entry.name })
+        else
+            try std.fmt.allocPrint(allocator, "{s}/graphs", .{data_dir});
+        defer allocator.free(shards_parent);
+        var shards = std.Io.Dir.cwd().openDir(sio, shards_parent, .{ .iterate = true }) catch |err| switch (err) {
+            error.FileNotFound, error.NotDir => continue,
+            else => return err,
+        };
+        defer shards.close(sio);
+        var sit = shards.iterate();
+        while (try sit.next(sio)) |shard| {
+            if (shard.kind != .directory) continue;
+            for ([_][]const u8{ "manifest.a", "manifest.b" }) |slot| {
+                const p = try std.fmt.allocPrint(allocator, "{s}/{s}/{s}", .{ shards_parent, shard.name, slot });
+                defer allocator.free(p);
+                // A slot that does not authenticate under the key, or cannot
+                // be parsed (a graph written without the key, a torn slot),
+                // shows nothing either way: skipped, as recovery skips it.
+                const m = (gs.manifest.Manifest.readFromFileWithKey(allocator, p, key) catch |err| switch (err) {
+                    error.ManifestAuthFailed, error.ChecksumMismatch, error.InvalidMagic, error.InvalidData, error.UnexpectedEndOfFile => continue,
+                    else => return err,
+                }) orelse continue;
+                if (m.format_version >= gs.manifest.MANIFEST_VERSION_SEALED_SIDE_FILES) return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// SONNY-6635: the cipher a data-directory file of `source` is read with.
+fn dataDirReadCipher(key: [32]u8, identity: ?gs.registry.DataDirIdentity, source: DataDirFileSource) gs.side_file_crypto.Cipher {
+    return switch (source) {
+        .identity => gs.side_file_crypto.Cipher.init(key, identity.?.uuid),
+        .legacy_seal, .plaintext => gs.side_file_crypto.Cipher.init(key, gs.registry.SEAL_UUID),
+    };
+}
+
+/// SONNY-6635: load `data_dir`'s registry from `registry_path` under
+/// `key` (a sealed one without it is `error.SideFileEncrypted`). Returns
+/// whether it was read from a file not yet sealed under the identity (to be
+/// resealed). Shared by `StorageAdapter.init` and `graphRegisteredOnDisk`.
+fn loadDataDirRegistry(
+    allocator: Allocator,
+    registry: *gs.registry.GraphRegistry,
+    data_dir: []const u8,
+    registry_path: []const u8,
+    key: ?[32]u8,
+    identity: ?gs.registry.DataDirIdentity,
+) !bool {
+    const k = key orelse {
+        _ = try registry.loadFromFileWith(registry_path, .{ .cipher = null, .require_sealed = false });
+        return false;
+    };
+    const raw = try gs.side_file_crypto.readWholeFile(allocator, registry_path);
+    defer allocator.free(raw);
+    const source = try classifyDataDirFile(allocator, data_dir, k, identity, .graph_registry, std.fs.path.basename(registry_path), raw);
+    var cipher = dataDirReadCipher(k, identity, source);
+    defer cipher.deinit();
+    // The file is read again: a file changed in between is held to the
+    // same source (sealed under that cipher, or plaintext only when no
+    // evidence was found).
+    _ = try registry.loadFromFileWith(registry_path, .{ .cipher = &cipher, .require_sealed = source != .plaintext });
+    return source != .identity;
+}
+
+/// SONNY-6590 test-only: write the exact-index files in the plaintext
+/// layout even under a key, as geode did before SONNY-6590, so a test can
+/// show such files are dropped and rebuilt sealed. Always false outside tests.
+var plaintext_exact_index_for_test: bool = false;
+
+pub fn setPlaintextExactIndexForTest(on: bool) void {
+    if (!builtin.is_test) @compileError("test-only helper");
+    plaintext_exact_index_for_test = on;
+}
+
+const SealedRead = union(enum) {
+    /// No file.
+    absent,
+    /// A file that cannot be used (unreadable, plaintext under a key, or it
+    /// failed authentication): the caller rebuilds the index.
+    unusable,
+    /// The file's plaintext layout (owned; zero it before freeing).
+    bytes: []u8,
+};
+
+/// SONNY-6590: read geode's exact-index side file `name` in `dir` under
+/// `cipher` and return its plaintext layout.
+fn readSealedExactFile(allocator: Allocator, dir: []const u8, name: []const u8, cipher: *const gs.side_file_crypto.Cipher) SealedRead {
+    const path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, name }) catch return .unusable;
+    defer allocator.free(path);
+    const raw = gs.side_file_crypto.readWholeFile(allocator, path) catch |err| switch (err) {
+        error.FileNotFound => return .absent,
+        else => return .unusable,
+    };
+    defer allocator.free(raw);
+    if (!gs.side_file_crypto.isSealed(raw)) return .unusable;
+    const plain = cipher.open(allocator, exactIndexSealKind(name), name, raw) catch |err| {
+        // Derived: rebuilt from the pages. Logged, because a sealed file that
+        // fails authentication was modified, copied from another graph, or
+        // written under another key.
+        slog.warn("exact property index file failed authentication; it is rebuilt from the graph's pages (SONNY-6590)", &.{
+            SAttr.string("file", path),
+            SAttr.err("error", err),
+        });
+        return .unusable;
+    };
+    return .{ .bytes = plain };
+}
+
+/// SONNY-6590: seal `plaintext` and write it to `dir/name` atomically (temp
+/// file, fsync, rename).
+fn writeSealedExactFile(allocator: Allocator, dir: []const u8, name: []const u8, cipher: *const gs.side_file_crypto.Cipher, plaintext: []const u8) !void {
+    const sealed = try cipher.seal(allocator, exactIndexSealKind(name), name, plaintext);
+    defer allocator.free(sealed);
+    const path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, name });
+    defer allocator.free(path);
+    try gs.side_file_crypto.writeAtomic(allocator, path, sealed);
+}
+
+/// SONNY-6590: under a key, delete an exact-index file in the plaintext
+/// layout (left by geode before SONNY-6590). Both files go when either is
+/// plaintext: the pair is rebuilt and saved sealed. Run when a graph opens.
+fn dropPlaintextExactIndexFiles(allocator: Allocator, dir: []const u8) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var plaintext = false;
+    for ([_][]const u8{ prop_exact_index_file_name, prop_rev_index_file_name }) |name| {
+        const path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, name }) catch return;
+        defer allocator.free(path);
+        const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch continue;
+        defer file.close(io);
+        var head: [gs.side_file_crypto.MAGIC.len]u8 = undefined;
+        const n = file.readPositionalAll(io, &head, 0) catch 0;
+        if (!gs.side_file_crypto.isSealed(head[0..n])) plaintext = true;
+    }
+    if (!plaintext) return;
+    for ([_][]const u8{ prop_exact_index_file_name, prop_rev_index_file_name }) |name| {
+        const path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir, name }) catch return;
+        defer allocator.free(path);
+        std.Io.Dir.cwd().deleteFile(io, path) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => slog.err("could not delete a plaintext exact property index file under TDE; it holds property key names in plaintext (SONNY-6590)", &.{
+                SAttr.string("file", path),
+                SAttr.err("error", err),
+            }),
+        };
+    }
+    slog.info("deleted the plaintext exact property index files written before TDE covered them; the index is rebuilt and saved sealed (SONNY-6590)", &.{
+        SAttr.string("dir", dir),
+    });
+}
 
 pub fn resetLookupCounters() void {
     g_exact_node_property_lookup_count.store(0, .release);
@@ -675,6 +1029,30 @@ fn exactNodePropertyIndexShardForParts(label_id: gs.LabelId, property_key: []con
     return @intCast(exactNodePropertyIndexHash(label_id, property_key, value_hash) % exact_node_property_index_shard_count);
 }
 
+/// SONNY-6646 (6): an exact-index key, unbuilt: `StringHashMap`'s hash of
+/// the encoded key (`encodeKeyInto`) is `exactNodePropertyIndexHash` of its
+/// parts (Wyhash's streaming and one-shot forms agree), so a posting is found
+/// without encoding (or allocating) the key.
+const ExactKeyParts = struct {
+    label_id: gs.LabelId,
+    property_key: []const u8,
+    value_hash: u64,
+};
+
+const ExactKeyPartsContext = struct {
+    pub fn hash(_: ExactKeyPartsContext, k: ExactKeyParts) u64 {
+        return exactNodePropertyIndexHash(k.label_id, k.property_key, k.value_hash);
+    }
+
+    pub fn eql(_: ExactKeyPartsContext, k: ExactKeyParts, key: []const u8) bool {
+        if (key.len != 4 + 4 + k.property_key.len + 8) return false;
+        if (std.mem.readInt(u32, key[0..4], .little) != k.label_id) return false;
+        if (std.mem.readInt(u32, key[4..8], .little) != k.property_key.len) return false;
+        if (!std.mem.eql(u8, key[8 .. 8 + k.property_key.len], k.property_key)) return false;
+        return std.mem.readInt(u64, key[8 + k.property_key.len ..][0..8], .little) == k.value_hash;
+    }
+};
+
 fn exactNodePropertyIndexShardForEncodedKey(key: []const u8) usize {
     return @intCast(std.hash.Wyhash.hash(0, key) % exact_node_property_index_shard_count);
 }
@@ -717,6 +1095,9 @@ const NodePropertyExactIndex = struct {
     /// StringHashMap mutex. Checkpoint/load still take every shard in stable
     /// order to preserve a coherent on-disk snapshot.
     shards: [exact_node_property_index_shard_count]NodePropertyExactIndexShard,
+    /// SONNY-6590: seals `prop_exact.idx` / `prop_rev.idx` under at-rest
+    /// encryption (null: plaintext layout, no key configured).
+    cipher: ?gs.side_file_crypto.Cipher = null,
 
     fn init(allocator: Allocator) NodePropertyExactIndex {
         var self: NodePropertyExactIndex = .{
@@ -729,10 +1110,24 @@ const NodePropertyExactIndex = struct {
         return self;
     }
 
+    /// SONNY-6590: the index of graph `graph_uuid` under the store's at-rest
+    /// key (`GraphConfig.encryption_key`; null = no encryption).
+    fn initForGraph(allocator: Allocator, encryption_key: ?[32]u8, graph_uuid: [16]u8) NodePropertyExactIndex {
+        var self = init(allocator);
+        self.cipher = gs.side_file_crypto.Cipher.forKey(encryption_key, graph_uuid);
+        return self;
+    }
+
+    fn cipherPtr(self: *const NodePropertyExactIndex) ?*const gs.side_file_crypto.Cipher {
+        if (self.cipher) |*c| return c;
+        return null;
+    }
+
     fn deinit(self: *NodePropertyExactIndex) void {
         for (&self.shards) |*shard| {
             shard.deinit(self.allocator);
         }
+        if (self.cipher) |*c| c.deinit();
     }
 
     fn clear(self: *NodePropertyExactIndex) void {
@@ -816,18 +1211,17 @@ const NodePropertyExactIndex = struct {
         try gop.value_ptr.append(self.allocator, node_id);
     }
 
+    /// SONNY-6646 (6): allocation-free for any key: the entry is found from
+    /// its parts (`ExactKeyPartsContext`). Past the 1 KiB scratch the key
+    /// was built on the heap, and a failed allocation left the entry.
     fn remove(self: *NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64, node_id: u64) void {
-        var key_buf: [1024]u8 = undefined;
-        const encoded = self.encodeKeyScratch(key_buf[0..], label_id, property_key, value_hash) catch return;
-        defer if (encoded.owned) |owned| self.allocator.free(owned);
-        const probe_key = encoded.key;
-        const shard_idx = exactNodePropertyIndexShardForEncodedKey(probe_key);
-        const shard = &self.shards[shard_idx];
+        const parts = ExactKeyParts{ .label_id = label_id, .property_key = property_key, .value_hash = value_hash };
+        const shard = &self.shards[exactNodePropertyIndexShardForParts(label_id, property_key, value_hash)];
         const io = std.Io.Threaded.global_single_threaded.io();
         shard.mutex.lockUncancelable(io);
         defer shard.mutex.unlock(io);
 
-        if (shard.postings.getPtr(probe_key)) |list| {
+        if (shard.postings.getPtrAdapted(parts, ExactKeyPartsContext{})) |list| {
             var i: usize = 0;
             while (i < list.items.len) : (i += 1) {
                 if (list.items[i] == node_id) {
@@ -836,7 +1230,7 @@ const NodePropertyExactIndex = struct {
                 }
             }
             if (list.items.len == 0) {
-                if (shard.postings.fetchRemove(probe_key)) |kv| {
+                if (shard.postings.fetchRemoveAdapted(parts, ExactKeyPartsContext{})) |kv| {
                     self.allocator.free(kv.key);
                     var list_copy = kv.value;
                     list_copy.deinit(self.allocator);
@@ -945,9 +1339,27 @@ const NodePropertyExactIndex = struct {
     /// tail routes to a SAFE rebuild; a correct O(tail) reconcile of this
     /// value→node index is not achievable with the v0.2.29 API — see the Phase 5
     /// report). Non-fatal: callers should catch and log warnings.
-    fn saveToFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, checkpoint_epoch: u64, covered_lsn: u64) !void {
+    fn saveToFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, checkpoint_epoch: u64, covered_lsn: u64, config_hash: u64) !void {
         self.lockAllShards();
         defer self.unlockAllShards();
+
+        // SONNY-6590: under a key both files are built in memory and sealed
+        // whole (the envelope authenticates the complete file).
+        const seal_with = if (builtin.is_test and plaintext_exact_index_for_test) null else self.cipherPtr();
+        if (seal_with) |cipher| {
+            var aw: std.Io.Writer.Allocating = .init(self.allocator);
+            defer {
+                std.crypto.secureZero(u8, aw.writer.buffer);
+                aw.deinit();
+            }
+            try self.writeForwardLocked(&aw.writer, checkpoint_epoch, covered_lsn, config_hash);
+            try writeSealedExactFile(self.allocator, graph_dir_path, prop_exact_index_file_name, cipher, aw.written());
+            std.crypto.secureZero(u8, aw.writer.buffer);
+            aw.clearRetainingCapacity();
+            try self.writeReverseLocked(&aw.writer, checkpoint_epoch, covered_lsn);
+            try writeSealedExactFile(self.allocator, graph_dir_path, prop_rev_index_file_name, cipher, aw.written());
+            return;
+        }
 
         const idx_path = try self.allocator.alloc(u8, graph_dir_path.len + "/prop_exact.idx".len);
         defer self.allocator.free(idx_path);
@@ -960,18 +1372,36 @@ const NodePropertyExactIndex = struct {
 
         var idx_wbuf: [8192]u8 = undefined;
         var idx_fw = file.writerStreaming(idx_io, &idx_wbuf);
-        const writer = &idx_fw.interface;
+        try self.writeForwardLocked(&idx_fw.interface, checkpoint_epoch, covered_lsn, config_hash);
+        try idx_fw.flush();
 
+        // GAP-ENT-0048 crash-reconcile (Phase E1): persist the node→postings
+        // REVERSE MAP alongside prop_exact.idx, stamped with the SAME (epoch,
+        // covered_lsn). It lets a crash-reopen with a committed WAL tail EVICT a
+        // tail-changed node's OLD postings in O(node's postings) WITHOUT
+        // re-reading its (tail-overwritten) old value — the exact prerequisite
+        // the Phase 5 report flagged as missing. Written in the SAME locked pass
+        // (all shard mutexes held) so it is an exact inversion of the postings
+        // just written. Independent stamp/magic → an inconsistent or torn
+        // reverse file is rejected on load (→ safe full rebuild), never mis-used.
+        try self.writeReverseMapLocked(graph_dir_path, checkpoint_epoch, covered_lsn);
+    }
+
+    /// The `prop_exact.idx` layout. Caller holds every shard mutex.
+    fn writeForwardLocked(self: *NodePropertyExactIndex, writer: *std.Io.Writer, checkpoint_epoch: u64, covered_lsn: u64, config_hash: u64) !void {
         // 8-byte magic header (v3 = checkpoint-epoch + covered-lsn stamped, the
         // WAL-aware Path B contract; v4 = SONNY-2806, a number's value hash is
-        // its exact value). GENPIDX3 (bytes-hashed numbers), GENPIDX2
+        // its exact value; v5 = SONNY-6354, stamped with the indexed-key
+        // configuration). GENPIDX4, GENPIDX3 (bytes-hashed numbers), GENPIDX2
         // (counter-stamped) and GENPIDX1 (unstamped) are treated as stale on
         // load → rebuild (never mis-served).
-        try writer.writeAll("GENPIDX4");
+        try writer.writeAll(exactIndexMagicForWrite());
         // WAL-aware staleness stamp: the gs checkpoint_epoch (derived-index
         // generation) and the durable-frontier LSN this index covers.
         try writer.writeInt(u64, checkpoint_epoch, .little);
         try writer.writeInt(u64, covered_lsn, .little);
+        // SONNY-6354: which keys the index holds (`graph_store.exactIndexConfigHash`).
+        try writer.writeInt(u64, config_hash, .little);
 
         // Entry count
         var count: u64 = 0;
@@ -995,18 +1425,6 @@ const NodePropertyExactIndex = struct {
                 }
             }
         }
-        try idx_fw.flush();
-
-        // GAP-ENT-0048 crash-reconcile (Phase E1): persist the node→postings
-        // REVERSE MAP alongside prop_exact.idx, stamped with the SAME (epoch,
-        // covered_lsn). It lets a crash-reopen with a committed WAL tail EVICT a
-        // tail-changed node's OLD postings in O(node's postings) WITHOUT
-        // re-reading its (tail-overwritten) old value — the exact prerequisite
-        // the Phase 5 report flagged as missing. Written in the SAME locked pass
-        // (all shard mutexes held) so it is an exact inversion of the postings
-        // just written. Independent stamp/magic → an inconsistent or torn
-        // reverse file is rejected on load (→ safe full rebuild), never mis-used.
-        try self.writeReverseMapLocked(graph_dir_path, checkpoint_epoch, covered_lsn);
     }
 
     /// Phase E1: write `prop_rev.idx` — the node→[(label,key,value_hash)] reverse
@@ -1030,9 +1448,13 @@ const NodePropertyExactIndex = struct {
 
         var rev_wbuf: [8192]u8 = undefined;
         var rev_fw = file.writerStreaming(rev_io, &rev_wbuf);
-        const writer = &rev_fw.interface;
+        try self.writeReverseLocked(&rev_fw.interface, checkpoint_epoch, covered_lsn);
+        try rev_fw.flush();
+    }
 
-        try writer.writeAll(prop_rev_index_magic);
+    /// The `prop_rev.idx` layout. Caller holds every shard mutex.
+    fn writeReverseLocked(self: *NodePropertyExactIndex, writer: *std.Io.Writer, checkpoint_epoch: u64, covered_lsn: u64) !void {
+        try writer.writeAll(revIndexMagicForWrite());
         try writer.writeInt(u64, checkpoint_epoch, .little);
         try writer.writeInt(u64, covered_lsn, .little);
 
@@ -1056,7 +1478,6 @@ const NodePropertyExactIndex = struct {
                 }
             }
         }
-        try rev_fw.flush();
     }
 
     /// Phase E2: remove `node_id` from the posting for `encoded_key` (the exact
@@ -1116,9 +1537,31 @@ const NodePropertyExactIndex = struct {
     /// Never blesses a stale copy: on ANY uncertainty it does NOT return `.loaded`
     /// (the "never serve a stale prop_exact.idx" invariant — a wrong exact index =
     /// silently wrong WHERE/GROUP BY/DISTINCT).
-    fn loadFromFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, expected_epoch: u64, expected_covered_lsn: u64) ExactIndexLoadOutcome {
+    ///
+    /// SONNY-6354: and only if it holds the keys this process indexes
+    /// (`expected_config`, `graph_store.exactIndexConfigHash`): a lean-mode
+    /// index saved before a key was registered lacks that key's older
+    /// holders, and one saved with lean mode on lacks every other key.
+    fn loadFromFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8, expected_epoch: u64, expected_covered_lsn: u64, expected_config: u64) ExactIndexLoadOutcome {
         self.lockAllShards();
         defer self.unlockAllShards();
+
+        // SONNY-6590: under a key only a sealed file that authenticates loads;
+        // a plaintext one or one that fails is a present-but-unusable snapshot.
+        if (self.cipherPtr()) |cipher| {
+            switch (readSealedExactFile(self.allocator, graph_dir_path, prop_exact_index_file_name, cipher)) {
+                .absent => return .absent,
+                .unusable => return .stale,
+                .bytes => |plain| {
+                    defer {
+                        std.crypto.secureZero(u8, plain);
+                        self.allocator.free(plain);
+                    }
+                    var fixed: std.Io.Reader = .fixed(plain);
+                    return self.loadLocked(&fixed, expected_epoch, expected_covered_lsn, expected_config);
+                },
+            }
+        }
 
         const idx_path = self.allocator.alloc(u8, graph_dir_path.len + "/prop_exact.idx".len) catch return .absent;
         defer self.allocator.free(idx_path);
@@ -1134,15 +1577,20 @@ const NodePropertyExactIndex = struct {
 
         var reader_buffer: [4096]u8 = undefined;
         var file_reader = file.reader(gsa_io, &reader_buffer);
-        const reader = &file_reader.interface;
+        return self.loadLocked(&file_reader.interface, expected_epoch, expected_covered_lsn, expected_config);
+    }
 
-        // Validate magic header — only the v4 (epoch + covered-lsn stamped,
-        // numbers hashed by value) format loads; a GENPIDX3 (numbers hashed by
-        // their bytes), GENPIDX2 (counter-stamped) or GENPIDX1 (unstamped) file
-        // is a present-but-stale snapshot -> rebuild.
+    /// Parse the `prop_exact.idx` layout from `reader`. Caller holds every
+    /// shard mutex.
+    fn loadLocked(self: *NodePropertyExactIndex, reader: *std.Io.Reader, expected_epoch: u64, expected_covered_lsn: u64, expected_config: u64) ExactIndexLoadOutcome {
+        // Validate magic header — only the v5 (epoch + covered-lsn + key
+        // configuration stamped, numbers hashed by value) format loads; a
+        // GENPIDX4 (no key configuration), GENPIDX3 (numbers hashed by their
+        // bytes), GENPIDX2 (counter-stamped) or GENPIDX1 (unstamped) file is a
+        // present-but-stale snapshot -> rebuild.
         var magic: [8]u8 = undefined;
         reader.readSliceAll(&magic) catch return .stale;
-        if (!std.mem.eql(u8, &magic, "GENPIDX4")) return .stale;
+        if (!std.mem.eql(u8, &magic, exact_index_magic)) return .stale;
 
         // WAL-aware staleness gate (Path B): reject unless BOTH the derived-index
         // generation matches (no checkpoint since persist) AND the covered LSN is
@@ -1151,6 +1599,8 @@ const NodePropertyExactIndex = struct {
         if (stored_epoch != expected_epoch) return .stale;
         const stored_covered_lsn = reader.takeInt(u64, .little) catch return .stale;
         if (stored_covered_lsn != expected_covered_lsn) return .stale;
+        const stored_config = reader.takeInt(u64, .little) catch return .stale;
+        if (stored_config != expected_config) return .stale;
 
         const entry_count = reader.takeInt(u64, .little) catch return .stale;
 
@@ -1204,14 +1654,57 @@ const NodePropertyExactIndex = struct {
 /// (`.absent` → defer to lazy first-access, preserving sub-second cold-open).
 const ExactIndexLoadOutcome = enum { loaded, stale, absent };
 
+/// `prop_exact.idx` format edition (see `NodePropertyExactIndex.saveToFile`).
+/// GENPIDX6 (SONNY-3055): a string's value hash is that of its NFC form; a
+/// GENPIDX5 file hashed raw bytes, so a stored 'e' + U+0301 was missed by a
+/// seek for 'é', and is stale (rebuilt on open).
+const exact_index_magic = "GENPIDX6";
+
+/// SONNY-3055 test-only: write the earlier key derivation (strings hashed by
+/// their raw bytes) and format editions (GENPIDX5, GENRVIX2), as a binary
+/// before SONNY-3055 did, so a test can prove such files are rebuilt, never
+/// served. Always false outside tests.
+var legacy_string_keys_for_test: bool = false;
+
+pub fn setLegacyStringKeysForTest(on: bool) void {
+    if (!builtin.is_test) @compileError("test-only helper");
+    legacy_string_keys_for_test = on;
+}
+
+fn legacyStringKeys() bool {
+    return builtin.is_test and legacy_string_keys_for_test;
+}
+
+fn exactIndexMagicForWrite() []const u8 {
+    return if (legacyStringKeys()) "GENPIDX5" else exact_index_magic;
+}
+
+fn revIndexMagicForWrite() []const u8 {
+    return if (legacyStringKeys()) "GENRVIX2" else prop_rev_index_magic;
+}
+
 /// Phase E2: the `(checkpoint_epoch, covered_lsn)` stamp of an on-disk
 /// `prop_exact.idx`, read from its header alone (no postings). `null` when the
-/// file is absent, torn, or not the GENPIDX4 (WAL-aware) format. Used by the
+/// file is absent, torn, or not the current (WAL-aware) format. Used by the
 /// crash-reopen reconcile gate to compare the snapshot's covered_lsn against the
 /// pre-recovery frontier BEFORE deciding to reconcile vs full-rebuild.
 const ExactIndexStamp = struct { epoch: u64, covered_lsn: u64 };
 
-fn readExactIndexStamp(allocator: Allocator, graph_dir_path: []const u8) ?ExactIndexStamp {
+fn readExactIndexStamp(allocator: Allocator, graph_dir_path: []const u8, cipher: ?*const gs.side_file_crypto.Cipher) ?ExactIndexStamp {
+    // SONNY-6590: a sealed file is authenticated whole before its stamp is
+    // believed (O(file), on the crash-reopen path only).
+    if (cipher) |c| switch (readSealedExactFile(allocator, graph_dir_path, prop_exact_index_file_name, c)) {
+        .absent, .unusable => return null,
+        .bytes => |plain| {
+            defer {
+                std.crypto.secureZero(u8, plain);
+                allocator.free(plain);
+            }
+            var fixed: std.Io.Reader = .fixed(plain);
+            return parseExactIndexStamp(&fixed);
+        },
+    };
+
     const idx_path = std.fmt.allocPrint(allocator, "{s}/prop_exact.idx", .{graph_dir_path}) catch return null;
     defer allocator.free(idx_path);
 
@@ -1221,11 +1714,13 @@ fn readExactIndexStamp(allocator: Allocator, graph_dir_path: []const u8) ?ExactI
 
     var rbuf: [64]u8 = undefined;
     var fr = file.reader(io, &rbuf);
-    const reader = &fr.interface;
+    return parseExactIndexStamp(&fr.interface);
+}
 
+fn parseExactIndexStamp(reader: *std.Io.Reader) ?ExactIndexStamp {
     var magic: [8]u8 = undefined;
     reader.readSliceAll(&magic) catch return null;
-    if (!std.mem.eql(u8, &magic, "GENPIDX4")) return null;
+    if (!std.mem.eql(u8, &magic, exact_index_magic)) return null;
     const epoch = reader.takeInt(u64, .little) catch return null;
     const covered = reader.takeInt(u64, .little) catch return null;
     return .{ .epoch = epoch, .covered_lsn = covered };
@@ -1277,7 +1772,21 @@ const NodePropertyReverseMap = struct {
     /// the forward base-load, so a torn / inconsistent / foreign reverse file is
     /// rejected → the caller falls back to a full rebuild, never an unsound
     /// reconcile). Mirrors `NodePropertyExactIndex.loadFromFile`'s outcomes.
-    fn loadFromFile(self: *NodePropertyReverseMap, graph_dir_path: []const u8, expected_epoch: u64, expected_covered_lsn: u64) ExactIndexLoadOutcome {
+    fn loadFromFile(self: *NodePropertyReverseMap, graph_dir_path: []const u8, expected_epoch: u64, expected_covered_lsn: u64, cipher: ?*const gs.side_file_crypto.Cipher) ExactIndexLoadOutcome {
+        // SONNY-6590: under a key only a sealed file that authenticates loads.
+        if (cipher) |c| switch (readSealedExactFile(self.allocator, graph_dir_path, prop_rev_index_file_name, c)) {
+            .absent => return .absent,
+            .unusable => return .stale,
+            .bytes => |plain| {
+                defer {
+                    std.crypto.secureZero(u8, plain);
+                    self.allocator.free(plain);
+                }
+                var fixed: std.Io.Reader = .fixed(plain);
+                return self.parse(&fixed, expected_epoch, expected_covered_lsn);
+            },
+        };
+
         const rev_path = std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ graph_dir_path, prop_rev_index_file_name }) catch return .absent;
         defer self.allocator.free(rev_path);
 
@@ -1287,8 +1796,10 @@ const NodePropertyReverseMap = struct {
 
         var rbuf: [4096]u8 = undefined;
         var fr = file.reader(io, &rbuf);
-        const reader = &fr.interface;
+        return self.parse(&fr.interface, expected_epoch, expected_covered_lsn);
+    }
 
+    fn parse(self: *NodePropertyReverseMap, reader: *std.Io.Reader, expected_epoch: u64, expected_covered_lsn: u64) ExactIndexLoadOutcome {
         var magic: [8]u8 = undefined;
         reader.readSliceAll(&magic) catch return .stale;
         if (!std.mem.eql(u8, &magic, prop_rev_index_magic)) return .stale;
@@ -1395,7 +1906,10 @@ pub const LabelStringDict = struct {
                 try local.id_to_str.put(id, owned);
                 return id;
             },
-            .external => |dict| return dict.getOrAssign(label),
+            // SONNY-6491: the view is shard 0's engine dictionary. A name
+            // assigned here reaches neither the other shards nor disk, so the
+            // view only reads; new names go through `resolvePersistedLabelId`.
+            .external => |dict| return dict.getId(label) orelse error.LabelDictionaryViewIsReadOnly,
         }
     }
 
@@ -1561,16 +2075,38 @@ fn freeReadPropertyMap(allocator: Allocator, map: *std.StringHashMap(gs.Property
 }
 
 // CANARY: REQ=REQ-SONNY-2463-MATERIALIZE-OOM; FEATURE="EngineDirectNodeOwnership"; ASPECT=ReadMapPartialFailure; STATUS=TESTED; TEST=tests/test_sonny2463_materialize_oom.zig; OWNER=engine; UPDATED=2026-09-25
+// CANARY: REQ=REQ-SONNY-6450-DUPLICATE-STORED-KEY; FEATURE="EngineDirectNodeOwnership"; ASPECT=LaterEntryReplacesEarlier; STATUS=TESTED; TEST=tests/test_sonny6450_ownership_residuals.zig; OWNER=storage; UPDATED=2026-11-12
 /// Decode `encoded` and put it into `map` under a copy of `key`. The map owns
 /// both copies once the put succeeds. If a copy or the put itself fails, the
 /// copies made so far are freed here, and the map is unchanged (SONNY-2463:
-/// they used to leak).
-fn putDecodedProperty(allocator: Allocator, map: *std.StringHashMap(gs.PropertyValue), key: []const u8, encoded: []const u8) !void {
+/// they used to leak). SONNY-6450 item 6: a key the map already holds (the
+/// same key twice in a stored property chain) has its value replaced by the
+/// later entry's, and the earlier value freed; `put` kept the map's key and
+/// dropped both the new key copy and the earlier value. `pub` for that
+/// regression.
+pub fn putDecodedProperty(allocator: Allocator, map: *std.StringHashMap(gs.PropertyValue), key: []const u8, encoded: []const u8) !void {
     const decoded = try gs.property.decode(allocator, encoded);
+    // CANARY: REQ=REQ-SONNY-6433-KEYS-AFTER-REMOVE; FEATURE="PropertyStorage"; ASPECT=TombstoneNotAProperty; STATUS=TESTED; TEST=tests/test_sonny6433_keys_after_remove.zig; OWNER=storage; UPDATED=2026-11-12
+    // SONNY-6433: a null is the tombstone `removeNodeProperty` (REMOVE, and
+    // SET to null) writes: the property is absent, not present with a null
+    // value. It was copied into the map, so keys() and properties() listed
+    // a removed property.
+    if (decoded.value == .null) {
+        if (map.fetchRemove(key)) |kv| {
+            allocator.free(kv.key);
+            freeOwnedStorageProperty(allocator, kv.value);
+        }
+        return;
+    }
     errdefer freeOwnedStorageProperty(allocator, decoded.value);
+    if (map.getPtr(key)) |held| {
+        freeOwnedStorageProperty(allocator, held.*);
+        held.* = decoded.value;
+        return;
+    }
     const owned_key = try allocator.dupe(u8, key);
     errdefer allocator.free(owned_key);
-    try map.put(owned_key, decoded.value);
+    try map.putNoClobber(owned_key, decoded.value);
 }
 
 // CANARY: REQ=REQ-SONNY-2806-EXACT-INDEX-NUMBER-HASH; FEATURE="InlinePropertyMatch"; ASPECT=ExactNumberHash; STATUS=TESTED; TEST=tests/test_sonny2806_exact_property_matching.zig; OWNER=storage; UPDATED=2026-09-26
@@ -1602,6 +2138,14 @@ fn numberHash(n: value_order.Number) u64 {
 
 fn hashStorageProperty(allocator: Allocator, value: gs.PropertyValue) !u64 {
     if (storedNumber(value)) |n| return numberHash(n);
+    // SONNY-3055: a string hashes as its NFC form does (`=` compares the NFC
+    // forms), so a stored 'e' + U+0301 and a seek for 'é' meet. An ASCII or
+    // NFC string hashes its bytes, as before.
+    if (value == .string and !legacyStringKeys() and !canonical_string.isCanonical(value.string)) {
+        const c = try canonical_string.canonical(allocator, value.string);
+        defer c.deinit(allocator);
+        return hashStorageProperty(allocator, .{ .string = c.bytes });
+    }
     var stack_buf: [64]u8 = undefined;
     const encoded_len = gs.property.encodedSize(value);
     if (encoded_len <= stack_buf.len) {
@@ -1620,6 +2164,13 @@ fn hashStorageProperty(allocator: Allocator, value: gs.PropertyValue) !u64 {
 fn hashEncodedPropertyBytes(encoded_value: []const u8) u64 {
     if (gs.property.decodeView(encoded_value)) |decoded| {
         if (storedNumber(decoded.value)) |n| return numberHash(n);
+        // SONNY-3055: a string by its NFC form, as in `hashStorageProperty`.
+        // Out of memory canonicalizing a non-NFC string (a few KiB) leaves the
+        // raw-bytes hash: the seek then misses it, as before SONNY-3055.
+        if (decoded.value == .string and !legacyStringKeys() and !canonical_string.isCanonical(decoded.value.string)) {
+            var sfa = std.heap.stackFallback(1024, std.heap.smp_allocator);
+            if (hashStorageProperty(sfa.get(), decoded.value)) |h| return h else |_| {}
+        }
     } else |_| {}
     return std.hash.Wyhash.hash(0, encoded_value);
 }
@@ -1644,6 +2195,301 @@ pub fn shouldExposePropertyKey(key: []const u8) bool {
 
 const merge_tuple_lock_count: usize = 16384;
 
+// CANARY: REQ=REQ-SONNY-6523-CHECKPOINT-SETTINGS; FEATURE="CrashRecovery"; ASPECT=CheckpointFailureLogLimit; STATUS=TESTED; TEST=tests/test_sonny6523_checkpoint_settings.zig; OWNER=storage; UPDATED=2026-11-13
+/// SONNY-6523 (6): while the same cause keeps failing light checkpoints, an
+/// ERROR at most this often.
+pub const checkpoint_failure_log_interval_ms: i64 = 10 * std.time.ms_per_min;
+
+/// SONNY-6523 (6): which failing light checkpoints are logged at ERROR: the
+/// first of a cause (the first failure, or one with another cause than the
+/// previous), then the same cause again at most every
+/// `checkpoint_failure_log_interval_ms`. The rest are only counted. Not
+/// thread-safe (`StorageAdapter.checkpoint_failure_log_mutex`).
+pub const CheckpointFailureLog = struct {
+    /// The previous failure's cause; null while checkpoints succeed.
+    cause: ?anyerror = null,
+    /// When the cause was last logged.
+    logged_ms: i64 = 0,
+    /// Failures in a row (0 while checkpoints succeed).
+    consecutive: u64 = 0,
+
+    pub const Verdict = enum { first, repeated, suppressed };
+
+    pub fn noteFailure(self: *CheckpointFailureLog, err: anyerror, now_ms: i64) Verdict {
+        self.consecutive += 1;
+        if (self.cause == null or self.cause.? != err) {
+            self.cause = err;
+            self.logged_ms = now_ms;
+            return .first;
+        }
+        if (now_ms - self.logged_ms >= checkpoint_failure_log_interval_ms) {
+            self.logged_ms = now_ms;
+            return .repeated;
+        }
+        return .suppressed;
+    }
+
+    /// The failures in a row that this success ends, or null if none.
+    pub fn noteSuccess(self: *CheckpointFailureLog) ?u64 {
+        if (self.consecutive == 0) return null;
+        const n = self.consecutive;
+        self.* = .{};
+        return n;
+    }
+};
+
+fn checkpointLogNowMs() i64 {
+    return @intCast(monoNanosNow() / std.time.ns_per_ms);
+}
+
+/// SONNY-6523 (5): the data directory's dropped-graph names
+/// (`StorageAdapter.saveDroppedGraphNamesLocked`).
+const dropped_graphs_file_name = "dropped_graphs.dat";
+const dropped_graphs_magic = "GEODROP1";
+
+/// SONNY-6523 (5): fsync the directory holding `path`, so a rename into it
+/// survives power loss (as graph-storage's `syncGraphDir`: `.iterate = true`
+/// opens a real directory fd; the default O_PATH one fails fsync).
+fn syncDirOf(path: []const u8) !void {
+    const sio = std.Io.Threaded.global_single_threaded.io();
+    var dir = try std.Io.Dir.cwd().openDir(sio, std.fs.path.dirname(path) orelse ".", .{ .iterate = true });
+    defer dir.close(sio);
+    const dir_file = std.Io.File{ .handle = dir.handle, .flags = .{ .nonblocking = false } };
+    try dir_file.sync(sio);
+}
+
+// CANARY: REQ=REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=QuarantinedGraphRefusesWrites; STATUS=TESTED; TEST=tests/test_sonny6523_quarantine_fail_closed.zig; OWNER=storage; UPDATED=2026-11-13
+/// SONNY-6523: `ManagedGraph.quarantine`'s codes, one per
+/// `graph_store.GraphQuarantineError`.
+pub const Quarantine = enum(u8) {
+    none,
+    quarantined,
+    checksum_mismatch,
+    data_corruption,
+    invalid_data,
+    /// SONNY-6529: graph-storage could not undo an aborted transaction.
+    abort_not_undone,
+    /// SONNY-6529: a commit failed after the store's in-memory copy took
+    /// the transaction's writes, and the engine undid them.
+    commit_failed,
+
+    fn of(err: anyerror) Quarantine {
+        return switch (err) {
+            error.ChecksumMismatch => .checksum_mismatch,
+            error.DataCorruption => .data_corruption,
+            error.InvalidData => .invalid_data,
+            error.AbortNotUndone => .abort_not_undone,
+            error.CommitFailed => .commit_failed,
+            else => .quarantined,
+        };
+    }
+
+    fn toError(q: Quarantine) ?graph_store.GraphQuarantineError {
+        return switch (q) {
+            .none => null,
+            .quarantined => error.GraphQuarantined,
+            .checksum_mismatch => error.ChecksumMismatch,
+            .data_corruption => error.DataCorruption,
+            .invalid_data => error.InvalidData,
+            .abort_not_undone => error.AbortNotUndone,
+            .commit_failed => error.CommitFailed,
+        };
+    }
+};
+
+// CANARY: REQ=REQ-SONNY-6529-ABORT-NOT-UNDONE; FEATURE="TransactionManagement"; ASPECT=QuarantineOnFailedAbort; STATUS=TESTED; TEST=tests/test_sonny6529_abort_quarantine.zig; OWNER=storage; UPDATED=2026-11-15
+/// SONNY-6529: an engine transaction of `mg` could not be ended cleanly
+/// (`cause`: `.abort_not_undone` or `.commit_failed`): log it at ERROR with
+/// the graph and the operation (`site`), and refuse the graph's writes
+/// (`refuseQuarantinedWrite`) and reads (`GraphStore.quarantineGraphReads`)
+/// with a 58000 error until the server restarts.
+///
+/// Not reopened in place. graph-storage returns a store to its committed
+/// state when it is reopened, but geode keeps the graph's nodes,
+/// relationships, label counts, the MERGE and exact property indexes and
+/// the full-text and advanced indexes in memory beside the engine, has no
+/// path that rebuilds them for one graph while the server runs, and its
+/// writers hold shard pointers of the graph's engine between lock
+/// acquisitions. A restart reopens every graph from disk.
+///
+/// `AbortNotUndone` reaches here only for an abort graph-storage could
+/// neither undo nor, from v0.4.24, discard (SONNY-6657: the transaction
+/// overlapped another on its shard, cross-shard records in the WAL tail, or
+/// `abort_undo = .keep_writes`); a discarded abort succeeds and quarantines
+/// nothing (`abortUnmirroredTxn`).
+///
+/// Nothing keeps writing to the shard: graph-storage refuses its writes,
+/// commits and checkpoints after `AbortNotUndone`, and geode refuses every
+/// write to the graph before it reaches the engine. The security graph's
+/// reads stay exempt, as for a failed hydration.
+pub fn quarantineAfterTxnFailure(mg: *ManagedGraph, cause: Quarantine, err: anyerror, site: []const u8) void {
+    slog.err("graph quarantined: an engine transaction could not be ended cleanly; its reads and writes fail with 58000 until the server restarts and reopens it at its committed state (SONNY-6529)", &.{
+        SAttr.string("graph", mg.name),
+        SAttr.string("operation", site),
+        SAttr.string("cause", @tagName(cause)),
+        SAttr.err("error", err),
+    });
+    mg.quarantine.store(@intFromEnum(cause), .release);
+    if (graph_store.getCurrentGlobalStore()) |store| {
+        if (cause.toError()) |qerr| store.quarantineGraphReads(mg.name, qerr);
+    }
+}
+
+/// SONNY-6529: abort `txn`, an engine transaction the adapter opened on
+/// `shard` for one write call that failed before it changed the store's
+/// in-memory copy (the adapter's write methods return the error, and the
+/// store applies a write to memory only after its engine write returned):
+/// graph-storage undoes the transaction, which is exactly the state the
+/// store holds. SONNY-6657: one its undo journal cannot undo (a page the
+/// caller imaged, a legacy property chain, ...) graph-storage v0.4.24
+/// completes by discarding the transaction's pages and redoing the committed
+/// state, which is the same state: the abort succeeds, the shard keeps
+/// serving and the graph is not quarantined
+/// (`storage_txn_aborts_discarded_total`). Only when it cannot discard
+/// either (another transaction was open on the shard at some point during
+/// this one, cross-shard records in the WAL tail, `abort_undo =
+/// .keep_writes`) is it `AbortNotUndone`, which quarantines the graph; it
+/// is never ignored.
+fn abortUnmirroredTxn(mg: *ManagedGraph, shard: *gs.GraphEngine, txn: gs.TxnId, site: []const u8) void {
+    abortCounted(shard, txn) catch |err| noteAbortFailure(mg, err, site);
+}
+
+/// SONNY-6529: as `abortUnmirroredTxn`, for a transaction id of the sharded
+/// engine (`mg.engine.beginTxn`, `encodeShardedTxn`).
+fn abortUnmirroredShardedTxn(mg: *ManagedGraph, txn: gs.TxnId, site: []const u8) void {
+    abortShardedCounted(mg, txn) catch |err| noteAbortFailure(mg, err, site);
+}
+
+// CANARY: REQ=REQ-SONNY-6529-ABORT-METRICS; FEATURE="Observability"; ASPECT=EngineAbortCounters; STATUS=TESTED; TEST=tests/test_sonny6529_abort_quarantine.zig; OWNER=storage; UPDATED=2026-11-15
+/// SONNY-6529: graph-storage's `Metrics.txn_aborts_undone` and
+/// `txn_aborts_not_undone`, summed over every graph's shards, for the
+/// aborts geode issues (every engine abort of the server goes through
+/// `abortCounted`). Exported as `geode.runtime.storage_txn_aborts_undone_total`
+/// and `geode.runtime.storage_txn_aborts_not_undone_total`
+/// (`registerCheckpointMetrics`). The shard's own counters are plain fields
+/// written under its single-writer contract, so they are read here, by the
+/// writer, around its abort, never by the metrics scrape.
+pub var storage_txn_aborts_undone_total: std.atomic.Value(u64) = .init(0);
+pub var storage_txn_aborts_not_undone_total: std.atomic.Value(u64) = .init(0);
+// CANARY: REQ=REQ-SONNY-6657-DISCARD-ABORT; FEATURE="TransactionManagement"; ASPECT=DiscardedAbortCounter; STATUS=TESTED; TEST=tests/test_sonny6529_abort_quarantine.zig; OWNER=storage; UPDATED=2026-11-16
+/// SONNY-6657: graph-storage's `Metrics.txn_aborts_discarded` (from
+/// v0.4.24), summed the same way: aborts its undo journal could not undo
+/// that it completed by discarding the transaction's pages and redoing the
+/// committed state. Such an abort succeeds: the shard keeps serving and
+/// geode does not quarantine the graph. Exported as
+/// `geode.runtime.storage_txn_aborts_discarded_total`.
+pub var storage_txn_aborts_discarded_total: std.atomic.Value(u64) = .init(0);
+
+fn abortCounted(shard: *gs.GraphEngine, txn: gs.TxnId) anyerror!void {
+    const undone0 = shard.metrics.txn_aborts_undone;
+    const not_undone0 = shard.metrics.txn_aborts_not_undone;
+    const discarded0 = shard.metrics.txn_aborts_discarded;
+    defer {
+        _ = storage_txn_aborts_undone_total.fetchAdd(shard.metrics.txn_aborts_undone -% undone0, .monotonic);
+        _ = storage_txn_aborts_not_undone_total.fetchAdd(shard.metrics.txn_aborts_not_undone -% not_undone0, .monotonic);
+        _ = storage_txn_aborts_discarded_total.fetchAdd(shard.metrics.txn_aborts_discarded -% discarded0, .monotonic);
+    }
+    return shard.abortTxn(txn);
+}
+
+fn abortShardedCounted(mg: *ManagedGraph, txn: gs.TxnId) anyerror!void {
+    const si = shardedTxnShard(txn);
+    if (si >= mg.engine.shards.len) return mg.engine.abortTxn(txn);
+    return abortCounted(mg.engine.shards[si], shardedTxnLocal(txn));
+}
+
+// CANARY: REQ=REQ-SONNY-6601-AUTOCOMMIT-ABORT-QUARANTINE; FEATURE="TransactionManagement"; ASPECT=AutoCommitAbortNotUndone; STATUS=TESTED; TEST=tests/test_sonny6601_autocommit_abort_quarantine.zig; OWNER=storage; UPDATED=2026-11-15
+/// SONNY-6601 (3): an auto-commit engine write (`mg.engine.addLabel`,
+/// `removeLabel`, `addEdge`, `removeEdge`, `removeEdgeProperty`) on the
+/// shard of `node_id` failed. graph-storage aborted it itself
+/// (`abortFailedWrite`) and returned the write's error; if that abort could
+/// not undo the write, the shard now refuses every write, commit and
+/// checkpoint (`abort_not_undone`), which only the shard's state shows.
+/// Quarantine the graph then, as an explicit abort's `AbortNotUndone` does
+/// (`noteAbortFailure`); it went on serving from memory beside the refused
+/// shard. Read on the writing thread, after its write (the shard's
+/// single-writer contract).
+fn noteAutoCommitFailure(mg: *ManagedGraph, node_id: u64, err: anyerror, site: []const u8) void {
+    if (mg.shardEngineForNode(node_id).abort_not_undone != null) quarantineAfterTxnFailure(mg, .abort_not_undone, err, site);
+}
+
+fn noteAbortFailure(mg: *ManagedGraph, err: anyerror, site: []const u8) void {
+    switch (err) {
+        error.AbortNotUndone => quarantineAfterTxnFailure(mg, .abort_not_undone, err, site),
+        else => slog.err("an engine transaction abort failed (SONNY-6529)", &.{
+            SAttr.string("graph", mg.name),
+            SAttr.string("operation", site),
+            SAttr.err("error", err),
+        }),
+    }
+}
+
+// CANARY: REQ=REQ-SONNY-6529-MIRRORED-TXN-END; FEATURE="TransactionManagement"; ASPECT=CommitWhatTheStoreHolds; STATUS=TESTED; TEST=tests/test_sonny6529_abort_undo.zig; OWNER=storage; UPDATED=2026-11-15
+/// SONNY-6529: end `txn` (a statement's or a session's engine transaction,
+/// sharded id) whose writes the store's in-memory copy holds: commit it.
+///
+/// Such a transaction is never aborted. graph-storage 0.4.16 `abortTxn`
+/// undoes its writes, but the store keeps them in memory, and geode's own
+/// undo (`statement_undo`, `txn_undo_log`) undoes them through the store's
+/// write methods, which write to the engine too: an abort before that replay
+/// undid every write on the transaction's shard twice (a node it created was
+/// gone, so deleting it failed, and the store kept it). geode's undo is the
+/// rollback, as it must be: a statement transaction covers one of the graph's
+/// 16 shards, the writes on the others commit on their own. Where the replay
+/// runs while the transaction is open, its writes join it and commit with
+/// it, so the failed writes and their undo reach the WAL as one unit.
+///
+/// A commit that fails leaves the engine and the store's copy disagreeing:
+/// the transaction is aborted (graph-storage undoes it) and the graph is
+/// quarantined (`quarantineAfterTxnFailure`, `.commit_failed`). The commit
+/// error is returned.
+fn commitMirroredTxn(mg: *ManagedGraph, txn: gs.TxnId, site: []const u8) !void {
+    mg.engine.commitTxn(txn) catch |err| {
+        failMirroredTxn(mg, txn, err, site);
+        return err;
+    };
+}
+
+/// SONNY-6529: the commit of a transaction whose writes the store's
+/// in-memory copy holds failed with `err` (see `commitMirroredTxn`).
+fn failMirroredTxn(mg: *ManagedGraph, txn: gs.TxnId, err: anyerror, site: []const u8) void {
+    abortShardedCounted(mg, txn) catch |abort_err| switch (abort_err) {
+        // TxnNotFound: the failed commit ended it.
+        error.TxnNotFound => {},
+        else => noteAbortFailure(mg, abort_err, site),
+    };
+    if (mg.quarantine.load(.acquire) == @intFromEnum(Quarantine.none))
+        quarantineAfterTxnFailure(mg, .commit_failed, err, site);
+}
+
+// CANARY: REQ=REQ-SONNY-6528-SECURITY-WRITE-EXCLUSION; FEATURE="GQL Auth DDL Persistence"; ASPECT=SecurityGraphWriteLock; STATUS=TESTED; TEST=tests/test_sonny6528_security_write_exclusion.zig; OWNER=storage; UPDATED=2026-11-14
+/// SONNY-6528 (2): what `StorageAdapter.holdSecurityGraphForWrite` took;
+/// `release` lets it go (a no-op when it took nothing).
+pub const SecurityWriteHold = struct {
+    adapter: ?*StorageAdapter = null,
+    mg: ?*ManagedGraph = null,
+
+    pub fn release(self: SecurityWriteHold) void {
+        if (self.mg) |mg| self.adapter.?.releaseGraphWriteLock(mg);
+    }
+};
+
+/// SONNY-6523: refuse a write to a quarantined graph before it reaches the
+/// engine. The graph's hydration found its store damaged (REQ-GQL-028); a
+/// write would build on it, and its WAL records would be replayed onto it.
+/// Called by every adapter write entry point once it has the graph.
+fn refuseQuarantinedWrite(mg: *const ManagedGraph) graph_store.GraphQuarantineError!void {
+    const q: Quarantine = @enumFromInt(mg.quarantine.load(.acquire));
+    // SONNY-6529: a graph quarantined after a failed commit still takes the
+    // compensating writes of the rollback that follows it (the undo log's
+    // and a statement's replay run with capture suspended): its engine is
+    // sound (the failed transaction was undone there), and the rollback
+    // undoes the transaction's earlier, committed requests, which would
+    // otherwise stay durable.
+    if (q == .commit_failed and statement_undo.suspended()) return;
+    if (q.toError()) |err| return err;
+}
+
 /// Wraps a single `ShardedGraphEngine` together with its label dictionary and
 /// metadata.  Owned by (and keyed inside) the `StorageAdapter`.
 pub const ManagedGraph = struct {
@@ -1652,6 +2498,39 @@ pub const ManagedGraph = struct {
     exact_node_property_index: NodePropertyExactIndex,
     name: []const u8, // owned
     uuid: [16]u8,
+    /// SONNY-6523: why the graph is quarantined (REQ-GQL-028: its first-touch
+    /// hydration failed, so the store is known to be damaged), as a
+    /// `Quarantine` code; `.none` while it is not. Set once by
+    /// `markGraphQuarantined`, never cleared for the process lifetime. Every
+    /// write path refuses a quarantined graph (`refuseQuarantinedWrite`).
+    quarantine: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(Quarantine.none)),
+    /// SONNY-6527: the receiver of the engine's label-dictionary findings
+    /// (`GraphConfig.label_dict_report`); freed after the engine is closed.
+    label_report: ?*label_dict_divergence.ReportCtx = null,
+    /// SONNY-6528 (1): held by a Raft apply for each replicated write to this
+    /// graph (`beginReplicatedApply`) and by a checkpoint of it right after
+    /// it takes `rwlock` EXCLUSIVE (`checkpointOneGraph`). The apply cannot
+    /// take `rwlock`: it runs on the Raft tick thread under the Raft node's
+    /// `inner_mutex`, and a request on the leader holds its graph's `rwlock`
+    /// while it proposes (taking `inner_mutex`). Lock order: `rwlock` ->
+    /// this; the apply never takes `rwlock` while it holds this.
+    replicated_apply_mutex: std.Io.Mutex = .init,
+    /// SONNY-6528 (1): the thread holding `replicated_apply_mutex` for an
+    /// apply (`StorageAdapter.currentThreadTag`), 0 when none. A checkpoint
+    /// the apply itself starts (its hydration's persist-on-complete) does
+    /// not wait for it.
+    replicated_apply_holder: std.atomic.Value(u64) = .init(0),
+    /// SONNY-6636 (b): a Raft snapshot is copying this graph's files
+    /// (`holdGraphForSnapshot`, holding `replicated_apply_mutex`). Label
+    /// interning ahead of an apply, on a Raft receive thread, skips the
+    /// graph rather than wait for the copy (the apply interns them later).
+    snapshot_copying: std.atomic.Value(bool) = .init(false),
+    /// SONNY-6541 (1): Raft `drop_graph` applies waiting for this graph's
+    /// `rwlock` (`beginReplicatedDrop`). Such an apply waits under the Raft
+    /// node's `inner_mutex`, so a thread holding this graph's lock must not
+    /// wait for `inner_mutex` or for a commit while it is set
+    /// (`threadHoldsGraphAwaitedByReplicatedDrop`): it gives up instead.
+    replicated_drop_waiters: std.atomic.Value(u32) = .init(0),
     /// GAP-ENT-0008 Fix B coverage signal: number of live nodes processed by
     /// the most recent `rebuildExactNodePropertyIndex` pass. Reset to 0 at the
     /// start of each rebuild and incremented once per live node the per-shard
@@ -1676,6 +2555,13 @@ pub const ManagedGraph = struct {
     /// mutexes here. Only `ensureExactNodePropertyIndexBuilt` ever holds it, so it
     /// participates in no lock-ordering relationship and cannot deadlock.
     exact_index_build_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    /// SONNY-6354: the lean late-key generation (`graph_store.leanLateGenMax`)
+    /// the exact index is complete for. A lean key registered at runtime after
+    /// it has holders written while it was unregistered, so unindexed; the
+    /// index serves (and is saved) only once `catchUpExactLeanKeysLocked` has
+    /// added them (`exactIndexCurrent`). Written under
+    /// `exact_index_build_mutex`.
+    exact_lean_gen: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// GAP-0064 FIX A: `true` while a RACE-FREE background reopen rebuild
     /// (`spawnExactIndexRebuildOnReopen` → `exactIndexRebuildOnReopenWorker`)
     /// owns this graph's exact-index build. Set at a successful reopen spawn
@@ -1740,6 +2626,11 @@ pub const ManagedGraph = struct {
     /// not available in the geode root module's std) locked via the global
     /// single-threaded io handle.
     fts_label_index_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    /// SONNY-6591: `fts_label_index` holds every fulltext index the catalog
+    /// records for this graph (`fts_index_ops.armLabelRegistry` filled it from
+    /// the catalog and opened their engines). The registry lives in memory
+    /// only, so a graph opened by a restart starts with it empty.
+    fts_registry_armed: std.atomic.Value(bool) = .init(false),
     /// Per-graph RwLock for concurrent read access. Queries acquire shared;
     /// mutations and persistence acquire exclusive. Part of P1 lock migration.
     rwlock: std.Io.RwLock = std.Io.RwLock.init,
@@ -1757,6 +2648,13 @@ pub const ManagedGraph = struct {
     /// `dropGraph` freed the graph under its lock's holders and waiters, whose
     /// release was then a use-after-free.
     pins: std.atomic.Value(u32) = .init(0),
+    /// SONNY-6472 (4): node creates and deletes in flight through this
+    /// adapter. The engine counts a node (`manifest.node_count`) and writes or
+    /// tombstones its record in separate steps (a create counts at
+    /// `allocNode`, then writes the record; a delete tombstones, then
+    /// uncounts), so each one in flight can leave one record fewer than the
+    /// count. `scanAllNodes` allows that many and no more.
+    node_census_writers: std.atomic.Value(u32) = .init(0),
     // CANARY: REQ=REQ-SONNY-3029-GROUP-COMMIT-TXN-GATE; FEATURE="High-Concurrency Mutations"; ASPECT=TxnGate; STATUS=TESTED; TEST=tests/test_sonny3029_group_commit_txn_gate.zig; OWNER=storage; UPDATED=2026-09-27
     /// SONNY-3029: group-commit batches with a statement transaction open on
     /// this graph (`enterBatchTxn`), and threads that hold or wait for its
@@ -1771,6 +2669,14 @@ pub const ManagedGraph = struct {
     /// committed writes on crash recovery.
     batch_txns_open: std.atomic.Value(u32) = .init(0),
     write_lock_claims: std.atomic.Value(u32) = .init(0),
+    // CANARY: REQ=REQ-SONNY-3135-LOCKLESS-DROP-WAITS; FEATURE="MultiGraphIsolation"; ASPECT=WriteHolder; STATUS=TESTED; TEST=tests/test_sonny3135_lockless_drop_waits.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-3135 (N7c): the id (plus one) of the thread that holds `rwlock`
+    /// EXCLUSIVE through the graph lock API (`acquireGraphWriteLock*`, until
+    /// `releaseGraphWriteLock`), 0 when none does. `GraphStore.dropGraph`
+    /// takes the write lock itself unless the calling thread holds it
+    /// (`threadHoldsGraphWriteLock`), so a drop waits for the graph's
+    /// holders without waiting for its own caller.
+    write_holder: std.atomic.Value(u64) = .init(0),
 
     /// Explicit writer-preference counter for ALL EXCLUSIVE acquirers of
     /// `rwlock` (the periodic checkpoint AND the edge-phase schema/MERGE ops).
@@ -1808,6 +2714,13 @@ pub const ManagedGraph = struct {
     /// and exclusive acquirers themselves NEVER consult the backoff, so two
     /// exclusives never wedge each other — they just race `tryLock` normally.
     exclusive_waiting: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
+    /// SONNY-6783: bumped when the per-graph lock is let go while an exclusive
+    /// acquirer waits (`wakeExclusiveWaiter`). The contended slow path of
+    /// `acquireGraphWriteLockCancelable` waits on it, bounded by its nap, so a
+    /// release wakes it at once instead of leaving the lock idle until the nap
+    /// ends.
+    lock_release_seq: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     /// Per-shard rwlocks covering the N partitions of
     /// `GraphStore.nodes` / `GraphStore.edges` / adjacency.  Writers
@@ -1909,6 +2822,17 @@ pub const ManagedGraph = struct {
 
     /// SONNY-3028: was this graph dropped (it is out of `engines`, and its
     /// last pin frees it)?
+    /// SONNY-6472 (4): bracket a node create or delete (`node_census_writers`):
+    /// from before the engine counts or tombstones the node to after its
+    /// record and count agree.
+    pub fn beginNodeCensusWrite(self: *ManagedGraph) void {
+        _ = self.node_census_writers.fetchAdd(1, .seq_cst);
+    }
+
+    pub fn endNodeCensusWrite(self: *ManagedGraph) void {
+        _ = self.node_census_writers.fetchSub(1, .seq_cst);
+    }
+
     pub fn isDropped(self: *const ManagedGraph) bool {
         return self.pins.load(.acquire) & dropped_bit != 0;
     }
@@ -2210,6 +3134,7 @@ pub const ManagedGraph = struct {
         } else {
             self.engine.close() catch {};
         }
+        if (self.label_report) |r| allocator.destroy(r); // SONNY-6527: after the engine
         self.exact_node_property_index.deinit();
         allocator.free(self.merge_tuple_locks);
         self.label_dict.deinit();
@@ -2222,87 +3147,69 @@ fn resolvePersistedLabelId(mg: *ManagedGraph, label: []const u8) !gs.LabelId {
     if (mg.label_dict.getId(label)) |id| return id;
     // CANARY: REQ=REQ-QUIC-HC-171; FEATURE="High-Concurrency Mutations"; ASPECT=LabelDictionaryCheckpoint; STATUS=IMPL; TEST=tests/perf/test_group_commit_coordinator.zig; OWNER=storage; UPDATED=2026-05-29
     //
-    // LabelStringDict is a view over shard 0's dictionary. Creating labels
-    // through that view updates memory but does not dirty the sharded engines,
-    // so checkpoint/reopen can recover nodes with label IDs whose names were
-    // never persisted. Use the engine API for first sight of a label: it
-    // broadcasts the mapping to every shard and dirties the dictionaries.
-    const id = try mg.engine.getOrAssignLabel(label);
+    // LabelStringDict is a view over shard 0's dictionary and only reads
+    // (SONNY-6491): a name created through it would reach neither the other
+    // shards nor disk. Use the engine API for first sight of a label: it
+    // assigns the name on every shard, shard 0 first, and returns shard 0's id.
+    //
+    // Label-dictionary durability (gap 0026 for the security graph,
+    // GAP-0915 for every graph): the label dictionary is not WAL-logged, so a
+    // name must be on disk before any committed record carries its id, or a
+    // crash leaves the records unreachable by label (labeled MATCH 0 while
+    // `MATCH (n)` sees them all). graph_storage 0.4.14 (SONNY-6491) does this
+    // itself: each shard's `getOrAssignLabel` writes its labels.dict (tmp,
+    // fsync, rename, directory fsync) before returning a NEW name's id, and an
+    // error fails the mutation (durability before ack, fail closed).
+    // Checkpoints no longer write labels.dict. geode used to rewrite every
+    // shard's file here as well, which on 0.4.14 only added 16 fsyncs per new
+    // name.
+    // CANARY: REQ=REQ-GAP-0915-LABEL-INDEX-CRASH-REBUILD; FEATURE="CrashRecovery"; ASPECT=LabelDictFirstSightPersist; STATUS=TESTED; TEST=tests/test_gap0910_0915_crash_recovery.zig; OWNER=storage; UPDATED=2026-11-13
+    return try mg.engine.getOrAssignLabel(label);
+}
 
-    // Label-dictionary durability (gap 0026 for the security graph;
-    // GAP-0915 extended it to EVERY graph): the label dictionary is NOT
-    // WAL-logged — it is persisted only at checkpoint (labels.dict).
-    // Per-commit WAL fsync alone is therefore insufficient on a FRESH
-    // (never-checkpointed) graph: after an unclean crash, recovery replays
-    // the node records from the fsynced WAL but has lost the name→id
-    // mappings, leaving every record unreachable BY LABEL — labeled MATCH
-    // returned 0 while `MATCH (n)` saw the full committed set. Persist the
-    // (tiny, bounded — a handful of labels ever) per-shard dictionaries
-    // synchronously on FIRST sight of a label, and fail the mutation if the
-    // persist fails: durability before ack, fail closed. saveToFile is
-    // atomic (tmp + fsync + rename), matching the checkpoint writer, so a
-    // crash mid-save leaves the previous dictionary intact.
-    // CANARY: REQ=REQ-GAP-0915-LABEL-INDEX-CRASH-REBUILD; FEATURE="CrashRecovery"; ASPECT=LabelDictFirstSightPersist; STATUS=TESTED; TEST=tests/test_gap0910_0915_crash_recovery.zig; OWNER=storage; UPDATED=2026-07-10
-    {
-        var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        for (mg.engine.shards) |shard| {
-            const labels_path = try std.fmt.bufPrint(&path_buf, "{s}/labels.dict", .{shard.graph_dir.path});
-            try shard.label_dict.saveToFile(labels_path);
+// CANARY: REQ=REQ-SONNY-6523-FAILED-CREATE-COUNT; FEATURE="StorageIntegrity"; ASPECT=FailedCreateGivesSlotBack; STATUS=TESTED; TEST=tests/test_sonny6523_failed_create_count.zig; OWNER=storage; UPDATED=2026-11-13
+/// SONNY-6523 (2): give back the node slot `allocNode` handed a create that
+/// then failed. `allocNode` counts the node in the shard manifest at once
+/// and is not part of any transaction, so without this the count stayed one
+/// ahead of the live records and the next checkpoint persisted it; the
+/// live-count check (REQ-GQL-028) then failed the graph with DataCorruption
+/// after a restart.
+///
+/// `txn`: the transaction the record would have been written in, still
+/// active. `aborting`: the caller aborts `txn` right after this (it opened
+/// it itself). The caller holds what serializes its `allocNode` on the
+/// shard (the graph's write lock, or its shard lock), so neither the count
+/// nor the id is another writer's.
+///
+/// SONNY-6529: graph-storage 0.4.16 `abortTxn` undoes a record written into
+/// the empty slot (`putNodeTxn`): it empties the slot and gives the count
+/// back, and the id when it is still the last one the shard issued. So:
+///   * a record in the slot, `aborting`: nothing here; the abort gives it
+///     all back (deleting it here as well was undone by the same abort, a
+///     wasted write);
+///   * a record in the slot, joined transaction (it commits, a statement's
+///     or a session's): the record is deleted in it (`deleteNodeTxn`: the
+///     tombstone is logged and the count taken back), so the slot reads the
+///     same once it commits;
+///   * no record (the create failed before it wrote one, or before it had a
+///     transaction): only the count is taken back, and the id too when it is
+///     still the last one the shard issued; the abort has nothing to undo.
+fn releaseFailedNodeSlot(shard: *gs.GraphEngine, node_id: u64, txn: ?gs.TxnId, aborting: bool) void {
+    if (txn) |t| {
+        if (shard.node_store.getRawSlot(node_id) catch null) |rec| {
+            if (aborting) return;
+            if (!gs.node.isDeleted(&rec)) {
+                if (shard.deleteNodeTxn(node_id, t)) |_| return else |err| {
+                    log.err("SONNY-6523: could not delete the record of failed node create {d} ({s}); the shard's live-node count may be off by one", .{ node_id, @errorName(err) });
+                    return;
+                }
+            }
+            return; // already tombstoned: deleteNodeTxn took the count back
         }
     }
-    return id;
-}
-
-/// Security-graph durability (gap 0026), belt-and-suspenders re-log of the
-/// node's label var_store page inside the mutating txn so it commits (and, on
-/// the security graph's `sync_each_commit` engines, fsyncs) with the mutation.
-///
-/// HISTORY: this began as a workaround for an upstream graph-storage WAL
-/// mis-log — `GraphEngine.addLabelTxn` used to log the label block with
-/// `logPage(txn, .var_store, result.head)`, imaging a bogus page id instead of
-/// the real label-block page, so labels written since the last checkpoint
-/// vanished on crash recovery. That upstream defect is FIXED as of gs v0.3.2:
-/// `addLabelTxn` now images the var page via `logVarChain`, which correctly
-/// decodes both encodings (see below). This re-log is therefore redundant with
-/// the engine's own WAL image, but is retained as defensive durability.
-///
-/// SLAB-HEAD DECODE (the crash this function itself caused before the fix):
-/// a var head is EITHER a legacy page-chain ref `first_page << 16` (page id =
-/// `head >> 16`) OR a slab-packed head with bit 63 set (`TAG | page<<24 | slot`,
-/// page id = `slabHeadPageId(head)`). The previous `head >> 16` decode was
-/// correct ONLY for the legacy form; for a slab head it produced a ~2^47 page
-/// id (e.g. 0x800000000100). Recovery replayed that bogus page image into a
-/// dirty buffer-pool frame, and `flushAll` then issued a `pwrite` at an ~1.15 EB
-/// offset → `EFBIG` → `error.FileTooBig`, so the ENTIRE `__geode_security`
-/// engine failed to reopen after a crash of a never-checkpointed security graph
-/// (a real durability loss: the acknowledged security mutation became
-/// unrecoverable). Decode slab-aware — exactly as `gs`'s own `logVarChain` does.
-///
-/// Scoped to `__geode_security`; no-op for non-security graphs and label-less
-/// nodes.
-fn relogSecurityLabelPageTxn(mg: *ManagedGraph, node_shard: anytype, node_id: u64, txn: gs.TxnId) !void {
-    if (!std.mem.eql(u8, mg.name, "__geode_security")) return;
-    const rec = (try node_shard.getNode(node_id)) orelse return;
-    const head = rec.label_head;
-    if (head == 0) return;
-    const page_id = if (gs.var_store.isSlabHead(head))
-        gs.var_store.slabHeadPageId(head)
-    else
-        head >> 16;
-    try node_shard.logPagePublic(txn, .var_store, page_id);
-}
-
-/// Auto-commit variant of `relogSecurityLabelPageTxn` for the
-/// `mg.engine.addLabel` (self-committing) call sites: the label add has
-/// already committed, so the corrected page image is logged in its own tiny
-/// follow-up txn. Security-graph only; the second commit is one extra WAL
-/// fsync on an admin-rare path.
-fn relogSecurityLabelPageAutoCommit(mg: *ManagedGraph, node_shard: anytype, node_id: u64) !void {
-    if (!std.mem.eql(u8, mg.name, "__geode_security")) return;
-    const txn = try node_shard.beginTxn();
-    errdefer node_shard.abortTxn(txn) catch {};
-    try relogSecurityLabelPageTxn(mg, node_shard, node_id, txn);
-    try node_shard.commitTxn(txn);
+    if (shard.manifest.node_count > 0) shard.manifest.node_count -= 1;
+    const stride: u64 = shard.idStride();
+    if (shard.manifest.next_node_id == node_id + stride) shard.manifest.next_node_id = node_id;
 }
 
 /// Security-graph durability (gap 0026): crash-recovery self-heal for the
@@ -2371,6 +3278,49 @@ fn healSecurityEngineCounters(mg: *ManagedGraph) void {
     }
 }
 
+// CANARY: REQ=REQ-SONNY-6384-WAL-LSN-ANCHOR; FEATURE="Auth DDL Persistence"; ASPECT=WalLsnAnchorAtOpen; STATUS=TESTED; TEST=tests/test_sonny6384_offline_change_crash_durability.zig; OWNER=storage; UPDATED=2026-11-12
+/// SONNY-6384: keep each shard WAL's LSN at or past its manifest's
+/// `last_checkpoint_lsn` before anything writes to the graph.
+///
+/// A full checkpoint sets `last_checkpoint_lsn = L` and compacts the WAL up
+/// to L; when that leaves the WAL empty, the WAL library deletes its
+/// `graph.wal.ckpt` sidecar, the only record of the WAL's LSN for an empty
+/// file (the clean close rewrites it). A process that ends after such a
+/// checkpoint without closing the engine (a SIGKILL, or the offline CLI,
+/// which never closes it) leaves the next open numbering the WAL from 0, while
+/// recovery replays from L by that same numbering: every record written
+/// afterwards is skipped by the next crash recovery (lost), or, once more
+/// than L were written, only a torn tail of them is replayed.
+///
+/// Heal: append one no-op `checkpoint_marker` at exactly LSN L and fsync it,
+/// the anchor the clean close would have left. Recovery replays from L + 1,
+/// so it never replays the marker; the next checkpoint compacts it away.
+/// Records already skipped by an earlier recovery are not recovered here.
+/// A failure fails the open: serving the graph would acknowledge writes that
+/// the next crash recovery drops.
+fn healWalLsnAnchor(engine: *gs.ShardedGraphEngine) !void {
+    for (engine.shards) |shard| {
+        if (shard.read_only) continue;
+        const covered = shard.manifest.last_checkpoint_lsn;
+        if (shard.wal.inner.currentLsn() >= covered) continue;
+        var rec = gs.wal_record.WalRecord{
+            .lsn = covered,
+            .txn_id = 0,
+            .record_type = .checkpoint_marker,
+            .file_id = 0,
+            .page_id = 0,
+            .payload = &.{},
+            .checksum = 0,
+        };
+        var buf: [64]u8 = undefined;
+        const n = try rec.serializeInto(&buf);
+        _ = try shard.wal.inner.appendWithLsn(covered, buf[0..n]);
+        try shard.wal.inner.sync();
+        if (shard.wal.current_lsn < covered) shard.wal.current_lsn = covered;
+        log.warn("healed shard WAL LSN anchor: the WAL numbered below its last checkpoint LSN {d} (an empty WAL left by a checkpoint and no clean close)", .{covered});
+    }
+}
+
 fn initMergeTupleLocks(allocator: Allocator) ![]std.Io.Mutex {
     const locks = try allocator.alloc(std.Io.Mutex, merge_tuple_lock_count);
     for (locks) |*lock| {
@@ -2420,6 +3370,25 @@ fn encodeShardedTxn(shard_idx: usize, local: gs.TxnId) gs.TxnId {
 /// return the decoded local txn (batching all ops in the same fsync).
 /// Otherwise return null — the caller should open a fresh local txn on the
 /// node's shard.
+// CANARY: REQ=REQ-SONNY-6671-WORKER-SHARD; FEATURE="High-Concurrency Mutations"; ASPECT=ForeignShardWriteCounter; STATUS=TESTED; TEST=tests/test_sonny6671_group_commit_routing.zig; OWNER=storage; UPDATED=2026-11-16
+/// SONNY-6671: the engine shard whose group-commit worker runs on this
+/// thread (`group_commit.ShardedCoordinator.shardLoop`), null elsewhere. A
+/// worker holds a batch transaction open on its own shard, and its ops take
+/// that shard's lock; a write to another shard's engine runs beside that
+/// shard's own worker.
+pub threadlocal var t_group_commit_shard: ?usize = null;
+
+/// SONNY-6671: engine writes a group-commit worker made on a shard other
+/// than its own (`noteEngineShardWrite`). Zero in a correct server.
+pub var group_commit_foreign_shard_writes_total: std.atomic.Value(u64) = .init(0);
+
+/// SONNY-6671: a write to engine shard `shard` is about to run.
+fn noteEngineShardWrite(shard: usize) void {
+    const own = t_group_commit_shard orelse return;
+    if (own == shard) return;
+    _ = group_commit_foreign_shard_writes_total.fetchAdd(1, .monotonic);
+}
+
 fn shardLocalTxnForNode(stmt_txn_id: gs.TxnId, node_id: u64) ?gs.TxnId {
     const txn_shard = shardedTxnShard(stmt_txn_id);
     const node_shard = gs.shard_count.shardOfNode(node_id);
@@ -2444,10 +3413,63 @@ fn addIndexedNodePropertyEx(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u6
     try mg.exact_node_property_index.addEx(label_id, property_key, value_hash, node_id, assume_new);
 }
 
-fn removeIndexedNodeProperty(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, value: gs.PropertyValue) void {
-    const value_hash = hashStorageProperty(mg.engine.allocator, value) catch return;
-    mg.exact_node_property_index.remove(label_id, property_key, value_hash, node_id);
+/// SONNY-6601 (2): `addIndexedNodePropertyEx` with the value's hash computed
+/// by the caller, which keeps it to take the entry back
+/// (`exact_node_property_index.remove`, allocation-free for keys up to its
+/// 1 KiB scratch) if the write fails before it commits.
+fn addIndexedNodePropertyHash(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, value_hash: u64, assume_new: bool) !void {
+    if (!graph_store.shouldIndexProperty(property_key)) return;
+    try mg.exact_node_property_index.addEx(label_id, property_key, value_hash, node_id, assume_new);
 }
+
+// CANARY: REQ=REQ-SONNY-6646-EXACT-INDEX-PROPERTY-WRITE; FEATURE="StorageIntegrity"; ASPECT=ExactIndexMove; STATUS=TESTED; TEST=tests/test_sonny6646_exact_index_property_write.zig; OWNER=storage; UPDATED=2026-11-15
+/// SONNY-6646 (6): one node property's exact-index move, for every label of
+/// the node. `prepare` (both hashes) runs before the engine write;
+/// `addNew` before the commit, with `undoNew` if the write then fails;
+/// `removeOld` after it, which cannot fail. The old entry was removed after
+/// the commit by a remover that `catch return`ed (a hash or key allocation),
+/// leaving the node findable by a value it no longer held; the new one was
+/// added after it with a `try`, failing a committed write.
+const ExactIndexMove = struct {
+    key: []const u8,
+    indexed: bool,
+    old_hash: ?u64,
+    new_hash: u64,
+    added: usize = 0,
+
+    fn prepare(mg: *ManagedGraph, key: []const u8, old_value: ?gs.PropertyValue, new_value: gs.PropertyValue) !ExactIndexMove {
+        if (!graph_store.shouldIndexProperty(key)) return .{ .key = key, .indexed = false, .old_hash = null, .new_hash = 0 };
+        return .{
+            .key = key,
+            .indexed = true,
+            .old_hash = if (old_value) |o| try hashStorageProperty(mg.engine.allocator, o) else null,
+            .new_hash = try hashStorageProperty(mg.engine.allocator, new_value),
+        };
+    }
+
+    /// The value does not change in the index: nothing to move.
+    fn unchanged(self: *const ExactIndexMove) bool {
+        return !self.indexed or (self.old_hash != null and self.old_hash.? == self.new_hash);
+    }
+
+    fn addNew(self: *ExactIndexMove, mg: *ManagedGraph, label_ids: []const gs.LabelId, node_id: u64) !void {
+        if (self.unchanged()) return;
+        for (label_ids) |label_id| {
+            try mg.exact_node_property_index.addEx(label_id, self.key, self.new_hash, node_id, false);
+            self.added += 1;
+        }
+    }
+
+    fn undoNew(self: *const ExactIndexMove, mg: *ManagedGraph, label_ids: []const gs.LabelId, node_id: u64) void {
+        for (label_ids[0..self.added]) |label_id| mg.exact_node_property_index.remove(label_id, self.key, self.new_hash, node_id);
+    }
+
+    fn removeOld(self: *const ExactIndexMove, mg: *ManagedGraph, label_ids: []const gs.LabelId, node_id: u64) void {
+        if (self.unchanged()) return;
+        const old_hash = self.old_hash orelse return;
+        for (label_ids) |label_id| mg.exact_node_property_index.remove(label_id, self.key, old_hash, node_id);
+    }
+};
 
 /// Zero-copy variant: index a property using pre-encoded bytes from the iterator.
 /// Avoids the decode-then-re-encode round-trip that `addIndexedNodeProperty` performs.
@@ -2487,6 +3509,22 @@ fn addNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []cons
         // strings/ext), and re-encoding.
         for (label_ids) |label_id| {
             try addIndexedNodePropertyFromEncoded(mg, label_id, node_id, entry.key, entry.encoded_value, true);
+        }
+    }
+}
+
+/// SONNY-6354: `addNodePropertiesForLabels` restricted to the lean keys
+/// registered at runtime after generation `since`
+/// (`catchUpExactLeanKeysLocked`). The node may already be in a posting (a
+/// write after the registration indexed it), so the de-dup scan stays on.
+fn addNodeLateKeyPropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []const gs.LabelId, prop_head: u64, since: u64) !void {
+    if (prop_head == 0 or label_ids.len == 0) return;
+    var iter = try mg.shardEngineForNode(node_id).getAllProperties(prop_head);
+    defer iter.deinit();
+    while (try iter.next()) |entry| {
+        if (!graph_store.leanKeyRegisteredAfter(entry.key, since)) continue;
+        for (label_ids) |label_id| {
+            try addIndexedNodePropertyFromEncoded(mg, label_id, node_id, entry.key, entry.encoded_value, false);
         }
     }
 }
@@ -2541,15 +3579,67 @@ fn removeNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []c
 const exact_rebuild_cancel_poll_batch: usize = 256;
 
 fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFlags) !void {
-    // H4 (cold-open phase 1): instrument every rebuild so tests can prove the
-    // deferred-build latch rebuilds 0 times at open and exactly once on first
-    // access. Counts the eager-open, test-helper, AND lazy-first-access paths.
-    _ = g_exact_rebuild_runs.fetchAdd(1, .monotonic);
-    mg.exact_node_property_index.clear();
-    mg.exact_index_rebuild_iters.store(0, .monotonic);
-    // task0048d: per-build dispatch accounting (pool vs inline shard scans).
-    g_exact_rebuild_pool_tasks.store(0, .monotonic);
-    g_exact_rebuild_inline_tasks.store(0, .monotonic);
+    // SONNY-6354: the rebuild indexes every key registered when it reads the
+    // node, so it is complete for the late keys registered before it began.
+    const lean_gen = graph_store.leanLateGenMax();
+    try scanExactNodePropertyIndex(mg, cancel, null);
+    mg.exact_lean_gen.store(lean_gen, .release);
+}
+
+/// SONNY-6354: is the exact index built and complete for every lean key
+/// registered so far (`ManagedGraph.exact_lean_gen`)? Lock-free.
+fn exactIndexCurrent(mg: *ManagedGraph) bool {
+    if (!mg.exact_index_built.load(.acquire)) return false;
+    return mg.exact_lean_gen.load(.acquire) >= graph_store.leanLateGenMax();
+}
+
+// CANARY: REQ=REQ-SONNY-6354-LEAN-LATE-KEY-INDEXES; FEATURE="MergeIdempotency"; ASPECT=ExactIndexLateKeyCatchUp; STATUS=TESTED; TEST=tests/test_sonny6354_lean_late_key_indexes.zig; OWNER=storage; UPDATED=2026-11-12
+/// SONNY-6354: add to a BUILT exact index the postings of the lean keys
+/// registered at runtime since it was last complete (`exact_lean_gen`): the
+/// nodes that carried such a key before it was registered were not indexed
+/// for it (`addIndexedNodePropertyEx` skips unregistered keys), and every
+/// seek trusts the index as complete for a registered key
+/// (`graph_store.shouldIndexProperty`). Nothing is removed and no other key
+/// is touched, so a reader of another key is unaffected; a posting a live
+/// write added meanwhile is de-duplicated. Repeats until no key was
+/// registered during the scan. Caller holds `exact_index_build_mutex`.
+fn catchUpExactLeanKeysLocked(mg: *ManagedGraph, cancel: read_budget.CancelFlags) !void {
+    while (true) {
+        const target = graph_store.leanLateGenMax();
+        const since = mg.exact_lean_gen.load(.acquire);
+        if (target <= since) return;
+        try scanExactNodePropertyIndex(mg, cancel, since);
+        mg.exact_lean_gen.store(target, .release);
+    }
+}
+
+/// SONNY-6354: make a built exact index complete for every registered key
+/// (`catchUpExactLeanKeysLocked`) before it is saved, and return the key
+/// configuration to stamp it with. The configuration is read FIRST, so every
+/// key it names is one the catch-up then covers. Caller holds
+/// `exact_index_build_mutex`.
+fn prepareExactIndexSaveLocked(mg: *ManagedGraph) !u64 {
+    const config = graph_store.exactIndexConfigHash();
+    try catchUpExactLeanKeysLocked(mg, .{});
+    return config;
+}
+
+/// The per-shard node scan behind the rebuild (`late_since == null`: clear,
+/// then index every registered key) and the late-key catch-up
+/// (`late_since == g`: add only the postings of lean keys registered after
+/// generation `g`, clearing nothing).
+fn scanExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFlags, late_since: ?u64) !void {
+    if (late_since == null) {
+        // H4 (cold-open phase 1): instrument every rebuild so tests can prove the
+        // deferred-build latch rebuilds 0 times at open and exactly once on first
+        // access. Counts the eager-open, test-helper, AND lazy-first-access paths.
+        _ = g_exact_rebuild_runs.fetchAdd(1, .monotonic);
+        mg.exact_node_property_index.clear();
+        mg.exact_index_rebuild_iters.store(0, .monotonic);
+        // task0048d: per-build dispatch accounting (pool vs inline shard scans).
+        g_exact_rebuild_pool_tasks.store(0, .monotonic);
+        g_exact_rebuild_inline_tasks.store(0, .monotonic);
+    }
 
     const shards = mg.engine.shards;
 
@@ -2562,6 +3652,7 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
         mg: *ManagedGraph,
         shard: *gs.GraphEngine,
         cancel: read_budget.CancelFlags,
+        late_since: ?u64,
         since_poll: usize = 0,
         err: ?anyerror = null,
 
@@ -2569,8 +3660,10 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
             if (self.err != null) return;
             // Coverage counter: count every live node the scan presents (atomic
             // so the parallel per-shard workers compose correctly).
-            _ = self.mg.exact_index_rebuild_iters.fetchAdd(1, .monotonic);
-            _ = g_exact_rebuild_nodes_scanned.fetchAdd(1, .monotonic);
+            if (self.late_since == null) {
+                _ = self.mg.exact_index_rebuild_iters.fetchAdd(1, .monotonic);
+                _ = g_exact_rebuild_nodes_scanned.fetchAdd(1, .monotonic);
+            }
             // GAP-ENT-0048 DEFECT B: poll the read-executor cancel flags at a
             // batch boundary. On a client disconnect / stall-watchdog abort this
             // stops the expensive per-node property-chain walk immediately (the
@@ -2607,6 +3700,12 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
             };
             defer self.mg.engine.allocator.free(label_ids);
 
+            if (self.late_since) |since| {
+                addNodeLateKeyPropertiesForLabels(self.mg, node_id, label_ids, rec.prop_head, since) catch |err| {
+                    self.err = err;
+                };
+                return;
+            }
             addNodePropertiesForLabels(self.mg, node_id, label_ids, rec.prop_head) catch |err| {
                 self.err = err;
             };
@@ -2632,7 +3731,7 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
 
     var ctxs: [gs.sharded_engine.SHARD_COUNT]ShardCtx = undefined;
     for (shards, 0..) |shard, idx| {
-        ctxs[idx] = .{ .mg = mg, .shard = shard, .cancel = cancel };
+        ctxs[idx] = .{ .mg = mg, .shard = shard, .cancel = cancel, .late_since = late_since };
     }
 
     // Serial fallback: a single shard gains nothing from the pool, and keeps a
@@ -2672,7 +3771,7 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
         // Default backpressure (.return_error) is deadlock-safe; the wait_group
         // auto-adds on submit and auto-dones on completion.
         if (pool.submit(Task.run, c, .{ .wait_group = &wg })) |_| {
-            _ = g_exact_rebuild_pool_tasks.fetchAdd(1, .monotonic);
+            if (late_since == null) _ = g_exact_rebuild_pool_tasks.fetchAdd(1, .monotonic);
         } else |_| {
             inline_ctxs_buf[inline_n] = c;
             inline_n += 1;
@@ -2681,7 +3780,7 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
     // Shards that failed to submit run inline on this (non-worker) thread BEFORE
     // wg.wait(), so they still complete and are not double-counted by wg.
     for (inline_ctxs_buf[0..inline_n]) |c| {
-        _ = g_exact_rebuild_inline_tasks.fetchAdd(1, .monotonic);
+        if (late_since == null) _ = g_exact_rebuild_inline_tasks.fetchAdd(1, .monotonic);
         c.run();
     }
     wg.wait();
@@ -2720,16 +3819,53 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph, cancel: read_budget.CancelFl
 /// checkpoint can never lose its non-blocking `tryLock` to the very build it is
 /// persisting (the lost persist).
 fn ensureExactNodePropertyIndexBuilt(adapter: *StorageAdapter, mg: *ManagedGraph) !void {
-    if (mg.exact_index_built.load(.acquire)) return;
+    return ensureExactIndex(adapter, mg, .wait);
+}
+
+// CANARY: REQ=REQ-SONNY-6362-READ-NO-BUILD-WAIT; FEATURE="ExactPropertyIndex"; ASPECT=ReadFallsBackDuringBuild; STATUS=TESTED; TEST=tests/test_sonny6362_exact_index_read_fallback.zig; OWNER=storage; UPDATED=2026-11-12
+/// SONNY-6362 item 6: `ensureExactNodePropertyIndexBuilt` for an index-served
+/// READ. While another thread holds `exact_index_build_mutex` (a deferred
+/// build or a late-key catch-up, O(graph)) a read parked on it for the whole
+/// build; it now answers `error.ExactIndexBusy` at once, and every read
+/// caller treats an error as "no index answer" and scans. With the mutex
+/// free the read builds (or catches up) the index itself, as before. Write
+/// paths and the MERGE resolver keep waiting: they must see a complete index.
+// CANARY: REQ=REQ-SONNY-6347-NO-READ-FROM-INDEX-OVER-ENCRYPTED-FIELD; FEATURE="FieldLevelEncryption"; ASPECT=IndexServedReadDeclines; STATUS=TESTED; TEST=tests/test_sonny6347_fle_envelope_identity.zig; OWNER=security; UPDATED=2026-11-13
+/// SONNY-6347 item 4: an index-served read (exact seek, posting count,
+/// ordered scan) over an FLE-encrypted field is refused with
+/// `error.IndexOverEncryptedField`, and every caller scans or sorts instead.
+/// No such index can be made now (SONNY-6335), but one made before its field
+/// was encrypted holds ciphertext (a seek never matched: a read returned no
+/// rows) or values from before. Any type, as MERGE's refusal does (a value
+/// is encrypted under its node's first label, which the pattern may not
+/// name); true when the catalog cannot be read.
+fn refuseIndexOverEncryptedField(property_key: []const u8) error{IndexOverEncryptedField}!void {
+    if (fle_integration.fieldEncryptedInAnyType(property_key)) return error.IndexOverEncryptedField;
+}
+
+fn ensureExactIndexForRead(adapter: *StorageAdapter, mg: *ManagedGraph) !void {
+    return ensureExactIndex(adapter, mg, .no_wait);
+}
+
+fn ensureExactIndex(adapter: *StorageAdapter, mg: *ManagedGraph, comptime mode: enum { wait, no_wait }) !void {
+    // SONNY-6354: built AND complete for every lean key registered so far.
+    if (exactIndexCurrent(mg)) return;
     const io = std.Io.Threaded.global_single_threaded.io();
     // SONNY-1574: the build runs in an INNER scope so `exact_index_build_mutex`
     // is released BEFORE the persist worker is spawned (see the spawn below).
     const built_here = blk: {
-        mg.exact_index_build_mutex.lockUncancelable(io);
+        switch (mode) {
+            .wait => mg.exact_index_build_mutex.lockUncancelable(io),
+            .no_wait => if (!mg.exact_index_build_mutex.tryLock()) return error.ExactIndexBusy,
+        }
         defer mg.exact_index_build_mutex.unlock(io);
         // Double-check under the mutex: a peer first-accessor may have built it
-        // while we waited for the lock.
-        if (mg.exact_index_built.load(.acquire)) break :blk false;
+        // while we waited for the lock. A built index may still lack a lean
+        // key registered since (SONNY-6354): add its older holders.
+        if (mg.exact_index_built.load(.acquire)) {
+            try catchUpExactLeanKeysLocked(mg, read_budget.activeCancelFlags());
+            break :blk false;
+        }
         // GAP-0064 (adversarial review — TEST-ONLY): hold the LAZY build "in flight"
         // (mutex held, mid-build) so a test can prove a concurrent FULL checkpoint's
         // eager build does NOT run a second concurrent rebuild (the lazy-vs-checkpoint
@@ -2802,7 +3938,7 @@ fn ensureExactNodePropertyIndexBuilt(adapter: *StorageAdapter, mg: *ManagedGraph
 // pair) so the whole statement commits with a single fsync:
 //
 //   const txn = try adapter.beginStatementTxn(graph_name);
-//   errdefer txn.abort();
+//   errdefer txn.fail();
 //   // adapter.createNode / adapter.setNodeProperty etc. now join `txn`
 //   try txn.commit();                  // ONE WAL fsync
 //
@@ -2813,10 +3949,12 @@ fn ensureExactNodePropertyIndexBuilt(adapter: *StorageAdapter, mg: *ManagedGraph
 //     graph — the thread-local is safe.
 //   - Mutations on a DIFFERENT graph than the active StatementTxn fall
 //     back to the regular auto-commit path (per-sub-op fsync).
-//   - `abort()` / `commit()` clear the thread-local.  If neither is
+//   - `fail()` / `commit()` clear the thread-local.  If neither is
 //     called before the guarded scope exits, the engine will keep the
 //     txn record as "begin without commit" until replay rolls it back,
-//     which is correct but wasteful — use `errdefer txn.abort()`.
+//     which is correct but wasteful — use `errdefer txn.fail()`.
+//     SONNY-6529: `fail()` commits (after the statement's undo replay when
+//     one runs): see `StatementTxn.fail`.
 // ============================================================================
 
 /// Per-statement engine transaction handle returned by
@@ -2826,23 +3964,138 @@ pub const StatementTxn = struct {
     txn_id: gs.TxnId,
     graph_name: []const u8, // non-owning — adapter's engines map owns the storage
 
-    /// Commit the statement txn → exactly one WAL fsync.
+    /// Commit the statement txn → exactly one WAL fsync. SONNY-6529: a
+    /// commit that fails aborts it and quarantines the graph
+    /// (`commitMirroredTxn`).
+    ///
+    /// SONNY-6658: in an auto-commit statement (`deferToStatementEnd`) the
+    /// commit is the statement's end's: the transaction stays this thread's
+    /// statement transaction (`t_auto_statement_txn`), later writes of the
+    /// statement join it, and `commitAutoStatementTxn` commits it. A commit
+    /// that is not the statement's last first puts the statement's undo on
+    /// disk (`statement_undo.beforeOwnEngineCommit`).
     pub fn commit(self: *StatementTxn) !void {
+        if (isAutoStatementTxn(self)) return;
+        if (t_auto_statement_txn == null and deferToStatementEnd()) {
+            t_auto_statement_txn_storage = self.*;
+            t_auto_statement_txn = &t_auto_statement_txn_storage;
+            t_current_statement_txn = t_auto_statement_txn;
+            return;
+        }
+        try statement_undo.beforeOwnEngineCommit();
         t_current_statement_txn = null;
-        try self.mg.engine.commitTxn(self.txn_id);
+        try commitMirroredTxn(self.mg, self.txn_id, "statement commit");
     }
 
-    /// Abort the statement txn (no fsync beyond the ABORT record append).
-    /// Safe to call from `errdefer`.
-    pub fn abort(self: *StatementTxn) void {
-        t_current_statement_txn = null;
-        // error-policy: A — abort() is documented errdefer-safe; a failed
-        // engine abort is superseded by WAL recovery.
-        self.mg.engine.abortTxn(self.txn_id) catch {};
+    // CANARY: REQ=REQ-SONNY-6529-MIRRORED-TXN-END; FEATURE="TransactionManagement"; ASPECT=FailedStatementTxn; STATUS=TESTED; TEST=tests/test_sonny6529_abort_undo.zig; OWNER=storage; UPDATED=2026-11-15
+    /// The statement failed: end its transaction. Safe to call from
+    /// `errdefer`.
+    ///
+    /// SONNY-6529: never an engine abort (see `commitMirroredTxn`): the
+    /// store's in-memory copy holds the statement's writes, and its undo
+    /// record (`statement_undo`) undoes them. When that record is being kept
+    /// (`statement_undo.capturing`), the transaction is handed over to the
+    /// record's replay (`settleFailedStatementTxn`): it stays this thread's
+    /// statement transaction, the replay's writes join it, and the replay's
+    /// end commits it, so the failed writes and their undo commit together
+    /// (a crash before that commit loses both). Otherwise it is committed
+    /// now. graph-storage 0.4.15 `abortTxn` kept the writes in memory too
+    /// (and the next checkpoint made them durable); 0.4.16 undoes them, and
+    /// the replay then undid the same writes a second time.
+    pub fn fail(self: *StatementTxn) void {
+        // SONNY-6658: deferred to its statement's end, which ends it.
+        if (isAutoStatementTxn(self)) return;
+        if (t_current_statement_txn == self) t_current_statement_txn = null;
+        if (t_failed_statement_txn == null and statement_undo.capturing()) {
+            t_failed_statement_txn_storage = self.*;
+            t_failed_statement_txn = &t_failed_statement_txn_storage;
+            if (t_current_statement_txn == null) t_current_statement_txn = &t_failed_statement_txn_storage;
+            return;
+        }
+        commitMirroredTxn(self.mg, self.txn_id, "failed statement") catch {};
+    }
+
+    /// The statement wrote nothing in its transaction (a MERGE that found
+    /// its node): abort it. With nothing to undo it is an ABORT record only.
+    pub fn discard(self: *StatementTxn) void {
+        if (isAutoStatementTxn(self)) return; // SONNY-6658: as `fail`
+        if (t_current_statement_txn == self) t_current_statement_txn = null;
+        abortUnmirroredShardedTxn(self.mg, self.txn_id, "unused statement txn");
     }
 };
 
 threadlocal var t_current_statement_txn: ?*StatementTxn = null;
+
+/// SONNY-6529: a failed statement's engine transaction kept open for the
+/// replay of the statement's undo record (`StatementTxn.fail`), and its
+/// storage (the statement's own frame has returned by then).
+threadlocal var t_failed_statement_txn: ?*StatementTxn = null;
+threadlocal var t_failed_statement_txn_storage: StatementTxn = undefined;
+
+/// SONNY-6529: commit the failed statement's transaction `StatementTxn.fail`
+/// kept open, if there is one: its writes and the replay's undo of them.
+/// Called by the executor when the statement's undo record has been replayed
+/// (`execution.endStatementFailed`) and when its program ends, and before a
+/// new statement or session transaction opens on the thread. No-op without
+/// one.
+pub fn settleFailedStatementTxn() void {
+    const txn = t_failed_statement_txn orelse return;
+    t_failed_statement_txn = null;
+    if (t_current_statement_txn == txn) t_current_statement_txn = null;
+    commitMirroredTxn(txn.mg, txn.txn_id, "failed statement after its undo") catch {};
+}
+
+// CANARY: REQ=REQ-SONNY-6658-AUTOCOMMIT-ATOMIC; FEATURE="TransactionManagement"; ASPECT=StatementEndCommit; STATUS=TESTED; TEST=tests/test_sonny6658_autocommit_crash_atomicity.zig; OWNER=storage; UPDATED=2026-11-16
+// SONNY-6658: an auto-commit statement's engine transaction. In an
+// auto-commit statement (outside BEGIN ... COMMIT, with the durable undo log
+// installed) the statement's engine transaction is committed when the
+// statement ends (`commitAutoStatementTxn`, from `execution`), not when the
+// executor that opened it returns (`StatementTxn.commit` hands it over), and
+// a statement that has none opens one at its first write, on that write's
+// shard (`openAutoStatementTxn`). Its changes on that shard so commit as one
+// unit, last; a change on another shard commits its own engine transaction
+// and puts the statement's undo on disk first
+// (`statement_undo.beforeOwnEngineCommit`), so a crash before the statement
+// ends is undone at the restart (`txn_durable_undo`). A change used to commit
+// its own engine transaction wherever the statement had none (`MATCH ...
+// SET`), and a kill mid-statement left those changes in place.
+threadlocal var t_auto_statement_txn: ?*StatementTxn = null;
+threadlocal var t_auto_statement_txn_storage: StatementTxn = undefined;
+
+/// SONNY-6658: is this thread's statement an auto-commit one whose engine
+/// transaction is committed at its end? Not with a session engine transaction
+/// (an explicit transaction's).
+fn deferToStatementEnd() bool {
+    return t_session_engine_txn == null and statement_undo.autoCommitStatementOpen();
+}
+
+/// SONNY-6658: `txn` is the auto-commit statement's transaction (or the
+/// executor's copy of it, handed over by `StatementTxn.commit`).
+fn isAutoStatementTxn(txn: *const StatementTxn) bool {
+    const a = t_auto_statement_txn orelse return false;
+    return a == txn or (a.mg == txn.mg and a.txn_id == txn.txn_id);
+}
+
+/// SONNY-6658: commit the auto-commit statement's engine transaction, if
+/// there is one: at the statement's end, after its undo is on disk when it
+/// went durable, or after a failed statement's undo replayed (its
+/// compensations joined it). A commit that fails aborts it and quarantines
+/// the graph (`commitMirroredTxn`).
+pub fn commitAutoStatementTxn() !void {
+    const txn = t_auto_statement_txn orelse return;
+    t_auto_statement_txn = null;
+    if (t_current_statement_txn == txn) t_current_statement_txn = null;
+    try commitMirroredTxn(txn.mg, txn.txn_id, "auto-commit statement");
+}
+
+/// SONNY-6658: the end of a request with an auto-commit statement's engine
+/// transaction still open (a statement scope that did not end it): commit
+/// it, so it never outlives the request on a pooled thread.
+pub fn settleAutoStatementTxn() void {
+    if (t_auto_statement_txn == null) return;
+    log.warn("an auto-commit statement's engine txn outlived its statement; committing it", .{});
+    commitAutoStatementTxn() catch {};
+}
 
 // R9 (2026-04-22): session-scoped engine txn — spans an entire Geode
 // BEGIN TX / COMMIT block.  The msft-graph client sends batches of the
@@ -2934,21 +4187,31 @@ pub var session_txn_backstop_total: std.atomic.Value(u64) = .init(0);
 /// session, would join it.
 ///
 /// SONNY-3027: true when the backstop ran: the session's engine transaction
-/// was still open. The request's write lock is released by now, so it is
-/// aborted, never committed (a commit here, outside the lock, overlapped the
-/// transactions of the graph's next writer: the SONNY-2978 class), and the
+/// was still open. The request's write lock is released by now, and the
 /// caller fails the session's transaction.
+/// SONNY-6529: the transaction is committed under its graph's write lock,
+/// taken again here (a commit outside the lock overlapped the transactions
+/// of the graph's next writer: the SONNY-2978 class); the caller's rollback
+/// then undoes its writes. It was aborted, which graph-storage 0.4.16 makes
+/// a write too (the undo), and which the rollback then undid a second time.
 pub fn leaveSessionEngineTxn(slot: *SessionEngineTxn, scope: SessionEngineTxnScope) bool {
     if (scope.nested) return false;
     var backstop = false;
+    settleFailedStatementTxn(); // SONNY-6529: never outlives the request either
+    settleAutoStatementTxn(); // SONNY-6658: nor this
     if (slot.open and t_session_engine_txn == &slot.txn) {
         // The executor commits it when the program that opened it returns,
         // and the handler before it releases the program's write lock; one
         // still open is a bug. A warning: the failure is handled, and the
         // client sees it (its transaction fails); the counter tells.
-        log.warn("a session engine txn outlived its request's write lock; aborting it and failing its transaction", .{});
+        log.warn("a session engine txn outlived its request's write lock; committing it under the lock and failing its transaction", .{});
         _ = session_txn_backstop_total.fetchAdd(1, .monotonic);
-        abortThreadSessionTxn();
+        if (takeThreadSessionTxn()) |txn| {
+            defer unpinTaken(txn);
+            const lock = graph_store.acquireGraphWriteLock(txn.graph_name);
+            defer graph_store.releaseGraphLock(lock);
+            commitMirroredTxn(txn.mg, txn.txn_id, "session txn backstop") catch {};
+        }
         backstop = true;
     }
     if (t_session_commit_failure) |err| {
@@ -2991,7 +4254,7 @@ pub fn settleThreadSessionTxn() error{SessionCommitFailed}!void {
     if (t_session_commit_failure) |err| {
         t_session_commit_failure = null;
         log.warn("session engine txn commit failed: {s}", .{@errorName(err)});
-        abortThreadSessionTxn();
+        // SONNY-6529: the failed commit ended it (`commitThreadSessionTxn`).
         return error.SessionCommitFailed;
     }
     commitThreadSessionTxn() catch |err| {
@@ -3010,6 +4273,34 @@ threadlocal var t_session_commit_failure: ?anyerror = null;
 
 pub fn noteSessionCommitFailure(err: anyerror) void {
     if (t_session_commit_failure == null) t_session_commit_failure = err;
+}
+
+/// SONNY-3121 test instrumentation: called by the self-locking bulk MERGE
+/// helpers the QUIC handler calls directly when group commit is off
+/// (`bulkMergeEdgeWithIdsShardLockedForTenant`,
+/// `bulkMergeNodeWithReservedIdMultiPropForTenant`) right after they have
+/// their graph, before they lock it. A test drops the graph there.
+pub var bulk_graph_resolved_hook: ?*const fn (mg: *ManagedGraph) void = null;
+
+/// SONNY-6472 (4) test hook: runs in `bulkInsertNodeWithReservedIdGraphLocked`
+/// and (SONNY-6492 (3)) `createNode` right after the engine counted the new
+/// node and before its record is written. A test scans the graph there, or
+/// drops it.
+pub var node_slot_allocated_hook: ?*const fn (mg: *ManagedGraph) void = null;
+
+// CANARY: REQ=REQ-SONNY-6601-HALF-WRITE-SEAM; FEATURE="TransactionManagement"; ASPECT=PropertyWriteFaultSeam; STATUS=TESTED; TEST=tests/test_sonny6601_half_write_rollback.zig; OWNER=storage; UPDATED=2026-11-15
+/// SONNY-6601 (1) test seam (test builds only): runs in a node property
+/// write (`setNodeProperty`, `setNodePropertiesBatch`, `removeNodeProperty`)
+/// after its `putPropertyTxn` and before its `putNodeTxn`. An error it
+/// returns fails the write there, half done: the property chain written in
+/// the transaction, the node record not.
+pub const PropertyWriteFault = error{PropertyWriteFaultInjected};
+pub var property_write_midpoint_hook: if (builtin.is_test) ?*const fn () PropertyWriteFault!void else void = if (builtin.is_test) null else {};
+
+inline fn propertyWriteMidpoint() PropertyWriteFault!void {
+    if (builtin.is_test) {
+        if (property_write_midpoint_hook) |hook| try hook();
+    }
 }
 
 /// SONNY-3031 fault injection for tests: the next N commits of a session
@@ -3033,18 +4324,21 @@ fn takeInjectedCommitFault() bool {
 /// counted and logged.
 ///
 /// CANARY: REQ=REQ-SONNY-3135-FAILED-TXN-ABORT; FEATURE="TransactionManagement"; ASPECT=SettleAtWriteRelease; STATUS=TESTED; TEST=tests/test_sonny3135_profile_allowlist_failed_txn.zig; OWNER=storage; UPDATED=2026-09-27
-/// SONNY-3135 (N7b): the transaction of a request that failed
-/// (`noteSessionTxnFailed`) is aborted instead: the handler rolls it back
-/// once the lock is released, and a commit made the failed changes durable
-/// until then (the SONNY-2979 crash window).
+/// SONNY-3135 (N7b) aborted the transaction of a request that failed
+/// (`noteSessionTxnFailed`) instead. SONNY-6529: committed as well: the
+/// store's in-memory copy holds its writes, the handler's rollback undoes
+/// them once the lock is released, and graph-storage 0.4.16's abort undid
+/// them first, so the rollback undid them twice (see `endThreadSessionTxn`).
+/// The failed changes are durable until that rollback, as every committed
+/// request of an explicit transaction is (the SONNY-2979 crash window).
 pub fn settleAtWriteRelease() void {
     if (t_session_engine_txn == null) return;
     _ = session_txn_open_at_write_release_total.fetchAdd(1, .monotonic);
     if (sessionTxnFailed()) {
         // The structured logger, at error level: the path is a handled
         // failure, and std.log's error level fails a test that drives it.
-        slog.err("a graph write lock was released with a failed request's session engine txn open; aborting it under the lock", &.{});
-        abortThreadSessionTxn();
+        slog.err("a graph write lock was released with a failed request's session engine txn open; committing it under the lock for the rollback to undo", &.{});
+        endThreadSessionTxn();
         return;
     }
     log.err("a graph write lock was released with a session engine txn open; committing it under the lock", .{});
@@ -3103,6 +4397,9 @@ fn unpinTaken(txn: *StatementTxn) void {
 ///
 /// SONNY-3031: a commit that fails aborts the transaction, so the engine
 /// forgets it: it stayed in the shard's `active_txns` forever.
+/// SONNY-6529: and quarantines the graph (`failMirroredTxn`): graph-storage
+/// 0.4.16 undoes the aborted transaction, whose writes the store's
+/// in-memory copy keeps, so the two disagree until the graph is reopened.
 pub fn commitThreadSessionTxn() !void {
     const txn = takeThreadSessionTxn() orelse return;
     defer unpinTaken(txn);
@@ -3111,9 +4408,7 @@ pub fn commitThreadSessionTxn() !void {
     else
         txn.mg.engine.commitTxn(txn.txn_id);
     result catch |err| {
-        txn.mg.engine.abortTxn(txn.txn_id) catch |abort_err| {
-            log.err("session engine txn abort after a failed commit failed: {s}", .{@errorName(abort_err)});
-        };
+        failMirroredTxn(txn.mg, txn.txn_id, err, "session commit");
         return err;
     };
 }
@@ -3124,15 +4419,22 @@ pub fn hasThreadSessionTxn() bool {
     return t_session_engine_txn != null;
 }
 
-/// SONNY-2823: abort this thread's session engine transaction, if it has
-/// one. Callers abort BEFORE the undo log replays, so the replay's own
-/// changes commit on their own and do not join the aborted transaction.
-pub fn abortThreadSessionTxn() void {
+// CANARY: REQ=REQ-SONNY-6529-MIRRORED-TXN-END; FEATURE="TransactionManagement"; ASPECT=SessionTxnEnd; STATUS=TESTED; TEST=tests/test_sonny6529_abort_undo.zig; OWNER=storage; UPDATED=2026-11-15
+/// SONNY-6529: end this thread's session engine transaction, if it has one,
+/// keeping its writes: commit it (`commitMirroredTxn`; a failure aborts it
+/// and quarantines the graph). For the paths that roll the Geode
+/// transaction back: they call it AFTER the undo log replays, so the
+/// replay's changes join it and commit with the writes they undo.
+///
+/// It was `abortThreadSessionTxn`, called before the replay so the replay's
+/// changes committed on their own (SONNY-2823). graph-storage 0.4.16's abort
+/// undoes the transaction's writes, which the store's in-memory copy keeps,
+/// and the replay then undid them a second time: deleting a node the abort
+/// had removed failed (NodeNotFound), and the store kept the node.
+pub fn endThreadSessionTxn() void {
     const txn = takeThreadSessionTxn() orelse return;
     defer unpinTaken(txn);
-    // error-policy: A — best-effort session rollback; WAL recovery
-    // supersedes a failed abort.
-    txn.mg.engine.abortTxn(txn.txn_id) catch {};
+    commitMirroredTxn(txn.mg, txn.txn_id, "session txn end") catch {};
 }
 
 /// SONNY-3028: does this thread have an engine transaction open on `mg` (its
@@ -3179,51 +4481,168 @@ pub fn sessionEngineTxnGraph() ?[]const u8 {
 pub const OrderedScanDir = enum { asc, desc };
 
 const OrderedDir = gs.ordered_property_index.OrderedPropertyIndex.Direction;
-const OrderedCursor = gs.ordered_property_index.OrderedPropertyIndex.Cursor;
 
-/// Max (key,node_id) pairs pulled from one shard cursor per SHARED-lock hold.
-/// Bounds how long a single batch fences a queued EXCLUSIVE checkpoint/apply on
-/// that shard (wedge-avoidance), mirroring `label_scan_batch_slots`.
+/// Max ordered-tree entries one shard batch visits per lock hold. Bounds how
+/// long a single batch fences a queued EXCLUSIVE checkpoint/apply on that
+/// shard (wedge-avoidance), mirroring `label_scan_batch_slots`.
 const ordered_scan_batch_slots: usize = 256;
 
-/// One copied-out head from a shard cursor. `key` is an OWNED dup of the tree's
-/// (order-preserving) encoded key bytes — copied under the shard lock because
-/// the borrowed `OrderedBTree.Entry.key` is only valid under the lock and until
-/// the next mutation of that tree.
+/// One copied-out head from a shard's ordered tree. `key` is an OWNED dup of
+/// the tree's (order-preserving) encoded key bytes — copied under the locks
+/// because the borrowed `OrderedBTree.Entry.key` is only valid under them and
+/// until the next mutation of that tree.
 const OrderedScanHead = struct { key: []u8, node_id: u64 };
 
-/// Per-shard cursor + current bounded batch for the k-way merge.
+/// Per-shard resume point + current bounded batch for the k-way merge.
 const OrderedShardState = struct {
-    cursor: ?OrderedCursor = null,
-    opened: bool = false,
+    /// OWNED copy of the last tree key the previous batch visited (live or
+    /// not); null before the first batch. The next batch starts strictly
+    /// after it in scan order.
+    resume_key: ?[]u8 = null,
     exhausted: bool = false,
     buf: std.ArrayList(OrderedScanHead) = .empty,
     pos: usize = 0,
 };
 
-/// Advance shard `i`'s ordered cursor by a BOUNDED batch, copying (key,node_id)
-/// out into owned buffers, then release the shard lock.
+/// SONNY-6375: the graphs whose `rwlock` this thread holds through the
+/// graph-lock API (`acquireGraphReadLock`, `acquireGraphWriteLock`,
+/// `acquireGraphWriteLockCancelable`, and the `graph_store` handles built on
+/// them), so a reader that takes `mg.rwlock` SHARED itself (`orderedScan`)
+/// skips it when its own thread already holds the lock. `std.Io.RwLock` is not
+/// reentrant: SHARED under this thread's EXCLUSIVE never returns, and a
+/// second SHARED behind a waiting writer can wedge.
 ///
-/// -- LOCK SAFETY (the subtle part) --
-///   * Only this shard's adapter SHARED lock is held while reading the tree;
-///     `mg.rwlock` is NEVER held across the scan (no checkpoint wedge).
-///   * At most `ordered_scan_batch_slots` entries are pulled per acquire, then
-///     the lock is released so a queued EXCLUSIVE checkpoint/apply on this shard
-///     wins before the next batch.
-///   * `exclusiveWaitingBackoff(mg)` parks BEFORE each (re)acquire so a waiting
-///     EXCLUSIVE drains the reader set first (mirrors appendLiveNodesForLabelShard).
-///   * `OrderedBTree.Entry.key` borrows tree-owned bytes valid only under the
-///     lock and until the next tree mutation, so we `dupe` them out here.
-///   * The Cursor is HELD ACROSS lock releases (between batches). This is
-///     memory-safe under concurrent node insert/update/delete: OrderedBTree
-///     insert/remove never free B-tree nodes (a split only shrinks+links leaves;
-///     remove frees the key copy, not the node), and Cursor.next()/prev()
-///     dereference only the leaf node + its prev/next back-pointers, never the
-///     (possibly-relocated) tree handle. A mutation across the gap can yield a
-///     torn read (a valid prefix of a consistent order), never a use-after-free.
-///     The one unsafe concurrent op is a full ordered-index rebuild
-///     (clearTrees) — that is DDL, takes this shard's EXCLUSIVE lock in
-///     `createOrderedIndex`, and does not run during a live scan.
+/// CANARY: REQ=REQ-SONNY-6433-ORDERED-INDEX-LOCKING; FEATURE="OrderedIndex"; ASPECT=GraphLockTrackingGrows; STATUS=TESTED; TEST=tests/test_sonny6433_ordered_index_locking.zig; OWNER=storage; UPDATED=2026-11-12
+/// SONNY-6433: the table grows past its 16 inline slots
+/// (`t_held_graph_locks_overflow`), so every lock is tracked by graph. It
+/// used to count a 17th lock without its graph, and while one was held every
+/// graph counted as held: an ordered scan of a graph this thread did not lock
+/// then read it with no `rwlock`. The room for the next entry is reserved
+/// BEFORE the lock is taken (`reserveGraphLockSlot`), so recording it cannot
+/// fail; an acquisition that cannot get the room fails (out of memory) with
+/// no lock taken. The overflow list is freed when it empties.
+const max_tracked_graph_locks = 16;
+threadlocal var t_held_graph_locks: [max_tracked_graph_locks]?*const ManagedGraph = @splat(null);
+threadlocal var t_held_graph_locks_overflow: std.ArrayListUnmanaged(*const ManagedGraph) = .empty;
+const graph_lock_overflow_allocator = std.heap.smp_allocator;
+
+/// SONNY-6433: room to record one more graph lock on this thread. Call it
+/// before taking the lock.
+fn reserveGraphLockSlot() error{OutOfMemory}!void {
+    for (t_held_graph_locks) |slot| {
+        if (slot == null) return;
+    }
+    try t_held_graph_locks_overflow.ensureUnusedCapacity(graph_lock_overflow_allocator, 1);
+}
+
+fn noteGraphLockTaken(mg: *const ManagedGraph) void {
+    for (&t_held_graph_locks) |*slot| {
+        if (slot.* == null) {
+            slot.* = mg;
+            return;
+        }
+    }
+    // Room reserved by `reserveGraphLockSlot` before the lock was taken.
+    t_held_graph_locks_overflow.append(graph_lock_overflow_allocator, mg) catch
+        @panic("SONNY-6433: no room to record a graph lock that was reserved before it was taken");
+}
+
+fn noteGraphLockReleased(mg: *const ManagedGraph) void {
+    for (&t_held_graph_locks) |*slot| {
+        if (slot.* == mg) {
+            slot.* = null;
+            return;
+        }
+    }
+    for (t_held_graph_locks_overflow.items, 0..) |held, i| {
+        if (held == mg) {
+            _ = t_held_graph_locks_overflow.swapRemove(i);
+            break;
+        }
+    }
+    if (t_held_graph_locks_overflow.items.len == 0 and t_held_graph_locks_overflow.capacity != 0)
+        t_held_graph_locks_overflow.clearAndFree(graph_lock_overflow_allocator);
+}
+
+/// SONNY-6375: does this thread hold `mg.rwlock` (SHARED or EXCLUSIVE) through
+/// the graph-lock API? See `t_held_graph_locks`.
+pub fn threadHoldsGraphLock(mg: *const ManagedGraph) bool {
+    for (t_held_graph_locks) |held| {
+        if (held == mg) return true;
+    }
+    for (t_held_graph_locks_overflow.items) |held| {
+        if (held == mg) return true;
+    }
+    return false;
+}
+
+/// SONNY-6541 (1): does this thread hold any graph's `rwlock` through the
+/// graph-lock API?
+pub fn threadHoldsAnyGraphLock() bool {
+    for (t_held_graph_locks) |held| {
+        if (held != null) return true;
+    }
+    return t_held_graph_locks_overflow.items.len > 0;
+}
+
+// CANARY: REQ=REQ-SONNY-6541-DROP-APPLY-NO-DEADLOCK; FEATURE="DistributedCluster"; ASPECT=HolderYieldsToReplicatedDrop; STATUS=TESTED; TEST=tests/test_sonny6541_drop_apply_deadlock.zig; OWNER=distributed; UPDATED=2026-11-14
+/// SONNY-6541 (1): does this thread hold the `rwlock` of a graph a Raft
+/// `drop_graph` apply waits for (`ManagedGraph.replicated_drop_waiters`)?
+/// That apply holds the Raft node's `inner_mutex` while it waits, so this
+/// thread waiting for `inner_mutex` (a propose) or for a commit deadlocks
+/// with it. The Raft request paths ask before and while they wait, and give
+/// up (`RaftNode.proposeCommand`, `ClusterCoordinator.waitForCommittedThenApplied`).
+pub fn threadHoldsGraphAwaitedByReplicatedDrop() bool {
+    for (t_held_graph_locks) |held| {
+        if (held) |mg| if (mg.replicated_drop_waiters.load(.acquire) > 0) return true;
+    }
+    for (t_held_graph_locks_overflow.items) |mg| {
+        if (mg.replicated_drop_waiters.load(.acquire) > 0) return true;
+    }
+    return false;
+}
+
+/// SONNY-6622: Raft snapshot restores waiting for the store's write lock
+/// under a Raft node's `inner_mutex` (`beginReplicatedRestore`).
+var g_replicated_restore_waiters: std.atomic.Value(u32) = .init(0);
+
+// CANARY: REQ=REQ-SONNY-6622-RAFT-SNAPSHOT-RESTORE; FEATURE="Raft Snapshot Persistence"; ASPECT=StoreHolderYieldsToRestore; STATUS=TESTED; TEST=tests/test_sonny6622_raft_v022_adapt.zig; OWNER=distributed; UPDATED=2026-11-15
+/// SONNY-6622: a Raft snapshot restore is about to take the store's write
+/// lock under the Raft node's `inner_mutex` (it replaces the whole store):
+/// a thread holding the store lock (every graph lock holds it shared) that
+/// would wait for Raft gives up instead (`threadMustYieldToReplicatedApply`),
+/// as for a replicated drop. Until `endReplicatedRestore`.
+pub fn beginReplicatedRestore() void {
+    _ = g_replicated_restore_waiters.fetchAdd(1, .acq_rel);
+}
+
+pub fn endReplicatedRestore() void {
+    _ = g_replicated_restore_waiters.fetchSub(1, .acq_rel);
+}
+
+/// SONNY-6541 (1), SONNY-6622: does this thread hold a lock a Raft apply
+/// waits for under `inner_mutex` (a replicated drop's graph, or the store
+/// during a snapshot restore)? Then it must not wait for `inner_mutex` or a
+/// commit: it gives up.
+pub fn threadMustYieldToReplicatedApply() bool {
+    if (threadHoldsGraphAwaitedByReplicatedDrop()) return true;
+    return g_replicated_restore_waiters.load(.acquire) > 0 and graph_store.storeLockHeldByCurrentThread();
+}
+
+/// Does this thread hold any graph's lock, or the store lock?
+pub fn threadHoldsAnyGraphOrStoreLock() bool {
+    return threadHoldsAnyGraphLock() or graph_store.storeLockHeldByCurrentThread();
+}
+
+/// SONNY-6375 test seam (test builds only): runs on the scanning thread
+/// between two batches of one `orderedScan`, when it holds no graph or shard
+/// lock — the window a concurrent write or ordered-index rebuild can use.
+pub const OrderedScanBatchHook = struct { ctx: *anyopaque, run: *const fn (*anyopaque) void };
+pub threadlocal var test_ordered_scan_between_batches: ?OrderedScanBatchHook = null;
+
+/// Refill shard `i`'s batch with at least one live head, or mark the shard
+/// exhausted. A batch whose visited entries were all deleted nodes comes back
+/// empty; an empty, non-exhausted shard would otherwise drop out of the merge.
 fn orderedScanRefill(
     mg: *ManagedGraph,
     i: usize,
@@ -3231,6 +4650,57 @@ fn orderedScanRefill(
     key: []const u8,
     dir: OrderedDir,
     st: *OrderedShardState,
+    holds_graph_lock: bool,
+    allocator: Allocator,
+    io: std.Io,
+) !void {
+    while (true) {
+        try orderedScanBatch(mg, i, label_id, key, dir, st, holds_graph_lock, allocator, io);
+        if (st.buf.items.len > 0 or st.exhausted) return;
+    }
+}
+
+/// Read shard `i`'s next BOUNDED batch of its ordered tree for `(label_id,
+/// key)`, copying the (key, node_id) of every live node out into owned
+/// buffers, then release the locks.
+///
+/// -- LOCK SAFETY (SONNY-6375) --
+///   graph_storage's `OrderedBTree` has no internal locking, and
+///   `openOrderedCursor` documents that the cursor borrows the live tree, which
+///   must not be mutated while it is iterated. Its writers are:
+///   * the online label/delete hooks (`addLabel`, `removeLabel`, `deleteNode`),
+///     run by write statements under `mg.rwlock` EXCLUSIVE and by the bulk
+///     paths under `mg.rwlock` SHARED + this shard's `shard_locks[i]`
+///     EXCLUSIVE;
+///   * the rebuilds (`clearTrees` + rescan, which FREES the tree nodes):
+///     `createOrderedIndex` (`mg.rwlock` SHARED + `shard_locks[i]` EXCLUSIVE)
+///     and the full checkpoint / close (`mg.rwlock` EXCLUSIVE).
+///   So each batch holds `mg.rwlock` SHARED and then `shard_locks[i]` SHARED
+///   (tier 1, rwlock before shard lock, the order `createOrderedIndex` uses),
+///   which excludes all of them. When this thread already holds `mg.rwlock`
+///   (`holds_graph_lock`: a point-read / fallback read under SHARED, or a read
+///   statement of a write program under EXCLUSIVE) it is not taken again —
+///   `std.Io.RwLock` is not reentrant — and the exclusive-waiting back-off is
+///   skipped (a waiting writer cannot get in while this thread holds the lock).
+///   * Both locks are released after at most `ordered_scan_batch_slots`
+///     visited entries, so a queued EXCLUSIVE checkpoint/apply wins before the
+///     next batch; `exclusiveWaitingBackoff(mg)` parks BEFORE each acquire so a
+///     waiting EXCLUSIVE drains the reader set first.
+///   * NO cursor survives a release: a rebuild in the gap frees the nodes a
+///     held cursor points into. Each batch opens a fresh cursor and re-seeks
+///     strictly past `st.resume_key` (keys are unique: the ordered encoding
+///     embeds node_id). A mutation in the gap can still give a torn read (a
+///     valid prefix of a consistent order), never a use-after-free.
+///   * The liveness check (`getNode`) of each visited node runs under the same
+///     hold; the ordered tree keeps deleted-but-still-posted nodes.
+fn orderedScanBatch(
+    mg: *ManagedGraph,
+    i: usize,
+    label_id: gs.LabelId,
+    key: []const u8,
+    dir: OrderedDir,
+    st: *OrderedShardState,
+    holds_graph_lock: bool,
     allocator: Allocator,
     io: std.Io,
 ) !void {
@@ -3241,33 +4711,57 @@ fn orderedScanRefill(
     st.buf.clearRetainingCapacity();
     st.pos = 0;
 
-    exclusiveWaitingBackoff(mg);
+    if (!holds_graph_lock) {
+        exclusiveWaitingBackoff(mg);
+        mg.rwlock.lockSharedUncancelable(io);
+    }
+    defer if (!holds_graph_lock) mg.rwlock.unlockShared(io);
+    // SONNY-6433: dropped between two batches (the scan's pin keeps it
+    // allocated; its engine is closed), as `lockedUnlessDropped` answers.
+    if (mg.isDropped()) return error.GraphNotFound;
     mg.shard_locks[i].lockSharedUncancelable(io);
     defer mg.shard_locks[i].unlockShared(io);
 
-    const shard = mg.engine.shards[i];
-    if (!st.opened) {
-        st.opened = true;
-        // openOrderedCursor descends the tree (findLeaf + seek); read it under
-        // the SHARED lock. Null => no ordered index registered on this shard.
-        st.cursor = shard.openOrderedCursor(label_id, key, dir);
-        if (st.cursor == null) {
-            st.exhausted = true;
-            return;
-        }
+    // Null => no ordered index registered on this shard.
+    var cursor = mg.engine.shards[i].openOrderedCursor(label_id, key, dir) orelse {
+        st.exhausted = true;
+        return;
+    };
+    if (st.resume_key) |rk| {
+        // Park at the first key >= rk; DESC then steps backward from there,
+        // or from the last key when every key is < rk.
+        cursor.inner.seek(rk);
+        if (dir == .desc and cursor.inner.leaf == null) cursor.inner.seekToLast();
     }
 
-    var n: usize = 0;
-    while (n < ordered_scan_batch_slots) : (n += 1) {
-        const e = st.cursor.?.next() orelse {
+    var last_visited: ?[]const u8 = null;
+    var visited: usize = 0;
+    while (visited < ordered_scan_batch_slots) {
+        const e = cursor.next() orelse {
             st.exhausted = true;
             break;
         };
+        if (st.resume_key) |rk| {
+            const ord = std.mem.order(u8, e.key, rk);
+            const already_visited = switch (dir) {
+                .asc => ord != .gt,
+                .desc => ord != .lt,
+            };
+            if (already_visited) continue;
+        }
+        visited += 1;
+        last_visited = e.key;
+        if ((try mg.engine.getNode(e.node_id)) == null) continue;
         const kc = try allocator.dupe(u8, e.key);
         st.buf.append(allocator, .{ .key = kc, .node_id = e.node_id }) catch |err| {
             allocator.free(kc);
             return err;
         };
+    }
+    if (last_visited) |lk| {
+        const owned = try allocator.dupe(u8, lk);
+        if (st.resume_key) |old| allocator.free(old);
+        st.resume_key = owned;
     }
 }
 
@@ -3283,7 +4777,42 @@ pub const StorageAdapter = struct {
     config: gs.GraphConfig,
     registry: gs.registry.GraphRegistry,
     registry_path: []const u8, // owned
+    /// SONNY-6523 (5): `dropped_graph_names` on disk (`saveDroppedGraphNamesLocked`).
+    dropped_graphs_path: []const u8, // owned
+    /// SONNY-6616 / SONNY-6635: `init` found `graph_registry.dat` /
+    /// `dropped_graphs.dat` under a key not sealed under the data
+    /// directory's identity (plaintext, written before SONNY-6616, or sealed
+    /// under `SEAL_UUID` by SONNY-6616's build); it reseals them under the
+    /// identity and records the binding before returning.
+    registry_plaintext: bool = false,
+    dropped_names_plaintext: bool = false,
+    /// SONNY-6635: the data directory's identity under a key (null without
+    /// one): its registry and dropped-graph list are sealed under it.
+    data_dir_identity: ?gs.registry.DataDirIdentity = null,
+    /// SONNY-6689: the directory's upgrade marker under a key, as read at
+    /// open and as recorded since (`recordDataDirSeal`).
+    data_dir_seal: ?DataDirSealMarker = null,
     mutex: std.Io.Mutex,
+    /// SONNY-6472 (2): names of graphs dropped since this adapter opened
+    /// (owned keys), under `mutex`. `getOrCreateGraph` / `pinOrCreateGraph`
+    /// answer GraphNotFound for them instead of creating the graph again; only
+    /// `createGraph` (CREATE GRAPH) does, and takes the name out.
+    dropped_graph_names: std.StringHashMapUnmanaged(void) = .empty,
+    /// SONNY-6589 (6): graphs whose engine could not be opened since this
+    /// adapter opened (owned keys), with the uuid tried and the error, under
+    /// `mutex` (`openGraphRememberingFailureLocked`).
+    open_failures: std.StringHashMapUnmanaged(OpenFailure) = .empty,
+    /// SONNY-6749: graphs whose files `commitGraphRestore` is swapping
+    /// (names borrowed from the restore's entries), under `mutex`. Nothing
+    /// opens their engine meanwhile (`openGraphRememberingFailureLocked`
+    /// answers WouldBlock): a statement that opened one while its directory
+    /// was renamed got FileNotFound, which `open_failures` kept for the
+    /// graph's uuid, so the restored graph never opened again.
+    restoring_graph_names: std.StringHashMapUnmanaged(void) = .empty,
+    /// SONNY-6606 (3): registry entries (owned names, with the uuid) whose
+    /// unreadable manifest `refreshRegistryHeaderNextIdsLocked` has logged,
+    /// under `mutex`: once per boot, not at every registry save.
+    unreadable_manifests_logged: std.StringHashMapUnmanaged([16]u8) = .empty,
 
     // GAP-0900 (observability + checkpoint-cadence): the group-commit bulk
     // fast paths (bulkInsertNodeWithReservedId* / bulkMergeNode*) write through
@@ -3306,6 +4835,15 @@ pub const StorageAdapter = struct {
     checkpoints_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     pending_bulk_ops: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     last_checkpoint_mono_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// SONNY-6523 (6): checkpoints that failed (`checkpointAllLight`, and
+    /// since SONNY-6646 (7) `checkpointAll`);
+    /// `adapter_checkpoint_failures_total` in the runtime metrics.
+    checkpoint_failures_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// SONNY-6523 (6): how often a failing light checkpoint was logged at
+    /// ERROR (`CheckpointFailureLog`), for the regression test.
+    checkpoint_failure_error_logs: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    checkpoint_failure_log: CheckpointFailureLog = .{},
+    checkpoint_failure_log_mutex: std.Io.Mutex = std.Io.Mutex.init,
     // GAP-0900: load-driven checkpoint cadence. The timer-based persistence
     // loop is unreliable under sustained ingest (its futex timeout is starved
     // when all I/O workers are busy), so the bulk write path itself drives the
@@ -3371,7 +4909,26 @@ pub const StorageAdapter = struct {
     /// invariant exercised by tests/test_admin_bootstrap_env_and_reset.zig
     /// because the actual sharded data lives at `{data_dir}/<graph_uuid>/...`,
     /// leaving the placeholder as a competing empty `graphs/` root.
-    pub fn init(allocator: Allocator, data_dir: []const u8, config: gs.GraphConfig) !*StorageAdapter {
+    /// SONNY-6716: frames per shard below which one statement cannot finish.
+    /// graph-storage divides the pool across its shards; no-steal keeps every
+    /// page an open transaction dirtied in its shard's frames, and a statement
+    /// that creates two nodes and a relationship dirties about eight pages of
+    /// one shard. A probe of the engine fails at 4 frames and passes at 8; 16
+    /// leaves room for indexes and wider statements.
+    pub const MIN_POOL_PAGES_PER_SHARD: u32 = 16;
+
+    /// The pool size the adapter actually uses for a configured `requested`.
+    pub fn effectiveBufferPoolPages(requested: u32) u32 {
+        return @max(requested, MIN_POOL_PAGES_PER_SHARD * @as(u32, @intCast(gs.sharded_engine.SHARD_COUNT)));
+    }
+
+    pub fn init(allocator: Allocator, data_dir: []const u8, config_in: gs.GraphConfig) !*StorageAdapter {
+        var config = config_in;
+        const pool_pages = effectiveBufferPoolPages(config.buffer_pool_pages);
+        if (pool_pages != config.buffer_pool_pages) {
+            log.warn("GEODE_BUFFER_POOL_PAGES={d} is too small to finish one statement ({d} frames per shard of {d}): using {d} pages (SONNY-6716)", .{ config.buffer_pool_pages, config.buffer_pool_pages / gs.sharded_engine.SHARD_COUNT, gs.sharded_engine.SHARD_COUNT, pool_pages });
+            config.buffer_pool_pages = pool_pages;
+        }
         const owned_dir = try allocator.dupe(u8, data_dir);
         errdefer allocator.free(owned_dir);
 
@@ -3392,23 +4949,87 @@ pub const StorageAdapter = struct {
             .config = config,
             .registry = gs.registry.GraphRegistry.init(allocator),
             .registry_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{owned_dir}),
+            .dropped_graphs_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ owned_dir, dropped_graphs_file_name }),
             .mutex = std.Io.Mutex.init,
             // GAP-0900: checkpoint-cadence observability counters.
             .checkpoints_total = std.atomic.Value(u64).init(0),
             .pending_bulk_ops = std.atomic.Value(u64).init(0),
-            // GAP-0900: 0 means "no checkpoint has run yet". The persistence
-            // loop and tests pass a monotonic `now`; until the first
-            // checkpointAll resets this to a real `monoNanosNow()`, the
-            // time-based cadence is measured from process start (clock 0).
-            .last_checkpoint_mono_ns = std.atomic.Value(u64).init(0),
+            // GAP-0900 / SONNY-6523 (6): until the first checkpoint, the
+            // time-based cadence is measured from this open. It was 0, and
+            // the monotonic clock counts from boot, not from the process's
+            // start: on a host up longer than GEODE_CHECKPOINT_INTERVAL_MS
+            // the first tick with bulk work pending fired a checkpoint.
+            .last_checkpoint_mono_ns = std.atomic.Value(u64).init(monoNanosNow()),
         };
         errdefer self.registry.deinit();
         errdefer allocator.free(self.registry_path);
+        errdefer allocator.free(self.dropped_graphs_path);
+        errdefer self.freeDroppedGraphNames();
 
+        // CANARY: REQ=REQ-SONNY-6430-REGISTRY-FAIL-CLOSED; FEATURE="Storage Adapter"; ASPECT=UnloadableRegistryRefuses; STATUS=TESTED; TEST=tests/test_sonny6430_storage_open_fail_closed.zig; OWNER=storage; UPDATED=2026-11-12
+        // SONNY-6635: the data directory's identity, which the registry and
+        // the dropped-graph list are sealed under. One that cannot be read
+        // (or does not authenticate) refuses the open.
+        if (config.encryption_key) |key| {
+            self.data_dir_identity = gs.registry.DataDirIdentity.load(allocator, owned_dir, key) catch |err| {
+                log.warn("cannot load the data directory identity in {s}: {}; refusing to open the data directory", .{ owned_dir, err });
+                return err;
+            };
+            // SONNY-6689: once upgraded, the identity must be there and be
+            // the one the marker names.
+            self.data_dir_seal = DataDirSealMarker.load(allocator, owned_dir, key) catch |err| {
+                log.warn("cannot load the data directory's upgrade marker in {s}: {}; refusing to open the data directory", .{ owned_dir, err });
+                return err;
+            };
+            DataDirSealMarker.check(self.data_dir_seal, self.data_dir_identity) catch |err| {
+                log.warn("the data directory {s} was upgraded under the TDE key, but its identity file is {s}; refusing to open it (SONNY-6689)", .{ owned_dir, if (err == error.DataDirIdentityMissing) "missing" else "another directory's" });
+                return err;
+            };
+        }
+        // SONNY-6430: a registry that exists but cannot be loaded is an
+        // error. It was a warning, and the adapter started with no graphs.
         self.loadRegistry() catch |err| switch (err) {
             error.FileNotFound => {},
-            else => log.warn("failed to load graph registry {s}: {}", .{ self.registry_path, err }),
+            else => {
+                // The caller reports the refusal (the server exits with it).
+                log.warn("cannot load the graph registry {s}: {}; refusing to open the data directory without its graphs", .{ self.registry_path, err });
+                return err;
+            },
         };
+        // SONNY-6523 (5): the names of the graphs dropped before this open.
+        // One that cannot be read refuses the open, as the registry does: a
+        // late write would otherwise create a dropped graph again.
+        self.loadDroppedGraphNames() catch |err| {
+            log.warn("cannot load the dropped-graph names {s}: {}; refusing to open the data directory", .{ self.dropped_graphs_path, err });
+            return err;
+        };
+        // SONNY-6616: graph names written in plaintext before SONNY-6616 are
+        // rewritten sealed now (the plaintext copies are replaced, not
+        // scrubbed: docs/TDE_FILE_LEVEL_ENCRYPTION.md).
+        // SONNY-6635: sealed under the data directory's identity, made now
+        // if there is none, and the binding recorded in it last, so an
+        // upgrade cut short reopens and resumes. Before the restore
+        // recovery, which saves the registry under the identity.
+        if (self.config.encryption_key) |key| try self.bindDataDirFiles(key);
+        // SONNY-6636 (1): a graph restore a crash interrupted is finished
+        // (or rolled back) before any graph opens; a damaged intent refuses
+        // the open.
+        self.recoverGraphRestore() catch |err| {
+            log.warn("cannot finish the interrupted graph restore in {s}: {}; refusing to open the data directory", .{ self.data_dir, err });
+            return err;
+        };
+        // SONNY-6689: a `txn_undo.wal` an earlier build sealed under
+        // `SEAL_UUID` is resealed under the identity, then the marker
+        // records the upgrade (last, so an upgrade cut short resumes).
+        if (self.config.encryption_key) |key| {
+            if (self.legacySideFilesReadable()) {
+                _ = txn_durable_undo.resealLegacy(self.allocator, self.data_dir, key, self.data_dir_identity.?.uuid) catch |err| {
+                    log.warn("cannot reseal the transaction undo log in {s}: {}; refusing to open the data directory", .{ self.data_dir, err });
+                    return err;
+                };
+            }
+            try self.recordDataDirSeal(key);
+        }
 
         // LEAN-MERGE-KEY-SEEK (Part 1): re-register the persisted merge-key set
         // BEFORE any graph is opened. Graphs open lazily (openGraphLocked) on
@@ -3469,9 +5090,11 @@ pub const StorageAdapter = struct {
         }
         self.engines.deinit();
         self.default_engine = null;
+        self.freeDroppedGraphNames();
 
         self.registry.deinit();
         self.allocator.free(self.registry_path);
+        self.allocator.free(self.dropped_graphs_path);
         self.allocator.free(self.data_dir);
         self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         self.allocator.destroy(self);
@@ -3518,9 +5141,11 @@ pub const StorageAdapter = struct {
         }
         self.engines.deinit();
         self.default_engine = null;
+        self.freeDroppedGraphNames();
 
         self.registry.deinit();
         self.allocator.free(self.registry_path);
+        self.allocator.free(self.dropped_graphs_path);
         self.allocator.free(self.data_dir);
         self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         self.allocator.destroy(self);
@@ -3542,21 +5167,314 @@ pub const StorageAdapter = struct {
         return out;
     }
 
+    // CANARY: REQ=REQ-SONNY-6472-NO-RESURRECT; FEATURE="MultiGraphIsolation"; ASPECT=DroppedNameRefused; STATUS=TESTED; TEST=tests/test_sonny6472_dropped_graph_writes.zig; OWNER=storage; UPDATED=2026-11-13
     /// Return the `ManagedGraph` for `name`, creating a new `GraphEngine` if
     /// the graph has not been opened yet.
+    ///
+    /// SONNY-6472 (2): a graph dropped since this adapter opened is not
+    /// created again here (GraphNotFound): a write that raced a DROP GRAPH
+    /// (`createNode`, the bulk insert and MERGE helpers, `pinOrCreateGraph`)
+    /// reached this lookup after the drop and brought the graph back. Lazy
+    /// creation of a name never dropped (the default graph's first use, an
+    /// embedding caller's first write) stays; `createGraph` (CREATE GRAPH) is
+    /// what creates a dropped name again.
     pub fn getOrCreateGraph(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        return self.getOrCreateGraphLocked(name);
+    }
 
+    fn getOrCreateGraphLocked(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
         if (self.engines.get(name)) |mg| {
             return mg;
         }
 
         if (self.findRegistryEntryLocked(name)) |entry| {
-            return self.openGraphLocked(name, entry.uuid);
+            return self.openGraphRememberingFailureLocked(name, entry.uuid);
         }
 
+        if (self.dropped_graph_names.contains(name)) return error.GraphNotFound;
         return self.createGraphLocked(name);
+    }
+
+    /// SONNY-6472 (2): CREATE GRAPH: `getOrCreateGraph`, and a graph dropped
+    /// earlier under this name is created afresh (its name leaves
+    /// `dropped_graph_names`).
+    ///
+    /// SONNY-6523 (5): the name leaves the tombstone file on disk before the
+    /// graph is created; a failed write leaves the name dropped (and the
+    /// create fails).
+    pub fn createGraph(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (self.dropped_graph_names.fetchRemove(name)) |kv| {
+            self.saveDroppedGraphNamesLocked() catch |err| {
+                self.dropped_graph_names.putAssumeCapacity(kv.key, {});
+                return err;
+            };
+            self.allocator.free(kv.key);
+        }
+        return self.getOrCreateGraphLocked(name);
+    }
+
+    /// SONNY-6528 (1): a Raft apply of one replicated write to `graph_name`
+    /// (`raft_apply.applyGraphMutation`) holds the graph's
+    /// `replicated_apply_mutex` for the write: a checkpoint of the graph
+    /// waits for it, as it waits for every local writer through `rwlock`.
+    /// The graph is pinned until `endReplicatedApply`. Errors as
+    /// `pinOrCreateGraph` (a graph dropped since the store opened:
+    /// GraphNotFound).
+    pub fn beginReplicatedApply(self: *StorageAdapter, graph_name: []const u8) !*ManagedGraph {
+        const mg = try self.pinOrCreateGraph(graph_name);
+        mg.replicated_apply_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        mg.replicated_apply_holder.store(currentThreadTag(), .release);
+        return mg;
+    }
+
+    pub fn endReplicatedApply(self: *StorageAdapter, mg: *ManagedGraph) void {
+        mg.replicated_apply_holder.store(0, .release);
+        mg.replicated_apply_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        self.unpinGraph(mg);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6633-INTERN-LABELS-BEFORE-APPLY; FEATURE="DistributedCluster"; ASPECT=InternOffRaftMutex; STATUS=TESTED; TEST=tests/test_sonny6631_apply_hydration_off_mutex.zig; OWNER=distributed; UPDATED=2026-11-15
+    /// SONNY-6633 (4): give `names` (labels and relationship types a Raft
+    /// entry's apply will write to `graph_name`) their label ids now, for a
+    /// caller that does not hold the Raft node's `inner_mutex`: a name new
+    /// to the graph is written to every shard's labels.dict durably (tmp,
+    /// fsync, rename, directory fsync) on first use, and under `inner_mutex`
+    /// that stopped the node for tens of milliseconds. Serialized with the
+    /// apply by the graph's `replicated_apply_mutex`, as the apply's own
+    /// assignment is. An entry that never commits leaves an id with no
+    /// records, which nothing lists. Best effort: a failure is the apply's to
+    /// report, when it assigns the id itself.
+    ///
+    /// Only a graph already open: the apply registers and loads a graph in
+    /// the store (`GraphStore.ensureGraphForReplicatedWrite`) before it opens
+    /// the engine, and opening or creating it here first
+    /// (`pinOrCreateGraph`, as `beginReplicatedApply` does) left followers
+    /// writing to a graph the store never loaded: in a real three-process
+    /// cluster they read 0 edges and 0 SET results
+    /// (`test-cluster-replicable-mutations` 1/9-3/9).
+    pub fn internNamesForReplicatedApply(self: *StorageAdapter, graph_name: []const u8, names: []const []const u8) void {
+        if (names.len == 0) return;
+        const mg = self.pinGraph(graph_name) orelse return;
+        defer self.unpinGraph(mg);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        // SONNY-6636 (b): never wait out a snapshot's copy of the graph on a
+        // Raft receive thread (heartbeats queue behind it); the copy sets
+        // `snapshot_copying` before it takes the mutex.
+        if (!mg.replicated_apply_mutex.tryLock()) {
+            if (mg.snapshot_copying.load(.acquire)) return;
+            mg.replicated_apply_mutex.lockUncancelable(io);
+        }
+        mg.replicated_apply_holder.store(currentThreadTag(), .release);
+        defer {
+            mg.replicated_apply_holder.store(0, .release);
+            mg.replicated_apply_mutex.unlock(io);
+        }
+        refuseQuarantinedWrite(mg) catch return;
+        for (names) |name| {
+            if (name.len == 0) continue;
+            _ = resolvePersistedLabelId(mg, name) catch |err| {
+                log.debug("label not interned ahead of the Raft apply: graph={s} error={s}", .{ graph_name, @errorName(err) });
+                return;
+            };
+        }
+    }
+
+    // CANARY: REQ=REQ-SONNY-6636-SERVER-SNAPSHOT; FEATURE="Raft Snapshot Persistence"; ASPECT=GraphFilesHeldForCopy; STATUS=TESTED; TEST=tests/test_sonny6636_server_snapshot.zig; OWNER=distributed; UPDATED=2026-11-16
+    /// SONNY-6636 (b): hold `graph_name` while a Raft snapshot copies its
+    /// files: its read lock (no local writer, no checkpoint: those take it
+    /// EXCLUSIVE) and its `replicated_apply_mutex` (no replicated write or
+    /// label interning), in that order, as a checkpoint takes them. The
+    /// Raft node holds its applies meanwhile, so no apply waits for it under
+    /// `inner_mutex`. `release` lets go.
+    pub fn holdGraphForSnapshot(self: *StorageAdapter, graph_name: []const u8) !SnapshotHold {
+        const acq = try self.acquireGraphReadLock(graph_name);
+        const mg = acq.mg;
+        mg.snapshot_copying.store(true, .release);
+        mg.replicated_apply_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        mg.replicated_apply_holder.store(currentThreadTag(), .release);
+        return .{ .adapter = self, .mg = mg, .hold_start_ns = acq.hold_start_ns };
+    }
+
+    pub const SnapshotHold = struct {
+        adapter: *StorageAdapter,
+        mg: *ManagedGraph,
+        hold_start_ns: u64,
+
+        pub fn release(self: *SnapshotHold) void {
+            self.mg.replicated_apply_holder.store(0, .release);
+            self.mg.replicated_apply_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            self.mg.snapshot_copying.store(false, .release);
+            self.adapter.releaseGraphReadLock(self.mg, self.hold_start_ns, .snapshot);
+        }
+    };
+
+    /// SONNY-6541 (1): a Raft `drop_graph` apply of `graph_name` is about to
+    /// wait for the graph's write lock under the Raft node's `inner_mutex`:
+    /// a holder of the graph's lock that would wait for Raft gives up
+    /// instead (`threadHoldsGraphAwaitedByReplicatedDrop`). Null when the
+    /// graph is not there. The graph is pinned until `endReplicatedDrop`.
+    pub fn beginReplicatedDrop(self: *StorageAdapter, graph_name: []const u8) ?*ManagedGraph {
+        const mg = self.pinGraph(graph_name) orelse return null;
+        _ = mg.replicated_drop_waiters.fetchAdd(1, .acq_rel);
+        return mg;
+    }
+
+    pub fn endReplicatedDrop(self: *StorageAdapter, mg: *ManagedGraph) void {
+        _ = mg.replicated_drop_waiters.fetchSub(1, .acq_rel);
+        self.unpinGraph(mg);
+    }
+
+    /// SONNY-6528 (2): a write to the `__geode_security` graph holds the
+    /// graph's write lock (rwlock EXCLUSIVE) for the engine operation. The
+    /// security graph is written through `UserStorageBackend` and the auth
+    /// graph manager, by the auth and policy DDL (under `auth_ddl_lock`) and
+    /// by the login-state, password and legacy-hash writes (under no common
+    /// lock), and none of them held a lock of the graph's: two of them wrote
+    /// its shards at once (`GraphEngine.allocNode` and the page writes are
+    /// not synchronized), and a checkpoint of the graph, which drains its
+    /// writers by taking that lock, did not wait for them. No user statement
+    /// runs on the security graph, so nothing else writes it under its lock.
+    /// Taken last: the caller may hold any auth lock and its session graph's
+    /// lock, and nothing is acquired while it is held but the store's leaf
+    /// mutexes. A nested write on the same thread holds nothing more.
+    /// Every other graph: a no-op.
+    pub fn holdSecurityGraphForWrite(self: *StorageAdapter, mg: *const ManagedGraph) !SecurityWriteHold {
+        if (!std.mem.eql(u8, mg.name, graph_store.SECURITY_GRAPH_NAME)) return .{};
+        if (self.threadHoldsGraphWriteLock(mg.name)) return .{};
+        return .{ .adapter = self, .mg = try self.acquireGraphWriteLock(mg.name) };
+    }
+
+    /// SONNY-6523: the graph's first-touch hydration failed with `err`
+    /// (`GraphStore.ensureGraphHydrated`): its store is damaged, and every
+    /// write to it is refused from now on (`refuseQuarantinedWrite`). A graph
+    /// not open in this adapter has no writes to refuse.
+    pub fn markGraphQuarantined(self: *StorageAdapter, name: []const u8, err: anyerror) void {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const mg = self.engines.get(name) orelse return;
+        mg.quarantine.store(@intFromEnum(Quarantine.of(err)), .release);
+    }
+
+    fn freeDroppedGraphNames(self: *StorageAdapter) void {
+        var it = self.dropped_graph_names.keyIterator();
+        while (it.next()) |k| self.allocator.free(k.*);
+        self.dropped_graph_names.deinit(self.allocator);
+        self.dropped_graph_names = .empty;
+        // SONNY-6589 (6): torn down with it (both deinit paths).
+        var fit = self.open_failures.keyIterator();
+        while (fit.next()) |k| self.allocator.free(k.*);
+        self.open_failures.deinit(self.allocator);
+        self.open_failures = .empty;
+        self.restoring_graph_names.deinit(self.allocator);
+        self.restoring_graph_names = .empty;
+        var uit = self.unreadable_manifests_logged.keyIterator();
+        while (uit.next()) |k| self.allocator.free(k.*);
+        self.unreadable_manifests_logged.deinit(self.allocator);
+        self.unreadable_manifests_logged = .empty;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6523-DROPPED-GRAPH-TOMBSTONE; FEATURE="MultiGraphIsolation"; ASPECT=DurableDroppedNames; STATUS=TESTED; TEST=tests/test_sonny6523_dropped_graph_restart.zig; OWNER=storage; UPDATED=2026-11-13
+    /// SONNY-6523 (5): write `dropped_graph_names` to `dropped_graphs_path`
+    /// durably (a temporary file, fsync, rename, directory fsync). Format:
+    /// the magic, a u32 count, then each name as a u16 length and its bytes
+    /// (little-endian). No names: the file is removed. Caller holds `mutex`.
+    fn saveDroppedGraphNamesLocked(self: *StorageAdapter) !void {
+        const sio = std.Io.Threaded.global_single_threaded.io();
+        if (self.dropped_graph_names.count() == 0) {
+            std.Io.Dir.cwd().deleteFile(sio, self.dropped_graphs_path) catch |err| switch (err) {
+                error.FileNotFound => {},
+                else => return err,
+            };
+            return syncDirOf(self.dropped_graphs_path);
+        }
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(self.allocator);
+        try buf.appendSlice(self.allocator, dropped_graphs_magic);
+        var count_bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &count_bytes, @intCast(self.dropped_graph_names.count()), .little);
+        try buf.appendSlice(self.allocator, &count_bytes);
+        var it = self.dropped_graph_names.keyIterator();
+        while (it.next()) |k| {
+            if (k.len > std.math.maxInt(u16)) return error.NameTooLong;
+            var len_bytes: [2]u8 = undefined;
+            std.mem.writeInt(u16, &len_bytes, @intCast(k.len), .little);
+            try buf.appendSlice(self.allocator, &len_bytes);
+            try buf.appendSlice(self.allocator, k.*);
+        }
+        // SONNY-6616: sealed under at-rest encryption (the names of dropped
+        // graphs were written in plaintext beside the encrypted stores).
+        // SONNY-6635: under the data directory's identity.
+        var cipher = try self.dataDirWriteCipher();
+        defer if (cipher) |*c| c.deinit();
+        const disk = try gs.side_file_crypto.encode(self.allocator, if (cipher) |*c| c else null, side_kind_dropped_graphs, dropped_graphs_file_name, buf.items);
+        defer self.allocator.free(disk);
+        if (cipher != null) std.crypto.secureZero(u8, buf.items);
+        const tmp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp", .{self.dropped_graphs_path});
+        defer self.allocator.free(tmp_path);
+        {
+            const file = try std.Io.Dir.cwd().createFile(sio, tmp_path, .{ .truncate = true, .permissions = std.Io.File.Permissions.fromMode(0o600) });
+            defer file.close(sio);
+            try file.writeStreamingAll(sio, disk);
+            try file.sync(sio);
+        }
+        try std.Io.Dir.cwd().rename(tmp_path, std.Io.Dir.cwd(), self.dropped_graphs_path, sio);
+        try syncDirOf(self.dropped_graphs_path);
+    }
+
+    /// SONNY-6523 (5): load `dropped_graphs_path` into `dropped_graph_names`
+    /// (none when it is absent). A name the registry holds is not dropped (a
+    /// crash between the tombstone and the drop left it); a malformed file is
+    /// an error.
+    fn loadDroppedGraphNames(self: *StorageAdapter) !void {
+        const lio = std.Io.Threaded.global_single_threaded.io();
+        const raw = std.Io.Dir.cwd().readFileAlloc(lio, self.dropped_graphs_path, self.allocator, .limited(64 << 20)) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => return err,
+        };
+        // SONNY-6616: sealed under at-rest encryption. A plaintext file
+        // (written before SONNY-6616) is read under the key and rewritten
+        // sealed by the caller; a sealed one without the key, or one that
+        // fails authentication, refuses the open. SONNY-6635: under the
+        // data directory's identity, as the registry (`classifyDataDirFile`).
+        var source: DataDirFileSource = .identity;
+        if (self.config.encryption_key) |key| {
+            source = classifyDataDirFile(self.allocator, self.data_dir, key, self.data_dir_identity, side_kind_dropped_graphs, dropped_graphs_file_name, raw) catch |err| {
+                self.allocator.free(raw);
+                return err;
+            };
+        }
+        var cipher: ?gs.side_file_crypto.Cipher = if (self.config.encryption_key) |key| dataDirReadCipher(key, self.data_dir_identity, source) else null;
+        defer if (cipher) |*c| c.deinit();
+        const decoded = try gs.side_file_crypto.decode(self.allocator, .{ .cipher = if (cipher) |*c| c else null, .require_sealed = cipher != null and source != .plaintext }, side_kind_dropped_graphs, dropped_graphs_file_name, raw);
+        defer {
+            if (cipher != null) std.crypto.secureZero(u8, decoded.bytes);
+            self.allocator.free(decoded.bytes);
+        }
+        self.dropped_names_plaintext = cipher != null and source != .identity;
+        const data = decoded.bytes;
+        if (data.len < dropped_graphs_magic.len + 4 or !std.mem.eql(u8, data[0..dropped_graphs_magic.len], dropped_graphs_magic)) return error.InvalidData;
+        var pos: usize = dropped_graphs_magic.len;
+        const n = std.mem.readInt(u32, data[pos..][0..4], .little);
+        pos += 4;
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            if (pos + 2 > data.len) return error.InvalidData;
+            const len = std.mem.readInt(u16, data[pos..][0..2], .little);
+            pos += 2;
+            if (pos + len > data.len) return error.InvalidData;
+            const name = data[pos .. pos + len];
+            pos += len;
+            if (self.findRegistryEntryLocked(name) != null) continue;
+            if (self.dropped_graph_names.contains(name)) continue;
+            const owned = try self.allocator.dupe(u8, name);
+            errdefer self.allocator.free(owned);
+            try self.dropped_graph_names.put(self.allocator, owned, {});
+        }
+        if (pos != data.len) return error.InvalidData;
     }
 
     /// Open an existing graph by name and UUID. Uses `GraphEngine.open()` to
@@ -3569,7 +5487,7 @@ pub const StorageAdapter = struct {
             return mg;
         }
 
-        return self.openGraphLocked(name, graph_uuid);
+        return self.openGraphRememberingFailureLocked(name, graph_uuid);
     }
 
     /// Return the stored UUID for a loaded graph, or null if not loaded.
@@ -3658,7 +5576,16 @@ pub const StorageAdapter = struct {
     /// SONNY-3132: the default graph is refused (`CannotDropDefaultGraph`),
     /// whoever calls. `GraphStore.dropGraph` checked for it only after this
     /// drop had deleted the default graph's engine and files.
-    pub fn dropGraph(self: *StorageAdapter, name: []const u8) error{ ObjectInUse, CannotDropDefaultGraph }!void {
+    ///
+    /// SONNY-6472 (2): the name is recorded in `dropped_graph_names` (room
+    /// taken before anything is dropped: OutOfMemory drops nothing), so a
+    /// write racing the drop cannot create the graph again.
+    ///
+    /// SONNY-6523 (5): and written to the tombstone file
+    /// (`saveDroppedGraphNamesLocked`) before anything is dropped, so the
+    /// name stays dropped across a restart. A failed write drops nothing
+    /// (`DroppedGraphNamesNotSaved`).
+    pub fn dropGraph(self: *StorageAdapter, name: []const u8) error{ ObjectInUse, CannotDropDefaultGraph, OutOfMemory, DroppedGraphNamesNotSaved }!void {
         // CANARY: REQ=REQ-SONNY-3132-DROP-DEFAULT-GRAPH; FEATURE="MultiGraphIsolation"; ASPECT=AdapterRefusesDefault; STATUS=TESTED; TEST=tests/test_sonny3132_drop_default_graph.zig; OWNER=storage; UPDATED=2026-09-27
         if (std.mem.eql(u8, name, graph_store.DEFAULT_GRAPH_NAME)) return error.CannotDropDefaultGraph;
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -3666,6 +5593,17 @@ pub const StorageAdapter = struct {
 
         if (self.engines.get(name)) |mg| {
             if (threadTxnOn(mg)) return error.ObjectInUse;
+        }
+
+        if (!self.dropped_graph_names.contains(name)) {
+            try self.dropped_graph_names.ensureUnusedCapacity(self.allocator, 1);
+            const owned = try self.allocator.dupe(u8, name);
+            self.dropped_graph_names.putAssumeCapacity(owned, {});
+            self.saveDroppedGraphNamesLocked() catch |err| {
+                log.warn("cannot record the drop of graph '{s}' in {s}: {}; the graph is not dropped", .{ name, self.dropped_graphs_path, err });
+                if (self.dropped_graph_names.fetchRemove(name)) |kv| self.allocator.free(kv.key);
+                return error.DroppedGraphNamesNotSaved;
+            };
         }
 
         var dropped_uuid: ?[16]u8 = null;
@@ -3723,6 +5661,356 @@ pub const StorageAdapter = struct {
         }
     }
 
+    // CANARY: REQ=REQ-SONNY-6636-CRASH-SAFE-GRAPH-SWAP; FEATURE="Raft Snapshot Persistence"; ASPECT=RegistrySwap; STATUS=TESTED; TEST=tests/test_sonny6636_graph_restore_swap.zig; OWNER=storage; UPDATED=2026-11-15
+    /// SONNY-6636 (1): a graph a restore puts in place: `uuid` is the uuid its
+    /// files were written under (graph-storage binds it into the manifest,
+    /// WAL header, shard uuids and, under at-rest encryption, the keys), so
+    /// the graph keeps it here.
+    pub const RestoreSource = struct { name: []const u8, uuid: [16]u8 };
+
+    /// SONNY-6636 (1): a restore of whole graphs in progress
+    /// (`beginGraphRestore`). `staged_dirs[i]` is the new, empty directory the
+    /// caller fills with `entries[i]`'s files, before `commitGraphRestore`
+    /// or `abandonGraphRestore`. `deinit` frees it.
+    pub const GraphRestore = struct {
+        arena: std.heap.ArenaAllocator,
+        entries: []graph_restore_intent.Entry,
+        staged_dirs: [][]const u8,
+        committed: bool = false,
+        /// SONNY-6636 (3): the Raft snapshot this restore installs.
+        raft: graph_restore_intent.RaftPoint = .{},
+
+        pub fn deinit(self: *GraphRestore) void {
+            self.arena.deinit();
+            self.* = undefined;
+        }
+    };
+
+    /// SONNY-6636 (1): where a test stops a restore as a crash would
+    /// (`setGraphRestoreCrashForTesting`): after the step named, nothing more
+    /// is written or cleaned up.
+    pub const GraphRestoreStep = enum { intent_written, committed, renamed, registry_saved, old_deleted };
+
+    /// SONNY-6636: the restore intent's cipher. SONNY-6635: still bound to
+    /// graph-storage's shared `SEAL_UUID`, not the data directory's identity
+    /// (as the registry now is): an intent an earlier build left by an
+    /// interrupted restore must stay readable at the next open.
+    /// SONNY-6689: under the data directory's identity, so an intent moved
+    /// from another directory under the key does not authenticate. An intent
+    /// an earlier build sealed under `SEAL_UUID` is read only in the open
+    /// that records the upgrade marker (`recoverGraphRestore`).
+    fn graphRestoreCipher(self: *const StorageAdapter) !?gs.side_file_crypto.Cipher {
+        return self.dataDirWriteCipher();
+    }
+
+    /// SONNY-6689: may a side file an earlier build sealed under
+    /// `SEAL_UUID` (the restore intent, `txn_undo.wal`) still be read? Only
+    /// until the marker records that they are under the identity.
+    fn legacySideFilesReadable(self: *const StorageAdapter) bool {
+        if (self.config.encryption_key == null) return false;
+        const m = self.data_dir_seal orelse return true;
+        return m.flags & DataDirSealMarker.side_files_bound == 0;
+    }
+
+    fn writeGraphRestoreIntent(self: *StorageAdapter, committed: bool, entries: []const graph_restore_intent.Entry, raft: graph_restore_intent.RaftPoint) !void {
+        var cipher = try self.graphRestoreCipher();
+        defer if (cipher) |*c| c.deinit();
+        try graph_restore_intent.write(self.allocator, self.data_dir, if (cipher) |*c| c else null, side_kind_graph_restore, .{ .committed = committed, .entries = entries, .raft = raft });
+    }
+
+    fn stagedDirPath(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8, suffix: []const u8) ![]const u8 {
+        const hex = std.fmt.bytesToHex(graph_uuid, .lower);
+        return std.fmt.allocPrint(allocator, "{s}/{s}{s}", .{ data_dir, &hex, suffix });
+    }
+
+    /// SONNY-6636 (1): start restoring `sources` (distinct names and uuids,
+    /// never `__geode_security`, whose contents are this node's own): write
+    /// the restore intent (fsynced, sealed under at-rest
+    /// encryption) and create each `<data_dir>/<uuid>.restore` directory.
+    /// Nothing a reader sees changes until `commitGraphRestore`. Refused when
+    /// a source's uuid belongs to another graph here (GraphRestoreUuidInUse).
+    /// The caller keeps every writer of these graphs paused until the commit
+    /// returns.
+    pub fn beginGraphRestore(self: *StorageAdapter, sources: []const RestoreSource) !GraphRestore {
+        return self.beginGraphRestoreAt(sources, .{});
+    }
+
+    /// SONNY-6636 (3): `beginGraphRestore` for a Raft snapshot at `raft`:
+    /// the intent carries it, and finishing the restore records it as the
+    /// Raft index the store reflects (`graph_restore_intent.writeRaftIndex`).
+    /// The default graph is restorable (SONNY-6636: replicated writes land
+    /// in it).
+    pub fn beginGraphRestoreAt(self: *StorageAdapter, sources: []const RestoreSource, raft: graph_restore_intent.RaftPoint) !GraphRestore {
+        if (sources.len == 0) return error.NothingToRestore;
+        for (sources, 0..) |s, i| {
+            if (s.name.len == 0 or std.mem.eql(u8, s.name, "__geode_security")) return error.GraphNotRestorable;
+            if (std.mem.allEqual(u8, &s.uuid, 0)) return error.GraphNotRestorable;
+            for (sources[0..i]) |t| {
+                if (std.mem.eql(u8, t.name, s.name) or std.mem.eql(u8, &t.uuid, &s.uuid)) return error.GraphNotRestorable;
+            }
+        }
+        var r: GraphRestore = .{ .arena = .init(self.allocator), .entries = &.{}, .staged_dirs = &.{}, .raft = raft };
+        errdefer r.arena.deinit();
+        const a = r.arena.allocator();
+        r.entries = try a.alloc(graph_restore_intent.Entry, sources.len);
+        {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            for (sources, r.entries) |s, *e| {
+                if (self.registry.findByUuid(s.uuid)) |owner| {
+                    if (!std.mem.eql(u8, owner.name, s.name)) return error.GraphRestoreUuidInUse;
+                }
+                e.* = .{ .name = try a.dupe(u8, s.name), .old = if (self.findRegistryEntryLocked(s.name)) |o| o.uuid else null, .new = s.uuid };
+            }
+        }
+        r.staged_dirs = try a.alloc([]const u8, sources.len);
+        for (r.staged_dirs, r.entries) |*d, e| d.* = try stagedDirPath(a, self.data_dir, e.new, graph_restore_intent.staged_suffix);
+        try self.writeGraphRestoreIntent(false, r.entries, r.raft);
+        errdefer self.abandonGraphRestore(&r);
+        if (graphRestoreCrashAt(.intent_written)) return error.InjectedGraphRestoreCrash;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        for (r.staged_dirs) |d| {
+            try std.Io.Dir.cwd().deleteTree(io, d); // a stale one
+            try std.Io.Dir.cwd().createDirPath(io, d);
+        }
+        return r;
+    }
+
+    /// SONNY-6636 (1): put the staged graphs in place. Rewriting the intent
+    /// with `committed` set is the commit point: a crash before it reopens
+    /// on the old graphs, one after it on the restored ones (`init` finishes
+    /// the swap). Then each old engine leaves `engines` and is marked
+    /// dropped (freed by its last unpin, with no checkpoint), its in-flight
+    /// lock holders drain, each staged directory is renamed into place (a
+    /// graph restored under its own uuid has its live directory renamed
+    /// aside first), the registry names the restored uuids, and the old
+    /// directories and the intent are deleted. A restored graph opens
+    /// lazily on its next use. Refused, with nothing changed (abandon it),
+    /// while this thread has a transaction on one of the graphs or when one
+    /// was created or dropped since `beginGraphRestore` (GraphRestoreRaced).
+    /// An error after the commit point leaves the intent for the next open.
+    pub fn commitGraphRestore(self: *StorageAdapter, r: *GraphRestore) !void {
+        const a = self.allocator;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const detached = try a.alloc(?*ManagedGraph, r.entries.len);
+        defer a.free(detached);
+        @memset(detached, null);
+        {
+            self.mutex.lockUncancelable(io);
+            defer self.mutex.unlock(io);
+            for (r.entries) |e| {
+                const now: ?[16]u8 = if (self.findRegistryEntryLocked(e.name)) |o| o.uuid else null;
+                const same = if (now) |u| (if (e.old) |o| std.mem.eql(u8, &u, &o) else false) else e.old == null;
+                if (!same) return error.GraphRestoreRaced;
+                if (self.registry.findByUuid(e.new)) |owner| {
+                    if (!std.mem.eql(u8, owner.name, e.name)) return error.GraphRestoreRaced;
+                }
+                if (self.engines.get(e.name)) |mg| {
+                    if (threadTxnOn(mg)) return error.ObjectInUse;
+                }
+            }
+            try self.restoring_graph_names.ensureUnusedCapacity(a, @intCast(r.entries.len));
+            try self.writeGraphRestoreIntent(true, r.entries, r.raft);
+            r.committed = true;
+            for (r.entries, detached) |e, *d| {
+                // SONNY-6749: no engine of it opens until the swap is over.
+                self.restoring_graph_names.putAssumeCapacity(e.name, {});
+                const kv = self.engines.fetchRemove(e.name) orelse continue;
+                const mg = kv.value;
+                if (self.default_engine == mg) self.default_engine = null;
+                // Our pin keeps it allocated through the drain below.
+                _ = mg.pins.fetchAdd(1, .acq_rel);
+                _ = mg.pins.fetchOr(ManagedGraph.dropped_bit, .acq_rel);
+                d.* = mg;
+            }
+        }
+        // SONNY-6749: the swap is over (or stopped: a retry or the next open
+        // finishes it); an open failure remembered for the old files is
+        // forgotten, so the graph opens on the files now in place.
+        defer {
+            self.mutex.lockUncancelable(io);
+            defer self.mutex.unlock(io);
+            for (r.entries) |e| {
+                _ = self.restoring_graph_names.remove(e.name);
+                if (self.open_failures.fetchRemove(e.name)) |kv| a.free(kv.key);
+            }
+        }
+        // Drain: a writer or checkpoint inside the old engine finishes; one
+        // that takes its lock later sees it dropped and writes nothing (so
+        // nothing reaches the renamed directories by path).
+        for (detached) |d| if (d) |mg| {
+            acquireWholeGraphExclusive(mg);
+            releaseWholeGraphExclusive(mg);
+        };
+        defer for (detached) |d| if (d) |mg| self.unpinGraph(mg);
+        if (graphRestoreCrashAt(.committed)) return error.InjectedGraphRestoreCrash;
+        try self.finishCommittedGraphRestore(r.entries, r.raft);
+    }
+
+    /// SONNY-6636 (1): the swap after the commit point, idempotent: run by
+    /// `commitGraphRestore` and, after a crash, by `init`.
+    fn finishCommittedGraphRestore(self: *StorageAdapter, entries: []const graph_restore_intent.Entry, raft: graph_restore_intent.RaftPoint) !void {
+        const a = self.allocator;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const cwd = std.Io.Dir.cwd();
+        for (entries) |e| {
+            const live = try graphDirPath(a, self.data_dir, e.new);
+            defer a.free(live);
+            const staged = try stagedDirPath(a, self.data_dir, e.new, graph_restore_intent.staged_suffix);
+            defer a.free(staged);
+            cwd.access(io, staged, .{}) catch continue; // renamed already
+            const own_uuid = if (e.old) |o| std.mem.eql(u8, &o, &e.new) else false;
+            if (pathExists(live)) {
+                if (own_uuid) {
+                    const aside = try stagedDirPath(a, self.data_dir, e.new, graph_restore_intent.aside_suffix);
+                    defer a.free(aside);
+                    try cwd.deleteTree(io, aside);
+                    try cwd.rename(live, cwd, aside, io);
+                } else {
+                    // Named by no graph (`commitGraphRestore` checked): a
+                    // leftover of an earlier restore.
+                    try cwd.deleteTree(io, live);
+                }
+            }
+            try cwd.rename(staged, cwd, live, io);
+        }
+        try graph_restore_intent.syncDir(self.data_dir);
+        if (graphRestoreCrashAt(.renamed)) return error.InjectedGraphRestoreCrash;
+        {
+            self.mutex.lockUncancelable(io);
+            defer self.mutex.unlock(io);
+            for (entries) |e| {
+                var found = false;
+                for (self.registry.entries.items) |*re| {
+                    if (std.mem.eql(u8, re.name, e.name)) {
+                        re.uuid = e.new;
+                        found = true;
+                    }
+                }
+                if (!found) try self.registry.addGraph(e.name, e.new);
+            }
+            try self.saveRegistryLocked();
+        }
+        try syncDirOf(self.registry_path);
+        if (graphRestoreCrashAt(.registry_saved)) return error.InjectedGraphRestoreCrash;
+        for (entries) |e| {
+            if (e.old) |o| {
+                if (!std.mem.eql(u8, &o, &e.new)) self.deleteGraphDirs(&.{o});
+            }
+            const aside = try stagedDirPath(a, self.data_dir, e.new, graph_restore_intent.aside_suffix);
+            defer a.free(aside);
+            cwd.deleteTree(io, aside) catch |err| log.warn("cannot delete {s} left by a graph restore: {}", .{ aside, err });
+        }
+        if (graphRestoreCrashAt(.old_deleted)) return error.InjectedGraphRestoreCrash;
+        // SONNY-6636 (3): the store now reflects the snapshot's Raft index;
+        // recorded before the intent goes, so a crash in between redoes it.
+        if (raft.index != 0) try graph_restore_intent.writeRaftIndex(a, self.data_dir, raft);
+        try graph_restore_intent.remove(a, self.data_dir);
+    }
+
+    /// SONNY-6636 (1): give up a restore not committed: delete its staged
+    /// directories, then the intent.
+    pub fn abandonGraphRestore(self: *StorageAdapter, r: *GraphRestore) void {
+        std.debug.assert(!r.committed);
+        if (g_test_graph_restore_crashed) return;
+        const io = std.Io.Threaded.global_single_threaded.io();
+        for (r.staged_dirs) |d| std.Io.Dir.cwd().deleteTree(io, d) catch |err| {
+            log.warn("cannot delete {s} left by a graph restore: {}", .{ d, err });
+        };
+        graph_restore_intent.remove(self.allocator, self.data_dir) catch |err| {
+            log.warn("cannot remove the graph restore intent: {}; the next open removes it", .{err});
+        };
+    }
+
+    fn deleteGraphDirs(self: *StorageAdapter, uuids: []const [16]u8) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        for (uuids) |u| {
+            const path = graphDirPath(self.allocator, self.data_dir, u) catch continue;
+            defer self.allocator.free(path);
+            std.Io.Dir.cwd().deleteTree(io, path) catch |err| {
+                log.warn("cannot delete graph directory {s} left by a restore: {}", .{ path, err });
+            };
+        }
+    }
+
+    /// SONNY-6636 (1): settle a restore a crash interrupted (`init`, after the
+    /// registry loads, before any graph opens): not committed, its staged
+    /// directories are deleted; committed, the swap is finished. A damaged
+    /// intent refuses the open: which directories are live cannot be told.
+    fn recoverGraphRestore(self: *StorageAdapter) !void {
+        var cipher = try self.graphRestoreCipher();
+        defer if (cipher) |*c| c.deinit();
+        // SONNY-6689: an intent sealed under `SEAL_UUID` by an earlier build
+        // is read once, before the marker records the upgrade.
+        const read_owned = graph_restore_intent.read(self.allocator, self.data_dir, if (cipher) |*c| c else null, side_kind_graph_restore) catch |err| switch (err) {
+            error.CorruptGraphRestoreIntent => blk: {
+                if (!self.legacySideFilesReadable()) return err;
+                var legacy = gs.side_file_crypto.Cipher.init(self.config.encryption_key.?, gs.registry.SEAL_UUID);
+                defer legacy.deinit();
+                break :blk try graph_restore_intent.read(self.allocator, self.data_dir, &legacy, side_kind_graph_restore);
+            },
+            else => return err,
+        };
+        var owned = read_owned orelse return;
+        defer owned.deinit();
+        const intent = owned.intent;
+        if (intent.committed) {
+            try self.finishCommittedGraphRestore(intent.entries, intent.raft);
+        } else {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            for (intent.entries) |e| {
+                const staged = try stagedDirPath(self.allocator, self.data_dir, e.new, graph_restore_intent.staged_suffix);
+                defer self.allocator.free(staged);
+                try std.Io.Dir.cwd().deleteTree(io, staged);
+            }
+            try graph_restore_intent.remove(self.allocator, self.data_dir);
+        }
+        slog.info("settled a graph restore interrupted by a crash", &.{
+            SAttr.string("outcome", if (intent.committed) "restored graphs kept" else "old graphs kept"),
+            SAttr.uint("graphs", intent.entries.len),
+        });
+    }
+
+    /// SONNY-6636 (3): every graph a Raft snapshot carries (all but
+    /// `__geode_security`, whose contents are this node's own), with the
+    /// uuid its files are written under. Free with `freeRestoreSources`.
+    pub fn snapshotGraphs(self: *StorageAdapter, allocator: Allocator) ![]RestoreSource {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        var out: std.ArrayList(RestoreSource) = .empty;
+        errdefer freeRestoreSources(allocator, out.items);
+        defer out.deinit(allocator);
+        for (self.registry.entries.items) |e| {
+            if (std.mem.eql(u8, e.name, "__geode_security")) continue;
+            const name = try allocator.dupe(u8, e.name);
+            errdefer allocator.free(name);
+            try out.append(allocator, .{ .name = name, .uuid = e.uuid });
+        }
+        return out.toOwnedSlice(allocator);
+    }
+
+    pub fn freeRestoreSources(allocator: Allocator, sources: []const RestoreSource) void {
+        for (sources) |s| allocator.free(s.name);
+        allocator.free(sources);
+    }
+
+    /// SONNY-6636 (3): `<data_dir>/<uuid hex>`, a graph's directory.
+    pub fn graphDirFor(self: *const StorageAdapter, allocator: Allocator, graph_uuid: [16]u8) ![]const u8 {
+        return graphDirPath(allocator, self.data_dir, graph_uuid);
+    }
+
+    /// SONNY-6636 (3): record that this data directory's store reflects the
+    /// Raft log up to `point` (a restore that swapped no graph).
+    pub fn recordStoreRaftIndex(self: *const StorageAdapter, point: RaftPoint) !void {
+        return graph_restore_intent.writeRaftIndex(self.allocator, self.data_dir, point);
+    }
+
+    /// SONNY-6636 (3): the Raft log position this data directory's store
+    /// reflects (recorded when a Raft snapshot restore finished), or index 0.
+    pub fn storeRaftIndex(self: *const StorageAdapter) !RaftPoint {
+        return graph_restore_intent.readRaftIndex(self.allocator, self.data_dir);
+    }
+
     /// Return the names of all known graphs. Caller owns the returned slice and
     /// each name string inside it.
     pub fn listGraphNames(self: *StorageAdapter, allocator: Allocator) ![][]const u8 {
@@ -3735,36 +6023,26 @@ pub const StorageAdapter = struct {
             names.deinit(allocator);
         }
 
+        // SONNY-6547 (2): the set borrows the registry's and the engine map's
+        // names, which `mutex` keeps alive until it is freed. It owned copies
+        // and freed a copy twice when an allocation after its insert failed
+        // (the insert's `errdefer` and the set's `defer`).
         var seen = std.StringHashMap(void).init(allocator);
-        defer {
-            var seen_it = seen.iterator();
-            while (seen_it.next()) |entry| {
-                allocator.free(entry.key_ptr.*);
-            }
-            seen.deinit();
-        }
+        defer seen.deinit();
 
         for (self.registry.entries.items) |entry| {
-            const seen_key = try allocator.dupe(u8, entry.name);
-            errdefer allocator.free(seen_key);
-            const seen_result = try seen.getOrPut(seen_key);
-            if (!seen_result.found_existing) {
-                try names.append(allocator, try allocator.dupe(u8, entry.name));
-            } else {
-                allocator.free(seen_key);
-            }
+            if ((try seen.getOrPut(entry.name)).found_existing) continue;
+            const copy = try allocator.dupe(u8, entry.name);
+            errdefer allocator.free(copy);
+            try names.append(allocator, copy);
         }
 
         var it = self.engines.iterator();
         while (it.next()) |entry| {
-            const seen_key = try allocator.dupe(u8, entry.key_ptr.*);
-            errdefer allocator.free(seen_key);
-            const seen_result = try seen.getOrPut(seen_key);
-            if (!seen_result.found_existing) {
-                try names.append(allocator, try allocator.dupe(u8, entry.key_ptr.*));
-            } else {
-                allocator.free(seen_key);
-            }
+            if ((try seen.getOrPut(entry.key_ptr.*)).found_existing) continue;
+            const copy = try allocator.dupe(u8, entry.key_ptr.*);
+            errdefer allocator.free(copy);
+            try names.append(allocator, copy);
         }
 
         return names.toOwnedSlice(allocator);
@@ -3782,7 +6060,7 @@ pub const StorageAdapter = struct {
         const mg = if (self.engines.get("default")) |existing|
             existing
         else if (self.findRegistryEntryLocked("default")) |entry|
-            try self.openGraphLocked("default", entry.uuid)
+            try self.openGraphRememberingFailureLocked("default", entry.uuid)
         else
             try self.createGraphLocked("default");
 
@@ -3806,7 +6084,17 @@ pub const StorageAdapter = struct {
             const _dur: f64 = @as(f64, @floatFromInt(@import("otel").internal.clock.unixNanoNow() -% _t0_12)) / @as(f64, std.time.ns_per_s);
             _om12.recordStorageOp(.write_node, _dur, if (_ok_12) .success else .error_, null);
         }
-        const mg = try self.getOrCreateGraph(graph_name);
+        // SONNY-6492 (3): pinned for the create, as the bulk helpers do
+        // (SONNY-3121). An embedding caller may hold no graph lock (which
+        // pins): a DROP GRAPH after the lookup freed the graph under the
+        // create. The lookup and the pin share one hold of the adapter's
+        // mutex, so a dropped graph is never found (GraphNotFound); a drop
+        // after it waits for this pin before freeing the graph.
+        const mg = try self.pinOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
+        defer self.unpinGraph(mg);
 
         // R7 (2026-04-22): batch every sub-op (putNode + per-label addLabel)
         // into a SINGLE storage-engine transaction so we incur exactly one
@@ -3821,8 +6109,39 @@ pub const StorageAdapter = struct {
         // putProperty) each call `txn_manager.begin()` + `commit()`, and
         // `commit()` always ends with `wal.sync()` (fsync) — see
         // `graph_storage/src/txn.zig:67-85`.
-        const node_id = try mg.engine.allocNode();
-        const node_shard = mg.shardEngineForNode(node_id);
+        // CANARY: REQ=REQ-SONNY-6425-CREATE-ONE-SHARD; FEATURE="StatementTxnBatching"; ASPECT=AllocOnStatementShard; STATUS=TESTED; TEST=tests/test_sonny6425_create_one_shard_commit.zig; OWNER=storage; UPDATED=2026-11-12
+        // SONNY-6425: with a statement txn open on this graph, the node is
+        // allocated on that txn's shard, so its record, labels and
+        // properties join the statement's one commit. `allocNode` and
+        // `beginTxn` pick their shard round-robin from the SAME counter, so
+        // the node always landed on another shard and committed in its own
+        // transactions (3-6 commits, each a WAL fsync, for a one-node CREATE).
+        mg.beginNodeCensusWrite(); // SONNY-6472 (4)
+        defer mg.endNodeCensusWrite();
+        var stmt_txn = currentStatementTxnForGraph(graph_name);
+        // CANARY: REQ=REQ-SONNY-6659-SINGLE-WRITER; FEATURE="TransactionManagement"; ASPECT=NodeIdFromTxnPage; STATUS=TESTED; TEST=tests/test_sonny6659_open_writers.zig; OWNER=storage; UPDATED=2026-11-16
+        // SONNY-6659: the shard first (the statement's, else round-robin as
+        // `allocNode` picks it), then its transaction, then the id from it
+        // (`allocNodeTxn`): while another transaction is open on the shard,
+        // the node goes on a node page of this transaction's own. A plain
+        // `allocNode` id came from the shard's shared tail page, and
+        // graph-storage 0.4.25 refuses (`WriteConflict`) a write to a page
+        // another open transaction has written.
+        const shard_idx: usize = if (stmt_txn) |s|
+            shardedTxnShard(s.txn_id)
+        else
+            @intCast(mg.engine.coordinator_txn_counter.fetchAdd(1, .monotonic) % gs.sharded_engine.SHARD_COUNT);
+        const node_shard = mg.engine.shards[shard_idx];
+        noteEngineShardWrite(shard_idx); // SONNY-6671
+        // SONNY-6658: an auto-commit statement's first write opens its
+        // transaction on the node's shard; a create that commits its own
+        // has the statement's undo on disk first.
+        if (stmt_txn == null) stmt_txn = try self.openAutoStatementTxn(graph_name, shard_idx);
+        const joined: ?gs.TxnId = if (stmt_txn) |s|
+            (if (shardedTxnShard(s.txn_id) == shard_idx) shardedTxnLocal(s.txn_id) else null)
+        else
+            null;
+        if (joined == null) try statement_undo.beforeOwnEngineCommit();
 
         // R7/R8 (2026-04-22): batch putNode + addLabel into a single per-shard
         // txn.  Under ShardedGraphEngine, each txn is pinned to one shard; we
@@ -3831,16 +6150,17 @@ pub const StorageAdapter = struct {
         // local txn (one fsync for the whole statement).  Otherwise open a
         // fresh local txn on node_shard (correct isolation, one fsync per
         // createNode call instead of per sub-op).
-        const stmt_txn = currentStatementTxnForGraph(graph_name);
-        const local_txn: gs.TxnId = if (stmt_txn) |s|
-            shardLocalTxnForNode(s.txn_id, node_id) orelse try node_shard.beginTxn()
-        else
-            try node_shard.beginTxn();
-        const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null;
-        errdefer if (own_txn) {
-            // error-policy: A — best-effort rollback on an already-failing path.
-            node_shard.abortTxn(local_txn) catch {};
-        };
+        const local_txn: gs.TxnId = joined orelse try node_shard.beginTxn();
+        const own_txn = joined == null;
+        // SONNY-6529: graph-storage undoes the failed create: the slot, the
+        // shard's live-node count and the id (when it is the last one
+        // issued) go back with the record.
+        errdefer if (own_txn) abortUnmirroredTxn(mg, node_shard, local_txn, "node create");
+        const node_id = try node_shard.allocNodeTxn(local_txn);
+        if (node_slot_allocated_hook) |hook| hook(mg);
+        // SONNY-6523 (2): a failure from here on gives the slot back; runs
+        // before the abort above, in the live txn.
+        errdefer releaseFailedNodeSlot(node_shard, node_id, local_txn, own_txn);
 
         // Write an initial node record.  The txn_stamp must be non-zero so
         // that getNode() does not treat the slot as empty (isEmpty checks all
@@ -3863,10 +6183,10 @@ pub const StorageAdapter = struct {
             const label_id = try resolvePersistedLabelId(mg, lbl);
             try node_shard.addLabelTxn(node_id, label_id, local_txn);
         }
-        // gap 0026: WAL-log the node's REAL label page (see
-        // relogSecurityLabelPageTxn) — no-op outside __geode_security.
-        try relogSecurityLabelPageTxn(mg, node_shard, node_id, local_txn);
 
+        // SONNY-6492 (3): dropped while this create ran (its pin kept the
+        // graph): the node is not reported created in a graph that is gone.
+        if (mg.isDropped()) return error.GraphNotFound;
         if (own_txn) try node_shard.commitTxn(local_txn);
         _ok_12 = true;
         // OTel Task 13: graph data model mutation counter.
@@ -3917,6 +6237,8 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         txn_id_opt: ?u64,
     ) !u64 {
+        try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         _ = txn_id_opt; // reserved for future extensions; thread-local is source of truth.
 
         // Statement-atomicity pre-pass. This path SKIPS the undo log by design
@@ -3955,7 +6277,7 @@ pub const StorageAdapter = struct {
                 else => return err,
             }
         }
-        errdefer if (stmt_txn_open) stmt_txn.abort();
+        errdefer if (stmt_txn_open) stmt_txn.fail();
 
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const node_id = try store.createNodeWithGraph(labels, graph_name);
@@ -4056,11 +6378,13 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         request_tenant: []const u8,
     ) !u64 {
+        try graph_store.refuseFlaggedNodeId(reserved_id); // SONNY-6362
         // Statement-atomicity pre-pass — see `bulkInsertNode`.
         // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=BulkInsertPrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
         for (props) |kv| try self.checkPropertyEntryWritable(kv.key, kv.value);
 
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         // Build it FIRST (before any node/index write below) so this insert's
         // posting lands on top of the fully-rebuilt index. No-op (one atomic
@@ -4086,6 +6410,12 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        // SONNY-6472 (2): a DROP GRAPH that ran between the lookup above and
+        // this lock left `mg` dropped (its files deleted): GraphNotFound, as
+        // the bulk MERGE helpers answer (SONNY-3121), not a write into it.
+        if (mg.isDropped()) return error.GraphNotFound;
+        try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const _hold_start = monoNanosNow();
         defer {
             const _hold_ns = monoNanosNow() -| _hold_start;
@@ -4127,6 +6457,9 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         request_tenant: []const u8,
     ) !u64 {
+        // SONNY-6523: also here, after the bulk MERGE paths' probe (its
+        // hydration may have just quarantined the graph).
+        try refuseQuarantinedWrite(mg);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -4135,6 +6468,7 @@ pub const StorageAdapter = struct {
         defer mg.shard_locks[idx].unlock(io);
 
         const node_shard = mg.engine.shards[idx];
+        noteEngineShardWrite(idx); // SONNY-6671
 
         // REQ-QUIC-HC-016: allocate the dense engine slot from the same
         // shard the coordinator selected for the public id. The previous path
@@ -4147,18 +6481,27 @@ pub const StorageAdapter = struct {
         // only protects string-keyed metadata maps (label dictionary and
         // GraphStore indexes), so holding it while doing putNode/putProperty
         // serializes otherwise-independent shard workers.
-        const slot_id = try node_shard.allocNode();
+        mg.beginNodeCensusWrite(); // SONNY-6472 (4)
+        defer mg.endNodeCensusWrite();
+        // SONNY-6659: the transaction first, then the slot from it
+        // (`allocNodeTxn`, a node page of its own while another transaction
+        // is open on the shard; see `createNode`).
         const stmt_txn = currentStatementTxnForGraph(graph_name);
         const stmt_local: ?gs.TxnId = if (stmt_txn) |s|
-            shardLocalTxnForNode(s.txn_id, slot_id)
+            (if (shardedTxnShard(s.txn_id) == idx) shardedTxnLocal(s.txn_id) else null)
         else
             null;
         const local_txn: gs.TxnId = stmt_local orelse try node_shard.beginTxn();
         const own_txn = stmt_local == null;
-        errdefer if (own_txn) {
-            // error-policy: A — best-effort rollback on an already-failing path.
-            node_shard.abortTxn(local_txn) catch {};
-        };
+        // SONNY-6529: graph-storage undoes the failed insert (slot, count,
+        // id) while the store's in-memory copy does not hold the node.
+        errdefer if (own_txn) abortUnmirroredTxn(mg, node_shard, local_txn, "bulk node insert");
+        const slot_id = try node_shard.allocNodeTxn(local_txn);
+        if (node_slot_allocated_hook) |hook| hook(mg);
+        // SONNY-6523 (2): before the abort above; not once the node is in
+        // the in-memory store (a later failure leaves it, as before).
+        var slot_kept = false;
+        errdefer if (!slot_kept) releaseFailedNodeSlot(node_shard, slot_id, local_txn, own_txn);
 
         var rec = gs.node.NodeRec{
             .out_head = 0,
@@ -4190,9 +6533,6 @@ pub const StorageAdapter = struct {
         for (label_ids) |label_id| {
             try node_shard.addLabelTxn(slot_id, label_id, local_txn);
         }
-        // gap 0026: WAL-log the node's REAL label page (see
-        // relogSecurityLabelPageTxn) — no-op outside __geode_security.
-        try relogSecurityLabelPageTxn(mg, node_shard, slot_id, local_txn);
 
         rec = (try node_shard.getNode(slot_id)) orelse return error.NodeNotFound;
         var id_buf: [16]u8 = undefined;
@@ -4232,42 +6572,81 @@ pub const StorageAdapter = struct {
         // storage/index writes directly here instead of routing back through
         // GraphStore.setNodePropertiesBatch, which would re-enter the adapter
         // graph lookup mutex and redo shard routing for every bulk CREATE.
+        // CANARY: REQ=REQ-SONNY-6601-BULK-INSERT-INDEX-ABORT; FEATURE="StorageIntegrity"; ASPECT=ExactIndexRollback; STATUS=TESTED; TEST=tests/test_sonny6601_bulk_insert_index_abort.zig; OWNER=storage; UPDATED=2026-11-15
+        // SONNY-6601 (2): the exact-index entries are added before the
+        // commit; an insert that fails before it takes them back (the abort
+        // and the slot release above undo the rest). They stayed, naming a node the abort removed under a
+        // slot the next insert reuses. Removed by the hash computed when
+        // added, so the removal cannot fail on an allocation.
+        var value_hashes_buf: [16]u64 = undefined;
+        const value_hashes: []u64 = if (props.len <= value_hashes_buf.len)
+            value_hashes_buf[0..props.len]
+        else
+            try self.allocator.alloc(u64, props.len);
+        defer if (props.len > value_hashes_buf.len) self.allocator.free(value_hashes);
+        var props_indexed: usize = 0;
+        errdefer if (!slot_kept) for (props[0..props_indexed], value_hashes[0..props_indexed]) |kv, h| {
+            for (label_ids) |label_id| mg.exact_node_property_index.remove(label_id, kv.key, h, slot_id);
+        };
         if (props.len > 0) {
-            for (props) |kv| {
+            for (props, 0..) |kv, i| {
                 const storage_val = try toStorageProperty(self.allocator, kv.value);
                 defer freeTemporaryStorageProperty(self.allocator, storage_val);
                 const new_prop_head = node_shard.putPropertyTxn(rec.prop_head, kv.key, storage_val, local_txn) catch |err|
                     return mapPropertyEntryError(err, kv.key);
                 rec.prop_head = new_prop_head;
+                value_hashes[i] = try hashStorageProperty(mg.engine.allocator, storage_val);
+                props_indexed = i + 1;
                 for (label_ids) |label_id| {
                     // GAP-0900 throughput: bulk insert reserves a FRESH slot_id
                     // that has never been indexed → skip the O(N) de-dup scan.
-                    try addIndexedNodePropertyEx(mg, label_id, slot_id, kv.key, storage_val, true);
+                    try addIndexedNodePropertyHash(mg, label_id, slot_id, kv.key, value_hashes[i], true);
                 }
             }
             try node_shard.putNodeTxn(slot_id, rec, local_txn);
         }
+
+        // CANARY: REQ=REQ-SONNY-6646-BULK-INSERT-POST-COMMIT; FEATURE="StorageIntegrity"; ASPECT=InMemoryCopyBeforeCommit; STATUS=TESTED; TEST=tests/test_sonny6646_bulk_insert_post_commit.zig; OWNER=storage; UPDATED=2026-11-15
+        // SONNY-6646 (5): the node and its properties go into the in-memory
+        // store BEFORE the commit. The properties were copied after it, and a
+        // failure there reported an error for a node that was committed (in
+        // the engine, and in memory without some of its properties): the
+        // client's retry made a second one. A failure before the commit now
+        // takes the node back out of the in-memory store (`undoReservedNode`
+        // cannot fail; its key room is reserved here), then the errdefers
+        // above give the slot back, take back the exact-index entries and
+        // abort the engine transaction.
+        var entries_buf: [16]graph_store.GraphStore.BatchPropertyEntry = undefined;
+        const entries: []graph_store.GraphStore.BatchPropertyEntry = if (props.len <= entries_buf.len)
+            entries_buf[0..props.len]
+        else
+            try self.allocator.alloc(graph_store.GraphStore.BatchPropertyEntry, props.len);
+        defer if (props.len > entries_buf.len) self.allocator.free(entries);
+        var longest_property_key: usize = 0;
+        for (props, 0..) |kv, i| {
+            entries[i] = .{ .key = kv.key, .value = kv.value };
+            longest_property_key = @max(longest_property_key, kv.key.len);
+        }
+        var mem_undo = try store.reserveReservedNodeUndo(labels, graph_name, request_tenant, longest_property_key);
+        defer mem_undo.deinit(store);
 
         {
             mg.string_indexes_mutex.lockUncancelable(io);
             defer mg.string_indexes_mutex.unlock(io);
             try store.createNodeWithReservedIdAndSlotGraphAndTenant(reserved_id, slot_id, labels, graph_name, request_tenant);
         }
-        if (own_txn) try node_shard.commitTxn(local_txn);
-
-        if (props.len > 0) {
-            var entries_buf: [16]graph_store.GraphStore.BatchPropertyEntry = undefined;
-            const entries: []graph_store.GraphStore.BatchPropertyEntry = if (props.len <= entries_buf.len)
-                entries_buf[0..props.len]
-            else
-                try self.allocator.alloc(graph_store.GraphStore.BatchPropertyEntry, props.len);
-            defer if (props.len > entries_buf.len) self.allocator.free(entries);
-
-            for (props, 0..) |kv, i| {
-                entries[i] = .{ .key = kv.key, .value = kv.value };
-            }
-            try store.setNodePropertiesBatchInMemoryOnly(reserved_id, entries);
+        {
+            errdefer store.undoReservedNode(&mem_undo, reserved_id, graph_name);
+            if (props.len > 0) try store.setNodePropertiesBatchInMemoryOnly(reserved_id, entries);
         }
+        slot_kept = true;
+        // SONNY-6529: the store's in-memory copy holds the node now; a failed
+        // commit is aborted (graph-storage undoes the node) and the graph
+        // quarantined, as for any transaction whose writes it holds.
+        if (own_txn) node_shard.commitTxn(local_txn) catch |err| {
+            quarantineAfterTxnFailure(mg, .commit_failed, err, "bulk node insert commit");
+            return err;
+        };
         // GAP-0900: feed the checkpoint-cadence signal. The group-commit bulk
         // fast path bypasses notifyMutation / GraphStore.dirty, so without this
         // the checkpoint cadence never sees bulk-ingest pressure and never fires
@@ -4332,7 +6711,9 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         request_tenant: []const u8,
     ) !u64 {
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -4342,7 +6723,7 @@ pub const StorageAdapter = struct {
         // all live on the source shard, with no cross-shard 2PC. So only the
         // SOURCE shard lock is needed; the old ascending two-lock dance for a
         // cross-shard target is gone (there is no dst-shard write to protect).
-        const src_shard = sharded_store.shardIndex(source_id);
+        const src_shard = self.nodeEngineShard(graph_name, source_id); // SONNY-6671
 
         exclusiveWaitingBackoff(mg); // GAP-0900 / edge-40001: yield to a pending exclusive (checkpoint or edge schema/MERGE).
         const _t_start = monoNanosNow();
@@ -4460,7 +6841,13 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         request_tenant: []const u8,
     ) !u64 {
-        const mg = try self.getOrCreateGraph(graph_name);
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
+        // SONNY-3121: pinned for the whole op (see `pinOrCreateGraph`).
+        const mg = try self.pinOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
+        defer self.unpinGraph(mg);
+        if (bulk_graph_resolved_hook) |hook| hook(mg);
+        if (mg.isDropped()) return error.GraphNotFound;
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -4471,7 +6858,7 @@ pub const StorageAdapter = struct {
         // existence-index dedup probe in the inner already runs on the source
         // shard held EXCLUSIVE here, so two racing same-tuple MERGEs still
         // serialize and cannot both miss-then-create (no duplicate edge).
-        const src_shard = sharded_store.shardIndex(source_id);
+        const src_shard = self.nodeEngineShard(graph_name, source_id); // SONNY-6671
 
         exclusiveWaitingBackoff(mg);
         const _t_start = monoNanosNow();
@@ -4479,6 +6866,8 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        // SONNY-3121: a DROP GRAPH that ran while this op waited for the lock.
+        if (mg.isDropped()) return error.GraphNotFound;
         const _hold_start = monoNanosNow();
         defer {
             const _hold_ns = monoNanosNow() -| _hold_start;
@@ -4579,7 +6968,7 @@ pub const StorageAdapter = struct {
                 // already guarantees (from,rel,to) and the engine identity covers
                 // graph_name, but we keep the full check as defense-in-depth and
                 // for the tenant disambiguation that the engine key cannot carry.
-                const edge = store.getEdgePtrHydrated(public_id) orelse continue;
+                const edge = (try store.getEdgePtrHydratedChecked(public_id)) orelse continue;
                 if (edge.to_id != target_id) continue;
                 if (!std.mem.eql(u8, edge.graph_name, graph_name)) continue;
                 if (!std.mem.eql(u8, edge.label, rel_type)) continue;
@@ -4649,8 +7038,10 @@ pub const StorageAdapter = struct {
         graph_name: []const u8,
         edges: []BatchMergeEdge,
     ) !void {
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         if (edges.len == 0) return;
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -4684,11 +7075,11 @@ pub const StorageAdapter = struct {
         // contention. This is the lock-side half of the throughput unlock.
         var i: usize = 0;
         while (i < edges.len) {
-            const src_shard = sharded_store.shardIndex(edges[i].source_id);
+            const src_shard = self.nodeEngineShard(graph_name, edges[i].source_id); // SONNY-6671
             mg.shard_locks[src_shard].lockUncancelable(io);
 
             // Drain the maximal run sharing this source shard under the one hold.
-            while (i < edges.len and sharded_store.shardIndex(edges[i].source_id) == src_shard) : (i += 1) {
+            while (i < edges.len and self.nodeEngineShard(graph_name, edges[i].source_id) == src_shard) : (i += 1) {
                 self.applyOneMerge(mg, store, graph_name, &edges[i]);
             }
 
@@ -4799,6 +7190,7 @@ pub const StorageAdapter = struct {
         apply_on_match: bool,
         request_tenant: []const u8,
     ) !MergeResult {
+        try graph_store.refuseFlaggedNodeId(reserved_id); // SONNY-6362
         // Statement-atomicity pre-pass — see `bulkInsertNode`.
         // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=BulkMergePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
         try self.checkPropertyEntryWritable(merge_key, merge_value);
@@ -4810,6 +7202,7 @@ pub const StorageAdapter = struct {
         graph_store.registerMergeIndexKey(merge_key);
 
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         // ENG-3914 (RC-2): the delegated insert below runs under THIS
         // function's SHARED hold, so its deferred exact-index build has to
         // happen out here — before that hold is taken. Idempotent; a no-op
@@ -4870,6 +7263,8 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const _hold_start = monoNanosNow();
         defer {
             const _hold_ns = monoNanosNow() -| _hold_start;
@@ -4881,8 +7276,15 @@ pub const StorageAdapter = struct {
             }
         }
 
-        if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value)) |probe_id| {
+        // SONNY-2976: match only within the request's tenant (see
+        // `mergeTenantScope`); a same-key node of another tenant is a miss.
+        if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value, mergeTenantScope(request_tenant))) |probe_id| {
             if (apply_on_match) {
+                // SONNY-6672: the matched node's shard lock (tuple lock ->
+                // rwlock SHARED, still held -> shard lock).
+                const match_shard = self.nodeEngineShard(graph_name, probe_id);
+                mg.shard_locks[match_shard].lockUncancelable(io);
+                defer mg.shard_locks[match_shard].unlock(io);
                 try store.setNodeProperty(probe_id, merge_key, merge_value);
                 for (on_create_props) |kv| {
                     if (std.mem.eql(u8, kv.key, merge_key)) continue;
@@ -4977,6 +7379,7 @@ pub const StorageAdapter = struct {
         request_tenant: []const u8,
     ) !MergeResult {
         if (merge_props.len == 0) return error.InvalidMergePattern;
+        try graph_store.refuseFlaggedNodeId(reserved_id); // SONNY-6362
 
         // Statement-atomicity pre-pass — see `bulkInsertNode`.
         // CANARY: REQ=REQ-PROPERTY-WRITE-ATOMICITY; FEATURE="PropertyStorage"; ASPECT=BulkMergePrePass; STATUS=TESTED; TEST=tests/test_property_write_atomicity.zig; OWNER=engine; UPDATED=2026-08-25
@@ -5001,7 +7404,12 @@ pub const StorageAdapter = struct {
             }
         }
 
-        const mg = try self.getOrCreateGraph(graph_name);
+        // SONNY-3121: pinned for the whole op (see `pinOrCreateGraph`).
+        const mg = try self.pinOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
+        defer self.unpinGraph(mg);
+        if (bulk_graph_resolved_hook) |hook| hook(mg);
+        if (mg.isDropped()) return error.GraphNotFound;
         // ENG-3914 (RC-2): see the single-property path — the delegated insert
         // now runs inside this function's SHARED hold, so the deferred
         // exact-index build must happen before that hold is taken.
@@ -5036,6 +7444,10 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        // SONNY-3121: a DROP GRAPH that ran while this op waited for the lock.
+        if (mg.isDropped()) return error.GraphNotFound;
+        try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         const _hold_start = monoNanosNow();
         defer {
             const _hold_ns = monoNanosNow() -| _hold_start;
@@ -5047,7 +7459,8 @@ pub const StorageAdapter = struct {
             }
         }
 
-        const existing_id = try findNodeMatchingMergeProps(self, self.allocator, mg, store, graph_name, label, merge_props);
+        // SONNY-2976: match only within the request's tenant.
+        const existing_id = try findNodeMatchingMergeProps(self, self.allocator, mg, store, graph_name, label, merge_props, mergeTenantScope(request_tenant));
         if (existing_id) |existing| {
             // GAP-0900 coalesce-upsert: apply the SET props to the existing
             // node on the match branch, mirroring the single-key path
@@ -5057,6 +7470,11 @@ pub const StorageAdapter = struct {
             // already hold the matched values); on_create_props that name a
             // merge key are skipped to avoid clobbering the index tuple.
             if (apply_on_match) {
+                // SONNY-6672: the matched node's shard lock (tuple lock ->
+                // rwlock SHARED, still held -> shard lock).
+                const match_shard = self.nodeEngineShard(graph_name, existing);
+                mg.shard_locks[match_shard].lockUncancelable(io);
+                defer mg.shard_locks[match_shard].unlock(io);
                 for (merge_props) |kv| {
                     try store.setNodeProperty(existing, kv.key, kv.value);
                 }
@@ -5135,10 +7553,16 @@ pub const StorageAdapter = struct {
     /// (a)-[:T {props}]->(b)`.
     ///
     /// Errors:
-    ///   * `error.SourceNodeNotFound` — the (src_label, src_filter_key=value)
-    ///     probe returned null (or not-indexable, which means the caller
-    ///     cannot use the fast path — dispatcher should fall back).
+    ///   * `error.SourceNodeNotFound` — no node holds (src_label,
+    ///     src_filter_key=value) (the executor's MATCH has no row).
     ///   * `error.TargetNodeNotFound` — symmetric.
+    ///   * `error.MergeKeyNotUnique` — an endpoint key more nodes may hold,
+    ///     or one MERGE's index cannot answer for (a value it cannot hold, or,
+    ///     SONNY-6436, a key lean indexing left out of it): nothing is
+    ///     written, and the caller falls back to the executor. Endpoints are
+    ///     resolved as the MATCH ... CREATE edge fast path resolves them
+    ///     (`lookupSoleNodeByMergeKey`); an unindexable key was answered as
+    ///     no holder, and the edge skipped.
     ///   * anything else — propagates the underlying graph-store /
     ///     engine error.
     ///
@@ -5164,28 +7588,16 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         txn_id_opt: ?u64,
     ) !u64 {
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         _ = txn_id_opt; // thread-local statement-txn slots are source of truth.
 
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
 
         // Endpoint resolution — both lookups MUST succeed for a fast-path
-        // edge.  `.not_indexable` means the value type (e.g. list / map)
-        // can't use the merge-prop index; dispatchers should treat that
-        // as "fall back to full executor" not a user-visible error, so
-        // we map it here to the same not-found error code — the caller
-        // can distinguish if needed.
-        var src_id: u64 = undefined;
-        switch (store.lookupMergeCandidate(graph_name, src_label, src_filter_key, src_node_id, &src_id)) {
-            .found => {},
-            .not_found => return error.SourceNodeNotFound,
-            .not_indexable => return error.SourceNodeNotFound,
-        }
-        var dst_id: u64 = undefined;
-        switch (store.lookupMergeCandidate(graph_name, dst_label, dst_filter_key, dst_node_id, &dst_id)) {
-            .found => {},
-            .not_found => return error.TargetNodeNotFound,
-            .not_indexable => return error.TargetNodeNotFound,
-        }
+        // edge. SONNY-6436: a key MERGE's index cannot answer for declines
+        // (`error.MergeKeyNotUnique`); it was answered as "not found".
+        const src_id = try self.lookupSoleNodeByMergeKey(graph_name, src_label, src_filter_key, src_node_id, error.SourceNodeNotFound);
+        const dst_id = try self.lookupSoleNodeByMergeKey(graph_name, dst_label, dst_filter_key, dst_node_id, error.TargetNodeNotFound);
 
         // Statement-txn batching: same pattern as `bulkInsertNode`.  Join
         // an existing session/statement txn if one is active on this
@@ -5209,7 +7621,7 @@ pub const StorageAdapter = struct {
                 else => return err,
             }
         }
-        errdefer if (stmt_txn_open) stmt_txn.abort();
+        errdefer if (stmt_txn_open) stmt_txn.fail();
 
         // Create the edge — `createEdgeWithGraph` routes through the
         // adapter vtable (which joins the statement txn internally via
@@ -5248,10 +7660,11 @@ pub const StorageAdapter = struct {
     /// read the entry (round 8, `MergePropertyIndex.settle`); a holder
     /// inserted meanwhile keeps its entry.
     ///
-    /// `.not_indexable` results are mapped to `missing_err` for the same
-    /// reason as `bulkInsertEdge` — the fast path cannot handle
-    /// non-indexable values and must treat them as a not-found for the
-    /// caller's purposes.
+    /// SONNY-6436: when MERGE's index cannot answer (`.not_indexable`: a
+    /// value it cannot hold, or a key lean indexing left out of it), this is
+    /// `error.MergeKeyNotUnique`, never `missing_err`: the index cannot know
+    /// that no node holds the key, and the caller falls back to the executor.
+    /// (It was `missing_err`, so the bulk edge path skipped the edge.)
     pub fn lookupNodeByMergeKey(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -5265,8 +7678,112 @@ pub const StorageAdapter = struct {
         var id: u64 = undefined;
         switch (store.lookupMergeCandidate(graph_name, label, prop_key, prop_value, &id)) {
             .found => return id,
-            .not_found, .not_indexable => return missing_err,
+            .not_found => return missing_err,
+            .not_indexable => return error.MergeKeyNotUnique,
         }
+    }
+
+    // CANARY: REQ=REQ-SONNY-3241-FAST-PATH-PARITY; FEATURE="WriteFastPathParity"; ASPECT=SoleHolderEndpoint; STATUS=TESTED; TEST=tests/test_sonny3241_fast_path_parity_wire.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-3241: `lookupNodeByMergeKey` for the MATCH ... CREATE edge fast
+    /// path, which writes ONE edge: the node holding the key when it is the
+    /// key's only holder; `missing_err` when no node holds it (the executor's
+    /// MATCH has no row, and creates nothing); `error.MergeKeyNotUnique` when
+    /// more nodes may hold it, or MERGE's index cannot hold the value (a
+    /// non-integer number, an over-long key, or, SONNY-6429, a key lean
+    /// indexing leaves out of it). The executor creates an edge
+    /// per matched pair, and finds a value the index cannot hold by a scan,
+    /// so the caller declines to it. (The lowest holder was taken as the
+    /// only one, and an unindexable value as none.)
+    pub fn lookupSoleNodeByMergeKey(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        prop_key: []const u8,
+        prop_value: graph_store.PropertyValue,
+        missing_err: anyerror,
+    ) !u64 {
+        _ = self;
+        // SONNY-6429: a key lean indexing leaves out of MERGE's index (no
+        // MERGE registered it) has no entry whoever holds it; the probe
+        // below would answer that as no holder, and the edge was skipped
+        // where the executor makes it.
+        if (!graph_store.shouldIndexProperty(prop_key)) return error.MergeKeyNotUnique;
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        var id: u64 = undefined;
+        // Settles an entry left unresolved by a removed holder first.
+        switch (store.lookupMergeCandidate(graph_name, label, prop_key, prop_value, &id)) {
+            .found => {},
+            .not_found => return missing_err,
+            .not_indexable => return error.MergeKeyNotUnique,
+        }
+        return switch (store.lookupOnlyMergeHolder(graph_name, label, prop_key, prop_value, &id)) {
+            .found => id,
+            .not_found => missing_err,
+            .not_indexable => error.MergeKeyNotUnique,
+        };
+    }
+
+    /// SONNY-2976: `lookupNodeByMergeKey` for a request of `request_tenant`
+    /// (the tag its writes carry): only a node of that tenant answers, unless
+    /// the request is unscoped (`mergeTenantScope`). The bulk MERGE's phase-1
+    /// probe and the bulk edge paths' endpoint resolution use it, so a key
+    /// held only by another tenant's node is a miss. SONNY-6436: an index
+    /// that cannot answer is `error.MergeKeyNotUnique`, as for
+    /// `lookupNodeByMergeKey`.
+    pub fn lookupNodeByMergeKeyForTenant(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        prop_key: []const u8,
+        prop_value: graph_store.PropertyValue,
+        request_tenant: []const u8,
+        missing_err: anyerror,
+    ) !u64 {
+        _ = self;
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        var id: u64 = undefined;
+        switch (store.lookupMergeCandidateForTenant(graph_name, label, prop_key, prop_value, mergeTenantScope(request_tenant), &id)) {
+            .found => return id,
+            .not_found => return missing_err,
+            .not_indexable => return error.MergeKeyNotUnique,
+        }
+    }
+
+    // CANARY: REQ=REQ-SONNY-3241-FAST-PATH-PARITY; FEATURE="WriteFastPathParity"; ASPECT=SoleHolderEndpointTenantScope; STATUS=TESTED; TEST=tests/test_sonny3241_fast_path_parity_wire.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-3241 with SONNY-2976: `lookupSoleNodeByMergeKey` for a request
+    /// of `request_tenant` (the tag its writes carry), for the MATCH ...
+    /// CREATE edge fast path's endpoints. An unscoped request
+    /// (`mergeTenantScope`) is answered as `lookupSoleNodeByMergeKey`
+    /// answers. A scoped one: the node of that tenant holding the key when it
+    /// is that tenant's only holder; `missing_err` when none of its nodes
+    /// holds it (another tenant's node is a miss);
+    /// `error.MergeKeyNotUnique` when more of its nodes may hold it, or the
+    /// holders could not all be read (the caller declines to the executor).
+    pub fn lookupSoleNodeByMergeKeyForTenant(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        prop_key: []const u8,
+        prop_value: graph_store.PropertyValue,
+        request_tenant: []const u8,
+        missing_err: anyerror,
+    ) !u64 {
+        const scope = mergeTenantScope(request_tenant) orelse
+            return self.lookupSoleNodeByMergeKey(graph_name, label, prop_key, prop_value, missing_err);
+        if (!graph_store.shouldIndexProperty(prop_key)) return error.MergeKeyNotUnique; // SONNY-6429, as above
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        var id: u64 = undefined;
+        // Settles an entry left unresolved by a removed holder first.
+        switch (store.lookupMergeCandidate(graph_name, label, prop_key, prop_value, &id)) {
+            .found => {},
+            .not_found => return missing_err,
+            .not_indexable => return error.MergeKeyNotUnique,
+        }
+        return switch (store.lookupOnlyMergeHolderForTenant(graph_name, label, prop_key, prop_value, scope, &id)) {
+            .found => id,
+            .not_found => missing_err,
+            .not_indexable => error.MergeKeyNotUnique,
+        };
     }
 
     /// Task 15/16 (enterprise-ingest-throughput): write-phase counterpart of
@@ -5299,6 +7816,7 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         txn_id_opt: ?u64,
     ) !u64 {
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         _ = txn_id_opt; // thread-local statement-txn slots are source of truth.
 
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
@@ -5329,7 +7847,7 @@ pub const StorageAdapter = struct {
                 else => return err,
             }
         }
-        errdefer if (stmt_txn_open) stmt_txn.abort();
+        errdefer if (stmt_txn_open) stmt_txn.fail();
 
         const edge_id = try store.createEdgeWithGraph(source_id, target_id, rel_type, graph_name);
 
@@ -5385,6 +7903,10 @@ pub const StorageAdapter = struct {
     /// then the first bulk `MERGE (:T {x: 1.5})` created a second node; and
     /// while the index is deferred or rebuilding, the search does not build
     /// it under the caller's graph lock.
+    ///
+    /// SONNY-2976: `tenant` (from `mergeTenantScope`) confines the match to
+    /// the nodes tagged with it, as the executor's MERGE confines it to the
+    /// session's tenant; null matches in every tenant (an unscoped request).
     fn findMergeNode(
         self: *StorageAdapter,
         store: *graph_store.GraphStore,
@@ -5392,17 +7914,18 @@ pub const StorageAdapter = struct {
         label: []const u8,
         key: []const u8,
         value: graph_store.PropertyValue,
+        tenant: ?[]const u8,
     ) !?u64 {
         _ = self;
         var id: u64 = 0;
-        switch (store.lookupMergeCandidate(graph_name, label, key, value, &id)) {
+        switch (store.lookupMergeCandidateForTenant(graph_name, label, key, value, tenant, &id)) {
             .found => return id,
             .not_found => return null,
             // Any other value the index cannot key (a null, a list, a key
             // past 1024 bytes) is refused, as before.
             .not_indexable => if (!graph_store.GraphStore.isNumberProperty(value)) return error.MergeValueNotIndexable,
         }
-        return store.lowestMergeHolderByValue(graph_name, label, key, value);
+        return store.lowestMergeHolderByValueForTenant(graph_name, label, key, value, tenant);
     }
 
     // CANARY: REQ=REQ-SONNY-2806-MERGE-RESOLVE-EXACT; FEATURE="MergeIdempotency"; ASPECT=ExactIndexCandidates; STATUS=TESTED; TEST=tests/test_sonny2806_merge_resolve.zig; OWNER=storage; UPDATED=2026-09-27
@@ -5509,6 +8032,8 @@ pub const StorageAdapter = struct {
         txn_id_opt: ?u64,
         apply_on_match: bool,
     ) !MergeResult {
+        try graph_store.refuseIfUniqueFenced(graph_name); // SONNY-2846: under the graph lock (see `uniqueFenced`)
+        try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         _ = txn_id_opt; // reserved for future extensions; thread-local is source of truth.
 
         // GAP-0046 / GAP-0900 Layer-3 (Fix 2): in lean-index mode the merge key
@@ -5522,6 +8047,11 @@ pub const StorageAdapter = struct {
         graph_store.registerMergeIndexKey(merge_key);
 
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        // GAP-0891 (RC-1) / SONNY-2976: the request's tenant, resolved on this
+        // (handler) thread: the tag a created node carries and the scope a
+        // match is confined to.
+        const request_tenant = fle_integration.tenantPreferringActiveContext();
+        const tenant_scope = mergeTenantScope(request_tenant);
 
         // Phase 1 (inline): merge-prop index probe.  `.not_indexable`
         // means the value type (list / map) cannot use the index; the
@@ -5537,7 +8067,7 @@ pub const StorageAdapter = struct {
         if (!apply_on_match) {
             // Task 4 review Finding 1: this early return only runs when
             // `!apply_on_match`, so it is always a pure hit with no write.
-            if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value)) |existing_id| {
+            if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value, tenant_scope)) |existing_id| {
                 return .{ .id = existing_id, .wrote = false };
             }
         }
@@ -5565,14 +8095,14 @@ pub const StorageAdapter = struct {
                 else => return err,
             }
         }
-        errdefer if (stmt_txn_open) stmt_txn.abort();
+        errdefer if (stmt_txn_open) stmt_txn.fail();
 
         // Re-probe under the txn.  For ON-CREATE-SET-only callers this
         // catches the narrow Phase-1-miss/Phase-2-hit race; for
         // apply_on_match callers this is the only probe (Phase 1 was
         // skipped) and on hit we apply the SET clauses to the existing
         // node before returning (true upsert semantics).
-        if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value)) |existing_id| {
+        if (try self.findMergeNode(store, graph_name, label, merge_key, merge_value, tenant_scope)) |existing_id| {
             if (apply_on_match) {
                 try store.setNodeProperty(existing_id, merge_key, merge_value);
                 for (on_create_props) |kv| {
@@ -5582,7 +8112,7 @@ pub const StorageAdapter = struct {
                 if (stmt_txn_open) try stmt_txn.commit();
                 return .{ .id = existing_id, .wrote = true };
             }
-            if (stmt_txn_open) stmt_txn.abort();
+            if (stmt_txn_open) stmt_txn.discard();
             // Task 4 review Finding 1: a concurrent writer won the race
             // between our Phase-1 miss and this re-probe — still a pure
             // hit with no write from THIS call's perspective.
@@ -5595,7 +8125,7 @@ pub const StorageAdapter = struct {
         // ExecutionContext / per-thread tenant is valid here — resolve it
         // explicitly and tag the merged node with it (instead of relying on the
         // implicit resolution inside createNodeWithGraph).
-        const node_id = try store.createNodeForRequestTenant(&labels, graph_name, fle_integration.tenantPreferringActiveContext());
+        const node_id = try store.createNodeForRequestTenant(&labels, graph_name, request_tenant);
 
         // Write the merge key as a regular property (msft-graph's node_id
         // is both the merge key and a node property) and then all
@@ -5644,6 +8174,7 @@ pub const StorageAdapter = struct {
         // registered; subsequent engine operations don't need the adapter
         // mutex.
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
 
         // Resolve label strings → label ids once; apply to every new slot.
         var label_ids_buf: [8]gs.LabelId = undefined;
@@ -5678,29 +8209,57 @@ pub const StorageAdapter = struct {
         // are skipped.
         const shard_count = gs.sharded_engine.SHARD_COUNT;
         var shard_txns: [shard_count]?gs.TxnId = [_]?gs.TxnId{null} ** shard_count;
+        // CANARY: REQ=REQ-SONNY-6659-SINGLE-WRITER; FEATURE="TransactionManagement"; ASPECT=NodeBatchJoins; STATUS=TESTED; TEST=tests/test_sonny6659_geode_single_writer.zig; OWNER=storage; UPDATED=2026-11-16
+        // SONNY-6659: on the shard of the statement's or session's engine
+        // transaction the batch writes in it (it commits or is undone with
+        // it), rather than in a second transaction open there beside it,
+        // which graph-storage 0.4.25 refuses (`WriteConflict`).
+        const joined_shard: ?usize = if (currentStatementTxnForGraph(graph_name)) |s| blk: {
+            const si = shardedTxnShard(s.txn_id);
+            if (si >= shard_count) break :blk null;
+            shard_txns[si] = shardedTxnLocal(s.txn_id);
+            break :blk si;
+        } else null;
+        // SONNY-6529: graph-storage undoes each shard's part of the failed
+        // batch (the store takes the nodes only once this returns).
         errdefer for (mg.engine.shards, 0..) |shard, si| {
-            // error-policy: A — best-effort rollback on an already-failing path.
-            if (shard_txns[si]) |t| shard.abortTxn(t) catch {};
+            if (si == joined_shard) continue;
+            if (shard_txns[si]) |t| abortUnmirroredTxn(mg, shard, t, "node batch create");
         };
 
+        mg.beginNodeCensusWrite(); // SONNY-6472 (4)
+        defer mg.endNodeCensusWrite();
+        // SONNY-6523 (2): on a failure every slot allocated here is given
+        // back (before the shard txns are aborted above).
+        var allocated: usize = 0;
+        errdefer for (out[0..allocated]) |id| {
+            const si = gs.shard_count.shardOfNode(id);
+            releaseFailedNodeSlot(mg.engine.shards[si], id, shard_txns[si], si != joined_shard);
+        };
         var i: usize = 0;
         while (i < n) : (i += 1) {
-            const node_id = try mg.engine.allocNode();
-            const si = gs.shard_count.shardOfNode(node_id);
+            // SONNY-6659: the shard round-robin (as `allocNode` picks it),
+            // its transaction, then the id from it (`allocNodeTxn`; see
+            // `createNode`).
+            const si: usize = @intCast(mg.engine.coordinator_txn_counter.fetchAdd(1, .monotonic) % shard_count);
             const node_shard = mg.engine.shards[si];
             if (shard_txns[si] == null) shard_txns[si] = try node_shard.beginTxn();
             const local_txn = shard_txns[si].?;
+            const node_id = try node_shard.allocNodeTxn(local_txn);
+            out[i] = node_id;
+            allocated = i + 1;
             try node_shard.putNodeTxn(node_id, rec_template, local_txn);
             for (label_ids) |label_id| {
                 try node_shard.addLabelTxn(node_id, label_id, local_txn);
             }
-            // gap 0026: WAL-log the node's REAL label page (see
-            // relogSecurityLabelPageTxn) — no-op outside __geode_security.
-            try relogSecurityLabelPageTxn(mg, node_shard, node_id, local_txn);
             out[i] = node_id;
         }
 
+        // SONNY-6658: the batch commits its own engine transactions: the
+        // statement's undo (the batch's intents) is on disk first.
+        try statement_undo.beforeOwnEngineCommit();
         for (mg.engine.shards, 0..) |shard, si| {
+            if (si == joined_shard) continue;
             if (shard_txns[si]) |t| try shard.commitTxn(t);
             shard_txns[si] = null;
         }
@@ -5714,6 +8273,9 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
 
@@ -5728,11 +8290,17 @@ pub const StorageAdapter = struct {
         // directly to the shard that owns node_id so the txn and the data
         // mutation are on the same single-threaded engine (ShardedGraphEngine
         // migration: Task 7).
-        const txn = try shard.beginTxn();
-        // error-policy: A — best-effort rollback on an already-failing path.
-        errdefer shard.abortTxn(txn) catch {};
+        // SONNY-6472 (3): join the statement/session engine txn when it is on
+        // the node's shard, so the request's same-shard changes commit (and
+        // are lost to a crash) together, as setNodeProperty's do.
+        const joined: ?gs.TxnId = try self.statementLocalTxn(graph_name, node_id); // SONNY-6658
+        const txn = joined orelse try shard.beginTxn();
+        // SONNY-6529: graph-storage undoes the failed delete.
+        errdefer if (joined == null) abortUnmirroredTxn(mg, shard, txn, "node delete");
+        mg.beginNodeCensusWrite(); // SONNY-6472 (4)
+        defer mg.endNodeCensusWrite();
         try shard.deleteNodeTxn(node_id, txn);
-        try shard.commitTxn(txn);
+        if (joined == null) try shard.commitTxn(txn);
         // OTel Task 13: graph data model mutation counter.
         const _om13dn = @import("otel_metrics");
         _om13dn.recordNodeMutation(.delete, graph_name, .success);
@@ -5820,6 +8388,9 @@ pub const StorageAdapter = struct {
         // span emission. The `_om12e.recordEdgeMutation` counter below
         // continues to publish `geode.graph_store.edge_mutations_total`.
         const mg = try self.getOrCreateGraph(graph_name);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         const rel_type = try resolvePersistedLabelId(mg, label);
 
         // R10 (2026-04-22): join the active session/statement engine txn
@@ -5840,33 +8411,47 @@ pub const StorageAdapter = struct {
         // shards correctly.  See
         // docs/bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md §3.2.
         const same_shard = gs.shard_count.shardOfNode(from_id) == gs.shard_count.shardOfNode(to_id);
-        if (same_shard) {
-            const stmt_txn = currentStatementTxnForGraph(graph_name);
-            if (stmt_txn) |s| {
-                if (shardLocalTxnForNode(s.txn_id, from_id)) |local| {
-                    // GAP-ENT-0024: the public-id-carrying path uses the
-                    // CO-LOCATED txn add (the id rides both durable adjacency
-                    // records; strictly fewer pages than addEdgeTxn's two-node
-                    // write and no `to`-record read). The legacy public_id==0
-                    // surface keeps the historical addEdgeTxn byte-for-byte.
-                    const _edge_id = if (public_id != 0)
-                        try mg.shardEngineForNode(from_id).addEdgeColocatedTxnWithPublicId(from_id, to_id, rel_type, local, public_id)
-                    else
-                        try mg.shardEngineForNode(from_id).addEdgeTxn(from_id, to_id, rel_type, local);
-                    _ok_12e = true;
-                    // OTel Task 13: graph data model mutation counter (fast path).
-                    _om12e.recordEdgeMutation(.create, graph_name, .success);
-                    return _edge_id;
-                }
-            }
+        // CANARY: REQ=REQ-SONNY-6659-SINGLE-WRITER; FEATURE="TransactionManagement"; ASPECT=CrossShardEdgeJoins; STATUS=TESTED; TEST=tests/test_sonny6659_geode_single_writer.zig; OWNER=storage; UPDATED=2026-11-16
+        // SONNY-6658: `statementLocalTxn`; a create that commits its own
+        // engine transaction has the statement's undo on disk first.
+        // SONNY-6659: an edge is stored on its source's shard wherever its
+        // target is (co-location), so a cross-shard edge joins the
+        // statement's or session's transaction on that shard too, through the
+        // co-located add (it never reads `to`'s record). It committed a
+        // transaction of its own there (`ShardedGraphEngine.addEdge`) while
+        // that one was open: two open writers of the shard's pages, which
+        // graph-storage 0.4.25 refuses (`WriteConflict`).
+        noteEngineShardWrite(gs.shard_count.shardOfNode(from_id)); // SONNY-6671
+        if (try self.statementLocalTxn(graph_name, from_id)) |local| {
+            // GAP-ENT-0024: the public-id-carrying path uses the
+            // CO-LOCATED txn add (the id rides both durable adjacency
+            // records; strictly fewer pages than addEdgeTxn's two-node
+            // write and no `to`-record read). The legacy public_id==0
+            // surface keeps the historical addEdgeTxn byte-for-byte for a
+            // same-shard edge, and `addEdge`'s co-located add otherwise.
+            const from_shard = mg.shardEngineForNode(from_id);
+            const _edge_id = if (public_id != 0)
+                try from_shard.addEdgeColocatedTxnWithPublicId(from_id, to_id, rel_type, local, public_id)
+            else if (same_shard)
+                try from_shard.addEdgeTxn(from_id, to_id, rel_type, local)
+            else
+                try from_shard.addEdgeColocatedTxn(from_id, to_id, rel_type, local);
+            _ok_12e = true;
+            // OTel Task 13: graph data model mutation counter (fast path).
+            _om12e.recordEdgeMutation(.create, graph_name, .success);
+            return _edge_id;
         }
         // GAP-ENT-0024: auto-commit — ShardedGraphEngine.addEdge already
         // routes to the co-located add on shard(from); the WithPublicId
         // variant is the same single-shard WAL txn carrying the inline id.
-        const _edge_id2 = if (public_id != 0)
-            try mg.engine.addEdgeColocatedWithPublicId(from_id, to_id, rel_type, public_id)
+        // No transaction of this thread is open on shard(from) here.
+        const _edge_id2 = (if (public_id != 0)
+            mg.engine.addEdgeColocatedWithPublicId(from_id, to_id, rel_type, public_id)
         else
-            try mg.engine.addEdge(from_id, to_id, rel_type);
+            mg.engine.addEdge(from_id, to_id, rel_type)) catch |err| {
+            noteAutoCommitFailure(mg, from_id, err, "relationship create (auto-commit)"); // SONNY-6601 (3)
+            return err;
+        };
         _ok_12e = true;
         // OTel Task 13: graph data model mutation counter.
         _om12e.recordEdgeMutation(.create, graph_name, .success);
@@ -5901,16 +8486,20 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // The edge is co-located on shard(from). Join an active stmt-txn iff it
         // is on shard(from); else single-shard auto-commit.
-        if (currentStatementTxnForGraph(graph_name)) |s| {
-            if (shardLocalTxnForNode(s.txn_id, from_id)) |local| {
-                try mg.shardEngineForNode(from_id).removeEdgeTxn(from_id, to_id, edge_id, local);
-                _ok_13de = true;
-                return;
-            }
+        if (try self.statementLocalTxn(graph_name, from_id)) |local| { // SONNY-6658
+            try mg.shardEngineForNode(from_id).removeEdgeTxn(from_id, to_id, edge_id, local);
+            _ok_13de = true;
+            return;
         }
-        try mg.engine.removeEdge(from_id, to_id, edge_id);
+        mg.engine.removeEdge(from_id, to_id, edge_id) catch |err| {
+            noteAutoCommitFailure(mg, from_id, err, "relationship delete (auto-commit)"); // SONNY-6601 (3)
+            return err;
+        };
         _ok_13de = true;
     }
 
@@ -5927,6 +8516,22 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         return mg.storage().expandOut(node_id, null, allocator);
+    }
+
+    /// SONNY-6266: the property head of edge `edge_id` (whose source is
+    /// `from_slot`) as the edge index holds it, or `fallback` when the index
+    /// has no entry. An incoming adjacency entry written before SONNY-6266
+    /// keeps head 0 for an edge whose properties were set after it was
+    /// created (the adapter updated a chain incoming walks do not read); the
+    /// edge index was always kept current, so a reverse walk reads it there.
+    pub fn edgePropHeadFromIndex(self: *StorageAdapter, graph_name: []const u8, from_slot: u64, edge_id: u64, fallback: u64) !u64 {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        const entry = (try mg.shardEngineForNode(from_slot).getEdge(edge_id)) orelse return fallback;
+        return entry.prop_head;
     }
 
     /// Iterate all incoming edges to a node without materializing them.
@@ -5946,34 +8551,31 @@ pub const StorageAdapter = struct {
 
     /// Get all outgoing edges from a node.
     /// Returns a caller-owned slice built from the engine's edge iterator.
+    ///
+    /// SONNY-6498: the engine's own slice. Through the type-erased
+    /// `GraphStorage.expandOut` the engine's slice was boxed in an iterator
+    /// state and then copied, and it leaked when the box could not be
+    /// allocated (graph_storage 0.4.13 `interface.zig` `sliceToEdgeIterator`
+    /// has no errdefer for it).
     pub fn getOutgoingEdges(self: *StorageAdapter, graph_name: []const u8, node_id: u64, allocator: Allocator) ![]gs.edge.EdgeEntry {
-        var result = std.ArrayList(gs.edge.EdgeEntry).empty;
-        errdefer result.deinit(allocator);
-
-        var iter = try self.iterateOutgoingEdges(graph_name, node_id, allocator);
-        defer iter.deinit();
-
-        while (try iter.next()) |entry| {
-            try result.append(allocator, entry);
-        }
-
-        return try result.toOwnedSlice(allocator);
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        return mg.engine.expandOut(node_id, null, allocator);
     }
 
     /// Get all incoming edges to a node.
     /// Returns a caller-owned slice built from the engine's edge iterator.
     pub fn getIncomingEdges(self: *StorageAdapter, graph_name: []const u8, node_id: u64, allocator: Allocator) ![]gs.edge.EdgeEntry {
-        var result = std.ArrayList(gs.edge.EdgeEntry).empty;
-        errdefer result.deinit(allocator);
-
-        var iter = try self.iterateIncomingEdges(graph_name, node_id, allocator);
-        defer iter.deinit();
-
-        while (try iter.next()) |entry| {
-            try result.append(allocator, entry);
-        }
-
-        return try result.toOwnedSlice(allocator);
+        // SONNY-6498: as `getOutgoingEdges`.
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        return mg.engine.expandIn(node_id, null, allocator);
     }
 
     // ------------------------------------------------------------------
@@ -6017,10 +8619,14 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const node_shard = mg.shardEngineForNode(node_id);
+        noteEngineShardWrite(gs.shard_count.shardOfNode(node_id)); // SONNY-6671
         const label_ids = try node_shard.label_store.getLabels(rec.label_head, self.allocator);
         defer self.allocator.free(label_ids);
 
@@ -6034,45 +8640,37 @@ pub const StorageAdapter = struct {
 
         const storage_val = try toStorageProperty(self.allocator, value);
         defer freeTemporaryStorageProperty(self.allocator, storage_val);
+        var index_move = try ExactIndexMove.prepare(mg, key, old_value, storage_val); // SONNY-6646 (6)
 
         // R7/R8 (2026-04-22): batch putProperty + putNode into one txn on the
         // node's shard. Join the statement txn's local txn if it is on the
         // same shard; otherwise open a fresh shard-local txn.
-        const stmt_txn = currentStatementTxnForGraph(graph_name);
-        const local_txn: gs.TxnId = if (stmt_txn) |s|
-            shardLocalTxnForNode(s.txn_id, node_id) orelse try node_shard.beginTxn()
-        else
-            try node_shard.beginTxn();
-        const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null;
-        errdefer if (own_txn) {
-            // error-policy: A — best-effort rollback on an already-failing path.
-            node_shard.abortTxn(local_txn) catch {};
-        };
+        const joined: ?gs.TxnId = try self.statementLocalTxn(graph_name, node_id); // SONNY-6658
+        const local_txn: gs.TxnId = joined orelse try node_shard.beginTxn();
+        const own_txn = joined == null;
+        // SONNY-6529: graph-storage undoes the failed write (the store's
+        // in-memory copy takes it only once this returns).
+        errdefer if (own_txn) abortUnmirroredTxn(mg, node_shard, local_txn, "node property set");
 
         const new_prop_head = node_shard.putPropertyTxn(rec.prop_head, key, storage_val, local_txn) catch |err|
             return mapPropertyEntryError(err, key);
 
         // Update the node record with the (possibly changed) prop_head.
         rec.prop_head = new_prop_head;
+        try propertyWriteMidpoint(); // SONNY-6601 (1)
         try node_shard.putNodeTxn(node_id, rec, local_txn);
-
-        if (own_txn) try node_shard.commitTxn(local_txn);
 
         // RC-4: the OLD value's exact-index posting is dropped only once the
         // durable write has SUCCEEDED. Dropping it up-front (as this used to,
         // before `putPropertyTxn`) left DURABLE index/value divergence on ANY
         // failure — the node kept its old value but became invisible to
-        // `MATCH (n:L {k: <old>})`, and the divergence survived restart. Every
-        // fallible step now precedes both index mutations, so the index can
-        // only ever move from "old value" to "new value", never to neither.
-        if (old_value) |existing| {
-            for (label_ids) |label_id| {
-                removeIndexedNodeProperty(mg, label_id, node_id, key, existing);
-            }
-        }
-        for (label_ids) |label_id| {
-            try addIndexedNodeProperty(mg, label_id, node_id, key, storage_val);
-        }
+        // `MATCH (n:L {k: <old>})`, and the divergence survived restart.
+        // SONNY-6646 (6): the new value's entries go in before the commit
+        // (taken back if it fails), so nothing after it can fail.
+        errdefer index_move.undoNew(mg, label_ids, node_id);
+        try index_move.addNew(mg, label_ids, node_id);
+        if (own_txn) try node_shard.commitTxn(local_txn);
+        index_move.removeOld(mg, label_ids, node_id);
     }
 
     /// Batch property entry: a key with either a value to set or null to remove.
@@ -6089,6 +8687,7 @@ pub const StorageAdapter = struct {
         key: []const u8,
         old_value: ?gs.PropertyValue,
         new_value: gs.PropertyValue,
+        index_move: ExactIndexMove, // SONNY-6646 (6)
     };
 
     /// Set or remove multiple properties on a node under a single mutex
@@ -6102,24 +8701,23 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const node_shard = mg.shardEngineForNode(node_id);
+        noteEngineShardWrite(gs.shard_count.shardOfNode(node_id)); // SONNY-6671
         const label_ids = try node_shard.label_store.getLabels(rec.label_head, self.allocator);
         defer self.allocator.free(label_ids);
 
         // R7/R8: one txn on the node's shard covering the full N-property batch.
-        const stmt_txn = currentStatementTxnForGraph(graph_name);
-        const local_txn: gs.TxnId = if (stmt_txn) |s|
-            shardLocalTxnForNode(s.txn_id, node_id) orelse try node_shard.beginTxn()
-        else
-            try node_shard.beginTxn();
-        const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null;
-        errdefer if (own_txn) {
-            // error-policy: A — best-effort rollback on an already-failing path.
-            node_shard.abortTxn(local_txn) catch {};
-        };
+        const joined: ?gs.TxnId = try self.statementLocalTxn(graph_name, node_id); // SONNY-6658
+        const local_txn: gs.TxnId = joined orelse try node_shard.beginTxn();
+        const own_txn = joined == null;
+        // SONNY-6529: graph-storage undoes the failed batch.
+        errdefer if (own_txn) abortUnmirroredTxn(mg, node_shard, local_txn, "node property batch");
 
         // RC-4: every exact-index mutation of the batch is DEFERRED until the
         // last fallible step has succeeded. The old shape mutated the index
@@ -6147,6 +8745,7 @@ pub const StorageAdapter = struct {
             else
                 .null;
             errdefer freeTemporaryStorageProperty(self.allocator, storage_val);
+            const index_move = try ExactIndexMove.prepare(mg, entry.key, old_value, storage_val); // SONNY-6646 (6)
 
             const new_prop_head = node_shard.putPropertyTxn(rec.prop_head, entry.key, storage_val, local_txn) catch |err|
                 return mapPropertyEntryError(err, entry.key);
@@ -6156,23 +8755,19 @@ pub const StorageAdapter = struct {
                 .key = entry.key,
                 .old_value = old_value,
                 .new_value = storage_val,
+                .index_move = index_move,
             });
         }
 
         // Write the node record once after all property mutations.
+        try propertyWriteMidpoint(); // SONNY-6601 (1)
         try node_shard.putNodeTxn(node_id, rec, local_txn);
+        // SONNY-6646 (6): the new values' entries before the commit (taken
+        // back if it fails), the old values' removed after it.
+        errdefer for (pending.items) |*p| p.index_move.undoNew(mg, label_ids, node_id);
+        for (pending.items) |*p| try p.index_move.addNew(mg, label_ids, node_id);
         if (own_txn) try node_shard.commitTxn(local_txn);
-
-        for (pending.items) |p| {
-            if (p.old_value) |existing| {
-                for (label_ids) |label_id| {
-                    removeIndexedNodeProperty(mg, label_id, node_id, p.key, existing);
-                }
-            }
-            for (label_ids) |label_id| {
-                try addIndexedNodeProperty(mg, label_id, node_id, p.key, p.new_value);
-            }
-        }
+        for (pending.items) |*p| p.index_move.removeOld(mg, label_ids, node_id);
     }
 
     /// Remove a property from a node by writing a null tombstone.
@@ -6182,6 +8777,9 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index.
         try ensureExactNodePropertyIndexBuilt(self, mg);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -6195,12 +8793,18 @@ pub const StorageAdapter = struct {
         }
 
         // R7: batch putProperty + putNode into one txn on the node's shard.
-        const txn = try node_shard.beginTxn();
-        // error-policy: A — best-effort rollback on an already-failing path.
-        errdefer node_shard.abortTxn(txn) catch {};
+        // SONNY-6472 (3): that txn is the statement/session engine txn when
+        // it is on the node's shard (as in setNodeProperty), so the request's
+        // same-shard changes commit, and are lost to a crash, together.
+        var index_move = try ExactIndexMove.prepare(mg, key, old_value, .null); // SONNY-6646 (6)
+        const joined: ?gs.TxnId = try self.statementLocalTxn(graph_name, node_id); // SONNY-6658
+        const txn = joined orelse try node_shard.beginTxn();
+        // SONNY-6529: graph-storage undoes the failed removal.
+        errdefer if (joined == null) abortUnmirroredTxn(mg, node_shard, txn, "node property remove");
 
         const new_prop_head = try node_shard.putPropertyTxn(rec.prop_head, key, .null, txn);
         rec.prop_head = new_prop_head;
+        try propertyWriteMidpoint(); // SONNY-6601 (1)
         try node_shard.putNodeTxn(node_id, rec, txn);
 
         // Commit on the SAME per-shard engine that started the txn.
@@ -6211,19 +8815,14 @@ pub const StorageAdapter = struct {
         // shard and raise `error.TxnNotFound`. Mirrors setNodeProperty /
         // setNodePropertiesBatch / setEdgeProperty which already commit
         // through node_shard / from_shard directly.
-        try node_shard.commitTxn(txn);
-
         // RC-4: drop the old posting only once the tombstone is durable —
         // a failure before this point must leave the index describing the
-        // value the node still holds.
-        if (old_value) |existing| {
-            for (label_ids) |label_id| {
-                removeIndexedNodeProperty(mg, label_id, node_id, key, existing);
-            }
-        }
-        for (label_ids) |label_id| {
-            try addIndexedNodeProperty(mg, label_id, node_id, key, .null);
-        }
+        // value the node still holds. SONNY-6646 (6): the tombstone's entry
+        // before the commit, so nothing after it can fail.
+        errdefer index_move.undoNew(mg, label_ids, node_id);
+        try index_move.addNew(mg, label_ids, node_id);
+        if (joined == null) try node_shard.commitTxn(txn);
+        index_move.removeOld(mg, label_ids, node_id);
     }
 
     /// Get a property from a node, returned in graph-storage representation.
@@ -6257,6 +8856,18 @@ pub const StorageAdapter = struct {
         return _prop;
     }
 
+    /// SONNY-6640: `getNodeProperty` for a node a posting or IdMap named,
+    /// which may have been deleted since: such a node (`NodeNotFound`) holds
+    /// no property (null); any other error is the read's, returned as itself.
+    /// The verifiers below used `catch null`, so a read that failed took a
+    /// node that exists for one that does not match.
+    fn getCandidateNodeProperty(self: *StorageAdapter, graph_name: []const u8, node_id: u64, key: []const u8) !?gs.PropertyValue {
+        return self.getNodeProperty(graph_name, node_id, key, self.allocator) catch |err| switch (err) {
+            error.NodeNotFound => null,
+            else => err,
+        };
+    }
+
     /// Get a node property directly from its prop_head (already known from a
     /// prior scanAllNodes), skipping the per-node getNode random read.
     /// slot_id routes to the owning shard (same as getNodeProperty); prop_head
@@ -6281,6 +8892,40 @@ pub const StorageAdapter = struct {
     /// importing graph_storage directly.
     pub fn shardOfSlot(_: *StorageAdapter, slot: u64) usize {
         return gs.shard_count.shardOfNode(slot);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6671-WORKER-SHARD; FEATURE="High-Concurrency Mutations"; ASPECT=EngineShardOfPublicId; STATUS=TESTED; TEST=tests/test_sonny6671_group_commit_routing.zig; OWNER=storage; UPDATED=2026-11-16
+    /// SONNY-6671: the engine shard that holds public node id `node_id` of
+    /// `graph_name`: its slot's. A relationship is written on its source's
+    /// engine shard, so the group-commit coordinator routes a relationship
+    /// op to that shard's worker and the bulk relationship paths take that
+    /// shard's lock. `shardIndex(node_id)` is that shard only for a node the
+    /// bulk insert created (it allocates the slot there); the executor
+    /// places a node's slot round-robin. A node the graph does not map falls
+    /// back to `shardIndex(node_id)` (its op then finds no source and writes
+    /// nothing).
+    // CANARY: REQ=REQ-SONNY-6672-MERGE-ONMATCH-SHARD; FEATURE="High-Concurrency Mutations"; ASPECT=MatchedNodeShard; STATUS=TESTED; TEST=tests/test_sonny6672_bulk_merge_onmatch_shard.zig; OWNER=storage; UPDATED=2026-11-16
+    /// SONNY-6672: the engine shard of the node a bulk MERGE of
+    /// `label {key: value}` matches now (in the request's tenant), or null
+    /// when none does. The coordinator routes an ON MATCH MERGE there, so the
+    /// matched node is written by its own shard's worker. A hint: a node the
+    /// MERGE matches only by the time it runs is still written under its
+    /// shard's lock (`bulkMergeNodeWithReservedIdForTenant`).
+    pub fn mergeMatchEngineShard(self: *StorageAdapter, graph_name: []const u8, label: []const u8, key: []const u8, value: graph_store.PropertyValue, request_tenant: []const u8) ?usize {
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        var id: u64 = 0;
+        switch (store.lookupMergeCandidateForTenant(graph_name, label, key, value, mergeTenantScope(request_tenant), &id)) {
+            .found => {},
+            .not_found, .not_indexable => return null,
+        }
+        const slot = store.nodeSlotOf(graph_name, id) orelse return null;
+        return self.shardOfSlot(slot);
+    }
+
+    pub fn nodeEngineShard(self: *StorageAdapter, graph_name: []const u8, node_id: u64) usize {
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        const slot = store.nodeSlotOf(graph_name, node_id) orelse return sharded_store.shardIndex(node_id);
+        return self.shardOfSlot(slot);
     }
 
     /// Find all node IDs with the given label in a graph.
@@ -6568,6 +9213,8 @@ pub const StorageAdapter = struct {
     /// Return node candidates for an exact `(label, property = value)` probe.
     /// Hash collisions are tolerated because higher layers still verify the
     /// full property map before treating a candidate as a MERGE match.
+    /// Index-served read: `error.ExactIndexBusy` while a build of the index
+    /// is in flight (SONNY-6362 item 6; the caller scans instead).
     pub fn getCandidateNodesByLabelAndProperty(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -6576,7 +9223,23 @@ pub const StorageAdapter = struct {
         value: graph_store.PropertyValue,
         allocator: Allocator,
     ) ![]u64 {
+        return self.getCandidateNodesImpl(graph_name, label, property_key, value, allocator, false);
+    }
+
+    fn getCandidateNodesImpl(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        property_key: []const u8,
+        value: graph_store.PropertyValue,
+        allocator: Allocator,
+        comptime wait_for_build: bool,
+    ) ![]u64 {
         _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
+        // SONNY-6347 item 4: an index over an FLE-encrypted field (made
+        // before the field was encrypted) holds ciphertext, or plaintext
+        // from before: it cannot answer; the caller scans.
+        if (!wait_for_build) try refuseIndexOverEncryptedField(property_key);
 
         const mg = blk: {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -6584,7 +9247,7 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         // H4: build the exact index on first access if it was deferred at open.
-        try ensureExactNodePropertyIndexBuilt(self, mg);
+        if (wait_for_build) try ensureExactNodePropertyIndexBuilt(self, mg) else try ensureExactIndexForRead(self, mg);
         const label_id = mg.label_dict.getId(label) orelse return try allocator.alloc(u64, 0);
 
         const storage_value = try toStorageProperty(allocator, value);
@@ -6612,9 +9275,13 @@ pub const StorageAdapter = struct {
     /// shard (the engine call no-ops re-registration and rebuilds the tree from
     /// the shard's current live nodes).
     ///
-    /// The label is interned if it does not yet exist, so CREATE INDEX may run
-    /// before the first node of `label` is written (the registration then
-    /// maintains the tree as nodes arrive, exactly like the exact index).
+    /// The label is named through the engine (all shards, durably) if it does
+    /// not yet exist, so a caller may register the index before the first node
+    /// of `label` is written (the registration then maintains the tree as
+    /// nodes arrive, exactly like the exact index). The ORDER BY auto-build
+    /// never gets here for an unknown label (`spawnOrderedIndexBuildAsync`
+    /// declines: a read does not name labels). The caller must not hold the
+    /// graph's lock.
     pub fn createOrderedIndex(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -6623,7 +9290,25 @@ pub const StorageAdapter = struct {
     ) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
         const mg = try self.getOrCreateGraph(graph_name);
-        const label_id = mg.label_dict.getId(label) orelse try mg.label_dict.getOrCreate(label);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
+        // CANARY: REQ=REQ-SONNY-6491-ORDERBY-LABEL-INTERN; FEATURE="CrashRecovery"; ASPECT=OrderedIndexLabelViaEngine; STATUS=TESTED; TEST=tests/test_sonny6491_orderby_label_intern.zig; OWNER=storage; UPDATED=2026-11-13
+        // SONNY-6491: a new label is named through the engine, as every other
+        // writer names it (`resolvePersistedLabelId`): on all 16 shards, made
+        // durable before its id is used. Naming it in shard 0's dictionary
+        // alone (the view) lost it on restart and left shards 1..15 one id
+        // behind for every later name. Under `mg.rwlock` SHARED (excludes the
+        // EXCLUSIVE writers, which name labels without the mutex) and then
+        // `string_indexes_mutex` (excludes the SHARED writers, which name
+        // labels under it): the same discipline as the shard-locked writers,
+        // without a shard lock, and no other lock is taken while it is held.
+        const label_id = blk: {
+            exclusiveWaitingBackoff(mg);
+            mg.rwlock.lockSharedUncancelable(io);
+            defer mg.rwlock.unlockShared(io);
+            mg.string_indexes_mutex.lockUncancelable(io);
+            defer mg.string_indexes_mutex.unlock(io);
+            break :blk try resolvePersistedLabelId(mg, label);
+        };
 
         // Per-shard registration + build-from-live-scan. The engine call MUTATES
         // the shard (registers the pair, rebuilds the tree via a live scan, marks
@@ -6682,10 +9367,12 @@ pub const StorageAdapter = struct {
     /// Returns an empty slice when the label is unknown or no ordered index is
     /// registered for `(label,key)` on any shard.
     ///
-    /// LOCK DISCIPLINE: see `orderedScanRefill` — bounded SHARED batches per
-    /// shard, `exclusiveWaitingBackoff` before each (re)acquire, keys copied out
-    /// under the lock, `mg.rwlock` never held across the scan, and the liveness
-    /// `getNode` runs OUTSIDE any shard lock (it takes only its own brief lock).
+    /// LOCK DISCIPLINE: see `orderedScanBatch` (SONNY-6375) — bounded batches
+    /// per shard, each under `mg.rwlock` SHARED (skipped when this thread
+    /// already holds the graph lock) then `shard_locks[i]` SHARED,
+    /// `exclusiveWaitingBackoff` before each acquire, keys copied out and the
+    /// liveness `getNode` run under that hold, no lock and no cursor kept
+    /// between batches.
     pub fn orderedScan(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -6696,10 +9383,17 @@ pub const StorageAdapter = struct {
         allocator: Allocator,
     ) ![]u64 {
         const io = std.Io.Threaded.global_single_threaded.io();
+        // SONNY-6347 item 4: ordered by ciphertext; the caller sorts.
+        try refuseIndexOverEncryptedField(key);
 
-        const ctx = (try self.resolveLabelScanContext(graph_name, label)) orelse
+        // SONNY-6433: pinned (SONNY-3028) for the whole scan: its locks are
+        // let go between batches, and a DROP GRAPH in that gap freed the
+        // graph the next batch read. A batch that finds it dropped fails the
+        // scan with GraphNotFound (`orderedScanBatch`).
+        const ctx = (try self.pinLabelScanContext(graph_name, label)) orelse
             return try allocator.alloc(u64, 0);
         const mg = ctx.mg;
+        defer self.unpinGraph(mg);
         const label_id = ctx.label_id;
 
         const eng_dir: OrderedDir = switch (dir) {
@@ -6711,21 +9405,26 @@ pub const StorageAdapter = struct {
         var states: [sharded_store.SHARD_COUNT]OrderedShardState =
             [_]OrderedShardState{.{}} ** sharded_store.SHARD_COUNT;
 
-        // Free every copied key buffer + per-shard batch list on exit (success
-        // or error). Cursors need no teardown (no deinit / no buffer-pool pins).
+        // Free every copied key buffer, resume key and per-shard batch list on
+        // exit (success or error).
         defer {
             for (states[0..shard_count]) |*st| {
                 for (st.buf.items) |h| allocator.free(h.key);
                 st.buf.deinit(allocator);
+                if (st.resume_key) |rk| allocator.free(rk);
             }
         }
+
+        // SONNY-6375: a caller that already holds this graph's lock (SHARED
+        // or EXCLUSIVE) on this thread must not take `mg.rwlock` again.
+        const holds_graph_lock = threadHoldsGraphLock(mg);
 
         var result = std.ArrayList(u64).empty;
         errdefer result.deinit(allocator);
 
         // Prime every shard's cursor + first batch.
         for (states[0..shard_count], 0..) |*st, i| {
-            try orderedScanRefill(mg, i, label_id, key, eng_dir, st, allocator, io);
+            try orderedScanRefill(mg, i, label_id, key, eng_dir, st, holds_graph_lock, allocator, io);
         }
 
         // k-way merge: repeatedly emit the extreme head across the (<=16) shards.
@@ -6751,18 +9450,16 @@ pub const StorageAdapter = struct {
             }
             const bi = best orelse break; // every shard exhausted
 
-            const head = states[bi].buf.items[states[bi].pos];
-            // Liveness: a node deleted after it was posted is still in the
-            // ordered tree; skip it but keep pulling so we can still reach
-            // `limit`. getNode takes only its own brief internal lock — NO shard
-            // lock is held here.
-            if ((try mg.engine.getNode(head.node_id)) != null) {
-                try result.append(allocator, head.node_id);
-            }
+            // Batches hold only live heads (deleted-but-still-posted nodes
+            // were skipped under the batch's locks).
+            try result.append(allocator, states[bi].buf.items[states[bi].pos].node_id);
 
             states[bi].pos += 1;
             if (states[bi].pos >= states[bi].buf.items.len and !states[bi].exhausted) {
-                try orderedScanRefill(mg, bi, label_id, key, eng_dir, &states[bi], allocator, io);
+                if (comptime @import("builtin").is_test) {
+                    if (test_ordered_scan_between_batches) |h| h.run(h.ctx);
+                }
+                try orderedScanRefill(mg, bi, label_id, key, eng_dir, &states[bi], holds_graph_lock, allocator, io);
             }
         }
 
@@ -6781,12 +9478,7 @@ pub const StorageAdapter = struct {
         label: []const u8,
         key: []const u8,
     ) bool {
-        const ctx = (self.resolveLabelScanContext(graph_name, label) catch return false) orelse
-            return false;
-        for (ctx.mg.engine.shards) |shard| {
-            if (!shard.hasOrderedIndex(ctx.label_id, key)) return false;
-        }
-        return true;
+        return self.orderedIndexGate(graph_name, label, key, .registered);
     }
 
     /// H3-P3: report whether `ORDER BY (label,key) LIMIT` can be SAFELY served
@@ -6803,13 +9495,7 @@ pub const StorageAdapter = struct {
         label: []const u8,
         key: []const u8,
     ) bool {
-        const ctx = (self.resolveLabelScanContext(graph_name, label) catch return false) orelse
-            return false;
-        for (ctx.mg.engine.shards) |shard| {
-            if (!shard.hasOrderedIndex(ctx.label_id, key)) return false;
-            if (!shard.isOrderedIndexEligible(ctx.label_id, key)) return false;
-        }
-        return true;
+        return self.orderedIndexGate(graph_name, label, key, .eligible);
     }
 
     /// H3-P4: report whether the ordered index is FRESH — i.e. a registered
@@ -6829,11 +9515,165 @@ pub const StorageAdapter = struct {
         label: []const u8,
         key: []const u8,
     ) bool {
-        _ = key;
-        const ctx = (self.resolveLabelScanContext(graph_name, label) catch return false) orelse
+        return self.orderedIndexGate(graph_name, label, key, .fresh);
+    }
+
+    const OrderedIndexGate = enum { registered, eligible, fresh };
+
+    // CANARY: REQ=REQ-SONNY-6433-ORDERED-INDEX-LOCKING; FEATURE="OrderedIndex"; ASPECT=LockedPlannerGates; STATUS=TESTED; TEST=tests/test_sonny6433_ordered_index_locking.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-6433: the three planner gates, ALL shards ANDed. They read each
+    /// shard's ordered-index registry, eligibility and freshness, which
+    /// `createOrderedIndex` (CREATE INDEX, the ORDER BY auto-build's
+    /// background worker) changes under `mg.rwlock` SHARED + `shard_locks[i]`
+    /// EXCLUSIVE and the full checkpoint under `mg.rwlock` EXCLUSIVE; they
+    /// read it with no lock. Now the graph is pinned, `mg.rwlock` is held
+    /// SHARED (unless this thread already holds the graph lock: it is not
+    /// reentrant) and each shard is read under `shard_locks[i]` SHARED, the
+    /// order `createOrderedIndex` takes them (tier 1: rwlock, then shard).
+    /// A dropped graph answers false.
+    fn orderedIndexGate(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+        comptime gate: OrderedIndexGate,
+    ) bool {
+        const ctx = (self.pinLabelScanContext(graph_name, label) catch return false) orelse
             return false;
-        for (ctx.mg.engine.shards) |shard| {
-            if (!shard.orderedIndexFresh()) return false;
+        const mg = ctx.mg;
+        defer self.unpinGraph(mg);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const holds_graph_lock = threadHoldsGraphLock(mg);
+        if (!holds_graph_lock) {
+            exclusiveWaitingBackoff(mg);
+            mg.rwlock.lockSharedUncancelable(io);
+        }
+        defer if (!holds_graph_lock) mg.rwlock.unlockShared(io);
+        if (mg.isDropped()) return false;
+        for (mg.engine.shards, 0..) |shard, i| {
+            mg.shard_locks[i].lockSharedUncancelable(io);
+            defer mg.shard_locks[i].unlockShared(io);
+            const ok = switch (gate) {
+                .registered => shard.hasOrderedIndex(ctx.label_id, key),
+                .eligible => shard.hasOrderedIndex(ctx.label_id, key) and shard.isOrderedIndexEligible(ctx.label_id, key),
+                .fresh => shard.orderedIndexFresh(),
+            };
+            if (!ok) return false;
+        }
+        return true;
+    }
+
+    /// SONNY-6499: see `orderedIndexColumn`.
+    pub const OrderedIndexColumn = struct {
+        /// Entries in the (label, key) trees of every shard: the nodes that
+        /// carry the key, when the index is fresh.
+        entries: u64,
+        /// Every indexed string is its own NFC form (true when the column
+        /// holds no string). The trees order strings by their bytes; the full
+        /// ORDER BY by their NFC forms (SONNY-3055). The two orders agree
+        /// exactly when every string is canonical.
+        strings_canonical: bool,
+        /// Every shard's values are of one order class (INTEGER, DOUBLE or
+        /// STRING). Eligibility is decided per shard, from the shard's own
+        /// values, so INTEGERs on one shard and DOUBLEs on another were
+        /// eligible everywhere, and the merge ordered every INTEGER before
+        /// every DOUBLE (the key's type rank).
+        one_class: bool,
+    };
+
+    // CANARY: REQ=REQ-SONNY-6499-ORDERBY-FASTPATH-NULLS; FEATURE="OrderedIndex"; ASPECT=ColumnEntriesAndNfc; STATUS=TESTED; TEST=tests/test_sonny6499_orderby_fastpath_nulls.zig; OWNER=storage; UPDATED=2026-11-13
+    /// SONNY-6499: what `orderedScanFastPath` needs beyond the gates to return
+    /// the full ORDER BY's rows from the value-ordered index: how many nodes
+    /// the trees hold (the rest of the label's nodes lack the key and sort as
+    /// NULL), and, for a STRING column, whether the trees' byte order is the
+    /// NFC order (a walk of the in-memory trees; no engine read). Null when
+    /// the graph, label or index is unknown on any shard. Locks as
+    /// `orderedIndexGate` does.
+    pub fn orderedIndexColumn(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+    ) ?OrderedIndexColumn {
+        const ctx = (self.pinLabelScanContext(graph_name, label) catch return null) orelse
+            return null;
+        const mg = ctx.mg;
+        defer self.unpinGraph(mg);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const holds_graph_lock = threadHoldsGraphLock(mg);
+        if (!holds_graph_lock) {
+            exclusiveWaitingBackoff(mg);
+            mg.rwlock.lockSharedUncancelable(io);
+        }
+        defer if (!holds_graph_lock) mg.rwlock.unlockShared(io);
+        if (mg.isDropped()) return null;
+        var column: OrderedIndexColumn = .{ .entries = 0, .strings_canonical = true, .one_class = true };
+        var class: ?gs.ordered_property_index.OrderedPropertyIndex.ValueOrderClass = null;
+        for (mg.engine.shards, 0..) |shard, i| {
+            mg.shard_locks[i].lockSharedUncancelable(io);
+            defer mg.shard_locks[i].unlockShared(io);
+            const entry = shard.ordered_property_index.find(ctx.label_id, key) orelse return null;
+            column.entries += entry.tree.len();
+            if (entry.value_class) |c| {
+                if (class != null and class.? != c) column.one_class = false;
+                class = c;
+            }
+            if (!column.strings_canonical or entry.value_class != .string) continue;
+            var cursor = shard.openOrderedCursor(ctx.label_id, key, .asc) orelse return null;
+            while (cursor.next()) |e| {
+                if (!self.orderedKeyStringCanonical(e.key)) {
+                    column.strings_canonical = false;
+                    break;
+                }
+            }
+        }
+        return column;
+    }
+
+    /// Whether the string an ordered-index key encodes is its own NFC form.
+    /// An ASCII key is; any other is decoded and checked. A key that is not a
+    /// string or cannot be decoded answers false (the caller declines).
+    fn orderedKeyStringCanonical(self: *StorageAdapter, key: []const u8) bool {
+        // Rank byte, payload, 8-byte node id.
+        if (key.len < 9 or key[0] != gs.ordered_encoding.TypeRank.string) return false;
+        for (key[1 .. key.len - 8]) |c| {
+            if (c >= 0x80) break;
+        } else return true;
+        const decoded = gs.ordered_encoding.decode(self.allocator, key) catch return false;
+        defer decoded.deinit(self.allocator);
+        return canonical_string.isCanonical(decoded.value.string);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6555-ORDERED-BUILD-PROBE; FEATURE="OrderedIndex"; ASPECT=ColumnClassProbe; STATUS=TESTED; TEST=tests/test_sonny6555_ordered_build_probe.zig; OWNER=storage; UPDATED=2026-11-15
+    /// SONNY-6555 item 3: whether the value-ordered index could serve the
+    /// (label, key) column, decided from the stored values before its build
+    /// is started (`orderedIndexColumn` decides it from a built index, too
+    /// late to spare the build). True when every node that carries the key
+    /// holds a value of one order class (INTEGER, DOUBLE or STRING) and every
+    /// string is its own NFC form; false at the first value that breaks it
+    /// (a second class, a non-canonical string, a value of no ordered class).
+    /// SONNY-6640: a read that fails is the error (it declined the column,
+    /// as if a value broke it). Reads through `getNodesByLabel` /
+    /// `getNodeProperty`, which take their own locks.
+    pub fn probeOrderedColumnClass(self: *StorageAdapter, graph_name: []const u8, label: []const u8, key: []const u8) !bool {
+        const ids = try self.getNodesByLabel(graph_name, label, self.allocator);
+        defer self.allocator.free(ids);
+        const Class = enum { integer, double, string };
+        var class: ?Class = null;
+        for (ids) |id| {
+            const pv = (try self.getCandidateNodeProperty(graph_name, id, key)) orelse continue;
+            defer freeOwnedStorageProperty(self.allocator, pv);
+            const c: Class = switch (pv) {
+                .int => .integer,
+                .float => .double,
+                .string => |str| blk: {
+                    if (!canonical_string.isCanonical(str)) return false;
+                    break :blk .string;
+                },
+                else => return false,
+            };
+            if (class) |seen| if (seen != c) return false;
+            class = c;
         }
         return true;
     }
@@ -6915,6 +9755,10 @@ pub const StorageAdapter = struct {
         if (orderedAutobuildDisabled()) return;
         // Fast pre-check OUTSIDE the lock: already registered -> nothing to do.
         if (self.isOrderedIndexRegistered(graph_name, label, key)) return;
+        // SONNY-6491: an ORDER BY on a label no node carries has nothing to
+        // index, and a read must not name a label (durable metadata). Decline;
+        // the first ORDER BY after the label's first node starts the build.
+        _ = (self.resolveLabelScanContext(graph_name, label) catch return) orelse return;
 
         const io = std.Io.Threaded.global_single_threaded.io();
         self.exact_persist_mutex.lockUncancelable(io);
@@ -7023,6 +9867,31 @@ pub const StorageAdapter = struct {
         mg.exact_index_built.store(true, .release);
     }
 
+    /// SONNY-6362 test instrumentation: add the posting `(label, key = value)
+    /// -> node_slot` to `graph_name`'s exact property index, as a value-hash
+    /// collision or a posting left stale reads to a lookup (the posting
+    /// names a node whose value is another).
+    pub fn addExactIndexPostingForTesting(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        key: []const u8,
+        value: graph_store.PropertyValue,
+        node_slot: u64,
+    ) !void {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        try ensureExactNodePropertyIndexBuilt(self, mg);
+        const label_id = mg.label_dict.getId(label) orelse return error.LabelNotFound;
+        const storage_value = try toStorageProperty(self.allocator, value);
+        defer freeTemporaryStorageProperty(self.allocator, storage_value);
+        const value_hash = try hashStorageProperty(self.allocator, storage_value);
+        try mg.exact_node_property_index.addEx(label_id, key, value_hash, node_slot, false);
+    }
+
     /// Test-only: read the coverage counter from the most recent
     /// `rebuildExactNodePropertyIndex` pass on `graph_name` (equals the
     /// live-node count after a successful rebuild).
@@ -7090,7 +9959,7 @@ pub const StorageAdapter = struct {
         var seed_idx: usize = 0;
         var best_len: usize = std.math.maxInt(usize);
         for (filters, 0..) |f, i| {
-            const len = self.countCandidateNodesByLabelAndProperty(graph_name, label, f.key, f.value) catch continue;
+            const len = self.countCandidateNodesImpl(graph_name, label, f.key, f.value, true) catch continue;
             if (len == 0) {
                 // Authoritative miss only when the exact index covers this key.
                 if (graph_store.shouldIndexProperty(f.key)) return missing_err;
@@ -7102,26 +9971,28 @@ pub const StorageAdapter = struct {
             }
         }
 
-        const candidates = try self.getCandidateNodesByLabelAndProperty(graph_name, label, filters[seed_idx].key, filters[seed_idx].value, self.allocator);
+        // SONNY-6362 item 6: a MERGE lookup waits for an in-flight build.
+        const candidates = try self.getCandidateNodesImpl(graph_name, label, filters[seed_idx].key, filters[seed_idx].value, self.allocator, true);
         defer self.allocator.free(candidates);
 
         for (candidates) |node_id| {
             _ = g_lookup_all_props_candidates_scanned.fetchAdd(1, .monotonic);
             var all_match = true;
-            for (filters, 0..) |f, i| {
-                if (i == seed_idx) continue; // seed already matched via the index
+            // CANARY: REQ=REQ-SONNY-6362-SEED-RECHECK; FEATURE="MergeIdempotency"; ASPECT=SeedFilterVerified; STATUS=TESTED; TEST=tests/test_sonny6362_merge_index_residuals.zig; OWNER=storage; UPDATED=2026-11-12
+            // SONNY-6362: every filter, the seed's included. The seed's
+            // posting is a value HASH (a collision names a node holding
+            // another value) and may be stale; it was trusted unchecked.
+            for (filters) |f| {
                 // getNodeProperty returns a STORAGE-domain PropertyValue (owns
                 // .string/.ext bytes); convert to the high-level domain to
                 // compare with the filter (a graph_store.PropertyValue).
-                const stored = (self.getNodeProperty(graph_name, node_id, f.key, self.allocator) catch null) orelse {
+                // SONNY-6640: a read that fails is the error, not a miss.
+                const stored = (try self.getCandidateNodeProperty(graph_name, node_id, f.key)) orelse {
                     all_match = false;
                     break;
                 };
                 defer freeOwnedStorageProperty(self.allocator, stored);
-                const actual = fromStorageProperty(self.allocator, stored) catch {
-                    all_match = false;
-                    break;
-                };
+                const actual = try fromStorageProperty(self.allocator, stored);
                 defer property_codec.freePropertyValue(self.allocator, actual);
                 if (!propertyValuesEqual(actual, f.value)) {
                     all_match = false;
@@ -7188,7 +10059,18 @@ pub const StorageAdapter = struct {
                     // lookupCompositeMergeCandidate (resolveNodeGraphSlot); the
                     // composite key encodes ALL filters, so no per-filter verify.
                     // This is the from-dump hot path: ZERO getNodeProperty.
-                    return cid;
+                    //
+                    // SONNY-6436: the entry names the LOWEST holder. The
+                    // executor's MATCH binds every node holding the key, and
+                    // MERGEs an edge per matched pair, so only the key's sole
+                    // holder answers; more is `error.MergeKeyNotUnique` (the
+                    // caller declines to the executor), as the scan below.
+                    // The lookup above settled the entry.
+                    return switch (store.lookupOnlyCompositeMergeHolder(graph_name, label, composite_idx, filters, &cid)) {
+                        .found => cid,
+                        .not_found => missing_err,
+                        .not_indexable => error.MergeKeyNotUnique,
+                    };
                 },
                 // AUTHORITATIVE composite MISS (FIX #1 of the 14.27M edge-ingest
                 // wedge). The filter set EXACTLY matches a REGISTERED composite
@@ -7235,7 +10117,7 @@ pub const StorageAdapter = struct {
         var seed_idx: usize = 0;
         var best_len: usize = std.math.maxInt(usize);
         for (filters, 0..) |f, i| {
-            const len = self.countCandidateNodesByLabelAndProperty(graph_name, label, f.key, f.value) catch continue;
+            const len = self.countCandidateNodesImpl(graph_name, label, f.key, f.value, true) catch continue;
             if (len == 0) {
                 if (graph_store.shouldIndexProperty(f.key)) return missing_err;
                 continue;
@@ -7253,7 +10135,7 @@ pub const StorageAdapter = struct {
             var seed_id: u64 = 0;
             switch (store.lookupMergeCandidate(graph_name, label, filters[seed_idx].key, filters[seed_idx].value, &seed_id)) {
                 .found => {
-                    if (try self.publicNodeMatchesRemaining(graph_name, store, seed_id, filters, seed_idx)) return seed_id;
+                    if (try self.publicNodeMatchesAll(graph_name, store, seed_id, filters)) return seed_id;
                     return missing_err;
                 },
                 // Merge index miss but the exact index has it (best_len==1) ⇒ a
@@ -7270,20 +10152,28 @@ pub const StorageAdapter = struct {
         // endpoint key {source, source_id} has a UNIQUE source_id, so the O(1)
         // merge-seek above handles the hot path; this O(label) scan is the rare
         // correctness fallback, not the steady state.
+        //
+        // SONNY-6429: the scan reads every candidate, and a second node
+        // matching every filter is `error.MergeKeyNotUnique`: the executor's
+        // MATCH binds each, and MERGEs an edge per matched pair, where the
+        // first match alone was taken (the caller declines to the executor).
         const label_nodes = store.getNodesByLabel(graph_name, label) orelse return missing_err;
+        var matched: ?u64 = null;
         for (label_nodes) |node_id| {
             var all_match = true;
             for (filters) |f| {
                 // Engine-direct single-property verify by slot — NO full-node
                 // hydration (Phase 2). Same de-hydration as the merge-seek verify.
-                if (!self.publicNodeFilterMatchesNoHydrate(graph_name, store, node_id, f)) {
+                if (!try self.publicNodeFilterMatchesNoHydrate(graph_name, store, node_id, f)) {
                     all_match = false;
                     break;
                 }
             }
-            if (all_match) return node_id;
+            if (!all_match) continue;
+            if (matched != null) return error.MergeKeyNotUnique;
+            matched = node_id;
         }
-        return missing_err;
+        return matched orelse missing_err;
     }
 
     /// Verify a single `(f.key == f.value)` filter against the PUBLIC node id's
@@ -7313,38 +10203,65 @@ pub const StorageAdapter = struct {
         store: *graph_store.GraphStore,
         node_id: u64,
         f: PropKV,
-    ) bool {
+    ) !bool {
         if (store.getIdMap(graph_name)) |id_map| {
             if (id_map.nodeSlot(@as(u128, node_id))) |slot| {
                 // Engine-direct single-property read (no cache insert).
                 // getNodeProperty returns a STORAGE-domain PropertyValue (owns
                 // .string/.ext bytes); convert + compare like the slot sibling.
-                const stored = (self.getNodeProperty(graph_name, slot, f.key, self.allocator) catch null) orelse return false;
+                // SONNY-6640: a read that fails is the error, not a miss.
+                const stored = (try self.getCandidateNodeProperty(graph_name, slot, f.key)) orelse return false;
                 defer freeOwnedStorageProperty(self.allocator, stored);
-                const actual = fromStorageProperty(self.allocator, stored) catch return false;
+                const actual = try fromStorageProperty(self.allocator, stored);
                 defer property_codec.freePropertyValue(self.allocator, actual);
                 return propertyValuesEqual(actual, f.value);
             }
         }
         // No engine/IdMap: resident read (unbounded cache in this mode).
-        const actual = store.getNodeProperty(node_id, f.key) orelse return false;
+        const actual = (try store.getNodePropertyOrError(node_id, f.key)) orelse return false;
         return propertyValuesEqual(actual, f.value);
     }
 
-    /// Verify every filter EXCEPT `seed_idx` against the public-id node's stored
-    /// properties (the seed already matched via the index/merge probe). Reads
-    /// each property engine-direct by slot — NO full-node hydration (Phase 2).
-    fn publicNodeMatchesRemaining(
+    // CANARY: REQ=REQ-SONNY-6447-MERGE-EDGE-ENDPOINT-TENANT; FEATURE="WriteFastPathParity"; ASPECT=CompositeEndpointTenantScope; STATUS=TESTED; TEST=tests/test_sonny6429_sole_holder_tenant_wire.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-6447: `lookupPublicNodeIdByLabelAndAllProps` for a request of
+    /// `request_tenant` (the tag its writes carry), for the MATCH ... MERGE
+    /// edge fast path's endpoints. An unscoped request (`mergeTenantScope`)
+    /// is answered as `lookupPublicNodeIdByLabelAndAllProps` answers. A
+    /// scoped one: that resolver's sole match (of any tenant) when it is the
+    /// request's tenant's node; `missing_err` when no node matches, or the
+    /// sole match is another tenant's (so none of this tenant's does);
+    /// `error.MergeKeyNotUnique` when more nodes match (some may be this
+    /// tenant's), or the match's tenant could not be read. Another tenant's
+    /// node is never the answer, whatever gate the caller passed.
+    pub fn lookupPublicNodeIdByLabelAndAllPropsForTenant(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        filters: []const PropKV,
+        request_tenant: []const u8,
+        missing_err: anyerror,
+    ) !u64 {
+        const scope = mergeTenantScope(request_tenant);
+        const id = try self.lookupPublicNodeIdByLabelAndAllProps(graph_name, label, filters, missing_err);
+        const tenant = scope orelse return id;
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        const own = store.nodeInGraphAndTenant(id, graph_name, tenant) catch return error.MergeKeyNotUnique;
+        return if (own) id else missing_err;
+    }
+
+    /// Verify every filter against the public-id node's stored properties.
+    /// Reads each property engine-direct by slot — NO full-node hydration
+    /// (Phase 2). SONNY-6362: the seed's filter too; the merge probe that
+    /// named the node checks only that it exists in the graph.
+    fn publicNodeMatchesAll(
         self: *StorageAdapter,
         graph_name: []const u8,
         store: *graph_store.GraphStore,
         node_id: u64,
         filters: []const PropKV,
-        seed_idx: usize,
     ) !bool {
-        for (filters, 0..) |f, i| {
-            if (i == seed_idx) continue;
-            if (!self.publicNodeFilterMatchesNoHydrate(graph_name, store, node_id, f)) return false;
+        for (filters) |f| {
+            if (!try self.publicNodeFilterMatchesNoHydrate(graph_name, store, node_id, f)) return false;
         }
         return true;
     }
@@ -7354,6 +10271,8 @@ pub const StorageAdapter = struct {
     /// copying the list or touching the engine — used by the read fast path to
     /// pick the most selective indexed inline property before the real seek.
     /// Returns 0 when the label is unknown or the posting is absent.
+    /// Index-served read: `error.ExactIndexBusy` while a build of the index
+    /// is in flight (SONNY-6362 item 6; the caller scans instead).
     pub fn countCandidateNodesByLabelAndProperty(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -7361,17 +10280,32 @@ pub const StorageAdapter = struct {
         property_key: []const u8,
         value: graph_store.PropertyValue,
     ) !usize {
+        return self.countCandidateNodesImpl(graph_name, label, property_key, value, false);
+    }
+
+    fn countCandidateNodesImpl(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        property_key: []const u8,
+        value: graph_store.PropertyValue,
+        comptime wait_for_build: bool,
+    ) !usize {
         // This probes the exact node-property index by value hash exactly like
         // getCandidateNodesByLabelAndProperty — count it as an exact-index lookup
         // so probe-counting callers/tests (GAP-ENT-0019) see the seek fire.
         _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
+        // SONNY-6347 item 4: an index over an FLE-encrypted field (made
+        // before the field was encrypted) holds ciphertext, or plaintext
+        // from before: it cannot answer; the caller scans.
+        if (!wait_for_build) try refuseIndexOverEncryptedField(property_key);
         const mg = blk: {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         // H4: build the exact index on first access if it was deferred at open.
-        try ensureExactNodePropertyIndexBuilt(self, mg);
+        if (wait_for_build) try ensureExactNodePropertyIndexBuilt(self, mg) else try ensureExactIndexForRead(self, mg);
         const label_id = mg.label_dict.getId(label) orelse return 0;
 
         const storage_value = try toStorageProperty(self.allocator, value);
@@ -7425,7 +10359,7 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         // H4: build the exact index on first access if it was deferred at open.
-        try ensureExactNodePropertyIndexBuilt(self, mg);
+        try ensureExactIndexForRead(self, mg); // SONNY-6362 item 6
         const label_id = mg.label_dict.getId(label) orelse
             return try allocator.alloc(PropertyPostingSummary, 0);
 
@@ -7532,6 +10466,29 @@ pub const StorageAdapter = struct {
         return stat.size;
     }
 
+    /// SONNY-3055 test-only: the format edition (magic) of the persisted
+    /// `prop_exact.idx`, or null when the file is absent.
+    pub fn exactIndexMagicForTesting(self: *StorageAdapter, graph_name: []const u8) ?[8]u8 {
+        if (!builtin.is_test) @compileError("test-only helper");
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.requireExistingGraphLocked(graph_name) catch return null;
+        };
+        const dir_path = graphDirPath(self.allocator, self.data_dir, mg.uuid) catch return null;
+        defer self.allocator.free(dir_path);
+        const idx_path = std.fmt.allocPrint(self.allocator, "{s}/prop_exact.idx", .{dir_path}) catch return null;
+        defer self.allocator.free(idx_path);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const file = std.Io.Dir.cwd().openFile(io, idx_path, .{}) catch return null;
+        defer file.close(io);
+        var rbuf: [16]u8 = undefined;
+        var fr = file.reader(io, &rbuf);
+        var magic: [8]u8 = undefined;
+        fr.interface.readSliceAll(&magic) catch return null;
+        return magic;
+    }
+
     /// SONNY-1574 test-only: size of the persisted `prop_exact.idx` snapshot, or
     /// null when the file is absent. The ground truth behind the persist
     /// counters — a test can prove that a "completed" persist really did put a
@@ -7575,7 +10532,7 @@ pub const StorageAdapter = struct {
 
         var rev = NodePropertyReverseMap.init(allocator);
         defer rev.deinit();
-        if (rev.loadFromFile(dir_path, expected_epoch, expected_covered) != .loaded) return null;
+        if (rev.loadFromFile(dir_path, expected_epoch, expected_covered, mg.exact_node_property_index.cipherPtr()) != .loaded) return null;
 
         var out = std.ArrayList(ReverseMapPairDump).empty;
         errdefer {
@@ -7612,7 +10569,7 @@ pub const StorageAdapter = struct {
         };
         const dir_path = graphDirPath(self.allocator, self.data_dir, mg.uuid) catch return null;
         defer self.allocator.free(dir_path);
-        const stamp = readExactIndexStamp(self.allocator, dir_path) orelse
+        const stamp = readExactIndexStamp(self.allocator, dir_path, mg.exact_node_property_index.cipherPtr()) orelse
             return .{ .epoch = mgCheckpointEpoch(mg), .covered_lsn = 0, .frontier = mgDurableFrontierLsn(mg), .pre_recovery = mgPreRecoveryFrontierLsn(mg) };
         return .{
             .epoch = stamp.epoch,
@@ -7651,115 +10608,42 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         const storage_val = try toStorageProperty(self.allocator, value);
         defer freeTemporaryStorageProperty(self.allocator, storage_val);
 
         // Edges live on the source node's shard.
         const from_shard = mg.shardEngineForNode(from_id);
-        // ENG-3983: both branches below reach into the DEFERRED `edge_index`
-        // directly; on a cold reopen it is empty until materialized, so an
-        // unhydrated lookup would report `error.EdgeNotFound` for a live edge.
-        // Mirrors `GraphEngine.getEdge`'s own hydrate-then-read contract.
+        // ENG-3983: graph-storage reads the DEFERRED `edge_index`; on a cold
+        // reopen it is empty until materialized (it hydrates on its own, but
+        // a failed hydration is reported here, before a transaction opens).
         try from_shard.ensureDerivedHydrated();
-        if (currentStatementTxnForGraph(graph_name)) |s| {
-            // R12: manual setEdgeProperty using Txn variants, routed to the
-            // from_id's shard. Mirrors engine_edge_props.setEdgeProperty 1:1.
-            const edge_entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
-            if (edge_entry.from != from_id or edge_entry.neighbor != to_id) return error.EdgeNotFound;
 
-            const from_rec = (try from_shard.node_store.getNode(from_id)) orelse return error.NodeNotFound;
-            const found_prop_head = edge_entry.prop_head;
-
-            // Use shard-local txn from the statement txn if shards match.
-            const local_txn = shardLocalTxnForNode(s.txn_id, from_id) orelse try from_shard.beginTxn();
-            const own_txn = shardLocalTxnForNode(s.txn_id, from_id) == null;
-            // error-policy: A — best-effort rollback on an already-failing path.
-            errdefer if (own_txn) from_shard.abortTxn(local_txn) catch {};
-
-            // GAP-0060: edge prop_heads are now a full u64 in both the
-            // adjacency entry (WIDE v3/slab-v3 record) and the edge index, so
-            // edge property chains slab-pack exactly like node props. Gated on
-            // the SAME shard config flag as gs `engine_edge_props.setEdgeProperty`
-            // (edge_prop_slab_packing, default ON) — a slab head is only ever
-            // produced for a store whose adjacency can hold it. When off, keep
-            // the legacy one-page-per-edge writer (still a u64 head, hi=0).
-            const new_head: u64 = if (from_shard.config.edge_prop_slab_packing)
-                from_shard.putPropertyTxn(found_prop_head, key, storage_val, local_txn) catch |err|
-                    return mapPropertyEntryError(err, key)
-            else
-                from_shard.putPropertyLegacyTxn(found_prop_head, key, storage_val, local_txn) catch |err|
-                    return mapPropertyEntryError(err, key);
-
-            if (new_head != found_prop_head) {
-                _ = try from_shard.adj_out.updateEdgePropHead(from_rec.out_head, edge_id, new_head);
-                // For cross-shard edges, to_node is on a different shard; for
-                // same-shard edges both adj lists are on from_shard.
-                const to_shard = mg.shardEngineForNode(to_id);
-                const to_rec = (try to_shard.node_store.getNode(to_id)) orelse return error.NodeNotFound;
-                _ = try to_shard.adj_in.updateEdgePropHead(to_rec.in_head, edge_id, new_head);
-
-                // v0.2.26: copy-on-write API (getPtr removed — mmap base is
-                // immutable). Also set edge_index_dirty (the F1 blessed-stale
-                // lesson): this manual mirror mutates the index outside
-                // engine_edge_props.setEdgeProperty, so the restamp gate must
-                // see it dirty or a checkpoint would re-bless a stale snapshot.
-                try from_shard.edge_index.updatePropHead(edge_id, new_head);
-                from_shard.edge_index_dirty = true;
-            }
-
-            if (found_prop_head != 0 and found_prop_head != new_head) {
-                from_shard.property_index.removeChain(found_prop_head);
-            }
-            try from_shard.refreshPropertyChainIndex(new_head);
-            if (own_txn) try from_shard.commitTxn(local_txn);
-            return;
-        }
-
-        // No active statement txn — open a local txn on the source shard
-        // and replicate the same cross-shard-aware logic above.
-        // The fallback `mg.engine.setEdgeProperty(from_id, to_id, edge_id, ...)`
-        // routes to `shards[shardOfNode(from)].setEdgeProperty(...)`, whose
-        // `engine_edge_props.setEdgeProperty` does
-        // `engine.node_store.getNode(to)` against the SOURCE shard. For
-        // cross-shard edges (from and to on different shards) the to node
-        // does not exist on from_shard, so the call raises NodeNotFound and
-        // every inline `CREATE (a)-[:R]->(b) RETURN ...` (where the
-        // persistEdgePublicId post-hook is the only setter) crashes.
-        const fb_edge_entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
-        if (fb_edge_entry.from != from_id or fb_edge_entry.neighbor != to_id) return error.EdgeNotFound;
-
-        const fb_from_rec = (try from_shard.node_store.getNode(from_id)) orelse return error.NodeNotFound;
-        const fb_found_prop_head = fb_edge_entry.prop_head;
-
-        const fb_local_txn = try from_shard.beginTxn();
-        // error-policy: A — best-effort rollback on an already-failing path.
-        errdefer from_shard.abortTxn(fb_local_txn) catch {};
-
-        // GAP-0060: edge prop chains slab-pack (u64 head), gated on the shard
-        // config — see the txn branch above.
-        const fb_new_head: u64 = if (from_shard.config.edge_prop_slab_packing)
-            from_shard.putPropertyTxn(fb_found_prop_head, key, storage_val, fb_local_txn) catch |err|
-                return mapPropertyEntryError(err, key)
-        else
-            from_shard.putPropertyLegacyTxn(fb_found_prop_head, key, storage_val, fb_local_txn) catch |err|
-                return mapPropertyEntryError(err, key);
-
-        if (fb_new_head != fb_found_prop_head) {
-            _ = try from_shard.adj_out.updateEdgePropHead(fb_from_rec.out_head, edge_id, fb_new_head);
-            const fb_to_shard = mg.shardEngineForNode(to_id);
-            const fb_to_rec = (try fb_to_shard.node_store.getNode(to_id)) orelse return error.NodeNotFound;
-            _ = try fb_to_shard.adj_in.updateEdgePropHead(fb_to_rec.in_head, edge_id, fb_new_head);
-
-            // v0.2.26 copy-on-write + dirty flag (see the txn-path comment).
-            try from_shard.edge_index.updatePropHead(edge_id, fb_new_head);
-            from_shard.edge_index_dirty = true;
-        }
-
-        if (fb_found_prop_head != 0 and fb_found_prop_head != fb_new_head) {
-            from_shard.property_index.removeChain(fb_found_prop_head);
-        }
-        try from_shard.refreshPropertyChainIndex(fb_new_head);
-        try from_shard.commitTxn(fb_local_txn);
+        // CANARY: REQ=REQ-SONNY-6266-EDGE-PROP-HEAD-IN; FEATURE="EdgeProperties"; ASPECT=IncomingAdjacencyPropHead; STATUS=TESTED; TEST=tests/test_sonny6266_planned_reverse_edge_props.zig; OWNER=storage; UPDATED=2026-11-15
+        // CANARY: REQ=REQ-SONNY-6471-EDGE-PROP-CRASH; FEATURE="TransactionManagement"; ASPECT=EdgePropHeadWalImage; STATUS=TESTED; TEST=tests/test_sonny6471_edge_prop_crash.zig; OWNER=storage; UPDATED=2026-11-15
+        // SONNY-6529: graph-storage's `setEdgePropertyTxn`, in the statement
+        // or session engine txn when it is on the source's shard (R12: no
+        // extra WAL fsync per property), else in a txn of its own. It writes
+        // the property, points both adjacency copies (the outgoing entry and
+        // the co-located incoming one in the source shard's `adj_in_remote`,
+        // SONNY-6266) and the edge index at the new chain, and WAL-images
+        // every page it rewrote in that txn (SONNY-6471), so a crash keeps
+        // the property with the edge. The source's node page is not imaged:
+        // graph-storage 0.4.16's tail reconcile finds the owner of every tail
+        // `.adj_out` page through the edge index. The write is undone by
+        // `abortTxn`. geode rewrote the adjacency itself
+        // (`publishEdgePropHead`) and imaged the pages with `logPagePublic`,
+        // which 0.4.16 cannot undo: every aborted relationship-property
+        // write failed closed and refused the shard's writes until a
+        // restart. The node-page image cost 8 KiB of WAL per write.
+        const joined: ?gs.TxnId = try self.statementLocalTxn(graph_name, from_id); // SONNY-6658
+        const txn = joined orelse try from_shard.beginTxn();
+        errdefer if (joined == null) abortUnmirroredTxn(mg, from_shard, txn, "relationship property set");
+        from_shard.setEdgePropertyTxn(from_id, to_id, edge_id, key, storage_val, txn) catch |err|
+            return mapPropertyEntryError(err, key);
+        if (joined == null) try from_shard.commitTxn(txn);
     }
 
     /// Set or remove multiple properties on an edge under a single mutex
@@ -7771,17 +10655,19 @@ pub const StorageAdapter = struct {
     /// old loop did:
     ///   * one adapter mutex acquire → `requireExistingGraphLocked`,
     ///   * one linear `adj_out.updateEdgePropHead` scan,
-    ///   * one linear `adj_in.updateEdgePropHead` scan,
+    ///   * one linear incoming-adjacency `updateEdgePropHead` scan,
     ///   * one `refreshPropertyChainIndex` walking all previously-written
     ///     properties — the O(K²)/edge amplifier.
     ///
     /// The batch collapses all of that to:
     ///   * one adapter mutex acquire,
-    ///   * N `putPropertyTxn` calls (each unavoidable),
-    ///   * exactly one `updateEdgePropHead(adj_out)` + one
-    ///     `updateEdgePropHead(adj_in)` at the end for the terminal
-    ///     `prop_head` (intermediate heads are never read),
-    ///   * exactly one `refreshPropertyChainIndex` at the end.
+    ///   * N `setEdgePropertyTxn` calls in one engine txn.
+    /// SONNY-6529: each through graph-storage's `setEdgePropertyTxn` (see
+    /// `setEdgeProperty`), which rewrites the adjacency heads only when a
+    /// write moved the chain and keeps the property-chain index itself.
+    /// The batch wrote the chain with `putPropertyTxn` and rewrote the
+    /// heads once at the end through `logPagePublic`, which graph-storage
+    /// 0.4.16 cannot undo (an aborted batch failed closed).
     ///
     /// Joins an active `StatementTxn` on this graph (parity with
     /// `setNodePropertiesBatch` + `setEdgeProperty`) so the whole batch
@@ -7797,6 +10683,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
 
         // Edges live on the source-node's shard (edge_id is shard-striped
         // by allocNode on the source shard).
@@ -7807,59 +10694,22 @@ pub const StorageAdapter = struct {
         const edge_entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
         const from_id = edge_entry.from;
         const to_id = edge_entry.neighbor;
-        const from_rec = (try from_shard.node_store.getNode(from_id)) orelse return error.NodeNotFound;
-        const orig_prop_head: u64 = edge_entry.prop_head;
-
         // R8/R12 parity: one txn on from_shard for all N property writes.
-        const stmt_txn = currentStatementTxnForGraph(graph_name);
-        const local_txn: gs.TxnId = if (stmt_txn) |s|
-            shardLocalTxnForNode(s.txn_id, from_id) orelse try from_shard.beginTxn()
-        else
-            try from_shard.beginTxn();
-        const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, from_id) == null;
-        errdefer if (own_txn) {
-            // error-policy: A — best-effort rollback on an already-failing path.
-            from_shard.abortTxn(local_txn) catch {};
-        };
+        const joined: ?gs.TxnId = try self.statementLocalTxn(graph_name, from_id); // SONNY-6658
+        const local_txn = joined orelse try from_shard.beginTxn();
+        errdefer if (joined == null) abortUnmirroredTxn(mg, from_shard, local_txn, "relationship property batch");
 
-        var running_prop_head: u64 = orig_prop_head;
-        var last_new_head_u64: u64 = orig_prop_head;
         for (entries) |entry| {
             const storage_val: gs.PropertyValue = if (entry.value) |val|
                 try toStorageProperty(self.allocator, val)
             else
                 .null;
             defer if (entry.value != null) freeTemporaryStorageProperty(self.allocator, storage_val);
-
-            // GAP-0060: edge prop chains slab-pack (u64 head), gated on the shard
-            // config — see setEdgeProperty.
-            const new_head_u64 = if (from_shard.config.edge_prop_slab_packing)
-                from_shard.putPropertyTxn(running_prop_head, entry.key, storage_val, local_txn) catch |err|
-                    return mapPropertyEntryError(err, entry.key)
-            else
-                from_shard.putPropertyLegacyTxn(running_prop_head, entry.key, storage_val, local_txn) catch |err|
-                    return mapPropertyEntryError(err, entry.key);
-            running_prop_head = new_head_u64;
-            last_new_head_u64 = new_head_u64;
+            from_shard.setEdgePropertyTxn(from_id, to_id, edge_id, entry.key, storage_val, local_txn) catch |err|
+                return mapPropertyEntryError(err, entry.key);
         }
 
-        if (running_prop_head != orig_prop_head) {
-            _ = try from_shard.adj_out.updateEdgePropHead(from_rec.out_head, edge_id, running_prop_head);
-            const to_shard = mg.shardEngineForNode(to_id);
-            const to_rec = (try to_shard.node_store.getNode(to_id)) orelse return error.NodeNotFound;
-            _ = try to_shard.adj_in.updateEdgePropHead(to_rec.in_head, edge_id, running_prop_head);
-
-            // v0.2.26 copy-on-write + dirty flag (see the txn-path comment).
-            try from_shard.edge_index.updatePropHead(edge_id, running_prop_head);
-            from_shard.edge_index_dirty = true;
-        }
-
-        if (orig_prop_head != 0 and orig_prop_head != running_prop_head) {
-            from_shard.property_index.removeChain(orig_prop_head);
-        }
-        try from_shard.refreshPropertyChainIndex(last_new_head_u64);
-
-        if (own_txn) try from_shard.commitTxn(local_txn);
+        if (joined == null) try from_shard.commitTxn(local_txn);
     }
 
     /// Get a property from an edge. Delegates to the engine's
@@ -8050,11 +10900,39 @@ pub const StorageAdapter = struct {
 
         // Fan out across all shards — each shard owns a disjoint node_id range.
         var ctx = Ctx{ .entries = .empty, .alloc = allocator };
+        errdefer ctx.entries.deinit(allocator);
         for (mg.engine.shards) |shard| {
+            const found_before = ctx.entries.items.len;
+            // SONNY-6472 (4): each count is read BEFORE the writers in flight,
+            // so a create counted by the first read whose record the scan
+            // missed, or a delete the scan missed that the second read still
+            // counts, is a writer in flight at the read after it.
+            const live_before = @atomicLoad(u64, &shard.manifest.node_count, .seq_cst);
+            const writers_before = mg.node_census_writers.load(.seq_cst);
             try shard.node_store.scanNodes(shard.manifest.next_node_id, &ctx, &Ctx.onNode);
+            if (ctx.had_error) return error.OutOfMemory;
+            const live_after = @atomicLoad(u64, &shard.manifest.node_count, .seq_cst);
+            const writers_after = mg.node_census_writers.load(.seq_cst);
+            // CANARY: REQ=REQ-SONNY-2409-ZEROED-PAGE-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=UnlabeledScanLiveCount; STATUS=TESTED; TEST=tests/test_sonny2409_zeroed_page_header.zig; OWNER=storage; UPDATED=2026-11-13
+            // SONNY-2409: graph_storage's pager reads a zeroed page (torn
+            // write, zeroed sectors) as a fresh one, so its node records look
+            // empty and `scanNodes` skips them: an unlabeled scan answered OK
+            // with those nodes missing. Fewer live records than the shard
+            // manifest counts means lost node data: fail closed, as the
+            // hydration scan does (REQ-GQL-028, same kill switch). The
+            // smaller of the counts read before and after the scan is used.
+            // SONNY-6472 (4): less one record per node create or delete in
+            // flight at either read (the engine counts and writes a node in
+            // separate steps): a write on another thread made a false
+            // DataCorruption. With no writer in flight the check is exact.
+            const live = @min(live_before, live_after);
+            const slack: u64 = @as(u64, writers_before) + writers_after;
+            const found = ctx.entries.items.len - found_before;
+            if (found + slack < live and !hydration_scan.liveCountCheckDisabled()) {
+                log.warn("scanAllNodes: graph {s} shard found {d} live node record(s) but its manifest counts {d}: node pages lost or zeroed", .{ graph_name, found, live });
+                return error.DataCorruption;
+            }
         }
-
-        if (ctx.had_error) return error.OutOfMemory;
 
         return ctx.entries.toOwnedSlice(allocator);
     }
@@ -8091,7 +10969,9 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
-        return hydration_scan.scanShard(allocator, mg.engine.shards[shard_idx], opts);
+        var scan_opts = opts;
+        scan_opts.node_census_writers = &mg.node_census_writers; // SONNY-6492 (2)
+        return hydration_scan.scanShard(allocator, mg.engine.shards[shard_idx], scan_opts);
     }
 
     /// Resolve a raw label/rel-type id to its dictionary string, or null when
@@ -8301,6 +11181,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
         return mg.engine.beginTxn();
     }
 
@@ -8321,7 +11202,12 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
-        try mg.engine.abortTxn(txn_id);
+        // SONNY-6529: an abort graph-storage cannot undo quarantines the
+        // graph (and is returned).
+        abortShardedCounted(mg, txn_id) catch |err| {
+            noteAbortFailure(mg, err, "abortTransaction");
+            return err;
+        };
     }
 
     /// Run a checkpoint on every loaded graph engine.
@@ -8329,8 +11215,20 @@ pub const StorageAdapter = struct {
     ///
     /// Used by the CLEAN-SHUTDOWN path and explicit/test callers so a restart
     /// loads the derived indexes from disk without a rebuild.
+    ///
+    /// SONNY-6646 (7): a graph's failed engine checkpoint is counted and
+    /// logged as a light one's is (`noteCheckpointFailure`); it was a WARN
+    /// on every call, counted nowhere. And it fails the call
+    /// (`error.CheckpointFailed`, once every graph was tried): an explicit
+    /// checkpoint reported success.
     pub fn checkpointAll(self: *StorageAdapter) !void {
-        return self.checkpointAllEx(false, true);
+        const failures_before = self.checkpoint_failures_total.load(.acquire);
+        self.checkpointAllEx(false, true) catch |err| {
+            // A graph's failure was counted where it happened.
+            if (err != error.CheckpointFailed) self.noteCheckpointFailure(null, err, .full);
+            return err;
+        };
+        if (self.checkpoint_failures_total.load(.acquire) == failures_before) self.noteCheckpointSuccess();
     }
 
     /// GAP-0900 Layer-2: incremental/bounded checkpoint of every graph.
@@ -8342,8 +11240,64 @@ pub const StorageAdapter = struct {
     /// node ingest in deferred mode (the full derived-index re-save was O(graph)
     /// and fell behind, letting the WAL + dirty pages grow until OOM). On reopen,
     /// graph-storage rebuilds the stale derived indexes from the durable pages.
+    ///
+    /// SONNY-6523 (6): a failure is counted (`checkpoint_failures_total`)
+    /// and logged at ERROR once per distinct cause, then at most every
+    /// `checkpoint_failure_log_interval_ms` while it repeats, and the
+    /// recovery once (`CheckpointFailureLog`). The persistence tick runs one
+    /// on every --persist-interval, and every failing tick logged at ERROR.
     pub fn checkpointAllLight(self: *StorageAdapter) !void {
-        return self.checkpointAllEx(true, true);
+        const failures_before = self.checkpoint_failures_total.load(.acquire);
+        self.checkpointAllEx(true, true) catch |err| {
+            self.noteCheckpointFailure(null, err, .light);
+            return err;
+        };
+        // A graph whose engine checkpoint failed is counted by
+        // `checkpointOneGraph`, and the pass returns without an error.
+        if (self.checkpoint_failures_total.load(.acquire) == failures_before) self.noteCheckpointSuccess();
+    }
+
+    /// SONNY-6523 (6): checkpoints (light, and full since SONNY-6646 (7))
+    /// that failed since this adapter opened.
+    pub fn checkpointFailuresTotal(self: *const StorageAdapter) u64 {
+        return self.checkpoint_failures_total.load(.acquire);
+    }
+
+    /// SONNY-6523 (6): ERROR lines failing checkpoints have logged.
+    pub fn checkpointFailureErrorLogs(self: *const StorageAdapter) u64 {
+        return self.checkpoint_failure_error_logs.load(.acquire);
+    }
+
+    fn noteCheckpointFailure(self: *StorageAdapter, graph: ?[]const u8, err: anyerror, kind: enum { light, full }) void {
+        _ = self.checkpoint_failures_total.fetchAdd(1, .acq_rel);
+        const lio = std.Io.Threaded.global_single_threaded.io();
+        self.checkpoint_failure_log_mutex.lockUncancelable(lio);
+        const verdict = self.checkpoint_failure_log.noteFailure(err, checkpointLogNowMs());
+        const consecutive = self.checkpoint_failure_log.consecutive;
+        self.checkpoint_failure_log_mutex.unlock(lio);
+        switch (verdict) {
+            .suppressed => {},
+            .first, .repeated => {
+                _ = self.checkpoint_failure_error_logs.fetchAdd(1, .acq_rel);
+                const msg = switch (kind) {
+                    .light => "light checkpoint failed; the WAL is not truncated and grows until a checkpoint succeeds (adapter_checkpoint_failures_total counts every failure; this is logged once per cause, then at most every 10 minutes)",
+                    .full => "full checkpoint failed; the WAL is not truncated and grows until a checkpoint succeeds (adapter_checkpoint_failures_total counts every failure; this is logged once per cause, then at most every 10 minutes)",
+                };
+                slog.err(msg, &.{
+                    SAttr.string("graph", graph orelse "(all)"),
+                    SAttr.string("error", @errorName(err)),
+                    SAttr.uint("consecutive_failures", consecutive),
+                });
+            },
+        }
+    }
+
+    fn noteCheckpointSuccess(self: *StorageAdapter) void {
+        const lio = std.Io.Threaded.global_single_threaded.io();
+        self.checkpoint_failure_log_mutex.lockUncancelable(lio);
+        const recovered = self.checkpoint_failure_log.noteSuccess();
+        self.checkpoint_failure_log_mutex.unlock(lio);
+        if (recovered) |n| slog.info("checkpoint succeeded again", &.{SAttr.uint("after_consecutive_failures", n)});
     }
 
     /// GAP-ENT-0048 (task0048d) test-only: is `name`'s adapter engine currently
@@ -8429,6 +11383,10 @@ pub const StorageAdapter = struct {
             n += 1;
         }
         for (names_buf[0..n]) |nm| {
+            // SONNY-6606 (3): a graph whose open already failed (and was
+            // logged, `openGraphRememberingFailureLocked`) is not reported
+            // again at every checkpoint.
+            if (self.open_failures.contains(nm)) continue;
             _ = self.requireExistingGraphLocked(nm) catch |err| {
                 log.warn("full checkpoint: could not load graph '{s}' to persist its exact index: {s}", .{ nm, @errorName(err) });
                 continue;
@@ -8518,12 +11476,18 @@ pub const StorageAdapter = struct {
         // actually lands. With bug #1's writer-preference the skip should not
         // happen, but this keeps the memory bound sound even if it ever does.
         var any_skipped = false;
+        // SONNY-6646: a FULL pass returns `CheckpointFailed` once it is done
+        // when a graph's engine checkpoint failed (counted and logged per
+        // graph); an explicit checkpoint reported success. A LIGHT pass only
+        // counts it (SONNY-6523 (6)): the persistence tick carries on.
+        var any_engine_failed = false;
         for (graphs_buf[0..graph_count]) |mg| {
             // Bounded rwlock deadline for the periodic LIGHT checkpoint;
             // unbounded (null) for the durability-critical FULL checkpoint.
             const timeout_ns: ?u64 = if (light) 5 * std.time.ns_per_s else null;
-            switch (self.checkpointOneGraph(mg, light, set_writer_pref, timeout_ns, null)) {
-                .ok, .engine_failed => {},
+            switch (self.checkpointOneGraph(mg, light, set_writer_pref, timeout_ns, null, .{})) {
+                .ok => {},
+                .engine_failed => any_engine_failed = true,
                 // GAP-0900 bug #2: an rwlock-deadline skip leaves the graph's
                 // dirty pages un-flushed — any_skipped keeps the backpressure
                 // counter high (see below). An engine checkpoint FAILURE is
@@ -8610,6 +11574,7 @@ pub const StorageAdapter = struct {
             self.pending_bulk_ops.store(0, .release);
         }
         self.last_checkpoint_mono_ns.store(monoNanosNow(), .release);
+        if (!light and any_engine_failed) return error.CheckpointFailed;
     }
 
     /// SONNY-1574: what a FULL checkpoint's exact-index persist decision
@@ -8688,6 +11653,22 @@ pub const StorageAdapter = struct {
     ///   FULL path's exact-index persist decision actually did. Left at
     ///   `.not_attempted` on every path that runs no decision (LIGHT, busy
     ///   rwlock, failed engine checkpoint, dir-path error).
+    /// SONNY-6692: extra work of one graph's checkpoint.
+    const CheckpointExtras = struct {
+        /// The caller already holds `mg.rwlock` EXCLUSIVE (its own write
+        /// lock): it is neither taken nor released here.
+        lock_held: bool = false,
+        /// Scrub the engine's dead space (`ShardedGraphEngine.scrubDeadSpace`)
+        /// under the lock, before the (FULL) engine checkpoint.
+        scrub: ?*ScrubOutcome = null,
+    };
+
+    /// SONNY-6692: what a scrubbing checkpoint did.
+    pub const ScrubOutcome = struct {
+        report: gs.ScrubReport = .{},
+        err: ?anyerror = null,
+    };
+
     fn checkpointOneGraph(
         self: *StorageAdapter,
         mg: *ManagedGraph,
@@ -8695,6 +11676,7 @@ pub const StorageAdapter = struct {
         set_writer_pref: bool,
         acquire_timeout_ns: ?u64,
         exact_out: ?*ExactIndexPersistOutcome,
+        extras: CheckpointExtras,
     ) OneGraphCheckpointOutcome {
         if (exact_out) |o| o.* = .not_attempted;
         const _t_start = monoNanosNow();
@@ -8741,7 +11723,7 @@ pub const StorageAdapter = struct {
         // explicit FULL checkpoint) spins via `tryLock` so durability is never
         // sacrificed.
         const io_cp = std.Io.Threaded.global_single_threaded.io();
-        if (!mg.rwlock.tryLock(io_cp)) {
+        if (!extras.lock_held and !mg.rwlock.tryLock(io_cp)) {
             var sleep_ns: u64 = 100 * std.time.ns_per_us;
             const max_sleep_ns: u64 = 2 * std.time.ns_per_ms;
             const cp_deadline_ns: ?u64 = if (acquire_timeout_ns) |t| _t_start + t else null;
@@ -8783,9 +11765,17 @@ pub const StorageAdapter = struct {
         // SONNY-3028: dropped while this checkpoint waited for its lock (the
         // caller pinned it): there is nothing left to save.
         if (mg.isDropped()) {
-            mg.rwlock.unlock(io_cp);
+            if (!extras.lock_held) mg.rwlock.unlock(io_cp);
             return .ok;
         }
+        // CANARY: REQ=REQ-SONNY-6528-APPLY-CHECKPOINT-EXCLUSION; FEATURE="DistributedCluster"; ASPECT=CheckpointWaitsForApply; STATUS=TESTED; TEST=tests/test_sonny6528_apply_checkpoint_exclusion.zig; OWNER=storage; UPDATED=2026-11-14
+        // SONNY-6528 (1): and for the Raft apply's writes, which hold no
+        // `rwlock` (`replicated_apply_mutex`), unless this checkpoint runs
+        // inside one on its own thread. Taken before any other lock this
+        // checkpoint takes under `rwlock`.
+        const apply_excluded = mg.replicated_apply_holder.load(.acquire) != currentThreadTag();
+        if (apply_excluded) mg.replicated_apply_mutex.lockUncancelable(io_cp);
+        defer if (apply_excluded) mg.replicated_apply_mutex.unlock(io_cp);
         // GAP-0900 L2: the periodic load-driven trigger runs the LIGHT engine
         // checkpoint (O(dirty)); the shutdown / explicit path runs the FULL
         // checkpoint so a restart loads the derived indexes without a rebuild.
@@ -8795,14 +11785,25 @@ pub const StorageAdapter = struct {
         // store does NOT bump the manifest counter or strand counter-stamped
         // snapshots.
         var engine_ok = true;
+        // SONNY-6692: dead space overwritten first, so the checkpoint below
+        // writes the cleared pages and truncates the WAL that held the old
+        // images.
+        if (extras.scrub) |out| {
+            if (mg.engine.scrubDeadSpace()) |r| out.report = r else |err| out.err = err;
+        }
         if (light) {
             mg.engine.checkpointLight() catch |err| {
-                log.warn("light checkpoint failed for graph '{s}': {}", .{ mg.name, err });
+                // SONNY-6523 (6): counted, and logged at ERROR once per
+                // cause (it was a WARN on every tick, forever).
+                self.noteCheckpointFailure(mg.name, err, .light);
                 engine_ok = false;
             };
         } else {
             mg.engine.checkpoint() catch |err| {
-                log.warn("checkpoint failed for graph '{s}': {}", .{ mg.name, err });
+                // CANARY: REQ=REQ-SONNY-6646-FULL-CHECKPOINT-FAILURE-LOG; FEATURE="CrashRecovery"; ASPECT=FullCheckpointFailureLogLimit; STATUS=TESTED; TEST=tests/test_sonny6646_full_checkpoint_failure_log.zig; OWNER=storage; UPDATED=2026-11-15
+                // SONNY-6646 (7): counted and limited as the light one is
+                // (a WARN on every failing call before).
+                self.noteCheckpointFailure(mg.name, err, .full);
                 engine_ok = false;
             };
         }
@@ -8917,8 +11918,9 @@ pub const StorageAdapter = struct {
         // mg.rwlock, yet its merge family threads read shallow Node copies
         // whose sub-heaps live on exactly these retire lists — reclaiming
         // mid-merge is the 14.27M SEGV bomb #2 / C-1 review UAF):
-        //  1. hasUnfinishedHydration: graph-scoped `done`-latch predicate —
-        //     catches THIS graph's build even between mutex-held phases.
+        //  1. hasRunningHydrationBuild: a build of THIS graph is running
+        //     (SONNY-6632: not `done == false`, which held off the reclaims of
+        //     a graph whose build failed transiently until a retry succeeded).
         //  2. tryBeginCacheReclaimGrace: NON-BLOCKING tryLock of the store's
         //     hydration_build_mutex — catches any concurrent build touching
         //     the shared retire machinery (parking here under the graph-
@@ -8927,7 +11929,7 @@ pub const StorageAdapter = struct {
         // window (typically the persist-on-complete graph checkpoint fired
         // right after hydration finishes, which reclaims with done == true).
         if (graph_store.getCurrentGlobalStore()) |store| {
-            if (store.hasUnfinishedHydration(mg.name)) {
+            if (store.hasRunningHydrationBuild(mg.name)) {
                 _ = g_hydration_reclaim_skips.fetchAdd(1, .monotonic);
                 slog.info("checkpoint grace window: retired-cache reclaim skipped (hydration in flight)", &.{
                     SAttr.string("graph", mg.name),
@@ -8959,7 +11961,7 @@ pub const StorageAdapter = struct {
                 });
             }
         }
-        mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (!extras.lock_held) mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
         return if (engine_ok) .ok else .engine_failed;
     }
 
@@ -9065,8 +12067,14 @@ pub const StorageAdapter = struct {
         if (mg.exact_index_built.load(.acquire)) {
             // Built (reloaded at open, or built by a prior touch/this checkpoint).
             // Persist the current index — under the build mutex, so no concurrent
-            // rebuild mutates it during the save.
-            mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
+            // rebuild mutates it during the save. SONNY-6354: complete for every
+            // registered key first, and stamped with that key set.
+            const config = prepareExactIndexSaveLocked(mg) catch |err| {
+                _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
+                log.warn("failed to complete property index for graph '{s}' before persisting it: {}", .{ mg.name, err });
+                return .write_failed;
+            };
+            mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg), config) catch |err| {
                 // SONNY-1574: a failed save is a FAILURE, not a warning the
                 // success surface swallows.
                 _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
@@ -9082,7 +12090,12 @@ pub const StorageAdapter = struct {
         // the build mutex excludes the worker/lazy builds) — then persist. An empty
         // (0-node) deferred graph has nothing to build → invalidate any stale file.
         if (self.eagerBuildDeferredIndexForFullCheckpoint(mg)) {
-            mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
+            const config = prepareExactIndexSaveLocked(mg) catch |err| {
+                _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
+                log.warn("failed to complete eagerly-built property index for graph '{s}' before persisting it: {}", .{ mg.name, err });
+                return .write_failed;
+            };
+            mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg), config) catch |err| {
                 _ = g_exact_persist_failures.fetchAdd(1, .monotonic);
                 log.warn("failed to persist eagerly-built property index for graph '{s}': {}", .{ mg.name, err });
                 return .write_failed;
@@ -9245,9 +12258,15 @@ pub const StorageAdapter = struct {
         // guarantee under a still-open WAL tail.
         if (graphDirPath(self.allocator, self.data_dir, mg.uuid)) |dir_path| {
             defer self.allocator.free(dir_path);
-            mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg)) catch |err| {
-                log.warn("hydration-time exact-index persist failed for graph '{s}': {} — index stays memory-only until the next checkpoint", .{ graph_name, err });
-            };
+            // SONNY-6354: complete for a key registered during the build, and
+            // stamped with the key set.
+            if (prepareExactIndexSaveLocked(mg)) |config| {
+                mg.exact_node_property_index.saveToFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg), config) catch |err| {
+                    log.warn("hydration-time exact-index persist failed for graph '{s}': {} — index stays memory-only until the next checkpoint", .{ graph_name, err });
+                };
+            } else |err| {
+                log.warn("hydration-time exact-index persist skipped for graph '{s}': {} — index stays memory-only until the next checkpoint", .{ graph_name, err });
+            }
         } else |err| {
             log.warn("hydration-time exact-index persist: dir path failed for graph '{s}': {}", .{ graph_name, err });
         }
@@ -9282,6 +12301,46 @@ pub const StorageAdapter = struct {
     /// `ensureGraphHydrated`). Busy past the deadline => error; the caller
     /// logs loudly and degrades (products stay memory-only until the next
     /// full checkpoint — pre-Task-3 behaviour).
+    // CANARY: REQ=REQ-SONNY-6692-SCRUB-CHECKPOINT; FEATURE="FieldLevelEncryption"; ASPECT=ScrubDeadSpaceThenCheckpoint; STATUS=TESTED; TEST=tests/test_sonny6692_fle_migration_scrub.zig; OWNER=security; UPDATED=2026-11-17
+    /// SONNY-6692: overwrite `graph_name`'s dead space (graph-storage
+    /// `scrubDeadSpace`: freed property and var-store pages, tombstoned slab
+    /// blobs) and run a FULL checkpoint, under the graph's EXCLUSIVE lock, so
+    /// no superseded value stays in the store files or the WAL. When this
+    /// thread already holds the graph's write lock (a statement's request
+    /// lock) it is used as held; when it holds none it is taken (waiting);
+    /// holding another graph's lock is refused (`GraphLockOrder`: taking a
+    /// second graph's lock could deadlock). `error.TransactionsOpen` when an
+    /// engine transaction of the graph is open.
+    pub fn scrubGraphDeadSpace(self: *StorageAdapter, graph_name: []const u8) !gs.ScrubReport {
+        return self.scrubGraphDeadSpaceWithin(graph_name, null);
+    }
+
+    /// SONNY-6700: `scrubGraphDeadSpace` waiting at most `acquire_timeout_ns`
+    /// for the graph's lock when it takes it (`error.CheckpointLockBusy`
+    /// past it; null waits). `CALL geode.storage.scrub()` scrubs one graph
+    /// after another holding no other lock, and a busy graph is reported,
+    /// not waited on forever.
+    pub fn scrubGraphDeadSpaceWithin(self: *StorageAdapter, graph_name: []const u8, acquire_timeout_ns: ?u64) !gs.ScrubReport {
+        const holds = self.threadHoldsGraphWriteLock(graph_name);
+        if (!holds and threadHoldsAnyGraphLock()) return error.GraphLockOrder;
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            const found = try self.requireExistingGraphLocked(graph_name);
+            _ = found.pins.fetchAdd(1, .acq_rel);
+            break :blk found;
+        };
+        defer self.unpinGraph(mg);
+        var scrub: ScrubOutcome = .{};
+        switch (self.checkpointOneGraph(mg, false, !holds, if (holds) null else acquire_timeout_ns, null, .{ .lock_held = holds, .scrub = &scrub })) {
+            .ok => {},
+            .skipped_busy => return error.CheckpointLockBusy,
+            .engine_failed => return error.CheckpointFailed,
+        }
+        if (scrub.err) |err| return err;
+        return scrub.report;
+    }
+
     pub fn checkpointGraph(self: *StorageAdapter, graph_name: []const u8) !void {
         return self.checkpointGraphEx(graph_name, null);
     }
@@ -9304,7 +12363,7 @@ pub const StorageAdapter = struct {
             break :blk found;
         };
         defer self.unpinGraph(mg);
-        switch (self.checkpointOneGraph(mg, false, true, 5 * std.time.ns_per_s, exact_out)) {
+        switch (self.checkpointOneGraph(mg, false, true, 5 * std.time.ns_per_s, exact_out, .{})) {
             .ok => {},
             .skipped_busy => return error.CheckpointLockBusy,
             .engine_failed => return error.CheckpointFailed,
@@ -9490,7 +12549,7 @@ pub const StorageAdapter = struct {
     /// `false` (full rebuild).
     fn tryReconcileExactIndexOnReopen(self: *StorageAdapter, mg: *ManagedGraph, graph_dir_path: []const u8) bool {
         // 1) Read the snapshot's (epoch, covered_lsn) stamp from its header.
-        const stamp = readExactIndexStamp(self.allocator, graph_dir_path) orelse return false;
+        const stamp = readExactIndexStamp(self.allocator, graph_dir_path, mg.exact_node_property_index.cipherPtr()) orelse return false;
 
         // 2) Gate on the WAL-aware single-recovery contract.
         const cur_epoch = mgCheckpointEpoch(mg);
@@ -9512,7 +12571,11 @@ pub const StorageAdapter = struct {
         // 4) Load the covered_lsn BASE postings (the snapshot as it stood at the
         //    last checkpoint). `expected_covered_lsn == stamp.covered_lsn` (==
         //    pre_recovery, gated) so the file loads despite the tail.
-        const base_outcome = mg.exact_node_property_index.loadFromFile(graph_dir_path, cur_epoch, stamp.covered_lsn);
+        // SONNY-6354: the late-key generation is read before the key
+        // configuration the file must match, so a key registered in between
+        // leaves the index behind (caught up on first access), never ahead.
+        const lean_gen = graph_store.leanLateGenMax();
+        const base_outcome = mg.exact_node_property_index.loadFromFile(graph_dir_path, cur_epoch, stamp.covered_lsn, graph_store.exactIndexConfigHash());
         if (base_outcome != .loaded) return false;
         // From here a `false` return MUST leave the index EMPTY (a partial index
         // is worse than a rebuild): every failure branch below calls `clear()`
@@ -9522,6 +12585,7 @@ pub const StorageAdapter = struct {
             // A committed tail advanced the frontier but touched NO node-owning
             // pages (e.g. edge-only) → the node-property base is already correct.
             _ = g_exact_index_reconciled.fetchAdd(1, .monotonic);
+            mg.exact_lean_gen.store(lean_gen, .release);
             return true;
         }
 
@@ -9529,7 +12593,7 @@ pub const StorageAdapter = struct {
         //    IDENTICALLY to the base. Missing/torn/mismatched → clear + rebuild.
         var rev = NodePropertyReverseMap.init(self.allocator);
         defer rev.deinit();
-        if (rev.loadFromFile(graph_dir_path, cur_epoch, stamp.covered_lsn) != .loaded) {
+        if (rev.loadFromFile(graph_dir_path, cur_epoch, stamp.covered_lsn, mg.exact_node_property_index.cipherPtr()) != .loaded) {
             mg.exact_node_property_index.clear();
             return false;
         }
@@ -9573,6 +12637,7 @@ pub const StorageAdapter = struct {
         }
 
         _ = g_exact_index_reconciled.fetchAdd(1, .monotonic);
+        mg.exact_lean_gen.store(lean_gen, .release);
         return true;
     }
 
@@ -9662,6 +12727,10 @@ pub const StorageAdapter = struct {
         if (self.checkpoint_metrics_registered.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return;
         reg.register("adapter_checkpoints_total", &self.checkpoints_total) catch {};
         reg.register("adapter_pending_bulk_ops", &self.pending_bulk_ops) catch {};
+        reg.register("adapter_checkpoint_failures_total", &self.checkpoint_failures_total) catch {};
+        reg.register("storage_txn_aborts_undone_total", &storage_txn_aborts_undone_total) catch {}; // SONNY-6529
+        reg.register("storage_txn_aborts_not_undone_total", &storage_txn_aborts_not_undone_total) catch {}; // SONNY-6529
+        reg.register("storage_txn_aborts_discarded_total", &storage_txn_aborts_discarded_total) catch {}; // SONNY-6657
     }
 
     /// Bulk write ops applied since the last checkpoint.
@@ -9841,123 +12910,47 @@ pub const StorageAdapter = struct {
     /// no staleness counter, so leaving an out-of-date copy would load wrong
     /// data after a crash. Best-effort: a missing file (already invalidated, or
     /// never written) is success.
+    ///
+    /// SONNY-6616: `prop_rev.idx` goes too. It was left behind: a reverse map
+    /// (node -> label, property key, value hash) of data the graph no longer
+    /// holds, with the property-key names in it (in plaintext without a key).
     fn invalidateExactPropertyIndexFile(allocator: Allocator, graph_dir_path: []const u8) void {
-        const idx_path = std.fmt.allocPrint(allocator, "{s}/prop_exact.idx", .{graph_dir_path}) catch return;
-        defer allocator.free(idx_path);
         const inv_io = std.Io.Threaded.global_single_threaded.io();
-        std.Io.Dir.cwd().deleteFile(inv_io, idx_path) catch |err| switch (err) {
-            error.FileNotFound => {},
-            else => log.warn("failed to invalidate stale prop_exact.idx: {s}", .{@errorName(err)}),
-        };
-    }
-
-    fn freeStoreMaskCount(total_pages: u64) usize {
-        return @intCast((total_pages + @bitSizeOf(usize) - 1) / @bitSizeOf(usize));
-    }
-
-    fn truncateFreeStoreIfPresent(allocator: Allocator, graph_dir: []const u8) !bool {
-        const free_store_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ graph_dir, free_store_path_name });
-        defer allocator.free(free_store_path);
-
-        const trunc_io = std.Io.Threaded.global_single_threaded.io();
-        const file = std.Io.Dir.cwd().openFile(trunc_io, free_store_path, .{ .mode = .read_write }) catch |err| switch (err) {
-            error.FileNotFound => return false,
-            else => return err,
-        };
-        defer file.close(trunc_io);
-
-        try file.setLength(trunc_io, 0);
-        return true;
-    }
-
-    fn maxPersistedPagesForStorePath(self: *StorageAdapter, graph_dir: []const u8, file_name: []const u8) !u64 {
-        const store_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ graph_dir, file_name });
-        defer self.allocator.free(store_path);
-
-        const stat = std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), store_path, .{}) catch |err| switch (err) {
-            error.FileNotFound => return 64,
-            else => return err,
-        };
-
-        const page_count = stat.size / self.config.page_size;
-        if (page_count >= std.math.maxInt(u64) / 2) return std.math.maxInt(u64);
-        return @max(@as(u64, 64), page_count * 2);
-    }
-
-    fn freeStoreLooksValidLocked(self: *StorageAdapter, graph_dir: []const u8) !bool {
-        const free_store_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ graph_dir, free_store_path_name });
-        defer self.allocator.free(free_store_path);
-
-        const io_fv = std.Io.Threaded.global_single_threaded.io();
-        const file = std.Io.Dir.cwd().openFile(io_fv, free_store_path, .{}) catch |err| switch (err) {
-            error.FileNotFound => return true,
-            else => return err,
-        };
-        defer file.close(io_fv);
-
-        const stat = try file.stat(io_fv);
-        if (stat.size == 0) return true;
-
-        const word_size = @sizeOf(usize);
-        const min_section_size = free_store_header_size + word_size;
-        const min_total_size = min_section_size * graph_store_file_names.len;
-        if (stat.size < min_total_size) return false;
-
-        var max_total_size: u64 = 0;
-        for (graph_store_file_names) |file_name| {
-            const max_pages = try self.maxPersistedPagesForStorePath(graph_dir, file_name);
-            max_total_size += free_store_header_size + freeStoreMaskCount(max_pages) * word_size;
-        }
-        if (stat.size > max_total_size) return false;
-
-        var offset: u64 = 0;
-        var header_buf: [free_store_header_size]u8 = undefined;
-        for (graph_store_file_names) |file_name| {
-            const max_pages = try self.maxPersistedPagesForStorePath(graph_dir, file_name);
-            const bytes_read = try file.readPositionalAll(io_fv, &header_buf, offset);
-            if (bytes_read != header_buf.len) return false;
-
-            const total_pages = std.mem.readInt(u64, header_buf[0..8], .little);
-            const next_free_hint = std.mem.readInt(u64, header_buf[8..16], .little);
-            if (total_pages < 64 or total_pages > max_pages) return false;
-            if (next_free_hint == 0 or next_free_hint > total_pages) return false;
-
-            const section_size: u64 = free_store_header_size + freeStoreMaskCount(total_pages) * word_size;
-            if (offset + section_size > stat.size) return false;
-            offset += section_size;
-        }
-
-        return offset == stat.size;
-    }
-
-    fn sanitizeFreeStoreBeforeOpenLocked(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8) !void {
-        const graph_dir = try graphDirPath(self.allocator, self.data_dir, graph_uuid);
-        defer self.allocator.free(graph_dir);
-
-        if (!(try self.freeStoreLooksValidLocked(graph_dir))) {
-            if (try truncateFreeStoreIfPresent(self.allocator, graph_dir)) {
-                log.warn("graph '{s}' has invalid persisted free.store; truncating it so GraphEngine.open can rebuild from disk", .{name});
-            }
+        for ([_][]const u8{ prop_exact_index_file_name, prop_rev_index_file_name }) |name| {
+            const idx_path = std.fmt.allocPrint(allocator, "{s}/{s}", .{ graph_dir_path, name }) catch return;
+            defer allocator.free(idx_path);
+            std.Io.Dir.cwd().deleteFile(inv_io, idx_path) catch |err| switch (err) {
+                error.FileNotFound => {},
+                else => log.warn("failed to invalidate stale {s}: {s}", .{ name, @errorName(err) }),
+            };
         }
     }
 
-    /// Attempt to create a per-graph audit logger. Returns null on failure
-    /// (soft failure — the graph remains usable without per-graph audit).
-    fn initAuditForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) ?*audit.AuditLogger {
-        const graph_dir = graphDirPath(allocator, data_dir, graph_uuid) catch |err| {
-            log.warn("failed to build graph dir path for audit: {}", .{err});
-            return null;
-        };
+    // CANARY: REQ=REQ-SONNY-6430-SECURITY-AUDIT-FAIL-CLOSED; FEATURE="Security Graph Audit"; ASPECT=NoUnauditedOpen; STATUS=TESTED; TEST=tests/test_sonny6430_storage_open_fail_closed.zig; OWNER=security; UPDATED=2026-11-12
+    /// The security graph's audit logger (only `__geode_security` has one).
+    /// Every failure is an error, so the graph never opens unaudited.
+    /// SONNY-6422 made an unusable GEODE_AUDIT_PUB/GEODE_AUDIT_SEC pair an
+    /// error; SONNY-6430: so is everything else. An audit log that cannot be
+    /// opened (EACCES, a read-only directory), whose tail does not verify, or
+    /// any allocation failure returned null, and the security graph opened
+    /// with no audit logger: every auth change went unaudited. No error is
+    /// one to carry on past: the open fails and the caller (the server's
+    /// startup, or the CLI) reports it. SONNY-6435: hence no optional in the
+    /// type; the caller owns the returned logger.
+    pub fn initAuditForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) !*audit.AuditLogger {
+        if (try audit.AuditLogger.loadEnvSigningKey(allocator)) |kp| {
+            var k = kp;
+            k.deinit();
+        }
+        const graph_dir = try graphDirPath(allocator, data_dir, graph_uuid);
         defer allocator.free(graph_dir);
 
-        const al = allocator.create(audit.AuditLogger) catch |err| {
-            log.warn("failed to allocate per-graph audit logger: {}", .{err});
-            return null;
-        };
+        const al = try allocator.create(audit.AuditLogger);
+        errdefer allocator.destroy(al);
         al.* = audit.AuditLogger.initForGraph(allocator, graph_dir) catch |err| {
-            log.warn("failed to init per-graph audit logger: {}", .{err});
-            allocator.destroy(al);
-            return null;
+            // The caller reports the refusal (the server does not start).
+            log.warn("cannot open the security graph's audit log in {s}: {}; refusing to open the graph unaudited", .{ graph_dir, err });
+            return err;
         };
         return al;
     }
@@ -9974,12 +12967,15 @@ pub const StorageAdapter = struct {
     /// wrapper) and adapter-level errors degrade to `null`.
     ///
     /// Also wires retention (`GEODE_TS_RETENTION_DAYS`) and TDE
-    /// (`GEODE_TS_TDE=1` + `GEODE_TDE_KEY`) into the engine (GAP-0865 c/e).
+    /// (`GEODE_TDE_KEY`; SONNY-6590: on whenever it is set) into the engine
+    /// (GAP-0865 c/e).
     fn initTimeseriesForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) !?*ts_mod.Store {
         const durability = ts_mod.durabilityFromEnv();
         return initTimeseriesForGraphInner(allocator, data_dir, graph_uuid, durability) catch |err| switch (durability) {
             .fail_closed => err,
-            .best_effort => blk: {
+            // SONNY-6590: plaintext time-series data under the TDE key
+            // refuses the graph (58000 TimeseriesNotEncrypted) either way.
+            .best_effort => if (err == error.TimeseriesNotEncrypted) err else blk: {
                 log.warn("per-graph timeseries init failed ({}); GEODE_TS_DURABILITY=best_effort — graph continues without persistent timeseries", .{err});
                 break :blk null;
             },
@@ -10095,6 +13091,10 @@ pub const StorageAdapter = struct {
         // tests/test_security_wal_durability.zig.
         const is_security_graph = std.mem.eql(u8, name, "__geode_security");
         if (is_security_graph) cfg.sync_mode = .sync_each_commit;
+        // SONNY-6527: shard label-dictionary findings, logged with the graph.
+        const label_report = try label_dict_divergence.ReportCtx.create(self.allocator, name);
+        errdefer self.allocator.destroy(label_report);
+        cfg.label_dict_report = label_report.report();
 
         const engine = gs.ShardedGraphEngine.create(
             self.allocator,
@@ -10129,12 +13129,13 @@ pub const StorageAdapter = struct {
             // mapping is consistent whether the caller reads via the adapter
             // or directly via the per-shard label_store.
             .label_dict = LabelStringDict.initView(&engine.shards[0].label_dict),
-            .exact_node_property_index = NodePropertyExactIndex.init(self.allocator),
+            .exact_node_property_index = NodePropertyExactIndex.initForGraph(self.allocator, cfg.encryption_key, graph_uuid),
             .merge_tuple_locks = merge_tuple_locks,
             .name = owned_name,
             .uuid = graph_uuid,
-            .audit_logger = if (is_security_graph) initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
+            .audit_logger = if (is_security_graph) try initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
             .ts_store = try initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
+            .label_report = label_report,
         };
 
         // Initialise per-graph FTS (fresh index for new graphs).
@@ -10188,8 +13189,6 @@ pub const StorageAdapter = struct {
 
     /// Open an existing graph engine from a known UUID directory.
     fn openGraphLocked(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8) !*ManagedGraph {
-        try self.sanitizeFreeStoreBeforeOpenLocked(name, graph_uuid);
-
         var cfg = self.config;
         cfg.data_dir = self.data_dir;
 
@@ -10199,18 +13198,42 @@ pub const StorageAdapter = struct {
         // `.deferred` (GEODE_WAL_SYNC=deferred bulk-load knob).
         const is_security_graph = std.mem.eql(u8, name, "__geode_security");
         if (is_security_graph) cfg.sync_mode = .sync_each_commit;
+        // SONNY-6527: shard label-dictionary findings, logged with the graph.
+        const label_report = try label_dict_divergence.ReportCtx.create(self.allocator, name);
+        errdefer self.allocator.destroy(label_report);
+        cfg.label_dict_report = label_report.report();
 
-        const engine = gs.ShardedGraphEngine.open(
+        // SONNY-6524: a graph whose shard label dictionaries disagree is
+        // refused (LabelDictionaryDiverged) unless the operator asked for the
+        // shard 0 rewrite and the disagreement is the shape it is right for.
+        const engine = label_dict_divergence.openShardedEngine(
             self.allocator,
             self.data_dir,
+            name,
             graph_uuid,
             cfg,
         ) catch |err| {
-            log.err("failed to open ShardedGraphEngine for graph '{s}': {}", .{ name, err });
+            // LabelDictionaryDiverged is logged there, with the shape and the repair.
+            // SONNY-6551: through the structured logger, as the other
+            // operator-facing errors of this file are (GAP-ENT-0038): the
+            // std.log line was counted by the Zig test runner as a failure of
+            // every test that opens a damaged graph on purpose
+            // (test-admin-bootstrap), though the error is returned and the
+            // caller fails closed on it.
+            if (err != error.LabelDictionaryDiverged) slog.err("failed to open ShardedGraphEngine for graph", &.{
+                SAttr.string("graph", name),
+                SAttr.err("error", err),
+            });
             return err;
         };
         // error-policy: A — best-effort close on an already-failing path.
         errdefer engine.close() catch {};
+
+        // SONNY-6384: before any write can land in a WAL that recovery would skip.
+        healWalLsnAnchor(engine) catch |err| {
+            log.err("failed to anchor the WAL LSNs of graph '{s}' at their last checkpoint: {}", .{ name, err });
+            return err;
+        };
 
         const mg = try self.allocator.create(ManagedGraph);
         errdefer self.allocator.destroy(mg);
@@ -10224,12 +13247,13 @@ pub const StorageAdapter = struct {
         mg.* = .{
             .engine = engine,
             .label_dict = LabelStringDict.initView(&engine.shards[0].label_dict),
-            .exact_node_property_index = NodePropertyExactIndex.init(self.allocator),
+            .exact_node_property_index = NodePropertyExactIndex.initForGraph(self.allocator, cfg.encryption_key, graph_uuid),
             .merge_tuple_locks = merge_tuple_locks,
             .name = owned_name,
             .uuid = graph_uuid,
-            .audit_logger = if (is_security_graph) initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
+            .audit_logger = if (is_security_graph) try initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
             .ts_store = try initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
+            .label_report = label_report,
         };
 
         // gap 0026: after a crash restart, advance the security graph's
@@ -10251,14 +13275,20 @@ pub const StorageAdapter = struct {
         // matches the engine's current epoch AND no committed WAL tail advanced
         // the durable frontier past its covered_lsn. Otherwise fall back to a
         // race-free hydration/lazy rebuild (never a stale serve).
+        // SONNY-6354: the late-key generation is read before the key
+        // configuration the file must match (see `tryReconcileExactIndexOnReopen`).
+        const load_lean_gen = graph_store.leanLateGenMax();
         const load_outcome: ExactIndexLoadOutcome = blk: {
             const dir_path = graphDirPath(self.allocator, self.data_dir, graph_uuid) catch break :blk .absent;
             defer self.allocator.free(dir_path);
-            break :blk mg.exact_node_property_index.loadFromFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg));
+            // SONNY-6590: a plaintext pair from before TDE sealed it goes now.
+            if (mg.exact_node_property_index.cipher != null) dropPlaintextExactIndexFiles(self.allocator, dir_path);
+            break :blk mg.exact_node_property_index.loadFromFile(dir_path, mgCheckpointEpoch(mg), mgDurableFrontierLsn(mg), graph_store.exactIndexConfigHash());
         };
         const loaded_from_disk = load_outcome == .loaded;
         if (loaded_from_disk) {
             // Persisted snapshot loaded: the index is complete and ready.
+            mg.exact_lean_gen.store(load_lean_gen, .release);
             mg.exact_index_built.store(true, .release);
             // GAP-ENT-0048 PRIMARY: record the O(snapshot) reload so a test can
             // prove the reopen engaged the index WITHOUT an O(graph) rebuild.
@@ -10357,18 +13387,70 @@ pub const StorageAdapter = struct {
         return mg;
     }
 
+    const OpenFailure = struct { uuid: [16]u8, err: anyerror };
+
+    // CANARY: REQ=REQ-SONNY-6589-OPEN-FAILURE-CACHED; FEATURE="StorageIntegrity"; ASPECT=GraphOpenFailureRemembered; STATUS=TESTED; TEST=tests/test_sonny6589_broken_graph_open.zig; OWNER=storage; UPDATED=2026-11-15
+    /// SONNY-6589 (6) / SONNY-6554 (7): `openGraphLocked`, once per graph
+    /// per adapter. A graph whose engine could not be opened is not in
+    /// `engines`, so every access opened it again (re-reading its store) and
+    /// logged the failure again: at startup, twice on the first query and in
+    /// the shutdown checkpoint. Its failure is remembered (by name and the
+    /// uuid tried) and answered from then on; a restart, or a DROP GRAPH and
+    /// a new graph under the name (a new uuid), tries again. Reads of it
+    /// still fail closed with the SONNY-6523 quarantine (58000). Running out
+    /// of memory is not remembered. Caller holds `mutex`.
+    fn openGraphRememberingFailureLocked(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8) !*ManagedGraph {
+        // CANARY: REQ=REQ-SONNY-6749-NO-OPEN-DURING-SWAP; FEATURE="Raft Snapshot Persistence"; ASPECT=EngineOpenRefusedMidSwap; STATUS=TESTED; TEST=tests/test_sonny6749_restore_hydration_race.zig; OWNER=storage; UPDATED=2026-11-18
+        // SONNY-6749: its files are being swapped; the caller retries.
+        if (self.restoring_graph_names.contains(name)) return error.WouldBlock;
+        if (self.open_failures.get(name)) |f| {
+            if (std.mem.eql(u8, &f.uuid, &graph_uuid)) return f.err;
+        }
+        return self.openGraphLocked(name, graph_uuid) catch |err| {
+            if (err != error.OutOfMemory) self.rememberOpenFailureLocked(name, graph_uuid, err);
+            return err;
+        };
+    }
+
+    fn rememberOpenFailureLocked(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8, err: anyerror) void {
+        if (self.open_failures.getPtr(name)) |f| {
+            f.* = .{ .uuid = graph_uuid, .err = err };
+            return;
+        }
+        // error-policy: A — out of memory only costs the cache: the next
+        // access opens (and logs) again, as before.
+        const key = self.allocator.dupe(u8, name) catch return;
+        self.open_failures.put(self.allocator, key, .{ .uuid = graph_uuid, .err = err }) catch self.allocator.free(key);
+    }
+
     fn requireExistingGraphLocked(self: *StorageAdapter, graph_name: []const u8) !*ManagedGraph {
         if (self.engines.get(graph_name)) |mg| {
             return mg;
         }
         if (self.findRegistryEntryLocked(graph_name)) |entry| {
-            return self.openGraphLocked(graph_name, entry.uuid);
+            return self.openGraphRememberingFailureLocked(graph_name, entry.uuid);
         }
         return error.GraphNotFound;
     }
 
     fn findRegistryEntryLocked(self: *StorageAdapter, name: []const u8) ?gs.registry.GraphEntry {
         return self.registry.findByName(name);
+    }
+
+    /// SONNY-6433: `resolveLabelScanContext` with the graph pinned
+    /// (SONNY-3028), so it stays allocated while the caller reads it between
+    /// lock holds. The caller unpins it (`unpinGraph`); null pins nothing.
+    fn pinLabelScanContext(self: *StorageAdapter, graph_name: []const u8, label: []const u8) !?LabelScanContext {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        const mg = try self.requireExistingGraphLocked(graph_name);
+        const label_id = mg.label_dict.getId(label) orelse return null;
+        _ = mg.pins.fetchAdd(1, .acq_rel);
+        return .{
+            .mg = mg,
+            .label_id = label_id,
+        };
     }
 
     fn resolveLabelScanContext(self: *StorageAdapter, graph_name: []const u8, label: []const u8) !?LabelScanContext {
@@ -10546,10 +13628,15 @@ pub const StorageAdapter = struct {
             }
 
             const manifest = self.loadPersistedManifestLocked(entry.uuid) catch |err| {
-                slog.err("graph registry entry has no readable manifest; it is skipped in the registry header's next ids", &.{
-                    SAttr.string("graph", entry.name),
-                    SAttr.err("error", err),
-                });
+                // CANARY: REQ=REQ-SONNY-6606-BROKEN-GRAPH-LOG-ONCE; FEATURE="StorageIntegrity"; ASPECT=UnreadableGraphLoggedOnce; STATUS=TESTED; TEST=tests/test_sonny6606_broken_graph_logs.zig; OWNER=storage; UPDATED=2026-11-15
+                // SONNY-6606 (3): once per entry per boot; it was logged at
+                // every registry save (each graph open, every ~30 s).
+                if (self.noteUnreadableManifestLocked(entry.name, entry.uuid)) {
+                    slog.err("graph registry entry has no readable manifest; it is skipped in the registry header's next ids", &.{
+                        SAttr.string("graph", entry.name),
+                        SAttr.err("error", err),
+                    });
+                }
                 next_node_id = @max(next_node_id, self.registry.next_node_id);
                 next_edge_id = @max(next_edge_id, self.registry.next_edge_id);
                 continue;
@@ -10562,9 +13649,81 @@ pub const StorageAdapter = struct {
         self.registry.next_edge_id = next_edge_id;
     }
 
+    /// SONNY-6606 (3): true the first time `name` / `graph_uuid` is noted
+    /// (log it then). Out of memory logs it again next time.
+    fn noteUnreadableManifestLocked(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8) bool {
+        if (self.unreadable_manifests_logged.get(name)) |u| {
+            if (std.mem.eql(u8, &u, &graph_uuid)) return false;
+        }
+        if (self.unreadable_manifests_logged.getPtr(name)) |u| {
+            u.* = graph_uuid;
+            return true;
+        }
+        // error-policy: A — out of memory only costs the dedup.
+        const key = self.allocator.dupe(u8, name) catch return true;
+        self.unreadable_manifests_logged.put(self.allocator, key, graph_uuid) catch self.allocator.free(key);
+        return true;
+    }
+
     fn saveRegistryLocked(self: *StorageAdapter) !void {
         self.refreshRegistryHeaderNextIdsLocked();
-        try self.registry.saveToFile(self.registry_path);
+        // SONNY-6616: the registry names every graph; sealed under a key.
+        // SONNY-6635: under the data directory's identity.
+        var cipher = try self.dataDirWriteCipher();
+        defer if (cipher) |*c| c.deinit();
+        try self.registry.saveToFileWith(self.registry_path, if (cipher) |*c| c else null);
+    }
+
+    /// SONNY-6635: the cipher the data directory's own files are written
+    /// with: bound to its identity under a key, none without one. Under a
+    /// key with no identity (never after `init`) the write is refused
+    /// rather than sealed under the shared `SEAL_UUID`.
+    fn dataDirWriteCipher(self: *const StorageAdapter) !?gs.side_file_crypto.Cipher {
+        const key = self.config.encryption_key orelse return null;
+        const id = self.data_dir_identity orelse return error.DataDirIdentityMissing;
+        return id.cipher(key);
+    }
+
+    /// SONNY-6635: at the end of `init` under a key: give the data directory
+    /// an identity if it has none, reseal the registry and the dropped-graph
+    /// list under it if they were read from a file that was not (plaintext,
+    /// or sealed under `SEAL_UUID`), and record the binding. The binding is
+    /// written last, so an upgrade cut short reads the resealed files under
+    /// the identity next time (`classifyDataDirFile`) and resumes. From then
+    /// on a plaintext or `SEAL_UUID`-sealed file is refused.
+    /// SONNY-6689: record (once) that the directory is upgraded and its
+    /// side files are under the identity.
+    fn recordDataDirSeal(self: *StorageAdapter, key: [32]u8) !void {
+        const id = self.data_dir_identity orelse return error.DataDirIdentityMissing;
+        if (self.data_dir_seal) |m| {
+            if (m.flags & DataDirSealMarker.side_files_bound != 0) return;
+        }
+        const m = DataDirSealMarker{ .uuid = id.uuid, .flags = DataDirSealMarker.side_files_bound };
+        try m.save(self.allocator, self.data_dir, key);
+        self.data_dir_seal = m;
+    }
+
+    fn bindDataDirFiles(self: *StorageAdapter, key: [32]u8) !void {
+        var id = self.data_dir_identity orelse blk: {
+            const fresh = try gs.registry.DataDirIdentity.generate();
+            try fresh.save(self.allocator, self.data_dir, key);
+            self.data_dir_identity = fresh;
+            break :blk fresh;
+        };
+        if (id.registry_bound) return;
+        if (self.registry_plaintext) {
+            try self.saveRegistryLocked();
+            self.registry_plaintext = false;
+            slog.info("resealed the graph registry under the data directory's identity (SONNY-6616, SONNY-6635)", &.{SAttr.string("file", self.registry_path)});
+        }
+        if (self.dropped_names_plaintext) {
+            try self.saveDroppedGraphNamesLocked();
+            self.dropped_names_plaintext = false;
+            slog.info("resealed the dropped-graph names under the data directory's identity (SONNY-6616, SONNY-6635)", &.{SAttr.string("file", self.dropped_graphs_path)});
+        }
+        id.registry_bound = true;
+        try id.save(self.allocator, self.data_dir, key);
+        self.data_dir_identity = id;
     }
 
     fn loadRegistry(self: *StorageAdapter) !void {
@@ -10572,7 +13731,14 @@ pub const StorageAdapter = struct {
             if (err == error.FileNotFound) return err;
             return err;
         };
-        try self.registry.loadFromFile(self.registry_path);
+        // SONNY-6616: sealed under a key; a sealed one without the key
+        // (SideFileEncrypted) or one that fails authentication refuses the
+        // open. SONNY-6635: sealed under the data directory's identity; a
+        // file from before (plaintext, or sealed under SEAL_UUID) is read
+        // only until the identity records the binding, a plaintext one only
+        // with no sign that the directory was sealed, and it is resealed at
+        // the end of `init`.
+        self.registry_plaintext = try loadDataDirRegistry(self.allocator, &self.registry, self.data_dir, self.registry_path, self.config.encryption_key, self.data_dir_identity);
     }
 
     // ------------------------------------------------------------------
@@ -10588,6 +13754,9 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index
         // (adding a label re-indexes the node's properties under the new label).
         try ensureExactNodePropertyIndexBuilt(self, mg);
@@ -10595,19 +13764,13 @@ pub const StorageAdapter = struct {
         const label_id = try resolvePersistedLabelId(mg, label);
         const node_shard = mg.shardEngineForNode(node_id);
         // R10: join active session/statement engine txn if on the same shard.
-        if (currentStatementTxnForGraph(graph_name)) |s| {
-            if (shardLocalTxnForNode(s.txn_id, node_id)) |local| {
-                try node_shard.addLabelTxn(node_id, label_id, local);
-                // gap 0026: WAL-log the node's REAL label page (see
-                // relogSecurityLabelPageTxn) — no-op outside __geode_security.
-                try relogSecurityLabelPageTxn(mg, node_shard, node_id, local);
-            } else {
-                try mg.engine.addLabel(node_id, label_id);
-                try relogSecurityLabelPageAutoCommit(mg, node_shard, node_id);
-            }
+        if (try self.statementLocalTxn(graph_name, node_id)) |local| { // SONNY-6658
+            try node_shard.addLabelTxn(node_id, label_id, local);
         } else {
-            try mg.engine.addLabel(node_id, label_id);
-            try relogSecurityLabelPageAutoCommit(mg, node_shard, node_id);
+            mg.engine.addLabel(node_id, label_id) catch |err| {
+                noteAutoCommitFailure(mg, node_id, err, "label add (auto-commit)"); // SONNY-6601 (3)
+                return err;
+            };
         }
         try addNodePropertiesForLabels(mg, node_id, &[_]gs.LabelId{label_id}, rec.prop_head);
     }
@@ -10620,6 +13783,9 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
         // H4: a live write must never mutate an unbuilt (deferred) exact index
         // (removing a label drops the node's postings under that label).
         try ensureExactNodePropertyIndexBuilt(self, mg);
@@ -10628,14 +13794,13 @@ pub const StorageAdapter = struct {
         removeNodePropertiesForLabels(mg, node_id, &[_]gs.LabelId{label_id}, rec.prop_head);
         const node_shard = mg.shardEngineForNode(node_id);
         // R10: join active session/statement engine txn if on the same shard.
-        if (currentStatementTxnForGraph(graph_name)) |s| {
-            if (shardLocalTxnForNode(s.txn_id, node_id)) |local| {
-                try node_shard.removeLabelTxn(node_id, label_id, local);
-            } else {
-                try mg.engine.removeLabel(node_id, label_id);
-            }
+        if (try self.statementLocalTxn(graph_name, node_id)) |local| { // SONNY-6658
+            try node_shard.removeLabelTxn(node_id, label_id, local);
         } else {
-            try mg.engine.removeLabel(node_id, label_id);
+            mg.engine.removeLabel(node_id, label_id) catch |err| {
+                noteAutoCommitFailure(mg, node_id, err, "label remove (auto-commit)"); // SONNY-6601 (3)
+                return err;
+            };
         }
     }
 
@@ -10645,6 +13810,13 @@ pub const StorageAdapter = struct {
 
     /// Remove a property from an edge. Delegates to the engine's
     /// `removeEdgeProperty` which handles adjacency list scanning internally.
+    ///
+    /// SONNY-6472 (3): inside a statement/session engine txn on the edge's
+    /// shard (the source's), the removal joins it instead: a null tombstone
+    /// (what `removeNodeProperty` writes; reads drop it, SONNY-6433) through
+    /// `setEdgeProperty`, so the request's same-shard changes commit, and are
+    /// lost to a crash, together. The engine's in-place remove commits its own
+    /// txn and has no variant that joins one.
     pub fn removeEdgeProperty(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -10658,7 +13830,24 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
-        try mg.engine.removeEdgeProperty(from_id, edge_id, key);
+        try refuseQuarantinedWrite(mg); // SONNY-6523
+        const security_hold = try self.holdSecurityGraphForWrite(mg); // SONNY-6528 (2)
+        defer security_hold.release();
+        if (try self.statementLocalTxn(graph_name, from_id) != null) { // SONNY-6658
+            const from_shard = mg.shardEngineForNode(from_id);
+            try from_shard.ensureDerivedHydrated();
+            const entry = (try from_shard.edge_index.get(edge_id)) orelse return error.EdgeNotFound;
+            if (entry.from != from_id) return error.EdgeNotFound;
+            if (entry.prop_head == 0) return; // no properties to remove
+            // Absent key: nothing to remove (no tombstone written).
+            const existing = (try from_shard.getProperty(entry.prop_head, key, self.allocator)) orelse return;
+            freeOwnedStorageProperty(self.allocator, existing);
+            return self.setEdgeProperty(graph_name, from_id, entry.neighbor, edge_id, key, .Null);
+        }
+        mg.engine.removeEdgeProperty(from_id, edge_id, key) catch |err| {
+            noteAutoCommitFailure(mg, from_id, err, "relationship property remove (auto-commit)"); // SONNY-6601 (3)
+            return err;
+        };
     }
 
     // ------------------------------------------------------------------
@@ -10700,6 +13889,7 @@ pub const StorageAdapter = struct {
         self: *StorageAdapter,
         graph_name: []const u8,
     ) !ReadLockAcquisition {
+        try reserveGraphLockSlot(); // SONNY-6433
         const mg = self.pinGraph(graph_name) orelse return error.GraphNotFound;
         const _t_start = monoNanosNow();
         // EDGE-PHASE 40001 FIX #2 (2026-06-22): yield to a pending EXCLUSIVE
@@ -10721,12 +13911,15 @@ pub const StorageAdapter = struct {
             return error.GraphNotFound;
         }
         const hold_start_ns = monoNanosNow();
+        noteGraphLockTaken(mg); // SONNY-6375
+        noteReadLockTaken(mg);
         return .{ .mg = mg, .hold_start_ns = hold_start_ns };
     }
 
     pub fn releaseGraphReadLock(self: *StorageAdapter, mg: *ManagedGraph, hold_start_ns: u64, site_tag: graph_store.LockSiteTag) void {
         // SONNY-3028: the pin `acquireGraphReadLock` took goes with the lock.
         defer self.unpinGraph(mg);
+        noteReadLockReleased(mg);
         const _hold_ns = monoNanosNow() -| hold_start_ns;
         _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
         const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
@@ -10741,7 +13934,9 @@ pub const StorageAdapter = struct {
             .fallback => _ = mg.rwlock_shared_hold_fallback_ns_total.fetchAdd(_hold_ns, .monotonic),
             .misc => {}, // intentionally not decomposed
         }
+        noteGraphLockReleased(mg); // SONNY-6375
         mg.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+        wakeExclusiveWaiter(mg); // SONNY-6783
     }
 
     /// Test helper: look up a `*ManagedGraph` by name without acquiring
@@ -10756,6 +13951,7 @@ pub const StorageAdapter = struct {
     /// Acquire an exclusive (write) lock on the named graph.
     /// Caller MUST call releaseGraphWriteLock when done.
     pub fn acquireGraphWriteLock(self: *StorageAdapter, graph_name: []const u8) !*ManagedGraph {
+        try reserveGraphLockSlot(); // SONNY-6433
         // SONNY-3028: pinned until `releaseGraphWriteLock`.
         const mg = self.pinGraph(graph_name) orelse return error.GraphNotFound;
         errdefer self.unpinGraph(mg);
@@ -10852,7 +14048,78 @@ pub const StorageAdapter = struct {
             mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
             return error.GraphNotFound;
         }
+        mg.write_holder.store(currentThreadTag(), .release);
+        noteGraphLockTaken(mg); // SONNY-6375
         return mg;
+    }
+
+    /// SONNY-6425 item 5: the graphs whose read lock this thread holds
+    /// through `acquireGraphReadLock` (a graph held twice has depth 2); see
+    /// `threadHoldsGraphReadLock`. A thread holds a handful at most; one
+    /// taken while all slots are in use is counted in
+    /// `t_read_locks_untracked`.
+    const HeldReadLock = struct { mg: ?*ManagedGraph = null, depth: u32 = 0 };
+    threadlocal var t_read_locks: [8]HeldReadLock = [_]HeldReadLock{.{}} ** 8;
+    threadlocal var t_read_locks_untracked: u32 = 0;
+
+    fn noteReadLockTaken(mg: *ManagedGraph) void {
+        for (&t_read_locks) |*held| {
+            if (held.mg == mg) {
+                held.depth += 1;
+                return;
+            }
+        }
+        for (&t_read_locks) |*held| {
+            if (held.depth == 0) {
+                held.* = .{ .mg = mg, .depth = 1 };
+                return;
+            }
+        }
+        t_read_locks_untracked += 1;
+    }
+
+    fn noteReadLockReleased(mg: *ManagedGraph) void {
+        for (&t_read_locks) |*held| {
+            if (held.mg == mg and held.depth > 0) {
+                held.depth -= 1;
+                if (held.depth == 0) held.mg = null;
+                return;
+            }
+        }
+        if (t_read_locks_untracked > 0) t_read_locks_untracked -= 1;
+    }
+
+    /// SONNY-3135 (N7c): this thread's tag for `ManagedGraph.write_holder`.
+    fn currentThreadTag() u64 {
+        return @as(u64, std.Thread.getCurrentId()) + 1;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6425-DROP-OWN-READ-LOCK; FEATURE="MultiGraphIsolation"; ASPECT=ReadHolderTracking; STATUS=TESTED; TEST=tests/test_sonny6425_drop_under_own_read_lock.zig; OWNER=storage; UPDATED=2026-11-12
+    /// SONNY-6425 item 5: does the calling thread hold `graph_name`'s read
+    /// lock through the graph lock API (`acquireGraphReadLock`)? `dropGraph`
+    /// refuses then: its write-lock acquire would wait for this thread's own
+    /// shared hold forever. True also when the thread holds more read locks
+    /// than the per-thread table records (it cannot tell, so it refuses). A
+    /// brief lookup under `mutex` (tier 0); no graph lock is taken.
+    pub fn threadHoldsGraphReadLock(self: *StorageAdapter, graph_name: []const u8) bool {
+        if (t_read_locks_untracked > 0) return true;
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const mg = self.engines.get(graph_name) orelse return false;
+        for (t_read_locks) |held| {
+            if (held.mg == mg and held.depth > 0) return true;
+        }
+        return false;
+    }
+
+    /// SONNY-3135 (N7c): does the calling thread hold `graph_name`'s write
+    /// lock through the graph lock API? A brief lookup under `mutex` (tier
+    /// 0); no graph lock is taken.
+    pub fn threadHoldsGraphWriteLock(self: *StorageAdapter, graph_name: []const u8) bool {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const mg = self.engines.get(graph_name) orelse return false;
+        return mg.write_holder.load(.acquire) == currentThreadTag();
     }
 
     /// Deadline-aware variant of `acquireGraphWriteLock`.
@@ -10902,6 +14169,7 @@ pub const StorageAdapter = struct {
         graph_name: []const u8,
         deadline_mono_ns: u64,
     ) !*ManagedGraph {
+        try reserveGraphLockSlot(); // SONNY-6433
         // SONNY-3028: pinned until `releaseGraphWriteLock`.
         const mg = self.pinGraph(graph_name) orelse return error.GraphNotFound;
         errdefer self.unpinGraph(mg);
@@ -10937,6 +14205,9 @@ pub const StorageAdapter = struct {
         _ = mg.exclusive_waiting.fetchAdd(1, .release);
         defer _ = mg.exclusive_waiting.fetchSub(1, .release);
 
+        // SONNY-6783: read before each probe, so a release between a failed
+        // probe and the wait below ends the wait at once.
+        var seen_release = mg.lock_release_seq.load(.acquire);
         // Fast path: uncontended acquire in one call.
         if (mg.rwlock.tryLock(io)) {
             _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
@@ -10979,13 +14250,17 @@ pub const StorageAdapter = struct {
             }
             const remaining = deadline_mono_ns - now;
             const nap_ns = @min(sleep_ns, remaining);
-            {
-                const req = std.os.linux.timespec{
-                    .sec = @intCast(nap_ns / std.time.ns_per_s),
-                    .nsec = @intCast(nap_ns % std.time.ns_per_s),
-                };
-                std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
-            }
+            // SONNY-6783: nap until the lock is let go or the nap ends. Napping
+            // without a wake left the lock idle while every waiter slept (16
+            // writers ran at half single-thread speed on macOS). The nap stays
+            // bounded, so a release site that does not wake costs at most the
+            // nap and a lost wake can never park a writer (HANG FIX above).
+            const nap: std.Io.Timeout = .{ .duration = .{
+                .raw = std.Io.Duration.fromNanoseconds(@intCast(nap_ns)),
+                .clock = .awake,
+            } };
+            io.futexWaitTimeout(u32, &mg.lock_release_seq.raw, seen_release, nap) catch {};
+            seen_release = mg.lock_release_seq.load(.acquire);
             if (mg.rwlock.tryLock(io)) {
                 _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
                 return lockedUnlessDropped(mg);
@@ -10994,8 +14269,20 @@ pub const StorageAdapter = struct {
         }
     }
 
+    /// SONNY-6783: wakes one writer waiting in the contended slow path of
+    /// `acquireGraphWriteLockCancelable` after the lock was let go. Free when
+    /// no exclusive acquirer waits. The caller still pins `mg`.
+    fn wakeExclusiveWaiter(mg: *ManagedGraph) void {
+        if (mg.exclusive_waiting.load(.seq_cst) == 0) return;
+        _ = mg.lock_release_seq.fetchAdd(1, .release);
+        std.Io.Threaded.global_single_threaded.io().futexWake(u32, &mg.lock_release_seq.raw, 1);
+    }
+
     pub fn releaseGraphWriteLock(self: *StorageAdapter, mg: *ManagedGraph) void {
+        mg.write_holder.store(0, .release);
+        noteGraphLockReleased(mg); // SONNY-6375
         mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+        wakeExclusiveWaiter(mg); // SONNY-6783
         unclaimWriteLock(mg);
         // SONNY-3028: and the pin the acquire took. A graph this thread
         // dropped while it held the lock is freed here, when no other thread
@@ -11013,7 +14300,7 @@ pub const StorageAdapter = struct {
     ///
     /// Caller contract:
     ///   const txn = try adapter.beginStatementTxn(graph_name);
-    ///   errdefer txn.abort();
+    ///   errdefer txn.fail();
     ///   // …adapter mutation calls on `graph_name`…
     ///   try txn.commit();
     ///
@@ -11024,6 +14311,10 @@ pub const StorageAdapter = struct {
     /// operation.  We log and return `error.NestedStatementTxn` rather
     /// than silently overwriting the thread-local.
     pub fn beginStatementTxn(self: *StorageAdapter, graph_name: []const u8, out: *StatementTxn) !void {
+        settleFailedStatementTxn(); // SONNY-6529
+        // SONNY-6658: an auto-commit statement's transaction is open until
+        // the statement ends; a later executor of the statement joins it.
+        if (t_current_statement_txn != null and t_current_statement_txn == t_auto_statement_txn) return error.NestedStatementTxn;
         if (t_current_statement_txn != null) {
             log.err("adapter.beginStatementTxn called with an existing statement txn on this thread (graph={s})", .{graph_name});
             return error.NestedStatementTxn;
@@ -11034,7 +14325,16 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk self.engines.get(graph_name) orelse return error.GraphNotFound;
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
 
+        // CANARY: REQ=REQ-SONNY-2978-OVERLAPPING-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=SpanningTxnKeepsWalBatch; STATUS=TESTED; TEST=tests/test_sonny2978_overlapping_engine_txn_crash.zig; OWNER=storage; UPDATED=2026-11-14
+        // SONNY-6528 (7): the transaction keeps the shard WAL record batch
+        // `beginTxn` opened (GAP-0900), though it spans adapter calls that
+        // commit their own transactions on its shard. Its images reach the
+        // log at its commit, after those transactions' newer ones; recovery
+        // (graph-storage 0.4.14, SONNY-6473) applies per page only the
+        // highest-LSN committed image, so the late older image no longer
+        // undoes their committed change after a crash (SONNY-2978).
         const txn_id = try mg.engine.beginTxn();
         out.* = .{
             .mg = mg,
@@ -11062,6 +14362,7 @@ pub const StorageAdapter = struct {
         shard_idx: usize,
         out: *StatementTxn,
     ) !void {
+        settleFailedStatementTxn(); // SONNY-6529
         if (t_current_statement_txn != null) return error.NestedStatementTxn;
 
         const mg = blk: {
@@ -11069,6 +14370,7 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk self.engines.get(graph_name) orelse return error.GraphNotFound;
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
 
         // Open a local txn on the shard directly, then re-encode it in the
         // ShardedGraphEngine wire format so commitTxn/abortTxn route back.
@@ -11083,6 +14385,38 @@ pub const StorageAdapter = struct {
         t_current_statement_txn = out;
     }
 
+    /// SONNY-6658: an auto-commit statement with no engine transaction open
+    /// on this thread (`deferToStatementEnd`) opens one on `shard_idx`, the
+    /// shard of its write, committed when the statement ends
+    /// (`commitAutoStatementTxn`). Null otherwise, and when the graph does
+    /// not exist yet.
+    fn openAutoStatementTxn(self: *StorageAdapter, graph_name: []const u8, shard_idx: usize) !?*StatementTxn {
+        if (t_current_statement_txn != null or t_failed_statement_txn != null) return null;
+        if (!deferToStatementEnd()) return null;
+        self.beginStatementTxnForShard(graph_name, shard_idx, &t_auto_statement_txn_storage) catch |err| switch (err) {
+            error.GraphNotFound => return null,
+            else => return err,
+        };
+        t_auto_statement_txn = &t_auto_statement_txn_storage;
+        return t_auto_statement_txn;
+    }
+
+    /// SONNY-6658: the engine transaction a write on node slot `slot` (a
+    /// relationship's: its source's) of `graph_name` joins: the statement's or
+    /// the session's when it is on the slot's shard, or an auto-commit
+    /// statement's opened now (`openAutoStatementTxn`). Null: the write
+    /// commits an engine transaction of its own, and the statement's undo is
+    /// on disk first (`statement_undo.beforeOwnEngineCommit`).
+    fn statementLocalTxn(self: *StorageAdapter, graph_name: []const u8, slot: u64) !?gs.TxnId {
+        if (currentStatementTxnForGraph(graph_name)) |s| {
+            if (shardLocalTxnForNode(s.txn_id, slot)) |local| return local;
+        } else if (try self.openAutoStatementTxn(graph_name, gs.shard_count.shardOfNode(slot))) |s| {
+            return shardLocalTxnForNode(s.txn_id, slot);
+        }
+        try statement_undo.beforeOwnEngineCommit();
+        return null;
+    }
+
     /// R9 (2026-04-22): open an engine transaction that lives for the
     /// lifetime of a Geode-level logical transaction (BEGIN TX … COMMIT).
     /// All subsequent mutation calls from this thread on `graph_name`
@@ -11094,6 +14428,7 @@ pub const StorageAdapter = struct {
     /// per-statement txns via `beginStatementTxn` (preferred) or simply
     /// lets the adapter's auto-batch (R7) path handle those sub-ops.
     pub fn beginSessionTxn(self: *StorageAdapter, graph_name: []const u8, out: *StatementTxn) !void {
+        settleFailedStatementTxn(); // SONNY-6529
         if (t_session_engine_txn != null) {
             log.err("adapter.beginSessionTxn called with an existing session txn on this thread (graph={s})", .{graph_name});
             return error.NestedSessionTxn;
@@ -11108,7 +14443,9 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk self.engines.get(graph_name) orelse return error.GraphNotFound;
         };
+        try refuseQuarantinedWrite(mg); // SONNY-6523
 
+        // SONNY-6528 (7): keeps its WAL batch, as `beginStatementTxn`.
         const txn_id = try mg.engine.beginTxn();
         out.* = .{
             .mg = mg,
@@ -11126,10 +14463,12 @@ pub const StorageAdapter = struct {
         try commitThreadSessionTxn();
     }
 
-    /// R9: abort the session-scoped engine txn (no data-durability fsync).
-    pub fn abortSessionTxn(self: *StorageAdapter) void {
+    /// R9: end the session-scoped engine txn. SONNY-6529: it commits (the
+    /// store's in-memory copy holds its writes; the undo log undoes them):
+    /// see `endThreadSessionTxn`. It was `abortSessionTxn`.
+    pub fn endSessionTxn(self: *StorageAdapter) void {
         _ = self;
-        abortThreadSessionTxn();
+        endThreadSessionTxn();
     }
 
     /// R9 (2026-04-22, lazy): open a session-scoped engine txn, for the
@@ -11174,6 +14513,22 @@ pub const StorageAdapter = struct {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.requireExistingGraphLocked(graph_name);
+    }
+
+    // CANARY: REQ=REQ-SONNY-3121-DIRECT-BULK-PIN; FEATURE="MultiGraphIsolation"; ASPECT=PinnedBulkLookup; STATUS=TESTED; TEST=tests/test_sonny3121_direct_bulk_pin.zig; OWNER=storage; UPDATED=2026-11-13
+    /// SONNY-3121: `getOrCreateGraph`, with a pin taken under the same hold of
+    /// the adapter's mutex, for the self-locking bulk helpers. With group
+    /// commit off the QUIC handler calls them with no graph lock (which pins)
+    /// and no coordinator pin, and a DROP GRAPH between their lookup and their
+    /// locks freed the graph under them. The caller unpins it (`unpinGraph`)
+    /// and treats a graph found dropped (`isDropped`) as GraphNotFound.
+    pub fn pinOrCreateGraph(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        // SONNY-6472 (2): never a graph dropped since the adapter opened.
+        const mg = try self.getOrCreateGraphLocked(name);
+        _ = mg.pins.fetchAdd(1, .acq_rel);
+        return mg;
     }
 
     /// SONNY-3028: pin `graph_name`'s graph (`ManagedGraph.pins`) for a caller
@@ -11326,7 +14681,18 @@ fn hashPropertyValue(seed: u64, value: graph_store.PropertyValue) u64 {
     };
     h = std.hash.Wyhash.hash(h, &[_]u8{tag});
     switch (value) {
-        .String => |s| h = std.hash.Wyhash.hash(h, s),
+        // SONNY-3055: a string by its NFC form, the form MERGE compares, so
+        // 'é' and 'e' + U+0301 take one tuple lock.
+        .String => |s| {
+            // Out of memory canonicalizing a non-NFC string hashes its raw
+            // bytes: two forms may then take two locks, as before SONNY-3055.
+            var sfa = std.heap.stackFallback(1024, std.heap.smp_allocator);
+            const a = sfa.get();
+            if (canonical_string.canonical(a, s)) |c| {
+                defer c.deinit(a);
+                h = std.hash.Wyhash.hash(h, c.bytes);
+            } else |_| h = std.hash.Wyhash.hash(h, s);
+        },
         .Bool => |b| h = std.hash.Wyhash.hash(h, if (b) &[_]u8{1} else &[_]u8{0}),
         .Null, .ExtValue => {},
         .Int, .Float, .Decimal => unreachable,
@@ -11449,8 +14815,24 @@ fn copySmallestExactCandidates(
         try allocator.alloc(u64, 0);
 }
 
-fn nodeMatchesMergeProps(node: *const graph_store.Node, graph_name: []const u8, label: []const u8, props: []const StorageAdapter.PropKV) bool {
+// CANARY: REQ=REQ-SONNY-2976-MERGE-TENANT-SCOPE; FEATURE="MergeRowVisibility"; ASPECT=BulkMergeTenantScope; STATUS=TESTED; TEST=tests/test_sonny2976_merge_fast_path_tenant_scope.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-2976: the tenant a bulk MERGE of a request tagged `request_tenant`
+/// matches within: that tenant, or null (every tenant) for an unscoped
+/// request (`default` or empty). The same rule as
+/// `tenancy.resolveTenantFilter` in non-strict mode (under strict tenancy
+/// the QUIC gate refuses an unscoped request before any fast path), and as
+/// the general executor's MERGE, which confines a match to the session's
+/// exact tenant (`crud_operations.nodeMatchesPattern`). MERGE's property
+/// index has no tenant in its key, so without this a request of tenant B
+/// matched, rewrote and answered tenant A's node.
+fn mergeTenantScope(request_tenant: []const u8) ?[]const u8 {
+    if (request_tenant.len == 0 or std.mem.eql(u8, request_tenant, graph_store.DEFAULT_TENANT_ID)) return null;
+    return request_tenant;
+}
+
+fn nodeMatchesMergeProps(node: *const graph_store.Node, graph_name: []const u8, label: []const u8, props: []const StorageAdapter.PropKV, tenant: ?[]const u8) bool {
     if (!std.mem.eql(u8, node.graph_name, graph_name)) return false;
+    if (tenant) |t| if (!std.mem.eql(u8, node.tenant_id, t)) return false;
     var has_label = false;
     for (node.labels) |actual| {
         if (std.mem.eql(u8, actual, label)) {
@@ -11475,6 +14857,7 @@ fn findNodeMatchingMergeProps(
     graph_name: []const u8,
     label: []const u8,
     props: []const StorageAdapter.PropKV,
+    tenant: ?[]const u8,
 ) !?u64 {
     // CANARY: REQ=REQ-QUIC-HC-111; FEATURE="High-Concurrency Mutations"; ASPECT=MultiPropertyMergeIndexedProbe; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=storage; UPDATED=2026-05-27
     //
@@ -11514,7 +14897,12 @@ fn findNodeMatchingMergeProps(
             // result and durability are unchanged.
             .found => {
                 _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
-                return cid;
+                // SONNY-2976: the composite entry names the lowest holder in
+                // ANY tenant. Of another tenant, it is not this request's
+                // match and does not prove it has none: search the request's
+                // holders below.
+                const t = tenant orelse return cid;
+                if (try store.nodeTaggedTenant(cid, t)) return cid;
             },
             .not_found => {
                 _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
@@ -11538,7 +14926,7 @@ fn findNodeMatchingMergeProps(
     // written, so the MERGE that registers the key would find none of them
     // and create a second node (`{a: 1.5, b: 'k'}` after
     // `CREATE (:T {a: 1.5, b: 'k'})`). Scan the label instead.
-    if (graph_store.leanIndexingEnabled()) return lowestLabelNodeMatchingMergeProps(allocator, store, graph_name, label, props);
+    if (graph_store.leanIndexingEnabled()) return lowestLabelNodeMatchingMergeProps(allocator, store, graph_name, label, props, tenant);
 
     // Multi-property MERGE used to scan every node carrying `label` on each
     // miss. Under fan-out this made unique tuple inserts O(label cardinality).
@@ -11575,8 +14963,8 @@ fn findNodeMatchingMergeProps(
         // GAP-0046: hydrate-on-miss. Under a bounded node cache (or right after a
         // deferred reopen) the matching node need not be resident; a plain
         // `getPtr` would miss it and the MERGE would wrongly create a duplicate.
-        const node = (store.nodes.getOrHydratePtr(public_id) catch null) orelse continue;
-        if (nodeMatchesMergeProps(node, graph_name, label, props)) lowest = public_id;
+        const node = (try store.nodes.getOrHydratePtr(public_id)) orelse continue;
+        if (nodeMatchesMergeProps(node, graph_name, label, props, tenant)) lowest = public_id;
     }
     return lowest;
 }
@@ -11589,6 +14977,7 @@ fn lowestLabelNodeMatchingMergeProps(
     graph_name: []const u8,
     label: []const u8,
     props: []const StorageAdapter.PropKV,
+    tenant: ?[]const u8,
 ) !?u64 {
     const ids = (try store.snapshotNodesByLabel(allocator, graph_name, label)) orelse return null;
     defer allocator.free(ids);
@@ -11596,12 +14985,13 @@ fn lowestLabelNodeMatchingMergeProps(
         graph_name: []const u8,
         label: []const u8,
         props: []const StorageAdapter.PropKV,
+        tenant: ?[]const u8,
 
         fn matches(c: @This(), node: *const graph_store.Node) bool {
-            return nodeMatchesMergeProps(node, c.graph_name, c.label, c.props);
+            return nodeMatchesMergeProps(node, c.graph_name, c.label, c.props, c.tenant);
         }
     };
-    const check = Check{ .graph_name = graph_name, .label = label, .props = props };
+    const check = Check{ .graph_name = graph_name, .label = label, .props = props, .tenant = tenant };
     for (ids) |id| {
         if (try store.residentNodeSatisfies(id, check, Check.matches)) return id;
     }
@@ -11630,6 +15020,30 @@ fn monoNanosNow() u64 {
 // ============================================================================
 // UUID generation helper
 // ============================================================================
+
+// SONNY-6636 (1): test-only crash injection for the graph restore swap
+// (`StorageAdapter.GraphRestoreStep`).
+var g_test_graph_restore_crash: ?StorageAdapter.GraphRestoreStep = null;
+var g_test_graph_restore_crashed: bool = false;
+
+/// SONNY-6636 (1): stop the next graph restore after `step` as a crash
+/// would (nothing more written or cleaned up); null stops none.
+pub fn setGraphRestoreCrashForTesting(step: ?StorageAdapter.GraphRestoreStep) void {
+    g_test_graph_restore_crash = step;
+    g_test_graph_restore_crashed = false;
+}
+
+fn graphRestoreCrashAt(step: StorageAdapter.GraphRestoreStep) bool {
+    if (comptime !builtin.is_test) return false;
+    if (g_test_graph_restore_crash != step) return false;
+    g_test_graph_restore_crashed = true;
+    return true;
+}
+
+fn pathExists(path: []const u8) bool {
+    std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), path, .{}) catch return false;
+    return true;
+}
 
 fn generateUuid() [16]u8 {
     // Pass an explicit cross-platform timestamp: uuid.newV7()'s default clock
@@ -12479,7 +15893,11 @@ test "StorageAdapter: per-graph FTS index is created, persists, and accessible" 
     }
 }
 
-test "StorageAdapter: reopen repairs corrupted free.store" {
+// SONNY-6523 removed the root free.store sanitizer as dead code: every graph
+// is sharded, so nothing reads `<graph root>/free.store` (each shard's own
+// free.store is validated by graph-storage). A stray file there must not
+// affect the reopen; it is no longer truncated (SONNY-6555 item 9).
+test "StorageAdapter: reopen ignores a stray root free.store" {
     const allocator = std.testing.allocator;
 
     var tmp = std.testing.tmpDir(.{});
@@ -12526,8 +15944,6 @@ test "StorageAdapter: reopen repairs corrupted free.store" {
 
         try std.testing.expectEqualStrings("Alice", name_prop.string);
         try std.testing.expectEqual(@as(u64, 1), try adapter.nodeCount(graph_name));
-        const repaired_stat = try std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), free_store_path, .{});
-        try std.testing.expectEqual(@as(u64, 0), repaired_stat.size);
     }
 }
 
@@ -12695,4 +16111,49 @@ test "GAP-0900 throughput: addEx(assume_new) builds a complete low-selectivity p
     try idx2.addEx(2, "k", H, 7, false); // duplicate → scan removes the redundancy
     const p2 = idx2.get(2, "k", H) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(usize, 1), p2.len);
+}
+
+// CANARY: REQ=REQ-SONNY-6345-AUTH-VERIFY-NO-STATE; FEATURE="OfflineAuthStoreSafety"; ASPECT=ReadOnlyRegistryProbe; STATUS=TESTED; TEST=tests/test_sonny6345_auth_cli_and_grant.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6345: whether the store in `data_dir` registers a graph named
+/// `name`, read from its `graph_registry.dat` without opening, creating or
+/// locking anything (`StorageAdapter.init` creates the directory and the
+/// registry). False when the directory or the registry does not exist.
+///
+/// SONNY-6616: `encryption_key` is the store's at-rest key (the registry is
+/// sealed under it); a sealed registry read without it is
+/// `error.SideFileEncrypted`.
+pub fn graphRegisteredOnDisk(allocator: std.mem.Allocator, data_dir: []const u8, name: []const u8, encryption_key: ?[32]u8) !bool {
+    const registry_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{data_dir});
+    defer allocator.free(registry_path);
+    std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), registry_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    var registry = gs.registry.GraphRegistry.init(allocator);
+    defer registry.deinit();
+    try readRegistryOffline(allocator, &registry, data_dir, encryption_key);
+    return registry.findByName(name) != null;
+}
+
+/// SONNY-6635: load `data_dir`'s `graph_registry.dat` into `registry` as
+/// `StorageAdapter.init` reads it (under the data directory's identity; a
+/// plaintext or `SEAL_UUID`-sealed one only until the directory is bound,
+/// a plaintext one only with no sign it was sealed), for an offline reader
+/// that writes nothing: nothing is resealed.
+pub fn readRegistryOffline(allocator: std.mem.Allocator, registry: *gs.registry.GraphRegistry, data_dir: []const u8, encryption_key: ?[32]u8) !void {
+    const registry_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{data_dir});
+    defer allocator.free(registry_path);
+    const identity: ?gs.registry.DataDirIdentity = if (encryption_key) |k| try gs.registry.DataDirIdentity.load(allocator, data_dir, k) else null;
+    // SONNY-6689: as `StorageAdapter.init` checks it.
+    if (encryption_key) |k| try DataDirSealMarker.check(try DataDirSealMarker.load(allocator, data_dir, k), identity);
+    _ = try loadDataDirRegistry(allocator, registry, data_dir, registry_path, encryption_key, identity);
+}
+
+test "SONNY-6716: a configured pool below 16 frames per shard is raised, a larger one is kept" {
+    const floor = StorageAdapter.MIN_POOL_PAGES_PER_SHARD * @as(u32, @intCast(gs.sharded_engine.SHARD_COUNT));
+    try std.testing.expectEqual(floor, StorageAdapter.effectiveBufferPoolPages(96));
+    try std.testing.expectEqual(floor, StorageAdapter.effectiveBufferPoolPages(0));
+    try std.testing.expectEqual(floor, StorageAdapter.effectiveBufferPoolPages(floor));
+    try std.testing.expectEqual(floor + 1, StorageAdapter.effectiveBufferPoolPages(floor + 1));
+    try std.testing.expectEqual(@as(u32, 1024), StorageAdapter.effectiveBufferPoolPages(1024));
 }

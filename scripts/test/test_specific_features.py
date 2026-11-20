@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 ADMIN_USER = os.getenv("GEODE_ADMIN_USERNAME", "geode")
-ADMIN_PASS = os.getenv("GEODE_DEFAULT_PASSWORD", "geode-test-password")
+ADMIN_PASS = os.getenv("GEODE_DEFAULT_PASSWORD", "Geode Test Admin Passphrase")
 
 
 def run_query(query, user=ADMIN_USER, password=ADMIN_PASS, server="127.0.0.1:3141"):

@@ -156,17 +156,15 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         const name = argv[subcmd_idx + 1];
-        // Find and remove policy by name
-        var it = mgr.storage.policy_cache.iterator();
-        while (it.next()) |entry| {
-            // SONNY-2750: never a GPS policy of the same name.
-            if (entry.value_ptr.effectiveKind() != .rls) continue;
-            if (std.mem.eql(u8, entry.value_ptr.getName(), name)) {
-                mgr.storage.removePolicy(entry.key_ptr.*) catch {};
-                break;
-            }
-        }
-        printOut("Policy '{s}' deleted\n", .{name});
+        // SONNY-2750: never a GPS policy of the same name. SONNY-6352: a
+        // removal that fails is reported (it was dropped, and the policy
+        // reported deleted while it stayed stored), and so is a name with no
+        // RLS policy (it was reported deleted too).
+        const outcome = cli_auth.removeRlsPolicyByName(&mgr, name) catch |err| {
+            std.debug.print("Error: failed to delete policy '{s}': {s} — the policy was NOT deleted\n", .{ name, @errorName(err) });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        printOut("Policy '{s}' {s}\n", .{ name, if (outcome == .removed) "deleted" else "not found (noop)" });
         return;
     }
 
@@ -175,93 +173,200 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     std.process.exit(@intFromEnum(ExitCode.usage_error));
 }
 
-/// Grant permission command handler
-/// Handles: grant <permission> [target] [resource] / --to / --resource
+// CANARY: REQ=REQ-SONNY-6586-OFFLINE-GRANT-RULE; FEATURE="OfflineAuthStoreSafety"; ASPECT=GrantMatchesOnlineGrant; STATUS=TESTED; TEST=tests/test_sonny6586_offline_grant_rule.zig; OWNER=security; UPDATED=2026-11-15
+// SONNY-6586: offline `geode grant` / `geode revoke` are the online
+// `GRANT <privilege> ON GRAPH <graph> TO <user>` / `REVOKE ...`: the same
+// rule (geode.security.graph_grant_rules: READ, WRITE, SCHEMA or ALL on one
+// named graph, to a user that exists) and the same GraphGrant records,
+// stored by the same AuthGraphManager write-through the server uses and
+// loads at startup. They stored a free-form Permission record (any name,
+// the principal in its conditions) that no authorization path reads, and
+// their one rule was hard-coded: `admin` only to a principal named "admin".
+// `admin` is a role: `geode user assign-role <user> admin`. The authority
+// here is the data directory itself, as for every offline auth command (it
+// runs only while no server holds the directory).
+
+const grant_rules = geode.security.graph_grant_rules;
+
+const GrantArgs = struct {
+    privilege: []const u8,
+    user: []const u8,
+    graph: []const u8,
+};
+
+/// `<privilege> [<graph>] <user> | --to/--from <user> | --graph <graph>`.
+/// A usage error exits 2.
+fn parseGrantArgs(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize, comptime is_grant: bool) !GrantArgs {
+    const user_flag = if (is_grant) "--to" else "--from";
+    var user: ?[]const u8 = null;
+    var graph: []const u8 = "";
+    var positional = std.ArrayList([]const u8).empty;
+    defer positional.deinit(allocator);
+    var i = start_idx + 1;
+    while (i < argv.len) : (i += 1) {
+        if (std.mem.eql(u8, argv[i], user_flag) and i + 1 < argv.len) {
+            user = argv[i + 1];
+            i += 1;
+        } else if ((std.mem.eql(u8, argv[i], "--graph") or std.mem.eql(u8, argv[i], "--resource")) and i + 1 < argv.len) {
+            graph = argv[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--server") and i + 1 < argv.len) {
+            i += 1;
+        } else if (std.mem.eql(u8, argv[i], "--data-dir") and i + 1 < argv.len) {
+            // The directory is not a positional (it was taken as the user).
+            i += 1;
+        } else if (!std.mem.startsWith(u8, argv[i], "--")) {
+            // The first is the privilege, whatever it looks like.
+            if (positional.items.len > 0 and isLikelyServerAddress(argv[i])) continue;
+            try positional.append(allocator, argv[i]);
+        }
+    }
+    if (positional.items.len == 0) {
+        std.debug.print("Error: missing permission to {s}\n", .{if (is_grant) "grant" else "revoke"});
+        if (is_grant) printGrantUsage() else printRevokeUsage();
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+    const rest = positional.items[1..];
+    if (user == null and rest.len > 0) user = rest[rest.len - 1];
+    if (graph.len == 0 and rest.len > 1) graph = rest[0];
+    if (user == null) {
+        if (is_grant) {
+            std.debug.print("Error: target user or role required (--to <target>)\n", .{});
+            printGrantUsage();
+        } else {
+            std.debug.print("Error: --from flag is required\n", .{});
+            printRevokeUsage();
+        }
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+    return .{ .privilege = positional.items[0], .user = user.?, .graph = graph };
+}
+
+/// The action codes of `args`, by the online rule; anything else exits 2.
+fn grantActions(args: GrantArgs, comptime is_grant: bool) []const u8 {
+    const verb = if (is_grant) "grant" else "revoke";
+    const done = if (is_grant) "granted" else "revoked";
+    const actions = grant_rules.actionsOf(args.privilege) orelse {
+        if (std.ascii.eqlIgnoreCase(args.privilege, "admin")) {
+            std.debug.print("Error: 'admin' is not a privilege: admin is a role. Give or take it with 'geode user assign-role <user> <role>' (GRANT ROLE admin TO <user>); nothing was {s}.\n", .{done});
+        } else {
+            std.debug.print("Error: unknown privilege '{s}': geode {s} takes READ, WRITE, SCHEMA or ALL on one graph, as GRANT <privilege> ON GRAPH <graph> TO <user>; nothing was {s}.\n", .{ args.privilege, verb, done });
+        }
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    };
+    grant_rules.checkGraph(args.graph, is_grant) catch |err| {
+        switch (err) {
+            error.GlobalPrivilegeNotSupported => std.debug.print("Error: geode {s} needs a graph (--graph <name>): a privilege is held per graph; global privilege is the user's role (geode user assign-role). Nothing was {s}.\n", .{ verb, done }),
+            error.GrantWildcardNotSupported => std.debug.print("Error: there is no grant on every graph ('*'): grant on one graph, or give the user a built-in role (geode user assign-role); nothing was granted.\n", .{}),
+        }
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    };
+    return actions;
+}
+
+/// The id of `username`, or exit 1 saying it does not exist.
+fn grantUserId(allocator: std.mem.Allocator, mgr: *AuthGraphManager, username: []const u8, comptime done: []const u8) !u64 {
+    return (try mgr.findUserIdByName(username)) orelse {
+        std.debug.print("Error: user '{s}' does not exist; nothing was {s}.\n", .{ username, done });
+        cli_auth.deinitCliAuthWithoutSaving(allocator, mgr);
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+}
+
+/// Grant command handler: `geode grant <privilege> --graph <graph> --to <user>`.
 pub fn cmdGrant(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Open graph store for offline auth operations
+    if (hasHelpFlag(argv, start_idx + 1)) {
+        printGrantUsage();
+        return;
+    }
+    const args = try parseGrantArgs(allocator, argv, start_idx, true);
+    const actions = grantActions(args, true);
+
+    // SONNY-6586: the auth store (and the data directory's lock) is opened
+    // only now, once help and the arguments are handled.
     const data_dir = extractDataDir(argv);
     var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
         std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
-
-    const perm_idx = start_idx + 1;
-    if (perm_idx >= argv.len) {
-        std.debug.print("Error: missing permission to grant\n", .{});
-        printGrantUsage();
-        std.process.exit(@intFromEnum(ExitCode.usage_error));
-    }
-
-    const permission = argv[perm_idx];
-    if (std.mem.eql(u8, permission, "--help") or std.mem.eql(u8, permission, "-h")) {
-        printGrantUsage();
-        return;
-    }
-
-    // Check for trailing help flag
-    if (hasHelpFlag(argv, perm_idx + 1)) {
-        printGrantUsage();
-        return;
-    }
-
-    var target: ?[]const u8 = null;
-    var resource: []const u8 = "";
-    var i = perm_idx + 1;
-    var positional = std.ArrayList([]const u8).empty;
-    defer positional.deinit(allocator);
-    while (i < argv.len) : (i += 1) {
-        if (std.mem.eql(u8, argv[i], "--to") and i + 1 < argv.len) {
-            target = argv[i + 1];
-            i += 1;
-        } else if (std.mem.eql(u8, argv[i], "--resource") and i + 1 < argv.len) {
-            resource = argv[i + 1];
-            i += 1;
-        } else if (std.mem.eql(u8, argv[i], "--server") and i + 1 < argv.len) {
-            // Skip global server flag and its value
-            i += 1;
-        } else if (!std.mem.startsWith(u8, argv[i], "--")) {
-            if (isLikelyServerAddress(argv[i])) continue;
-            positional.append(allocator, argv[i]) catch {};
-        }
-    }
-    if (target == null and positional.items.len > 0) {
-        target = positional.items[positional.items.len - 1];
-    }
-    if (resource.len == 0 and positional.items.len > 1) {
-        resource = positional.items[0];
-    }
-
-    if (target == null) {
-        std.debug.print("Error: target user or role required (--to <target>)\n", .{});
-        printGrantUsage();
-        std.process.exit(@intFromEnum(ExitCode.usage_error));
-    }
-
-    // Deny privilege escalation scenario used in tests
-    if (std.ascii.eqlIgnoreCase(permission, "admin") and !std.ascii.eqlIgnoreCase(target.?, "admin")) {
-        std.debug.print("Permission denied: insufficient privileges to grant '{s}' to '{s}'\n", .{ permission, target.? });
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    }
-
     // SONNY-2798: verify the chain before the change.
-    cli_auth.requireIntactChain(allocator, &mgr, "grant", permission);
+    cli_auth.requireIntactChain(allocator, &mgr, "grant", args.privilege);
 
-    // Persist the permission grant in the graph store
-    // SONNY-3037: a permission id of its own (it took the next user id, so
-    // every grant replaced the one before it).
-    const perm_id = mgr.storage.nextPermissionId();
-    try mgr.storage.persistPermission(perm_id, permission, resource, 0, target);
-    printOut("Granted permission '{s}' to '{s}'{s}{s}\n", .{ permission, target.?, if (resource.len > 0) " on resource " else "", if (resource.len > 0) resource else "" });
+    const uid = try grantUserId(allocator, &mgr, args.user, "granted");
+    const key = try cli_auth.changeKey(allocator);
+    // Every action or none (the write-through takes back what it added).
+    mgr.grantGraphPermissionsWriteThrough(&key, null, uid, args.graph, actions) catch |err| {
+        std.debug.print("Error: the grant could not be stored ({s}); nothing was granted.\n", .{@errorName(err)});
+        cli_auth.deinitCliAuthWithoutSaving(allocator, &mgr);
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    printOut("Granted {s} on {s} to {s}\n", .{ grant_rules.canonicalName(args.privilege), args.graph, args.user });
     // SONNY-2798: exit skips the deferred save; seal and save first.
     cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 
-/// Revoke permission command handler
-/// Handles: revoke <permission> [target] / --from
+/// Revoke command handler: `geode revoke <privilege> --graph <graph> --from <user>`.
 pub fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Open graph store for offline auth operations
+    if (hasHelpFlag(argv, start_idx + 1)) {
+        printRevokeUsage();
+        return;
+    }
+    const args = try parseGrantArgs(allocator, argv, start_idx, false);
+    const actions = grantActions(args, false);
+
+    const data_dir = extractDataDir(argv);
+    var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
+        std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
+    // SONNY-2798: verify the chain before the change.
+    cli_auth.requireIntactChain(allocator, &mgr, "revoke", args.privilege);
+
+    const uid = try grantUserId(allocator, &mgr, args.user, "revoked");
+    const key = try cli_auth.changeKey(allocator);
+    // CANARY: REQ=REQ-SONNY-3037-REVOKE-PRINCIPAL; FEATURE="OfflineAuthStoreSafety"; ASPECT=RevokeMatchesPrincipal; STATUS=TESTED; TEST=tests/test_sonny6586_offline_grant_rule.zig; OWNER=security; UPDATED=2026-11-15
+    // SONNY-3037: the named user's grant only, and a user that holds none
+    // is refused with nothing changed.
+    var held = false;
+    for (actions) |action| {
+        const was = mgr.revokeGraphPermissionWriteThrough(&key, null, uid, args.graph, action) catch |err| {
+            // What was revoked before this action is saved below.
+            std.debug.print("Error: the revoke could not be stored ({s}); revoke again.\n", .{@errorName(err)});
+            cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        held = held or was;
+    }
+    if (!held) {
+        std.debug.print("Error: '{s}' holds no {s} grant on {s}; nothing was revoked.\n", .{ args.user, grant_rules.canonicalName(args.privilege), args.graph });
+        cli_auth.deinitCliAuthWithoutSaving(allocator, &mgr);
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+    printOut("Revoked {s} on {s} from {s}\n", .{ grant_rules.canonicalName(args.privilege), args.graph, args.user });
+    // SONNY-2798: exit skips the deferred save; seal and save first.
+    cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
+    std.process.exit(@intFromEnum(ExitCode.success));
+}
+
+// CANARY: REQ=REQ-SONNY-6647-PRUNE-LEGACY-PERMISSIONS; FEATURE="OfflineAuthStoreSafety"; ASPECT=PruneInertPermissionRecords; STATUS=TESTED; TEST=tests/test_sonny6647_user_permissions.zig; OWNER=security; UPDATED=2026-11-15
+/// `geode auth prune-legacy-permissions [--dry-run] [--data-dir <dir>]`
+/// (SONNY-6647): the Permission records in __geode_security, which the
+/// offline `geode grant` stored before SONNY-6586 (a free-form name, the
+/// grantee in its conditions). No authorization path reads them: per-graph
+/// privileges are GraphGrant records and global privilege is the role.
+/// `--dry-run` lists them; otherwise they are removed and the chain sealed.
+pub fn cmdAuthPruneLegacyPermissions(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    if (hasHelpFlag(argv, start_idx)) {
+        printPruneUsage();
+        return;
+    }
+    var dry_run = false;
+    for (argv[start_idx..]) |a| {
+        if (std.mem.eql(u8, a, "--dry-run")) dry_run = true;
+    }
     const data_dir = extractDataDir(argv);
     var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
         std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
@@ -269,86 +374,45 @@ pub fn cmdRevoke(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     };
     defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
 
-    const perm_idx = start_idx + 1;
-    if (perm_idx >= argv.len) {
-        std.debug.print("Error: missing permission to revoke\n", .{});
-        printRevokeUsage();
-        std.process.exit(@intFromEnum(ExitCode.usage_error));
-    }
-
-    const permission = argv[perm_idx];
-    if (std.mem.eql(u8, permission, "--help") or std.mem.eql(u8, permission, "-h")) {
-        printRevokeUsage();
-        return;
-    }
-
-    if (hasHelpFlag(argv, perm_idx + 1)) {
-        printRevokeUsage();
-        return;
-    }
-
-    var target: ?[]const u8 = null;
-    var resource: []const u8 = "";
-    var i = perm_idx + 1;
-    var positional = std.ArrayList([]const u8).empty;
-    defer positional.deinit(allocator);
-    while (i < argv.len) : (i += 1) {
-        if (std.mem.eql(u8, argv[i], "--from") and i + 1 < argv.len) {
-            target = argv[i + 1];
-            i += 1;
-        } else if (std.mem.eql(u8, argv[i], "--resource") and i + 1 < argv.len) {
-            resource = argv[i + 1];
-            i += 1;
-        } else if (std.mem.eql(u8, argv[i], "--server") and i + 1 < argv.len) {
-            i += 1;
-        } else if (!std.mem.startsWith(u8, argv[i], "--")) {
-            if (isLikelyServerAddress(argv[i])) continue;
-            positional.append(allocator, argv[i]) catch {};
-        }
-    }
-    if (target == null and positional.items.len > 0) {
-        target = positional.items[positional.items.len - 1];
-    }
-    if (resource.len == 0 and positional.items.len > 1) {
-        resource = positional.items[0];
-    }
-
-    if (target == null) {
-        std.debug.print("Error: --from flag is required\n", .{});
-        printRevokeUsage();
-        std.process.exit(@intFromEnum(ExitCode.usage_error));
-    }
-
-    // SONNY-2798: verify the chain before the change.
-    cli_auth.requireIntactChain(allocator, &mgr, "revoke", permission);
-
-    // CANARY: REQ=REQ-SONNY-3037-REVOKE-PRINCIPAL; FEATURE="OfflineAuthStoreSafety"; ASPECT=RevokeMatchesPrincipal; STATUS=TESTED; TEST=tests/test_sonny3037_revoke_principal.zig; OWNER=security; UPDATED=2026-09-27
-    // SONNY-3037: the grants of `permission` to `target` (the principal
-    // `geode grant` records in the permission's conditions), on `resource`
-    // when one is named. It removed the first record with the permission's
-    // name, which could be another principal's, and reported success
-    // whether or not anything matched.
-    var matches = std.ArrayList(u64).empty;
-    defer matches.deinit(allocator);
+    var ids = std.ArrayList(u64).empty;
+    defer ids.deinit(allocator);
     var it = mgr.storage.permission_cache.iterator();
-    while (it.next()) |entry| {
-        const record = entry.value_ptr;
-        if (!std.mem.eql(u8, record.getName(), permission)) continue;
-        const holder = record.getConditions() orelse continue;
-        if (!std.mem.eql(u8, holder, target.?)) continue;
-        if (resource.len > 0 and !std.mem.eql(u8, record.getResource(), resource)) continue;
-        try matches.append(allocator, entry.key_ptr.*);
+    while (it.next()) |entry| try ids.append(allocator, entry.key_ptr.*);
+    std.mem.sort(u64, ids.items, {}, std.sort.asc(u64));
+
+    if (ids.items.len == 0) {
+        printOut("No legacy permission records.\n", .{});
+        cli_auth.deinitCliAuthWithoutSaving(allocator, &mgr);
+        std.process.exit(@intFromEnum(ExitCode.success));
     }
-    if (matches.items.len == 0) {
-        std.debug.print("Error: '{s}' holds no grant of permission '{s}'{s}{s}; nothing was revoked.\n", .{ target.?, permission, if (resource.len > 0) " on resource " else "", if (resource.len > 0) resource else "" });
-        cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
-        std.process.exit(@intFromEnum(ExitCode.general_error));
+    for (ids.items) |id| {
+        const record = mgr.storage.permission_cache.get(id).?;
+        const holder = record.getConditions() orelse "";
+        printOut("  {s} (to '{s}'{s}{s})\n", .{ record.getName(), holder, if (record.getResource().len > 0) ", resource " else "", record.getResource() });
     }
-    for (matches.items) |id| try mgr.storage.removePermission(id);
-    printOut("Revoked permission '{s}' from '{s}'{s}{s}\n", .{ permission, target.?, if (resource.len > 0) " on resource " else "", if (resource.len > 0) resource else "" });
-    // SONNY-2798: exit skips the deferred save; seal and save first.
+    if (dry_run) {
+        printOut("{d} legacy permission records; none is read by any authorization path. Run without --dry-run to remove them.\n", .{ids.items.len});
+        cli_auth.deinitCliAuthWithoutSaving(allocator, &mgr);
+        std.process.exit(@intFromEnum(ExitCode.success));
+    }
+    // SONNY-2798: verify the chain before the change; the change is sealed.
+    cli_auth.requireIntactChain(allocator, &mgr, "auth", "prune-legacy-permissions");
+    for (ids.items) |id| {
+        mgr.storage.removePermission(id) catch |err| {
+            std.debug.print("Error: could not remove permission record {d} ({s}); the records removed before it are saved.\n", .{ id, @errorName(err) });
+            cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+    }
+    printOut("Removed {d} legacy permission records.\n", .{ids.items.len});
     cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
     std.process.exit(@intFromEnum(ExitCode.success));
+}
+
+fn printPruneUsage() void {
+    printOut("geode auth prune-legacy-permissions - Remove the Permission records the offline geode grant stored before SONNY-6586\n", .{});
+    printOut("Usage: geode auth prune-legacy-permissions [--dry-run] [--data-dir <dir>]\n", .{});
+    printOut("No authorization path reads these records; --dry-run lists them.\n", .{});
 }
 
 // Helper functions for usage messages
@@ -363,17 +427,17 @@ fn printPolicyUsage() void {
 }
 
 fn printGrantUsage() void {
-    printOut("geode grant - Grant permissions\n", .{});
-    printOut("Usage: geode grant <permission> [target] [--resource <resource>] [--to <user|role>]\n", .{});
+    printOut("geode grant - Grant a privilege on one graph (offline; as GRANT <privilege> ON GRAPH <graph> TO <user>)\n", .{});
+    printOut("Usage: geode grant <READ|WRITE|SCHEMA|ALL> --graph <graph> --to <user> [--data-dir <dir>]\n", .{});
+    printOut("Admin is a role, not a privilege: geode user assign-role <user> admin\n", .{});
     printOut("Examples:\n", .{});
-    printOut("  geode grant read:users --to alice\n", .{});
-    printOut("  geode grant admin --to admin-role\n", .{});
+    printOut("  geode grant READ --graph sales --to alice\n", .{});
+    printOut("  geode grant ALL --graph sales --to alice\n", .{});
 }
 
 fn printRevokeUsage() void {
-    printOut("geode revoke - Revoke permissions\n", .{});
-    printOut("Usage: geode revoke <permission> [target] [--resource <resource>] [--from <user|role>]\n", .{});
+    printOut("geode revoke - Revoke a privilege on one graph (offline; as REVOKE <privilege> ON GRAPH <graph> FROM <user>)\n", .{});
+    printOut("Usage: geode revoke <READ|WRITE|SCHEMA|ALL> --graph <graph> --from <user> [--data-dir <dir>]\n", .{});
     printOut("Examples:\n", .{});
-    printOut("  geode revoke read:users --from alice\n", .{});
-    printOut("  geode revoke admin --from admin-role\n", .{});
+    printOut("  geode revoke WRITE --graph sales --from alice\n", .{});
 }

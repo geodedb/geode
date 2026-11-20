@@ -51,7 +51,7 @@ const builtin = @import("builtin");
 const platform = @import("platform.zig");
 const pooled = @import("transport/thread_pool");
 
-/// CANARY: REQ=REQ-SHELL-SPINNER-001; FEATURE="ShellProcessingIndicator"; ASPECT=Module; STATUS=TESTED; TEST=tests/test_spinner.zig; OWNER=cli; UPDATED=2026-01-30
+/// CANARY: REQ=REQ-SHELL-SPINNER-001; FEATURE="ShellProcessingIndicator"; ASPECT=Module; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig:"drain: quiet-connection timeout lanes and interrupt lanes"; OWNER=cli; UPDATED=2026-11-12
 /// Cross-platform spinner/activity indicator for long-running shell operations.
 /// Supports multiple terminal types including Unix TTY, Windows Console, and PowerShell.
 /// Terminal type detection for choosing appropriate spinner characters
@@ -181,6 +181,17 @@ pub const Spinner = struct {
     /// Buffer for thread-safe message storage
     message_buffer: [256]u8,
     message_len: usize,
+    /// Where the spinner writes; null writes to the process's stdout. Tests
+    /// set it: the test runner's stdout is its control channel.
+    out: ?*std.Io.Writer = null,
+
+    fn emit(self: *Spinner, bytes: []const u8) void {
+        if (self.out) |w| {
+            w.writeAll(bytes) catch {};
+            return;
+        }
+        platform.getStdoutHandle().writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), bytes) catch {};
+    }
 
     /// Create a new spinner with a message
     pub fn init(allocator: std.mem.Allocator, message: []const u8) Spinner {
@@ -234,9 +245,8 @@ pub const Spinner = struct {
     pub fn start(self: *Spinner) void {
         if (self.terminal_type == .non_interactive) {
             // For non-interactive, just print message once
-            const stdout = platform.getStdoutHandle();
-            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), self.message) catch {};
-            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), " ") catch {};
+            self.emit(self.message);
+            self.emit(" ");
             self.started = true;
             return;
         }
@@ -296,7 +306,6 @@ pub const Spinner = struct {
 
     /// Thread-safe render using message from buffer
     fn renderThreadSafe(self: *Spinner) void {
-        const stdout = platform.getStdoutHandle();
         const frame = self.style.frames[self.frame_index];
 
         // Get message under lock
@@ -315,10 +324,10 @@ pub const Spinner = struct {
             var clear_buf: [512]u8 = undefined;
             const padding = self.last_line_width - line.len;
             @memset(clear_buf[0..padding], ' ');
-            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), line) catch {};
-            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), clear_buf[0..padding]) catch {};
+            self.emit(line);
+            self.emit(clear_buf[0..padding]);
         } else {
-            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), line) catch {};
+            self.emit(line);
         }
 
         self.last_line_width = line.len;
@@ -357,7 +366,6 @@ pub const Spinner = struct {
 
     /// Render the current frame
     fn render(self: *Spinner) void {
-        const stdout = platform.getStdoutHandle();
         const frame = self.style.frames[self.frame_index];
 
         // Build the output line
@@ -370,11 +378,11 @@ pub const Spinner = struct {
             const padding = self.last_line_width - line.len;
             const padded = std.fmt.bufPrint(&clear_buf, "{s}{s}", .{ line, " " ** 50 }) catch line;
             const actual_padded = padded[0..@min(line.len + padding, padded.len)];
-            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), actual_padded) catch {};
-            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r") catch {};
-            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), line) catch {};
+            self.emit(actual_padded);
+            self.emit("\r");
+            self.emit(line);
         } else {
-            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), line) catch {};
+            self.emit(line);
         }
 
         self.last_line_width = line.len;
@@ -391,29 +399,27 @@ pub const Spinner = struct {
             self.animation_pool = null;
         }
 
-        const stdout = platform.getStdoutHandle();
-
         if (self.terminal_type == .non_interactive) {
             if (final_message) |msg| {
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
+                self.emit(msg);
             }
-            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r\n") catch {};
+            self.emit("\r\n");
             self.started = false;
             return;
         }
 
         // Clear the spinner line by overwriting with spaces
-        stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r") catch {};
+        self.emit("\r");
         var clear_buf: [256]u8 = undefined;
         @memset(&clear_buf, ' ');
         const clear_len = @min(self.last_line_width + 5, 250);
-        stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), clear_buf[0..clear_len]) catch {};
-        stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r") catch {};
+        self.emit(clear_buf[0..clear_len]);
+        self.emit("\r");
 
         // Print final message if provided
         if (final_message) |msg| {
-            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
-            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r\n") catch {};
+            self.emit(msg);
+            self.emit("\r\n");
         }
 
         self.started = false;
@@ -600,6 +606,9 @@ test "Spinner.initWithStyle uses custom style" {
 test "Spinner.isRunning tracks state correctly" {
     const allocator = std.testing.allocator;
     var spinner = Spinner.init(allocator, "Test");
+    var spinner_out: std.Io.Writer.Allocating = .init(allocator);
+    defer spinner_out.deinit();
+    spinner.out = &spinner_out.writer;
 
     try std.testing.expect(!spinner.isRunning());
 
@@ -616,23 +625,33 @@ test "Spinner.tick advances frame after interval" {
         .frames = &[_][]const u8{ "A", "B", "C" },
         .interval_ms = 10, // Short interval for testing
     });
+    var spinner_out: std.Io.Writer.Allocating = .init(allocator);
+    defer spinner_out.deinit();
+    spinner.out = &spinner_out.writer;
+    // Render frames (the runner's own stdout is a pipe, which would select
+    // the non-interactive one-line mode).
+    spinner.terminal_type = .unix_tty;
 
     spinner.start();
     try std.testing.expect(spinner.frame_index == 0);
 
-    // Wait for interval to pass
-    std.time.sleep(15 * std.time.ns_per_ms);
+    // Wait for the interval to pass
+    std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(15 * std.time.ns_per_ms), .awake) catch {};
 
-    const updated = spinner.tick();
-    // May or may not update depending on timing, but should not crash
-    _ = updated;
+    try std.testing.expect(spinner.tick());
+    try std.testing.expectEqual(@as(usize, 1), spinner.frame_index);
+    try std.testing.expect(std.mem.indexOf(u8, spinner_out.written(), "B Test") != null);
 
     spinner.stop(null);
+    try std.testing.expect(std.mem.indexOf(u8, spinner_out.written(), "A Test") != null);
 }
 
 test "Spinner.setMessage updates message" {
     const allocator = std.testing.allocator;
     var spinner = Spinner.init(allocator, "Initial");
+    var spinner_out: std.Io.Writer.Allocating = .init(allocator);
+    defer spinner_out.deinit();
+    spinner.out = &spinner_out.writer;
 
     try std.testing.expectEqualStrings("Initial", spinner.message);
 
@@ -652,6 +671,9 @@ test "ProgressSpinner.init sets up correctly" {
 test "ProgressSpinner.increment advances count" {
     const allocator = std.testing.allocator;
     var progress = ProgressSpinner.init(allocator, "Processing", 100);
+    var progress_out: std.Io.Writer.Allocating = .init(allocator);
+    defer progress_out.deinit();
+    progress.spinner.out = &progress_out.writer;
 
     try std.testing.expect(progress.current == 0);
 
@@ -665,6 +687,9 @@ test "ProgressSpinner.increment advances count" {
 test "ProgressSpinner.setCurrent updates value" {
     const allocator = std.testing.allocator;
     var progress = ProgressSpinner.init(allocator, "Processing", 100);
+    var progress_out: std.Io.Writer.Allocating = .init(allocator);
+    defer progress_out.deinit();
+    progress.spinner.out = &progress_out.writer;
 
     progress.setCurrent(50);
     try std.testing.expect(progress.current == 50);
@@ -700,6 +725,9 @@ test "SpinnerStyle constants are valid" {
 test "Spinner handles empty message" {
     const allocator = std.testing.allocator;
     var spinner = Spinner.init(allocator, "");
+    var spinner_out: std.Io.Writer.Allocating = .init(allocator);
+    defer spinner_out.deinit();
+    spinner.out = &spinner_out.writer;
 
     try std.testing.expectEqualStrings("", spinner.message);
     spinner.start();
@@ -712,17 +740,27 @@ test "Spinner success and fail methods work" {
     // Test success
     {
         var spinner = Spinner.init(allocator, "Testing success");
+        var spinner_out: std.Io.Writer.Allocating = .init(allocator);
+        defer spinner_out.deinit();
+        spinner.out = &spinner_out.writer;
         spinner.start();
+        spinner.terminal_type = .non_interactive;
         spinner.success("Done!");
         try std.testing.expect(!spinner.isRunning());
+        try std.testing.expect(std.mem.indexOf(u8, spinner_out.written(), "[OK] Done!\r\n") != null);
     }
 
     // Test fail
     {
         var spinner = Spinner.init(allocator, "Testing fail");
+        var spinner_out: std.Io.Writer.Allocating = .init(allocator);
+        defer spinner_out.deinit();
+        spinner.out = &spinner_out.writer;
         spinner.start();
+        spinner.terminal_type = .non_interactive;
         spinner.fail("Error occurred");
         try std.testing.expect(!spinner.isRunning());
+        try std.testing.expect(std.mem.indexOf(u8, spinner_out.written(), "[FAIL] Error occurred\r\n") != null);
     }
 }
 
@@ -730,7 +768,13 @@ test "Multiple spinners can be created independently" {
     const allocator = std.testing.allocator;
 
     var spinner1 = Spinner.init(allocator, "Spinner 1");
+    var spinner1_out: std.Io.Writer.Allocating = .init(allocator);
+    defer spinner1_out.deinit();
+    spinner1.out = &spinner1_out.writer;
     var spinner2 = Spinner.init(allocator, "Spinner 2");
+    var spinner2_out: std.Io.Writer.Allocating = .init(allocator);
+    defer spinner2_out.deinit();
+    spinner2.out = &spinner2_out.writer;
 
     try std.testing.expectEqualStrings("Spinner 1", spinner1.message);
     try std.testing.expectEqualStrings("Spinner 2", spinner2.message);

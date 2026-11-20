@@ -58,7 +58,7 @@ test "backup and restore basic operations" {
     try testing.expect(nodes.len == 2);
 
     // Check properties were restored
-    const name1 = graph.getNodeProperty(nodes[0], "name");
+    const name1 = (try graph.getNodePropertyOrError(nodes[0], "name"));
     try testing.expect(name1 != null);
 }
 
@@ -201,7 +201,7 @@ test "point-in-time recovery" {
     try backup_mgr.restore(&graph, "test_backup_pitr/backup2.bak", time2);
 
     // Verify we got the modified state
-    const state = graph.getNodeProperty(node1, "state");
+    const state = (try graph.getNodePropertyOrError(node1, "state"));
     try testing.expect(state != null);
     if (state) |val| switch (val) {
         .String => |s| try testing.expect(std.mem.eql(u8, s, "modified")),
@@ -262,7 +262,7 @@ test "backup compression" {
 }
 
 test "REQ-GQL-BACKUP-RESTORE validation" {
-    // CANARY: REQ=REQ-GQL-BACKUP-RESTORE; FEATURE="BackupRestore"; ASPECT=Core; STATUS=TESTED; TEST=test_backup_restore.zig; OWNER=team; UPDATED=2025-10-02
+    // CANARY: REQ=REQ-GQL-BACKUP-RESTORE; FEATURE="BackupRestore"; ASPECT=Core; STATUS=IMPL; TEST=test_backup_restore.zig; OWNER=team; UPDATED=2026-11-14
     const allocator = std.testing.allocator;
 
     const tmp_dir = try std.fs.cwd().makeOpenPath("test_backup_canary", .{});
@@ -312,7 +312,7 @@ test "REQ-GQL-BACKUP-RESTORE validation" {
     const alice_id = try index_mgr.lookupPropertyIndex("person_name", "Alice");
     try testing.expect(alice_id != null);
 
-    const alice_name = graph.getNodeProperty(alice_id.?, "name");
+    const alice_name = (try graph.getNodePropertyOrError(alice_id.?, "name"));
     try testing.expect(alice_name != null);
     if (alice_name) |val| switch (val) {
         .String => |s| try testing.expect(std.mem.eql(u8, s, "Alice")),

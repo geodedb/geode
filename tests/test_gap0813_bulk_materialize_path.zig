@@ -18,6 +18,7 @@
 // Real store, real parser, real executor — no mocks.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 
@@ -117,6 +118,8 @@ fn seedTwoHop(allocator: std.mem.Allocator, graph_name: []const u8, persons: usi
 }
 
 test "GAP-0813: two-hop DISTINCT with projection pruning meets latency budget" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 

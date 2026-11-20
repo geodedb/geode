@@ -2,8 +2,9 @@
 // on the database.
 //
 // SONNY-2803 gated graph, index and constraint DDL on the schema permission
-// for the graph the statement runs on. Indexes and constraints are
-// catalogued database-wide, by label, and bind every graph. So a user with a
+// for the graph the statement runs on. Indexes and constraints were
+// catalogued database-wide, by label, and bound every graph (graph-scoped
+// since SONNY-1319; the database-level gate stays). So a user with a
 // `FOR SCHEMA` grant on one graph (a tenant admin of g2) changed what every
 // other graph enforces (review probe probe_2803_catalog_scope): a UNIQUE or
 // NOT NULL constraint created from g2 refused writes on g1 and default, and
@@ -114,13 +115,19 @@ test "SONNY-3030: a FOR SCHEMA grant on some graphs does not reach the database-
     try testing.expect(try indexExists("probe_idx_g1"));
     _ = try fx.expectRefused(ga, f.rw, "DROP INDEX probe_idx_g1", "42501");
     try testing.expect(try indexExists("probe_idx_g1"));
+    // SONNY-1319: the index is g1's; dropped from g1, the grant holder is
+    // refused there too.
+    _ = try fx.expectRefused(ga, f.rw, "USE GRAPH g1; DROP INDEX probe_idx_g1", "42501");
+    try fx.expectRuns(ga, f.rw, "USE GRAPH default");
+    try testing.expect(try indexExists("probe_idx_g1"));
     _ = try fx.expectRefused(ga, f.rw, "CREATE INDEX probe_idx_rw FOR (n:Item) ON (n.j)", "42501");
     _ = try fx.expectRefused(ga, f.rw, "CREATE INDEX probe_fts_rw FOR (n:Doc) ON (n.body) USING fulltext", "42501");
     _ = try fx.expectRefused(ga, f.rw, "DROP CONSTRAINT probe_u", "42501");
     try testing.expect(!try indexExists("probe_idx_rw"));
 
-    // The Admin may.
-    try fx.expectRuns(ga, f.admin, "DROP INDEX probe_idx_g1");
+    // The Admin may, in g1, the graph whose index it is (SONNY-1319).
+    try fx.expectRuns(ga, f.admin, "USE GRAPH g1; DROP INDEX probe_idx_g1");
+    try fx.expectRuns(ga, f.admin, "USE GRAPH default");
     try testing.expect(!try indexExists("probe_idx_g1"));
 }
 
@@ -135,6 +142,8 @@ test "SONNY-3030: a FOR SCHEMA policy scoped to * is the database-level grant" {
     try fx.expectRuns(ga, f.rw, "USE GRAPH g2; CREATE INDEX probe_idx_all FOR (n:Item) ON (n.k)");
     try fx.expectRuns(ga, f.rw, "USE GRAPH default");
     try testing.expect(try indexExists("probe_idx_all"));
-    try fx.expectRuns(ga, f.rw, "DROP INDEX probe_idx_all");
+    // SONNY-1319: dropped in g2, the graph whose index it is.
+    try fx.expectRuns(ga, f.rw, "USE GRAPH g2; DROP INDEX probe_idx_all");
+    try fx.expectRuns(ga, f.rw, "USE GRAPH default");
     try testing.expect(!try indexExists("probe_idx_all"));
 }

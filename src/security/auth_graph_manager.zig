@@ -353,7 +353,17 @@ pub const AuthGraphManager = struct {
     /// If we can't grab the exclusive lock within the bound, we skip this verify
     /// round and retry next interval (logged, never silent) rather than becoming
     /// a blocking writer.
+    // CANARY: REQ=REQ-SONNY-6352-AUTH-READERS-LOCKED; FEATURE="GQL Auth DDL Persistence"; ASPECT=VerifyRoundHoldsAuthDdlLock; STATUS=TESTED; TEST=tests/test_sonny6352_auth_verify_locking.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6352: `verifyChain` reads the role, policy and permission caches
+    /// and `graph_grant_nodes`, which the auth DDL changes under
+    /// `auth_ddl_lock` (SONNY-6329). The round holds that lock too, taken
+    /// BEFORE the store lock (the lock order: `auth_ddl_lock` is never taken
+    /// while holding a graph lock). Without it a round racing a GRANT, REVOKE
+    /// or role / policy change read the maps mid-change: a rehash under the
+    /// iteration, or a count that did not match the records it then read.
     pub fn runVerifyRound(self: *Self) void {
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
         const deadline_ns = graph_store.monoNanosNowPub() + VERIFY_LOCK_ACQUIRE_BOUND_NS;
         graph_store.acquireStoreWriteLockCancelable(deadline_ns) catch |lock_err| {
             log.warn("Periodic HMAC verification skipped this round: could not acquire exclusive store lock within bound (retrying next interval)", &.{
@@ -364,7 +374,12 @@ pub const AuthGraphManager = struct {
         const verify_result = self.verifyChain(&self.hmac_key);
         graph_store.releaseStoreWriteLock();
         verify_result catch |err| {
-            log.err("PERIODIC HMAC CHECK FAILED - POSSIBLE TAMPERING", &.{Attr.string("error", @errorName(err))});
+            // SONNY-6598: only a mismatch is a tampering signal.
+            if (isChainTamperVerdict(err)) {
+                log.err("PERIODIC HMAC CHECK FAILED - POSSIBLE TAMPERING", &.{Attr.string("error", @errorName(err))});
+            } else {
+                log.err("Periodic HMAC chain verification could not run this round (not a tampering verdict; retrying next interval)", &.{Attr.string("error", @errorName(err))});
+            }
             return;
         };
         log.debug("Periodic HMAC chain verification passed", &.{});
@@ -394,6 +409,15 @@ pub const AuthGraphManager = struct {
     /// 3. `.geode_hmac_key` file in data directory (64 hex chars or 32 raw bytes)
     /// 4. Auto-generate random 256-bit key -> write to `.geode_hmac_key` (0o600)
     /// 5. error.NoHmacKeyAvailable (only if no data_dir provided)
+    ///
+    /// SONNY-6339: a source that is present but unusable is
+    /// error.HmacKeyInvalid, never "no key": a non-empty GEODE_AUTH_HMAC_KEY
+    /// that is not 64 hex characters (it was skipped, and the file key used
+    /// instead), a non-empty GEODE_TDE_KEY that is not 64 hex characters
+    /// (SONNY-6386: a wrong length was skipped too), and a
+    /// `.geode_hmac_key` that cannot be opened or read or is not 64 hex
+    /// characters / 32 bytes. The server refuses to start on it; it used to
+    /// run with the auth graph disabled.
     pub fn resolveHmacKey(allocator: Allocator, data_dir: ?[]const u8) !HmacKeyResult {
         return resolveHmacKeyEx(allocator, data_dir, true);
     }
@@ -416,13 +440,14 @@ pub const AuthGraphManager = struct {
                 var key: [32]u8 = undefined;
                 _ = std.fmt.hexToBytes(&key, env_val) catch {
                     log.warn("GEODE_AUTH_HMAC_KEY contains invalid hex", &.{});
-                    return error.NoHmacKeyAvailable;
+                    return error.HmacKeyInvalid;
                 };
                 return HmacKeyResult{ .key = key, .key_id = "env" };
-            } else {
+            } else if (env_val.len > 0) {
                 log.warn("GEODE_AUTH_HMAC_KEY must be exactly 64 hex characters", &.{
                     Attr.uint("actual_len", @intCast(env_val.len)),
                 });
+                return error.HmacKeyInvalid;
             }
         } else |_| {}
 
@@ -433,10 +458,17 @@ pub const AuthGraphManager = struct {
                 var tde_key: [32]u8 = undefined;
                 _ = std.fmt.hexToBytes(&tde_key, tde_val) catch {
                     log.warn("GEODE_TDE_KEY contains invalid hex", &.{});
-                    return error.NoHmacKeyAvailable;
+                    return error.HmacKeyInvalid;
                 };
                 const derived = auth_hmac.deriveHmacKey(&tde_key, geode_hkdf_config);
                 return HmacKeyResult{ .key = derived, .key_id = "tde-derived" };
+            } else if (tde_val.len > 0) {
+                // SONNY-6386: a set GEODE_TDE_KEY of the wrong length was
+                // skipped and the chain sealed with the file key instead.
+                log.warn("GEODE_TDE_KEY must be exactly 64 hex characters", &.{
+                    Attr.uint("actual_len", @intCast(tde_val.len)),
+                });
+                return error.HmacKeyInvalid;
             }
         } else |_| {}
 
@@ -456,8 +488,9 @@ pub const AuthGraphManager = struct {
                     else => {
                         log.warn("Failed to open HMAC key file", &.{
                             Attr.string("path", path),
+                            Attr.string("error", @errorName(err)),
                         });
-                        return error.NoHmacKeyAvailable;
+                        return error.HmacKeyInvalid;
                     },
                 }
             };
@@ -468,7 +501,7 @@ pub const AuthGraphManager = struct {
             var hex_buf: [64]u8 = undefined;
             const bytes_read = file.readPositionalAll(io_hr, &hex_buf, 0) catch {
                 log.warn("Failed to read HMAC key file", &.{});
-                return error.NoHmacKeyAvailable;
+                return error.HmacKeyInvalid;
             };
             if (bytes_read == 64) {
                 // Hex-encoded key file (64 hex chars -> 32 bytes)
@@ -477,7 +510,7 @@ pub const AuthGraphManager = struct {
                     log.warn("HMAC key file contains invalid hex", &.{
                         Attr.string("path", path),
                     });
-                    return error.NoHmacKeyAvailable;
+                    return error.HmacKeyInvalid;
                 };
                 return HmacKeyResult{ .key = key, .key_id = "file" };
             } else if (bytes_read == 32) {
@@ -489,7 +522,7 @@ pub const AuthGraphManager = struct {
                 log.warn("HMAC key file must be exactly 64 hex chars or 32 raw bytes", &.{
                     Attr.uint("actual", @intCast(bytes_read)),
                 });
-                return error.NoHmacKeyAvailable;
+                return error.HmacKeyInvalid;
             }
         }
 
@@ -497,6 +530,19 @@ pub const AuthGraphManager = struct {
     }
 
     // -- Chain Verification --
+
+    // CANARY: REQ=REQ-SONNY-6598-CHAIN-VERIFY-ERRORS; FEATURE="AuthOutcomeClassification"; ASPECT=ChainTamperVerdict; STATUS=TESTED; TEST=tests/test_sonny6598_verify_outcomes.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6598: whether a `verifyChain` error is the chain's verdict (a
+    /// record or the seal does not match: tampering, or a key the chain was
+    /// not sealed with) rather than a verification that could not run (out of
+    /// memory, a store read error). The callers reported every error as
+    /// tampering.
+    pub fn isChainTamperVerdict(err: anyerror) bool {
+        return switch (err) {
+            error.MissingChainRoot, error.RecordCountMismatch, error.RecordHmacMismatch, error.ChainHashMismatch => true,
+            else => false,
+        };
+    }
 
     /// Verify the integrity of the entire auth chain.
     ///
@@ -508,7 +554,9 @@ pub const AuthGraphManager = struct {
     pub fn verifyChain(self: *Self, hmac_key: *const [32]u8) !void {
         const total_records = self.countAuthRecords();
 
-        const chain_root = self.storage.loadChainRoot();
+        // SONNY-6594 (5): a root that cannot be read is the read's error, not
+        // MissingChainRoot ("POSSIBLE TAMPERING").
+        const chain_root = try self.storage.loadChainRoot();
 
         if (chain_root == null) {
             if (total_records > 0) {
@@ -544,6 +592,21 @@ pub const AuthGraphManager = struct {
         // Verify graph grant records
         try self.verifyGraphGrantRecords(hmac_key, &hmac_list);
 
+        // SONNY-6341: FLE role grant records
+        try self.verifyFleRoleGrantRecords(hmac_key, &hmac_list);
+
+        // SONNY-6608: MFA recovery-code records
+        try self.verifyMfaRecoveryRecords(hmac_key, &hmac_list);
+
+        // SONNY-6614: MFA attempt records
+        try self.verifyMfaAttemptRecords(hmac_key, &hmac_list);
+
+        // SONNY-6352: the records read must be the records counted. A
+        // mismatch (the maps changed between the count and the reads) fails
+        // the verification; it reached `computeChainHashChecked`'s
+        // `catch unreachable` and crashed the verifying thread.
+        if (hmac_list.items.len != total_records) return error.RecordCountMismatch;
+
         // Sort HMACs by their byte representation for deterministic ordering
         sortHmacs(hmac_list.items);
 
@@ -559,13 +622,17 @@ pub const AuthGraphManager = struct {
     }
 
     fn verifyUserRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
-        var it = self.storage.userIterator();
-        while (it.next()) |record| {
+        // SONNY-6329: ids under the cache's lock; the loop reads graph nodes.
+        const ids = try self.storage.cachedUserIds(self.allocator);
+        defer self.allocator.free(ids);
+        for (ids) |user_id| {
+            const user_copy = self.storage.getUser(user_id) orelse continue;
+            const record = &user_copy;
             const computed = computeUserHmac(hmac_key, record);
 
             // Get stored HMAC from graph node
             const node_id = self.storage.user_nodes.get(record.id) orelse continue;
-            const stored_hmac_prop = self.storage.store.getNodeProperty(node_id, "hmac");
+            const stored_hmac_prop = (try self.storage.store.getNodePropertyOrError(node_id, "hmac"));
             if (stored_hmac_prop == null or stored_hmac_prop.? != .String) {
                 return error.RecordHmacMismatch;
             }
@@ -585,7 +652,7 @@ pub const AuthGraphManager = struct {
             const computed = computeRoleHmac(hmac_key, record);
 
             const node_id = self.storage.role_nodes.get(record.id) orelse continue;
-            const stored_hmac_prop = self.storage.store.getNodeProperty(node_id, "hmac");
+            const stored_hmac_prop = (try self.storage.store.getNodePropertyOrError(node_id, "hmac"));
             if (stored_hmac_prop == null or stored_hmac_prop.? != .String) {
                 return error.RecordHmacMismatch;
             }
@@ -605,7 +672,7 @@ pub const AuthGraphManager = struct {
             const computed = computePermissionHmac(hmac_key, record);
 
             const node_id = self.storage.permission_nodes.get(record.id) orelse continue;
-            const stored_hmac_prop = self.storage.store.getNodeProperty(node_id, "hmac");
+            const stored_hmac_prop = (try self.storage.store.getNodePropertyOrError(node_id, "hmac"));
             if (stored_hmac_prop == null or stored_hmac_prop.? != .String) {
                 return error.RecordHmacMismatch;
             }
@@ -625,7 +692,7 @@ pub const AuthGraphManager = struct {
             const computed = computePolicyHmac(hmac_key, record);
 
             const node_id = self.storage.policy_nodes.get(record.id) orelse continue;
-            const stored_hmac_prop = self.storage.store.getNodeProperty(node_id, "hmac");
+            const stored_hmac_prop = (try self.storage.store.getNodePropertyOrError(node_id, "hmac"));
             if (stored_hmac_prop == null or stored_hmac_prop.? != .String) {
                 return error.RecordHmacMismatch;
             }
@@ -643,9 +710,9 @@ pub const AuthGraphManager = struct {
 
     /// SONNY-2791: does the HMAC stored on `record`'s node match the one
     /// `hmac_key` gives it?
-    fn policyHmacVerifies(self: *Self, hmac_key: *const [32]u8, record: *const UserStorageBackend.PolicyRecord) bool {
+    fn policyHmacVerifies(self: *Self, hmac_key: *const [32]u8, record: *const UserStorageBackend.PolicyRecord) !bool {
         const node_id = self.storage.policy_nodes.get(record.id) orelse return false;
-        const stored = self.storage.store.getNodeProperty(node_id, "hmac") orelse return false;
+        const stored = (try self.storage.store.getNodePropertyOrError(node_id, "hmac")) orelse return false;
         if (stored != .String) return false;
         const computed = computePolicyHmac(hmac_key, record);
         const computed_hex = auth_hmac.hmacToHex(&computed);
@@ -678,12 +745,12 @@ pub const AuthGraphManager = struct {
     /// An offline CLI command loads the security graph as it is and seals
     /// after its change, so it used to sign such a record. A record without a
     /// kind whose HMAC verifies was signed by this key before the upgrade.
-    fn refuseUnsignedLegacy(self: *Self, hmac_key: *const [32]u8, decisions: LegacyPolicyDecisions) error{UnsignedLegacyPolicyRecord}!void {
+    fn refuseUnsignedLegacy(self: *Self, hmac_key: *const [32]u8, decisions: LegacyPolicyDecisions) !void {
         var refused: usize = 0;
         var it = self.storage.policyIterator();
         while (it.next()) |record| {
             if (record.kind != .legacy or decisions.decided(record.id)) continue;
-            if (self.policyHmacVerifies(hmac_key, record)) continue;
+            if (try self.policyHmacVerifies(hmac_key, record)) continue;
             log.err("refusing to sign a policy record without a kind whose HMAC does not verify (it may have been planted); decide it with geode auth reseal --accept-legacy-policy <id> or --drop-legacy-policy <id>", &.{
                 Attr.uint("policy_id", record.id),
                 Attr.string("name", record.getName()),
@@ -723,7 +790,7 @@ pub const AuthGraphManager = struct {
         var it = self.storage.policyIterator();
         while (it.next()) |record| {
             if (record.kind != .legacy) continue;
-            if (self.policyHmacVerifies(hmac_key, record)) continue;
+            if (try self.policyHmacVerifies(hmac_key, record)) continue;
             try unverified.append(self.allocator, record.id);
         }
         for (unverified.items) |id| {
@@ -781,7 +848,30 @@ pub const AuthGraphManager = struct {
         self.seal_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.seal_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        try self.refuseUnsignedLegacy(hmac_key, decisions);
+        const seal = try self.computeSealLocked(hmac_key, decisions, &.{});
+        try self.persistSealLocked(seal);
+    }
+
+    /// A chain seal computed but not yet stored (SONNY-6273).
+    const ChainSeal = struct {
+        chain_hash: [32]u8,
+        record_count: u64,
+    };
+
+    /// Everything of a seal that can fail with this manager's memory: the
+    /// legacy-record check, each record's HMAC (stored on its node) and the
+    /// chain hash. `leaving`: policy records about to be removed, which the
+    /// seal leaves out (SONNY-6273, `dropPolicy`); they are not refused as
+    /// unsigned legacy records either, as the drop used to remove them
+    /// before sealing. Caller holds `seal_mutex`.
+    fn computeSealLocked(self: *Self, hmac_key: *const [32]u8, decisions: LegacyPolicyDecisions, leaving: []const u64) !ChainSeal {
+        if (leaving.len == 0) {
+            try self.refuseUnsignedLegacy(hmac_key, decisions);
+        } else {
+            // Only dropPolicy passes `leaving`, with no decisions of its own.
+            std.debug.assert(decisions.accept.len == 0 and decisions.drop.len == 0);
+            try self.refuseUnsignedLegacy(hmac_key, .{ .drop = leaving });
+        }
 
         var hmac_list: std.ArrayList([32]u8) = .empty;
         defer hmac_list.deinit(self.allocator);
@@ -796,34 +886,44 @@ pub const AuthGraphManager = struct {
         try self.sealPermissionRecords(hmac_key, &hmac_list);
 
         // Seal policy records
-        try self.sealPolicyRecords(hmac_key, &hmac_list);
+        try self.sealPolicyRecords(hmac_key, &hmac_list, leaving);
 
         // Seal graph grant records
         try self.sealGraphGrantRecords(hmac_key, &hmac_list);
 
+        // SONNY-6341: FLE role grant records
+        try self.sealFleRoleGrantRecords(hmac_key, &hmac_list);
+
+        // SONNY-6608: MFA recovery-code records
+        try self.sealMfaRecoveryRecords(hmac_key, &hmac_list);
+
+        // SONNY-6614: MFA attempt records
+        try self.sealMfaAttemptRecords(hmac_key, &hmac_list);
+
         // Sort HMACs for deterministic chain hash
         sortHmacs(hmac_list.items);
 
-        const total_records = self.countAuthRecords();
-        const chain_hash = computeChainHashChecked(hmac_key, hmac_list.items, total_records);
-        const chain_hash_hex = auth_hmac.hmacToHex(&chain_hash);
+        const total_records = self.countAuthRecords() - leaving.len;
+        return .{
+            .chain_hash = computeChainHashChecked(hmac_key, hmac_list.items, total_records),
+            .record_count = total_records,
+        };
+    }
 
-        try self.storage.persistChainRoot(&chain_hash_hex, total_records, "sealed");
+    fn persistSealLocked(self: *Self, seal: ChainSeal) !void {
+        const chain_hash_hex = auth_hmac.hmacToHex(&seal.chain_hash);
+        try self.storage.persistChainRoot(&chain_hash_hex, seal.record_count, "sealed");
     }
 
     fn sealUserRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
         // Collect user IDs first to avoid iterator invalidation
-        var ids: std.ArrayList(u64) = .empty;
-        defer ids.deinit(self.allocator);
-        {
-            var it = self.storage.user_cache.keyIterator();
-            while (it.next()) |key| {
-                try ids.append(self.allocator, key.*);
-            }
-        }
+        // SONNY-6329: the ids copied under the cache's lock, each record
+        // copied out by `getUser` (the loop writes graph nodes).
+        const ids = try self.storage.cachedUserIds(self.allocator);
+        defer self.allocator.free(ids);
 
-        for (ids.items) |user_id| {
-            const record = self.storage.user_cache.get(user_id) orelse continue;
+        for (ids) |user_id| {
+            const record = self.storage.getUser(user_id) orelse continue;
             const computed = computeUserHmac(hmac_key, &record);
             const computed_hex = auth_hmac.hmacToHex(&computed);
 
@@ -879,12 +979,13 @@ pub const AuthGraphManager = struct {
         }
     }
 
-    fn sealPolicyRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
+    fn sealPolicyRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8), leaving: []const u64) !void {
         var ids: std.ArrayList(u64) = .empty;
         defer ids.deinit(self.allocator);
         {
             var it = self.storage.policy_cache.keyIterator();
             while (it.next()) |key| {
+                if (std.mem.indexOfScalar(u64, leaving, key.*) != null) continue;
                 try ids.append(self.allocator, key.*);
             }
         }
@@ -1012,8 +1113,8 @@ pub const AuthGraphManager = struct {
         //    `GEODE_ADMIN_PASSWORD` wins for backward compatibility with
         //    deployments already pinning that name; a deprecation warning is
         //    emitted when both are set with different values so operators
-        //    notice the drift.  Falls back to a random 32-char hex password
-        //    when neither env var is present.
+        //    notice the drift.  Falls back to a random policy-compliant
+        //    passphrase (SONNY-6331) when neither env var is present.
         var password_from_env = false;
         const password = blk: {
             const admin_env = getEnvVarOwned(self.allocator, "GEODE_ADMIN_PASSWORD") catch null;
@@ -1036,33 +1137,30 @@ pub const AuthGraphManager = struct {
                 break :blk env_pw;
             }
 
-            var random_bytes: [16]u8 = undefined;
-            try cb.Csprng.bytes(&random_bytes);
-            const pw = try self.allocator.alloc(u8, 32);
-            const hex_chars = "0123456789abcdef";
-            for (random_bytes, 0..) |byte, i| {
-                pw[i * 2] = hex_chars[byte >> 4];
-                pw[i * 2 + 1] = hex_chars[byte & 0xf];
-            }
-            break :blk pw;
+            // SONNY-6331: a generated password meets the policy (it was 32
+            // hex characters, which the policy refuses).
+            var pw_buf: [geode_auth.max_password_length]u8 = undefined;
+            break :blk try self.allocator.dupe(u8, try geode_auth.PasswordPolicy.geodeSecure().generate(&pw_buf));
         };
 
         // CANARY: REQ=REQ-AUTH-POLICY-005; FEATURE="Unified Password Policy Validation"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_bug731_password_policy.zig; OWNER=security; UPDATED=2026-07-31
+        // CANARY: REQ=REQ-SONNY-6331-ONE-PASSWORD-POLICY; FEATURE="Unified Password Policy Validation"; ASPECT=FirstBootSeedForcedReset; STATUS=TESTED; TEST=tests/test_sonny6331_password_policy_paths.zig; OWNER=security; UPDATED=2026-11-12
         // The env seed path historically enforced NO password policy at all,
         // while `ALTER USER ... SET PASSWORD` over the wire enforced a 20-char
-        // 3-word passphrase — so a one-word 5-character admin password could be
-        // installed at first boot and then never be changeable to anything
-        // weaker-or-equal. Validate it here so the drift is visible.
+        // 3-word passphrase. See docs/@BUGS_731.md bug 4.
         //
-        // Deliberately WARN-ONLY, not fail-closed: refusing to boot would brick
-        // existing deployments whose seed predates this check, on upgrade. The
-        // operator is told exactly what is wrong and how it differs from what
-        // the server will demand at the next password change.
-        // See docs/@BUGS_731.md bug 4.
+        // SONNY-6331: a seed that does not meet the policy is taken (refusing
+        // to boot would brick a deployment whose seed predates the check) with
+        // a forced reset, as docs/USER_AUTH.md "Reset Triggers" states: it
+        // logs the admin in only to set a policy-compliant password. It was
+        // taken with no reset and only a warning.
+        var seed_violation: ?geode_auth.PasswordPolicy.Violation = null;
         if (password_from_env) {
-            if (geode_auth.PasswordPolicy.geodeSecure().validate(password)) |reason| {
-                log.warn("GEODE_ADMIN_PASSWORD/GEODE_DEFAULT_PASSWORD does not meet the server's password policy. The seed is being ACCEPTED for backward compatibility, but the same password would be REJECTED by 'ALTER USER ... SET PASSWORD'. Seed a policy-compliant passphrase (>=20 chars, upper and lower case, >=3 space-separated words) to remove this warning.", &.{
-                    Attr.string("reason", reason),
+            const policy = geode_auth.PasswordPolicy.geodeSecure();
+            seed_violation = policy.check(password);
+            if (seed_violation) |v| {
+                log.warn("GEODE_ADMIN_PASSWORD/GEODE_DEFAULT_PASSWORD does not meet the server's password policy. The seed is accepted with a FORCED RESET: the admin must set a policy-compliant passphrase at first login. Seed a compliant passphrase to avoid the reset.", &.{
+                    Attr.string("reason", policy.message(v)),
                 });
             }
         }
@@ -1082,10 +1180,10 @@ pub const AuthGraphManager = struct {
         var record = self.storage.getUser(user_id) orelse return error.UserNotFound;
         record.is_superuser = true;
         record.is_default_user = true;
-        record.password_reset_required = !password_from_env;
+        record.password_reset_required = !password_from_env or seed_violation != null;
         record.hash_algorithm_len = UserStorageBackend.copyIntoField(&record.hash_algorithm, "argon2id");
         record.password_changed_at = compat_milliTimestamp();
-        try self.storage.user_cache.put(user_id, record);
+        try self.storage.putCachedUser(user_id, record);
         try self.storage.upsertUserNode(record);
 
         // Re-persist HMAC with updated fields
@@ -1116,6 +1214,56 @@ pub const AuthGraphManager = struct {
         };
     }
 
+    // CANARY: REQ=REQ-SONNY-6708-INTERRUPTED-FIRST-BOOT; FEATURE="AuthGraphManager Bootstrap"; ASPECT=CrashSafeFirstBoot; STATUS=TESTED; TEST=tests/test_sonny6708_interrupted_first_boot.zig; OWNER=security; UPDATED=2026-11-17
+    /// SONNY-6708: discard the records of a first boot that was interrupted
+    /// before its seal, so the start can run as a first boot again.
+    ///
+    /// `bootstrapDefaultAdmin` is not atomic: it persists the admin :User, the
+    /// `admin` role and the HAS_ROLE edge, and only then seals the chain (writes
+    /// the AuthChainRoot). A process killed in between (SIGKILL, OOM kill, crash,
+    /// power loss) leaves auth records and no root, which the next start reports
+    /// as tampering (`MissingChainRoot`) and refuses forever, although nothing
+    /// was tampered with and the half-written admin could never have been used
+    /// (the listener opens after the bootstrap).
+    ///
+    /// The artifact is exactly: no AuthChainRoot, one user, and at most the
+    /// bootstrap's own `admin` role, and no other auth record of any kind. Only
+    /// that is discarded (returns true; `hasAuthRecords()` is then false and the
+    /// caller bootstraps). Anything else - a second user, a grant, a policy, a
+    /// role the bootstrap does not write - is not this artifact and is left alone
+    /// (returns false), so a missing root over real auth state stays the loud
+    /// tamper signal. A chain root that cannot be read is the read's error.
+    ///
+    /// Equivalent to the exposure that already exists: whoever can delete the
+    /// root of a one-user store can already delete the whole security graph,
+    /// which is a first boot.
+    pub fn recoverInterruptedBootstrap(self: *Self) !bool {
+        if ((try self.storage.loadChainRoot()) != null) return false;
+
+        const users = self.storage.cachedUserCount();
+        const roles = self.storage.role_cache.count();
+        if (users != 1 or roles > 1) return false;
+        if (self.countAuthRecords() != @as(u64, users) + @as(u64, roles)) return false;
+
+        var role_id: ?u64 = null;
+        if (roles == 1) {
+            var role_it = self.storage.role_cache.valueIterator();
+            const role = role_it.next() orelse return false;
+            if (!std.mem.eql(u8, role.getName(), "admin")) return false;
+            role_id = role.id;
+        }
+        var user_it = self.storage.userIterator();
+        const user_id = (user_it.next() orelse return false).id;
+
+        log.warn("interrupted first boot detected: the admin user was persisted but the auth chain was never sealed (the process was killed during the first start); discarding it and bootstrapping again", &.{
+            Attr.uint("user_id", user_id),
+        });
+        try self.storage.removeUser(user_id);
+        if (role_id) |id| try self.storage.removeRole(id);
+        self.next_user_id = 1;
+        return true;
+    }
+
     // -- User Creation --
 
     /// Create a new user with HMAC and reseal the chain.
@@ -1133,6 +1281,14 @@ pub const AuthGraphManager = struct {
 
         const user_id = self.next_user_id;
         self.next_user_id += 1;
+        // SONNY-1333: a user whose save failed part way is taken out again,
+        // so the CREATE USER that reports the failure can be retried.
+        errdefer {
+            self.storage.removeUser(user_id) catch {};
+            self.sealChain(hmac_key) catch |err| {
+                log.err("SONNY-1333: the security chain could not be sealed after a failed CREATE USER", &.{Attr.string("error", @errorName(err))});
+            };
+        }
 
         // Persist with HMAC
         try self.storage.persistUserWithHmac(user_id, username, email, password_hash, "", hmac_key);
@@ -1142,7 +1298,7 @@ pub const AuthGraphManager = struct {
             var record = self.storage.getUser(user_id) orelse return error.UserNotFound;
             record.is_superuser = true;
             record.hash_algorithm_len = UserStorageBackend.copyIntoField(&record.hash_algorithm, "argon2id");
-            try self.storage.user_cache.put(user_id, record);
+            try self.storage.putCachedUser(user_id, record);
             try self.storage.upsertUserNode(record);
             try self.recomputeAndStoreUserHmac(user_id, hmac_key);
         }
@@ -1157,7 +1313,7 @@ pub const AuthGraphManager = struct {
 
     /// Returns true if any User nodes exist in __geode_security.
     pub fn hasAuthRecords(self: *Self) bool {
-        return self.storage.user_cache.count() > 0;
+        return self.storage.cachedUserCount() > 0;
     }
 
     // -- Internal Helpers --
@@ -1167,15 +1323,18 @@ pub const AuthGraphManager = struct {
         // (HashMap.Size), so four-operand u32 addition can overflow when the
         // total exceeds ~4 billion records. Casting first lifts the arithmetic
         // to u64, preventing the panic in safe/debug builds.
-        return @as(u64, self.storage.user_cache.count()) +
+        return @as(u64, self.storage.cachedUserCount()) +
             @as(u64, self.storage.role_cache.count()) +
             @as(u64, self.storage.permission_cache.count()) +
             @as(u64, self.storage.policy_cache.count()) +
-            @as(u64, self.storage.graph_grant_nodes.count());
+            @as(u64, self.storage.graph_grant_nodes.count()) +
+            @as(u64, self.storage.fle_role_grant_nodes.count()) +
+            @as(u64, self.storage.mfa_recovery_nodes.count()) +
+            @as(u64, self.storage.mfa_attempt_nodes.count());
     }
 
     fn recomputeAndStoreUserHmac(self: *Self, user_id: u64, hmac_key: *const [32]u8) !void {
-        const record = self.storage.user_cache.get(user_id) orelse return error.UserNotFound;
+        const record = self.storage.getUser(user_id) orelse return error.UserNotFound;
         const computed = computeUserHmac(hmac_key, &record);
         const computed_hex = auth_hmac.hmacToHex(&computed);
         const node_id = self.storage.user_nodes.get(user_id) orelse return error.UserNotFound;
@@ -1209,10 +1368,13 @@ pub const AuthGraphManager = struct {
     }
 
     pub fn assignUserRole(self: *Self, hmac_key: *const [32]u8, user_id: u64, role_id: u64) !u64 {
+        const old = self.storage.getUser(user_id) orelse return error.UserNotFound;
         const changed = try self.storage.assignUserRole(user_id, role_id);
-        if (!changed) {
-            const record = self.storage.getUser(user_id) orelse return error.UserNotFound;
-            return record.auth_version;
+        if (!changed) return old.auth_version;
+        // SONNY-3038: the edge and the record, or neither.
+        errdefer {
+            _ = self.storage.revokeUserRole(user_id, role_id) catch |err| logRestoreFailure("HAS_ROLE edge", err);
+            self.restoreUserRecord(hmac_key, old);
         }
         const version = try self.storage.bumpUserAuthVersion(user_id);
         try self.recomputeAndStoreUserHmac(user_id, hmac_key);
@@ -1223,10 +1385,13 @@ pub const AuthGraphManager = struct {
     }
 
     pub fn revokeUserRole(self: *Self, hmac_key: *const [32]u8, user_id: u64, role_id: u64) !u64 {
+        const old = self.storage.getUser(user_id) orelse return error.UserNotFound;
         const changed = try self.storage.revokeUserRole(user_id, role_id);
-        if (!changed) {
-            const record = self.storage.getUser(user_id) orelse return error.UserNotFound;
-            return record.auth_version;
+        if (!changed) return old.auth_version;
+        // SONNY-3038: the edge and the record, or neither.
+        errdefer {
+            _ = self.storage.assignUserRole(user_id, role_id) catch |err| logRestoreFailure("HAS_ROLE edge", err);
+            self.restoreUserRecord(hmac_key, old);
         }
         const version = try self.storage.bumpUserAuthVersion(user_id);
         try self.recomputeAndStoreUserHmac(user_id, hmac_key);
@@ -1242,11 +1407,11 @@ pub const AuthGraphManager = struct {
     /// Update a user record's login state (failed_attempts, lockout_until) in the graph store.
     /// Recomputes the record HMAC and reseals the chain.
     pub fn updateUserLoginState(self: *Self, hmac_key: *const [32]u8, user_id: u64, failed_attempts: u16, lockout_until: i64) !void {
-        var record = self.storage.user_cache.get(user_id) orelse return error.UserNotFound;
+        var record = self.storage.getUser(user_id) orelse return error.UserNotFound;
         record.failed_login_attempts = failed_attempts;
         record.lockout_until = lockout_until;
         record.updated_at = compat_milliTimestamp();
-        try self.storage.user_cache.put(user_id, record);
+        try self.storage.putCachedUser(user_id, record);
         try self.storage.upsertUserNode(record);
         try self.recomputeAndStoreUserHmac(user_id, hmac_key);
         try self.sealChain(hmac_key);
@@ -1269,13 +1434,16 @@ pub const AuthGraphManager = struct {
     /// so the reseal below is mandatory: a bare property write would fail
     /// `verifyChain` and brick the next startup.
     pub fn updateUserPassword(self: *Self, hmac_key: *const [32]u8, user_id: u64, new_password_hash: []const u8) !u64 {
-        var record = self.storage.user_cache.get(user_id) orelse return error.UserNotFound;
+        const old = self.storage.getUser(user_id) orelse return error.UserNotFound;
+        // SONNY-3038: all of it or none of it.
+        errdefer self.restoreUserRecord(hmac_key, old);
+        var record = old;
         record.password_hash_len = UserStorageBackend.copyIntoField(&record.password_hash, new_password_hash);
         record.password_reset_required = false;
         record.password_changed_at = compat_milliTimestamp();
         record.updated_at = compat_milliTimestamp();
         record.auth_version += 1;
-        try self.storage.user_cache.put(user_id, record);
+        try self.storage.putCachedUser(user_id, record);
         try self.storage.upsertUserNode(record);
         try self.recomputeAndStoreUserHmac(user_id, hmac_key);
         try self.sealChain(hmac_key);
@@ -1290,14 +1458,40 @@ pub const AuthGraphManager = struct {
     pub fn removeUser(self: *Self, hmac_key: *const [32]u8, user_id: u64) !void {
         try self.storage.removeUser(user_id);
         // next_user_id is monotonically increasing; no need to decrement.
-        try self.sealChain(hmac_key);
+        // SONNY-3038: the record is gone; a seal that failed is tried again
+        // (as a revoke's is), so a saved removal is not reported as failed.
+        self.sealChain(hmac_key) catch try self.sealChain(hmac_key);
         self.logSecurityGraphMutation(.configuration_change, "REMOVE_USER", user_id, "", null);
+    }
+
+    // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=UserRecordUndo; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-3038: put a user record back as it was before a change that
+    /// failed part way (its cached record, its node, its HMAC) and seal the
+    /// chain again. A password, active-flag or role change used to leave
+    /// whatever it had written: a record whose node or chain no longer
+    /// matched (the next start's verification failed), or a change that was
+    /// in force after the restart although the statement failed.
+    fn restoreUserRecord(self: *Self, hmac_key: *const [32]u8, old: UserStorageBackend.UserRecord) void {
+        self.storage.putCachedUser(old.id, old) catch |err| logRestoreFailure("user record", err);
+        self.storage.upsertUserNode(old) catch |err| logRestoreFailure("user node", err);
+        self.recomputeAndStoreUserHmac(old.id, hmac_key) catch |err| logRestoreFailure("user HMAC", err);
+        self.sealChain(hmac_key) catch |err| logRestoreFailure("chain seal", err);
+    }
+
+    fn logRestoreFailure(what: []const u8, err: anyerror) void {
+        log.err("SONNY-3038: a security-graph change that failed could not be undone; the next start may load it or fail chain verification", &.{
+            Attr.string("part", what),
+            Attr.string("error", @errorName(err)),
+        });
     }
 
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-011; FEATURE="AuthDDLPersistence"; ASPECT=SetUserActive; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=security; UPDATED=2026-06-11
     /// Set a user's active state. Bumps auth_version so existing sessions are
     /// invalidated when a user is disabled. Reseals the chain.
     pub fn setUserActive(self: *Self, hmac_key: *const [32]u8, user_id: u64, active: bool) !u64 {
+        const old = self.storage.getUser(user_id) orelse return error.UserNotFound;
+        // SONNY-3038: all of it or none of it.
+        errdefer self.restoreUserRecord(hmac_key, old);
         try self.storage.updateUser(user_id, null, null, active, null, null);
         const v = try self.storage.bumpUserAuthVersion(user_id);
         try self.recomputeAndStoreUserHmac(user_id, hmac_key);
@@ -1340,9 +1534,9 @@ pub const AuthGraphManager = struct {
 
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-013; FEATURE="AuthDDLPersistence"; ASPECT=FindUserIdByName; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl.yml; OWNER=security; UPDATED=2026-06-11
     /// Look up a user id by username. Returns null if not found.
+    /// SONNY-6329: under the user cache's lock, copying the id alone.
     pub fn findUserIdByName(self: *Self, username: []const u8) !?u64 {
-        const record = self.storage.getUserByUsername(username) orelse return null;
-        return record.id;
+        return self.storage.findUserIdByUsername(username);
     }
 
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-014; FEATURE="AuthDDLPersistence"; ASPECT=CreateRole; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
@@ -1364,6 +1558,13 @@ pub const AuthGraphManager = struct {
         }
         const role_id = max_id + 1;
 
+        // SONNY-3038: a role whose save failed part way is taken out again
+        // (as a user is, SONNY-1333): CREATE ROLE reports the failure, and a
+        // role left stored would come back at the next start.
+        errdefer {
+            self.storage.removeRole(role_id) catch |err| logRestoreFailure("role record", err);
+            self.sealChain(hmac_key) catch |err| logRestoreFailure("chain seal", err);
+        }
         try self.storage.persistRole(role_id, name, description, 0, 0, false);
         try self.recomputeAndStoreRoleHmac(role_id, hmac_key);
         try self.sealChain(hmac_key);
@@ -1375,7 +1576,8 @@ pub const AuthGraphManager = struct {
     /// Remove a role from the security graph and reseal the chain.
     pub fn removeRole(self: *Self, hmac_key: *const [32]u8, role_id: u64) !void {
         try self.storage.removeRole(role_id);
-        try self.sealChain(hmac_key);
+        // SONNY-3038: as removeUser.
+        self.sealChain(hmac_key) catch try self.sealChain(hmac_key);
         self.logSecurityGraphMutation(.configuration_change, "REMOVE_ROLE", role_id, "", null);
     }
 
@@ -1416,6 +1618,13 @@ pub const AuthGraphManager = struct {
 
         // SONNY-2777: the policy id sequence every policy writer shares.
         const policy_id = self.storage.nextPolicyId();
+        // SONNY-3038: a policy whose save failed part way is taken out again.
+        // CREATE POLICY took it out of the catalog and failed, and the stored
+        // record came back at the next start.
+        errdefer {
+            self.storage.removePolicy(policy_id) catch |err| logRestoreFailure("policy record", err);
+            self.sealChain(hmac_key) catch |err| logRestoreFailure("chain seal", err);
+        }
 
         try self.storage.persistPolicy(.{
             .policy_id = policy_id,
@@ -1440,13 +1649,96 @@ pub const AuthGraphManager = struct {
     }
 
     // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=DropPolicy; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
+    // CANARY: REQ=REQ-SONNY-6273-DROP-POLICY-ATOMIC; FEATURE="GPS Policy Persistence"; ASPECT=DropPolicySealBeforeRemove; STATUS=TESTED; TEST=tests/test_sonny6273_drop_policy_atomic.zig; OWNER=security; UPDATED=2026-11-11
     /// Remove a policy by name from the security graph and reseal the chain.
     /// Returns error.PolicyNotFound if no matching policy exists.
+    ///
+    /// SONNY-3038: every GPS record of that name goes. Two could be stored
+    /// (a store written before names were unique, or by another writer); the
+    /// drop removed the first only, and the other was loaded at the next
+    /// start, so the dropped policy came back.
+    ///
+    /// SONNY-6273: removal and seal are one step. The records were removed
+    /// first and the chain sealed after; a seal that failed twice left them
+    /// gone with the chain still counting them (RecordCountMismatch: the next
+    /// start refused to load the security graph) while DROP POLICY failed and
+    /// the catalog kept the policy. Now the ids and the new seal (every
+    /// allocation of it) are computed while the records are still there; a
+    /// failure there changes nothing. Then the records go and the computed
+    /// seal is stored, which allocates nothing of this manager's. Only if
+    /// the graph store fails that write is the chain sealed again (twice),
+    /// as before; if both reseals fail too, the removed records are put
+    /// back and the chain is sealed over them, so the failed statement
+    /// leaves the policy stored, in the catalog, and under a chain that
+    /// verifies.
     pub fn dropPolicy(self: *Self, hmac_key: *const [32]u8, name: []const u8) !void {
-        const policy_id = self.findPolicyIdByName(name) orelse return error.PolicyNotFound;
-        try self.storage.removePolicy(policy_id);
-        try self.sealChain(hmac_key);
-        self.logSecurityGraphMutation(.configuration_change, "DROP_POLICY", policy_id, name, null);
+        // SONNY-6273: its own unit of undo (SONNY-1333). The failed DROP
+        // POLICY statement's undo replayed these store writes, the put-back
+        // below included, behind the record maps: the record put back was
+        // left with no node HMAC (verifyChain: RecordHmacMismatch). A
+        // ROLLBACK after a dropped policy brought its node back the same way.
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        var ids: std.ArrayList(u64) = .empty;
+        defer ids.deinit(self.allocator);
+        {
+            var it = self.storage.policyIterator();
+            while (it.next()) |record| {
+                if (record.effectiveKind() == .gps and std.mem.eql(u8, record.getName(), name)) try ids.append(self.allocator, record.id);
+            }
+        }
+        if (ids.items.len == 0) return error.PolicyNotFound;
+
+        // SONNY-6273: the records as they were, to put back if no seal of
+        // the records without them can be stored.
+        var removed: std.ArrayList(UserStorageBackend.PolicyRecord) = .empty;
+        defer removed.deinit(self.allocator);
+        try removed.ensureTotalCapacity(self.allocator, ids.items.len);
+
+        var removal_failure: ?anyerror = null;
+        var sealed = false;
+        {
+            self.seal_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.seal_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            const seal = try self.computeSealLocked(hmac_key, .{}, ids.items);
+            for (ids.items) |policy_id| {
+                const before = self.storage.getPolicy(policy_id);
+                self.storage.removePolicy(policy_id) catch |err| {
+                    removal_failure = err;
+                    break;
+                };
+                if (before) |r| removed.appendAssumeCapacity(r);
+            }
+            if (removal_failure == null) {
+                if (self.persistSealLocked(seal)) |_| {
+                    sealed = true;
+                } else |err| log.warn("DROP POLICY: the graph store did not take the chain seal; sealing again", &.{Attr.string("error", @errorName(err))});
+            }
+        }
+        // A removal that stopped part way, or a seal the graph store did not
+        // take: seal what is there now (a retry, as a revoke's), so the
+        // chain matches the records whatever is answered.
+        if (!sealed) {
+            self.sealChain(hmac_key) catch self.sealChain(hmac_key) catch |err| {
+                // CANARY: REQ=REQ-SONNY-6273-DROP-POLICY-RESTORE; FEATURE="GPS Policy Persistence"; ASPECT=RecordsRestoredWhenUnsealed; STATUS=TESTED; TEST=tests/test_sonny6273_drop_policy_atomic.zig; OWNER=security; UPDATED=2026-11-15
+                // SONNY-6273: no seal of the records without the policy could
+                // be stored, so the chain root still describes them (or a
+                // seal that failed part way). The records go back, and the
+                // chain is sealed over what is then stored, so the chain and
+                // the records agree (the next start verifies: it failed with
+                // AuthChainTampered) and the failed statement keeps the
+                // policy, as the catalog does.
+                log.err("DROP POLICY: no chain seal could be stored; putting the policy records back", &.{Attr.string("error", @errorName(err))});
+                for (removed.items) |record| {
+                    self.storage.restorePolicyRecord(record) catch |rerr| logRestoreFailure("policy record", rerr);
+                    self.recomputeAndStorePolicyHmac(record.id, hmac_key) catch |rerr| logRestoreFailure("policy HMAC", rerr);
+                }
+                self.sealChain(hmac_key) catch |rerr| logRestoreFailure("chain seal", rerr);
+                return err;
+            };
+        }
+        if (removal_failure) |err| return err;
+        for (ids.items) |policy_id| self.logSecurityGraphMutation(.configuration_change, "DROP_POLICY", policy_id, name, null);
     }
 
     // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=AlterPolicy; STATUS=TESTED; TEST=tests/test_gap0858_alter_policy_persist.zig; OWNER=security; UPDATED=2026-06-09
@@ -1486,6 +1778,15 @@ pub const AuthGraphManager = struct {
         const new_enabled = set_enabled orelse existing.enabled;
         const new_name = rename_to orelse existing.getName();
 
+        // SONNY-3038: all of it or none of it. A change that failed part way
+        // was left stored (or stored with a stale HMAC or seal), while ALTER
+        // POLICY put the catalog back and failed.
+        errdefer {
+            self.storage.restorePolicyRecord(existing) catch |err| logRestoreFailure("policy record", err);
+            self.recomputeAndStorePolicyHmac(policy_id, hmac_key) catch |err| logRestoreFailure("policy HMAC", err);
+            self.sealChain(hmac_key) catch |err| logRestoreFailure("chain seal", err);
+        }
+
         // Re-persist under the SAME id so upsertPolicyNode reuses the existing
         // node (in-place rename/toggle — no duplicate, no stale old-name node).
         // created_at is carried over from the existing record so the ALTER does
@@ -1515,6 +1816,159 @@ pub const AuthGraphManager = struct {
         try self.recomputeAndStorePolicyHmac(policy_id, hmac_key);
         try self.sealChain(hmac_key);
         self.logSecurityGraphMutation(.configuration_change, "ALTER_POLICY", policy_id, new_name, null);
+    }
+
+    // -- geode.rls.* restrictions (SONNY-3034) --
+
+    /// SONNY-3034: a restriction `geode.rls.*` adds, as stored: a label deny
+    /// (`kind = .rls_deny`; `subject` is the user, empty for every user) or
+    /// an attribute policy (`kind = .rls_attribute`; `subject` is the row
+    /// property, `attribute` the ABAC attribute key).
+    pub const RlsRestriction = struct {
+        kind: UserStorageBackend.PolicyKind,
+        graph: []const u8,
+        label: []const u8,
+        subject: []const u8,
+        attribute: []const u8 = "",
+    };
+
+    fn rlsRestrictionMatches(record: *const UserStorageBackend.PolicyRecord, r: RlsRestriction) bool {
+        return record.kind == r.kind and
+            std.mem.eql(u8, record.getGraph(), r.graph) and
+            std.mem.eql(u8, record.getTable(), r.label) and
+            std.mem.eql(u8, record.getUsingClause() orelse "", r.subject) and
+            std.mem.eql(u8, record.getCheckClause() orelse "", r.attribute);
+    }
+
+    // CANARY: REQ=REQ-SONNY-3034-RLS-RESTRICTIONS-DURABLE; FEATURE="RLS deny-policy procedure"; ASPECT=PersistRestriction; STATUS=TESTED; TEST=tests/test_sonny3034_rls_restrictions_durable.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-3034: store `r` in the security graph, signed and sealed: all of
+    /// it or none of it. Already stored: nothing to do. The restrictions
+    /// lived in the RLS engines only and were lost at every restart.
+    pub fn persistRlsRestriction(self: *Self, hmac_key: *const [32]u8, r: RlsRestriction) !void {
+        if (r.kind != .rls_deny and r.kind != .rls_attribute) return error.InvalidPolicyKind;
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        {
+            var it = self.storage.policyIterator();
+            while (it.next()) |record| {
+                if (rlsRestrictionMatches(record, r)) return;
+            }
+        }
+        const policy_id = self.storage.nextPolicyId();
+        errdefer {
+            self.storage.removePolicy(policy_id) catch |err| logRestoreFailure("policy record", err);
+            self.sealChain(hmac_key) catch |err| logRestoreFailure("chain seal", err);
+        }
+        try self.storage.persistPolicy(.{
+            .policy_id = policy_id,
+            .name = r.kind.property().?,
+            .description = "",
+            .graph = r.graph,
+            .table = r.label,
+            .operation = 0,
+            .permissive = false,
+            .enabled = true,
+            .using_clause = if (r.subject.len > 0) r.subject else null,
+            .check_clause = if (r.attribute.len > 0) r.attribute else null,
+            .audit_level = 0,
+            .created_by = 0,
+            .kind = r.kind,
+            .mode = .create,
+        });
+        try self.recomputeAndStorePolicyHmac(policy_id, hmac_key);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "ADD_RLS_RESTRICTION", policy_id, r.kind.property().?, null);
+    }
+
+    /// SONNY-3034: remove every stored record of `r` and reseal (one step,
+    /// as `dropPolicy`). Nothing stored: nothing to do. An error means the
+    /// records are still stored.
+    pub fn removeRlsRestriction(self: *Self, hmac_key: *const [32]u8, r: RlsRestriction) !void {
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        var ids: std.ArrayList(u64) = .empty;
+        defer ids.deinit(self.allocator);
+        {
+            var it = self.storage.policyIterator();
+            while (it.next()) |record| {
+                if (rlsRestrictionMatches(record, r)) try ids.append(self.allocator, record.id);
+            }
+        }
+        if (ids.items.len == 0) return;
+
+        var removal_failure: ?anyerror = null;
+        var sealed = false;
+        {
+            self.seal_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.seal_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            const seal = try self.computeSealLocked(hmac_key, .{}, ids.items);
+            for (ids.items) |policy_id| {
+                self.storage.removePolicy(policy_id) catch |err| {
+                    removal_failure = err;
+                    break;
+                };
+            }
+            if (removal_failure == null) {
+                if (self.persistSealLocked(seal)) |_| {
+                    sealed = true;
+                } else |err| log.warn("geode.rls remove: the graph store did not take the chain seal; sealing again", &.{Attr.string("error", @errorName(err))});
+            }
+        }
+        if (!sealed) self.sealChain(hmac_key) catch try self.sealChain(hmac_key);
+        if (removal_failure) |err| return err;
+        for (ids.items) |policy_id| self.logSecurityGraphMutation(.configuration_change, "REMOVE_RLS_RESTRICTION", policy_id, r.kind.property().?, null);
+    }
+
+    /// SONNY-3034: every stored restriction, for startup hydration, copied
+    /// with `allocator` (free with `freeRlsRestrictions`). A malformed
+    /// record is left out, and logged.
+    pub fn listRlsRestrictions(self: *Self, allocator: std.mem.Allocator) ![]RlsRestriction {
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
+        var out: std.ArrayList(RlsRestriction) = .empty;
+        errdefer {
+            freeRlsRestrictionItems(allocator, out.items);
+            out.deinit(allocator);
+        }
+        var it = self.storage.policyIterator();
+        while (it.next()) |record| {
+            if (record.kind != .rls_deny and record.kind != .rls_attribute) continue;
+            if (record.malformed) {
+                log.err("a stored geode.rls restriction is malformed and is not loaded", &.{
+                    Attr.uint("policy_id", record.id),
+                    Attr.string("kind", @tagName(record.kind)),
+                });
+                continue;
+            }
+            const graph = try allocator.dupe(u8, record.getGraph());
+            errdefer allocator.free(graph);
+            const label = try allocator.dupe(u8, record.getTable());
+            errdefer allocator.free(label);
+            const subject = try allocator.dupe(u8, record.getUsingClause() orelse "");
+            errdefer allocator.free(subject);
+            const attribute = try allocator.dupe(u8, record.getCheckClause() orelse "");
+            errdefer allocator.free(attribute);
+            try out.append(allocator, .{ .kind = record.kind, .graph = graph, .label = label, .subject = subject, .attribute = attribute });
+        }
+        return out.toOwnedSlice(allocator);
+    }
+
+    pub fn freeRlsRestrictions(allocator: std.mem.Allocator, items: []RlsRestriction) void {
+        freeRlsRestrictionItems(allocator, items);
+        allocator.free(items);
+    }
+
+    fn freeRlsRestrictionItems(allocator: std.mem.Allocator, items: []const RlsRestriction) void {
+        for (items) |r| {
+            allocator.free(r.graph);
+            allocator.free(r.label);
+            allocator.free(r.subject);
+            allocator.free(r.attribute);
+        }
     }
 
     fn recomputeAndStorePolicyHmac(self: *Self, policy_id: u64, hmac_key: *const [32]u8) !void {
@@ -1548,12 +2002,491 @@ pub const AuthGraphManager = struct {
         return removed;
     }
 
+    // CANARY: REQ=REQ-SONNY-6341-FLE-ROLE-GRANT-STORE; FEATURE="FieldLevelEncryption"; ASPECT=SealedFleRoleGrants; STATUS=TESTED; TEST=tests/test_sonny6341_fle_role_binding.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6341: let `user_id` act under FLE role `role`. Stored and the
+    /// chain resealed, or nothing: a reseal that fails takes the record out
+    /// again, so the caller can refuse the grant (fail closed).
+    pub fn grantUserFleRole(self: *Self, hmac_key: *const [32]u8, user_id: u64, role: []const u8) !void {
+        const was_there = self.storage.fle_role_grant_nodes.contains(UserStorageBackend.fleRoleGrantId(user_id, role));
+        _ = try self.storage.persistFleRoleGrant(user_id, role);
+        self.sealChain(hmac_key) catch |err| {
+            if (!was_there) {
+                _ = self.storage.revokeFleRoleGrant(user_id, role);
+                self.sealChain(hmac_key) catch {};
+            }
+            return err;
+        };
+        self.logSecurityGraphMutation(.configuration_change, "GRANT_FLE_ROLE", user_id, role, null);
+    }
+
+    /// SONNY-6341: take FLE role `role` from `user_id`; false when it was
+    /// not granted. An error means the revoke may not be saved.
+    pub fn revokeUserFleRole(self: *Self, hmac_key: *const [32]u8, user_id: u64, role: []const u8) !bool {
+        if (!self.storage.revokeFleRoleGrant(user_id, role)) return false;
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "REVOKE_FLE_ROLE", user_id, role, null);
+        return true;
+    }
+
+    /// SONNY-6341: every FLE role grant of a user being dropped.
+    pub fn revokeAllUserFleRoles(self: *Self, hmac_key: *const [32]u8, user_id: u64) !void {
+        if (try self.storage.revokeAllFleRoleGrants(user_id) > 0) try self.sealChain(hmac_key);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6608-MFA-WRITE-THROUGH; FEATURE="MFA authentication"; ASPECT=EnrollmentWriteThrough; STATUS=TESTED; TEST=tests/test_sonny6608_mfa_persist.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6608: `geode.auth.mfa_setup`'s write-through: `username`'s TOTP
+    /// secret (the user record's `mfa_secret`) and its recovery codes as
+    /// SHA-256 digests (`MfaRecoveryCodes`), with MFA turned off until a code
+    /// verifies against the new secret (`setMfaEnabledWriteThrough`). All
+    /// of it or none of it. The secret gets the protection every user record
+    /// field gets: integrity (the HMAC chain) and, with GEODE_TDE_KEY set,
+    /// page encryption at rest; there is no field-level encryption.
+    pub fn enrollMfaWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8, secret_base32: []const u8, digests: []const [32]u8) !void {
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        const uid = (try self.findUserIdByName(username)) orelse return error.UserNotFound;
+        const old = self.storage.getUser(uid) orelse return error.UserNotFound;
+        const old_digests = try self.storage.mfaRecoveryDigests(self.allocator, uid);
+        defer if (old_digests) |d| self.allocator.free(d);
+        // SONNY-6609: the secret is stored sealed, never in plaintext.
+        var sealed_buf: [UserStorageBackend.mfa_secret_field_len]u8 = undefined;
+        const sealed = try sealMfaSecret(hmac_key, uid, secret_base32, &sealed_buf);
+        // Undone in reverse: the digests first, then the record (which seals).
+        errdefer self.restoreUserRecord(hmac_key, old);
+        errdefer self.storage.setMfaRecoveryDigests(uid, old_digests orelse @as([]const [32]u8, &.{})) catch |err| logRestoreFailure("MFA recovery codes", err);
+        try self.storage.updateUser(uid, null, null, null, false, sealed);
+        try self.recomputeAndStoreUserHmac(uid, hmac_key);
+        try self.storage.setMfaRecoveryDigests(uid, digests);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "MFA_ENROLL", uid, username, null);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6609-MFA-SECRET-SEALED; FEATURE="MFA authentication"; ASPECT=SecretSealedAtRest; STATUS=TESTED; TEST=tests/test_sonny6609_mfa_at_rest.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6609: how a TOTP secret is stored. AES-256-GCM (through the
+    /// crypto_backend seam: std.crypto's Aes256Gcm, OpenSSL under -Dfips)
+    /// with a random 96-bit nonce, under a key derived with HKDF-SHA256 from
+    /// the security graph's HMAC key (the key the chain is sealed with:
+    /// GEODE_AUTH_HMAC_KEY, else derived from GEODE_TDE_KEY, else
+    /// `.geode_hmac_key`), the user id bound as associated data (a sealed
+    /// value copied to another user's record does not open). Stored as
+    /// `mfa_secret_sealed_prefix` + base64url(nonce || ciphertext || tag).
+    /// A value without the prefix is a secret stored in plaintext before
+    /// SONNY-6609 (base32 has no '$'); the server seals it at load
+    /// (`sealPlaintextMfaSecretWriteThrough`).
+    pub const mfa_secret_sealed_prefix = "aesgcm1$";
+    /// The longest secret that fits the record sealed (base32 secrets are 32).
+    pub const mfa_secret_max_plain = 48;
+    const mfa_secret_nonce_len = 12;
+    const mfa_secret_tag_len = 16;
+    const mfa_secret_b64 = std.base64.url_safe_no_pad;
+
+    pub fn isSealedMfaSecret(stored: []const u8) bool {
+        return std.mem.startsWith(u8, stored, mfa_secret_sealed_prefix);
+    }
+
+    fn mfaSecretKey(hmac_key: *const [32]u8) ![32]u8 {
+        var key: [32]u8 = undefined;
+        try cb.Kdf.hkdf(.sha256, hmac_key, "geode-mfa-secret-salt-v1", "geode-mfa-secret-v1", &key);
+        return key;
+    }
+
+    fn mfaSecretAd(user_id: u64, buf: *[64]u8) []const u8 {
+        return std.fmt.bufPrint(buf, "geode-mfa-secret-v1:user_id={d}", .{user_id}) catch unreachable;
+    }
+
+    /// Seal `plain` for `user_id` into `out`; the stored form (a slice of
+    /// `out`).
+    pub fn sealMfaSecret(hmac_key: *const [32]u8, user_id: u64, plain: []const u8, out: *[UserStorageBackend.mfa_secret_field_len]u8) ![]const u8 {
+        if (plain.len == 0 or plain.len > mfa_secret_max_plain) return error.FieldTooLong;
+        var key = try mfaSecretKey(hmac_key);
+        defer cb.secureZero(&key);
+        var raw: [mfa_secret_nonce_len + mfa_secret_max_plain + mfa_secret_tag_len]u8 = undefined;
+        defer cb.secureZero(&raw);
+        const nonce = raw[0..mfa_secret_nonce_len];
+        try cb.Csprng.bytes(nonce);
+        const ct = raw[mfa_secret_nonce_len..][0..plain.len];
+        var tag: [mfa_secret_tag_len]u8 = undefined;
+        var ad_buf: [64]u8 = undefined;
+        try cb.Aead.seal(.aes_256_gcm, &key, nonce, mfaSecretAd(user_id, &ad_buf), plain, ct, &tag);
+        @memcpy(raw[mfa_secret_nonce_len + plain.len ..][0..mfa_secret_tag_len], &tag);
+        const raw_len = mfa_secret_nonce_len + plain.len + mfa_secret_tag_len;
+        const enc_len = mfa_secret_b64.Encoder.calcSize(raw_len);
+        if (mfa_secret_sealed_prefix.len + enc_len > out.len - 1) return error.FieldTooLong;
+        @memcpy(out[0..mfa_secret_sealed_prefix.len], mfa_secret_sealed_prefix);
+        _ = mfa_secret_b64.Encoder.encode(out[mfa_secret_sealed_prefix.len..][0..enc_len], raw[0..raw_len]);
+        return out[0 .. mfa_secret_sealed_prefix.len + enc_len];
+    }
+
+    /// The plaintext of a stored secret, into `out`: a sealed value opened
+    /// (`error.MfaSecretUndecryptable` when it does not open for this key and
+    /// user: another key, another user's record, or changed bytes), or a
+    /// value stored in plaintext before SONNY-6609, copied.
+    pub fn openMfaSecretWithKey(hmac_key: *const [32]u8, user_id: u64, stored: []const u8, out: []u8) ![]const u8 {
+        if (!isSealedMfaSecret(stored)) {
+            if (stored.len > out.len) return error.FieldTooLong;
+            @memcpy(out[0..stored.len], stored);
+            return out[0..stored.len];
+        }
+        const enc = stored[mfa_secret_sealed_prefix.len..];
+        var raw: [UserStorageBackend.mfa_secret_field_len]u8 = undefined;
+        defer cb.secureZero(&raw);
+        const raw_len = mfa_secret_b64.Decoder.calcSizeForSlice(enc) catch return error.MfaSecretUndecryptable;
+        if (raw_len > raw.len or raw_len <= mfa_secret_nonce_len + mfa_secret_tag_len) return error.MfaSecretUndecryptable;
+        mfa_secret_b64.Decoder.decode(raw[0..raw_len], enc) catch return error.MfaSecretUndecryptable;
+        const ct_len = raw_len - mfa_secret_nonce_len - mfa_secret_tag_len;
+        if (ct_len > out.len) return error.FieldTooLong;
+        var key = try mfaSecretKey(hmac_key);
+        defer cb.secureZero(&key);
+        var ad_buf: [64]u8 = undefined;
+        const tag = raw[mfa_secret_nonce_len + ct_len ..][0..mfa_secret_tag_len];
+        cb.Aead.open(.aes_256_gcm, &key, raw[0..mfa_secret_nonce_len], mfaSecretAd(user_id, &ad_buf), raw[mfa_secret_nonce_len..][0..ct_len], tag, out[0..ct_len]) catch {
+            cb.secureZero(out[0..ct_len]);
+            return error.MfaSecretUndecryptable;
+        };
+        return out[0..ct_len];
+    }
+
+    /// `user_id`'s TOTP secret in plaintext, into `out`, or null when it has
+    /// none (this manager's HMAC key).
+    pub fn openMfaSecret(self: *Self, user_id: u64, out: []u8) !?[]const u8 {
+        const rec = self.storage.getUser(user_id) orelse return error.UserNotFound;
+        const stored = rec.getMFASecret() orelse return null;
+        return try openMfaSecretWithKey(&self.hmac_key, user_id, stored, out);
+    }
+
+    /// SONNY-6609: seal `user_id`'s secret if it is stored in plaintext (a
+    /// store written before SONNY-6609). Nothing else changes (no auth
+    /// version bump: the secret is the same). All of it or none of it.
+    /// True when it sealed one.
+    pub fn sealPlaintextMfaSecretWriteThrough(self: *Self, hmac_key: *const [32]u8, user_id: u64) !bool {
+        const old = self.storage.getUser(user_id) orelse return error.UserNotFound;
+        const stored = old.getMFASecret() orelse return false;
+        if (isSealedMfaSecret(stored)) return false;
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        var sealed_buf: [UserStorageBackend.mfa_secret_field_len]u8 = undefined;
+        const sealed = try sealMfaSecret(hmac_key, user_id, stored, &sealed_buf);
+        errdefer self.restoreUserRecord(hmac_key, old);
+        var record = old;
+        record.mfa_secret_len = UserStorageBackend.copyIntoField(&record.mfa_secret, sealed);
+        try self.storage.putCachedUser(user_id, record);
+        try self.storage.upsertUserNode(record);
+        try self.recomputeAndStoreUserHmac(user_id, hmac_key);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "MFA_SECRET_SEALED", user_id, record.getUsername(), null);
+        return true;
+    }
+
+    /// SONNY-6608: `geode.auth.mfa_enable` / `mfa_disable`'s write-through:
+    /// the user's stored `mfa_enabled`. Turning it on needs a stored secret
+    /// (`error.MfaNotEnrolled`). All of it or none of it.
+    pub fn setMfaEnabledWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8, enabled: bool) !void {
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        const uid = (try self.findUserIdByName(username)) orelse return error.UserNotFound;
+        const old = self.storage.getUser(uid) orelse return error.UserNotFound;
+        if (enabled and old.getMFASecret() == null) return error.MfaNotEnrolled;
+        errdefer self.restoreUserRecord(hmac_key, old);
+        try self.storage.updateUser(uid, null, null, null, enabled, null);
+        try self.recomputeAndStoreUserHmac(uid, hmac_key);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, if (enabled) "MFA_ENABLE" else "MFA_DISABLE", uid, username, null);
+    }
+
+    /// SONNY-6608: `user_id`'s stored MFA recovery-code digests (the caller
+    /// frees them), or null.
+    pub fn mfaRecoveryDigests(self: *Self, allocator: std.mem.Allocator, user_id: u64) !?[][32]u8 {
+        return self.storage.mfaRecoveryDigests(allocator, user_id);
+    }
+
+    /// SONNY-6341: every stored FLE role grant (roles borrow from the store).
+    pub fn listFleRoleGrants(self: *Self, allocator: std.mem.Allocator) ![]UserStorageBackend.FleRoleGrantRecord {
+        return self.storage.listFleRoleGrants(allocator);
+    }
+
+    // CANARY: REQ=REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED; FEATURE="GQL Auth DDL Persistence"; ASPECT=GrantWriteThrough; STATUS=TESTED; TEST=tests/test_sonny1333_grant_persist_show_grants.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-1333: GRANT `actions` ON GRAPH `graph_name` for the user: each
+    /// grant stored in __geode_security and added to the live grant table
+    /// `pol`, or none of them. If any step fails, every grant this call added,
+    /// to the store or to `pol`, is taken out again and the error returned: a
+    /// failed GRANT confers nothing now and nothing at the next start. A grant
+    /// held before the call is left as it was.
+    pub fn grantGraphPermissionsWriteThrough(
+        self: *Self,
+        hmac_key: *const [32]u8,
+        pol: ?*geode.multi_graph_security.GraphRBACPolicy,
+        user_id: u64,
+        graph_name: []const u8,
+        actions: []const u8,
+    ) !void {
+        const max_actions = 8;
+        if (actions.len > max_actions) return error.TooManyGrantActions;
+        // SONNY-6359: the grant records change under auth_ddl_lock (the auth
+        // DDL holds it already; re-entrant), before any graph lock.
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        var stored_new: [max_actions]bool = undefined;
+        var live_new: [max_actions]bool = undefined;
+        var touched: usize = 0;
+        errdefer self.undoGraphGrants(hmac_key, pol, user_id, graph_name, actions[0..touched], stored_new[0..touched], live_new[0..touched]);
+        for (actions, 0..) |action, i| {
+            stored_new[i] = !self.storage.hasGraphGrant(user_id, graph_name, action);
+            live_new[i] = if (pol) |p| !p.hasGraphGrant(user_id, graph_name, action) else false;
+            touched = i + 1;
+            try self.grantUserGraphPermission(hmac_key, user_id, graph_name, action);
+            if (pol) |p| try p.grantGraphPermission(user_id, graph_name, action);
+        }
+    }
+
+    /// SONNY-1333: the write-throughs above are their own unit of undo. The
+    /// statement undo (SONNY-3348) replays a failed statement's store writes
+    /// but not this manager's record maps or the HMAC chain, so it would undo
+    /// the security graph behind their back (and a statement that recorded a
+    /// limit fences, silently, the writes that undo a failed save). They run
+    /// with capture and the fence suspended, as the transaction undo does.
+    fn suspendStatementUndo() void {
+        geode.statement_undo.suspendCapture();
+    }
+
+    /// The undo of a failed `grantGraphPermissionsWriteThrough`. The chain is
+    /// sealed again whatever was undone: a failed seal, or a re-stored grant
+    /// held before, left it stale.
+    fn undoGraphGrants(
+        self: *Self,
+        hmac_key: *const [32]u8,
+        pol: ?*geode.multi_graph_security.GraphRBACPolicy,
+        user_id: u64,
+        graph_name: []const u8,
+        actions: []const u8,
+        stored_new: []const bool,
+        live_new: []const bool,
+    ) void {
+        for (actions, stored_new, live_new) |action, s, l| {
+            if (l) if (pol) |p| {
+                _ = p.revokeGraphPermission(user_id, graph_name, action);
+            };
+            if (s) self.storage.discardGraphGrant(user_id, graph_name, action) catch |err| {
+                log.err("SONNY-1333: a failed GRANT left its record stored; it is loaded at the next start unless revoked", &.{
+                    Attr.uint("user_id", user_id),
+                    Attr.string("graph", graph_name),
+                    Attr.uint("action", @as(u64, action)),
+                    Attr.string("error", @errorName(err)),
+                });
+            };
+        }
+        self.sealChain(hmac_key) catch |err| {
+            log.err("SONNY-1333: the security chain could not be sealed after a failed GRANT", &.{Attr.string("error", @errorName(err))});
+        };
+    }
+
+    // CANARY: REQ=REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED; FEATURE="GQL Auth DDL Persistence"; ASPECT=RevokeWriteThrough; STATUS=TESTED; TEST=tests/test_sonny1333_grant_persist_show_grants.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-1333: REVOKE `action` ON GRAPH `graph_name` from the user. The
+    /// live grant table `pol` first, so the privilege stops at once whatever
+    /// the save does (fail closed), then the stored record. An error means the
+    /// record could not be removed: the grant is gone until the next start,
+    /// when it is loaded again unless the REVOKE is retried. Returns whether
+    /// the grant was held, live or stored.
+    pub fn revokeGraphPermissionWriteThrough(
+        self: *Self,
+        hmac_key: *const [32]u8,
+        pol: ?*geode.multi_graph_security.GraphRBACPolicy,
+        user_id: u64,
+        graph_name: []const u8,
+        action: u8,
+    ) !bool {
+        // SONNY-6359: as grantGraphPermissionsWriteThrough.
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        const live_removed = if (pol) |p| p.revokeGraphPermission(user_id, graph_name, action) else false;
+        const stored_removed = self.revokeUserGraphPermission(hmac_key, user_id, graph_name, action) catch |err| {
+            // The record may be gone with only the seal failed. Seal again:
+            // if that holds, the revoke is saved. Otherwise the chain stays
+            // stale (a retry that finds no record would not seal it).
+            if (self.storage.hasGraphGrant(user_id, graph_name, action)) return err;
+            self.sealChain(hmac_key) catch return err;
+            return true;
+        };
+        return live_removed or stored_removed;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6359-GRANT-READERS-LOCKED; FEATURE="GQL Auth DDL Persistence"; ASPECT=GrantListingsLocked; STATUS=TESTED; TEST=tests/test_sonny6359_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-1333: the stored grants of one user, for SHOW GRANTS. Caller owns
+    /// the returned slice. SONNY-6359: under `auth_ddl_lock`, as GRANT /
+    /// REVOKE change the grant records under it; it read them unlocked.
+    /// Callers hold no graph lock but their session graph's.
+    pub fn listGraphGrantsForUser(self: *Self, allocator: std.mem.Allocator, user_id: u64) ![]user_storage.UserStorageBackend.GraphGrantRecord {
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
+        const all = try self.storage.listGraphGrants(allocator);
+        defer allocator.free(all);
+        var out: std.ArrayList(user_storage.UserStorageBackend.GraphGrantRecord) = .empty;
+        errdefer out.deinit(allocator);
+        for (all) |g| {
+            if (g.user_id == user_id) try out.append(allocator, g);
+        }
+        return out.toOwnedSlice(allocator);
+    }
+
+    // CANARY: REQ=REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED; FEATURE="GQL Auth DDL Persistence"; ASPECT=CreateUserWriteThrough; STATUS=TESTED; TEST=tests/test_sonny1333_grant_persist_show_grants.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-1333: CREATE USER's write-through: the User node and, with
+    /// `role_name`, the role node and its HAS_ROLE edge, or none of it. A user
+    /// stored without its role was left behind by a failed CREATE USER; the
+    /// retry then failed as a duplicate.
+    pub fn createUserWithRole(
+        self: *Self,
+        hmac_key: *const [32]u8,
+        username: []const u8,
+        email: []const u8,
+        password_hash: []const u8,
+        is_superuser: bool,
+        role_name: ?[]const u8,
+    ) !u64 {
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        const uid = try self.createUser(hmac_key, username, email, password_hash, is_superuser);
+        errdefer self.removeUser(hmac_key, uid) catch |err| {
+            log.err("SONNY-1333: a failed CREATE USER left its user stored", &.{
+                Attr.string("user", username),
+                Attr.string("error", @errorName(err)),
+            });
+        };
+        if (role_name) |rn| {
+            // createRole is idempotent.
+            _ = try self.createRole(hmac_key, rn, "");
+            if (try self.findRoleIdByName(rn)) |rid| {
+                _ = try self.assignUserRole(hmac_key, uid, rid);
+            }
+        }
+        return uid;
+    }
+
+    // CANARY: REQ=REQ-SONNY-3038-AUTH-WRITE-THROUGH; FEATURE="GQL Auth DDL Persistence"; ASPECT=UserWriteThroughs; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-3038: DROP USER's write-through (`server_init.writerDeleteUser`).
+    /// An error means the user is still stored. No such stored user: nothing
+    /// to do.
+    pub fn deleteUserWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8) !void {
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        // Not stored: a removal whose seals failed may have left the chain
+        // unsealed (removeUser); seal it, so the retry that reports success
+        // leaves a chain that verifies.
+        const uid = (try self.findUserIdByName(username)) orelse return self.sealChain(hmac_key);
+        // SONNY-6341: a dropped user's FLE role grants go with it (a user made
+        // later under the name holds none).
+        try self.revokeAllUserFleRoles(hmac_key, uid);
+        try self.removeUser(hmac_key, uid);
+    }
+
+    /// SONNY-3038: a password change's write-through
+    /// (`server_init.writerUpdatePassword`): stored, or an error and the
+    /// stored record as it was.
+    pub fn updatePasswordWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8, new_password_hash: []const u8) !void {
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        const uid = (try self.findUserIdByName(username)) orelse return;
+        _ = try self.updateUserPassword(hmac_key, uid, new_password_hash);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6369-LEGACY-HASH-UPGRADE; FEATURE="SecurePasswordVerify"; ASPECT=StoreUpgradedHash; STATUS=TESTED; TEST=tests/test_sonny6369_query_exit_and_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6369: the login upgrade's write-through
+    /// (`user_management.upgradeLegacyHash`, `server_init.writerRehashPassword`):
+    /// replace `username`'s stored legacy hash `old_hash` with the Argon2id
+    /// hash `new_hash` of the same password. The password is not changed, so
+    /// unlike `updateUserPassword` the auth version (the user's sessions), the
+    /// reset flag and `password_changed_at` stay. `error.PasswordHashChanged`
+    /// when the stored hash is no longer `old_hash` (a concurrent change wins).
+    /// All of it or none of it.
+    pub fn replaceLegacyPasswordHashWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8, old_hash: []const u8, new_hash: []const u8) !void {
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        const uid = (try self.findUserIdByName(username)) orelse return error.UserNotFound;
+        const old = self.storage.getUser(uid) orelse return error.UserNotFound;
+        if (!std.mem.eql(u8, old.getPasswordHash(), old_hash)) return error.PasswordHashChanged;
+        errdefer self.restoreUserRecord(hmac_key, old);
+        var record = old;
+        record.password_hash_len = UserStorageBackend.copyIntoField(&record.password_hash, new_hash);
+        record.hash_algorithm_len = UserStorageBackend.copyIntoField(&record.hash_algorithm, "argon2id");
+        record.updated_at = compat_milliTimestamp();
+        try self.storage.putCachedUser(uid, record);
+        try self.storage.upsertUserNode(record);
+        try self.recomputeAndStoreUserHmac(uid, hmac_key);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "REHASH_PASSWORD", uid, record.getUsername(), null);
+    }
+
+    /// SONNY-3038: ALTER USER ... ENABLE / DISABLE's write-through
+    /// (`server_init.writerSetActive`): stored, or an error and the stored
+    /// record as it was.
+    pub fn setActiveWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8, active: bool) !void {
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        const uid = (try self.findUserIdByName(username)) orelse return;
+        _ = try self.setUserActive(hmac_key, uid, active);
+    }
+
+    /// SONNY-3038: a built-in role change's write-through
+    /// (`server_init.writerSetRole`): the user's HAS_ROLE edges to the other
+    /// built-in roles (`builtin_names`) are revoked and one to `role_name`
+    /// assigned (its role node created if missing), all of it or none of it.
+    /// Done step by step, a failure part way left the user stored with no
+    /// built-in role, or with two. Custom-role edges are not touched.
+    pub fn setBuiltinRoleWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8, role_name: []const u8, builtin_names: []const []const u8) !void {
+        const max_roles = 8;
+        if (builtin_names.len > max_roles) return error.TooManyBuiltinRoles;
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        const uid = (try self.findUserIdByName(username)) orelse return;
+        const old = self.storage.getUser(uid) orelse return error.UserNotFound;
+
+        var revoked: [max_roles]u64 = undefined;
+        var revoked_count: usize = 0;
+        var created_role: ?u64 = null;
+        var assigned_role: ?u64 = null;
+        errdefer {
+            if (assigned_role) |rid| _ = self.storage.revokeUserRole(uid, rid) catch |err| logRestoreFailure("HAS_ROLE edge", err);
+            for (revoked[0..revoked_count]) |rid| _ = self.storage.assignUserRole(uid, rid) catch |err| logRestoreFailure("HAS_ROLE edge", err);
+            if (created_role) |rid| self.storage.removeRole(rid) catch |err| logRestoreFailure("role record", err);
+            self.restoreUserRecord(hmac_key, old);
+        }
+
+        // A user has exactly one built-in role at a time (see writerSetRole).
+        for (builtin_names) |other| {
+            if (std.mem.eql(u8, other, role_name)) continue;
+            const rid = (try self.findRoleIdByName(other)) orelse continue;
+            const before = self.authVersionOf(uid);
+            // The version moves only when an edge was removed.
+            if (try self.revokeUserRole(hmac_key, uid, rid) != before) {
+                revoked[revoked_count] = rid;
+                revoked_count += 1;
+            }
+        }
+
+        const existed = (try self.findRoleIdByName(role_name)) != null;
+        const rid = try self.createRole(hmac_key, role_name, "");
+        if (!existed) created_role = rid;
+        const before = self.authVersionOf(uid);
+        if (try self.assignUserRole(hmac_key, uid, rid) != before) assigned_role = rid;
+    }
+
+    fn authVersionOf(self: *Self, user_id: u64) u64 {
+        const record = self.storage.getUser(user_id) orelse return 0;
+        return record.auth_version;
+    }
+
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-018; FEATURE="AuthDDLPersistence"; ASPECT=ListGraphGrants; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-06-11
     /// List all persisted graph grants. Caller owns the returned slice.
+    /// SONNY-6359: under `auth_ddl_lock` (see `listGraphGrantsForUser`).
     pub fn listGraphGrants(self: *Self, allocator: std.mem.Allocator) ![]user_storage.UserStorageBackend.GraphGrantRecord {
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
         return self.storage.listGraphGrants(allocator);
     }
 
+    // CANARY: REQ=REQ-SONNY-6352-AUTH-READERS-LOCKED; FEATURE="GQL Auth DDL Persistence"; ASPECT=CanUserAccessGraphLocked; STATUS=TESTED; TEST=tests/test_sonny6352_auth_verify_locking.zig; OWNER=security; UPDATED=2026-11-12
     // CANARY: REQ=REQ-LSP-PERM-GRAPH-VISIBILITY-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=CoarseGraphVisibilityGate; STATUS=TESTED; TEST=tests/test_auth_graph_manager_unit.zig; OWNER=security; UPDATED=2026-06-11
     /// Returns true if `user` is a superuser (admin) or holds at least one
     /// persisted grant of any action on `graph_name`. Intended as a COARSE
@@ -1571,11 +2504,17 @@ pub const AuthGraphManager = struct {
     /// dedicated (user_id, graph_name) index can be added later if this
     /// becomes a hot path.
     ///
-    /// Locking: takes no AuthGraphManager-level lock (the manager has
-    /// none on the grant path). The underlying GraphStore reads are
-    /// safe under the global store rwlock convention used elsewhere in
-    /// this file — `revokeGraphGrant` scans the same data the same way.
-    pub fn canUserAccessGraph(self: *Self, user: []const u8, graph_name: []const u8) bool {
+    /// Locking (SONNY-6352): holds `auth_ddl_lock` for the scan, as GRANT /
+    /// REVOKE hold it while they change `graph_grant_nodes`; it iterated
+    /// the map unlocked. Callers (LSP / schema introspection) hold no
+    /// graph lock here, as the lock order requires.
+    /// SONNY-6594 (5): a grant whose record cannot be READ fails the check
+    /// with the read's error (still no access): it was skipped, a silent
+    /// deny an operator could not tell from a missing grant.
+    pub fn canUserAccessGraph(self: *Self, user: []const u8, graph_name: []const u8) !bool {
+        const ddl_guard = geode.security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
+
         // Resolve username -> user_id and short-circuit if the user is a
         // superuser. getUserByUsername is itself a thin wrapper over the
         // cache, so the cost is a single hashmap scan.
@@ -1595,20 +2534,22 @@ pub const AuthGraphManager = struct {
             // Gap 0034 discipline: hydrate-on-miss so an evicted/not-yet-resident
             // grant body still resolves from the engine (the getNodeProperty
             // reads below already hydrate; the body read must match).
-            const node = self.storage.store.getNodePtrHydrated(node_id) orelse continue;
+            const node = (try self.storage.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             // SECURITY_GRAPH_NAME is duplicated as a file-local const in this
             // module (and in user_storage.zig). Use the local copy so we don't
             // rely on a cross-module reference.
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
-            const uid_prop = self.storage.store.getNodeProperty(node_id, "user_id") orelse continue;
+            // SONNY-6607 (1): a grant whose properties cannot be read fails
+            // the check (still no access), not a silent "no grant".
+            const uid_prop = (try self.storage.store.getNodePropertyOrError(node_id, "user_id")) orelse continue;
             const stored_uid: u64 = switch (uid_prop) {
                 .Int => |v| if (v < 0) continue else @intCast(v),
                 else => continue,
             };
             if (stored_uid != user_id) continue;
 
-            const gname_prop = self.storage.store.getNodeProperty(node_id, "graph_name") orelse continue;
+            const gname_prop = (try self.storage.store.getNodePropertyOrError(node_id, "graph_name")) orelse continue;
             const stored_gname: []const u8 = switch (gname_prop) {
                 .String => |s| s,
                 else => continue,
@@ -1637,9 +2578,123 @@ pub const AuthGraphManager = struct {
         for (ids.items) |grant_id| {
             const node_id = self.storage.graph_grant_nodes.get(grant_id) orelse continue;
             // Read properties from graph to build a stable HMAC input.
-            const computed = computeGraphGrantHmacFromNode(hmac_key, self.storage.store, node_id, grant_id);
+            const computed = try computeGraphGrantHmacFromNode(hmac_key, self.storage.store, node_id, grant_id);
             const computed_hex = auth_hmac.hmacToHex(&computed);
             try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
+            try hmac_list.append(self.allocator, computed);
+        }
+    }
+
+    // -- MfaRecoveryCodes HMAC chain support (SONNY-6608) --
+
+    fn sealMfaRecoveryRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
+        var ids: std.ArrayList(u64) = .empty;
+        defer ids.deinit(self.allocator);
+        {
+            var it = self.storage.mfa_recovery_nodes.keyIterator();
+            while (it.next()) |key| try ids.append(self.allocator, key.*);
+        }
+        for (ids.items) |uid| {
+            const node_id = self.storage.mfa_recovery_nodes.get(uid) orelse continue;
+            const computed = try computeMfaRecoveryHmacFromNode(hmac_key, self.storage.store, node_id);
+            const computed_hex = auth_hmac.hmacToHex(&computed);
+            try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
+            try hmac_list.append(self.allocator, computed);
+        }
+    }
+
+    fn verifyMfaRecoveryRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
+        var it = self.storage.mfa_recovery_nodes.iterator();
+        while (it.next()) |e| {
+            const computed = try computeMfaRecoveryHmacFromNode(hmac_key, self.storage.store, e.value_ptr.*);
+            const stored = (try self.storage.store.getNodePropertyOrError(e.value_ptr.*, "hmac")) orelse return error.RecordHmacMismatch;
+            if (stored != .String) return error.RecordHmacMismatch;
+            const computed_hex = auth_hmac.hmacToHex(&computed);
+            if (!std.mem.eql(u8, &computed_hex, stored.String)) return error.RecordHmacMismatch;
+            try hmac_list.append(self.allocator, computed);
+        }
+    }
+
+    // -- MfaAttempts HMAC chain support (SONNY-6614) --
+
+    fn sealMfaAttemptRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
+        var ids: std.ArrayList(u64) = .empty;
+        defer ids.deinit(self.allocator);
+        {
+            var it = self.storage.mfa_attempt_nodes.keyIterator();
+            while (it.next()) |key| try ids.append(self.allocator, key.*);
+        }
+        for (ids.items) |uid| {
+            const node_id = self.storage.mfa_attempt_nodes.get(uid) orelse continue;
+            const computed = try computeMfaAttemptsHmacFromNode(hmac_key, self.storage.store, node_id);
+            const computed_hex = auth_hmac.hmacToHex(&computed);
+            try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
+            try hmac_list.append(self.allocator, computed);
+        }
+    }
+
+    fn verifyMfaAttemptRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
+        var it = self.storage.mfa_attempt_nodes.iterator();
+        while (it.next()) |e| {
+            const computed = try computeMfaAttemptsHmacFromNode(hmac_key, self.storage.store, e.value_ptr.*);
+            const stored = (try self.storage.store.getNodePropertyOrError(e.value_ptr.*, "hmac")) orelse return error.RecordHmacMismatch;
+            if (stored != .String) return error.RecordHmacMismatch;
+            const computed_hex = auth_hmac.hmacToHex(&computed);
+            if (!std.mem.eql(u8, &computed_hex, stored.String)) return error.RecordHmacMismatch;
+            try hmac_list.append(self.allocator, computed);
+        }
+    }
+
+    /// SONNY-6619: `geode.auth.mfa_verify`'s write-through of a lockout
+    /// transition (into lockout, or the reset after a stored one): the
+    /// user's MfaAttempts record, the chain resealed. All of it or none.
+    pub fn setMfaAttemptsWriteThrough(self: *Self, hmac_key: *const [32]u8, username: []const u8, state: UserStorageBackend.MfaAttemptState) !void {
+        suspendStatementUndo();
+        defer geode.statement_undo.resumeCapture();
+        const uid = (try self.findUserIdByName(username)) orelse return error.UserNotFound;
+        const old = try self.storage.getMfaAttempts(uid);
+        errdefer {
+            if (old) |o| {
+                self.storage.setMfaAttempts(uid, o) catch |err| logRestoreFailure("MFA attempts", err);
+            } else _ = self.storage.removeMfaAttempts(uid);
+            self.sealChain(hmac_key) catch |err| logRestoreFailure("chain seal", err);
+        }
+        try self.storage.setMfaAttempts(uid, state);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, if (state.lockout_until_ms != 0) "MFA_LOCKOUT" else "MFA_ATTEMPTS_RESET", uid, username, null);
+    }
+
+    /// SONNY-6614: `user_id`'s stored offline MFA attempts, or null.
+    pub fn mfaAttempts(self: *Self, user_id: u64) !?UserStorageBackend.MfaAttemptState {
+        return self.storage.getMfaAttempts(user_id);
+    }
+
+    // -- FleRoleGrant HMAC chain support (SONNY-6341) --
+
+    fn sealFleRoleGrantRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
+        var ids: std.ArrayList(u64) = .empty;
+        defer ids.deinit(self.allocator);
+        {
+            var it = self.storage.fle_role_grant_nodes.keyIterator();
+            while (it.next()) |key| try ids.append(self.allocator, key.*);
+        }
+        for (ids.items) |grant_id| {
+            const node_id = self.storage.fle_role_grant_nodes.get(grant_id) orelse continue;
+            const computed = try computeFleRoleGrantHmacFromNode(hmac_key, self.storage.store, node_id, grant_id);
+            const computed_hex = auth_hmac.hmacToHex(&computed);
+            try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
+            try hmac_list.append(self.allocator, computed);
+        }
+    }
+
+    fn verifyFleRoleGrantRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
+        var it = self.storage.fle_role_grant_nodes.iterator();
+        while (it.next()) |e| {
+            const computed = try computeFleRoleGrantHmacFromNode(hmac_key, self.storage.store, e.value_ptr.*, e.key_ptr.*);
+            const stored = (try self.storage.store.getNodePropertyOrError(e.value_ptr.*, "hmac")) orelse return error.RecordHmacMismatch;
+            if (stored != .String) return error.RecordHmacMismatch;
+            const computed_hex = auth_hmac.hmacToHex(&computed);
+            if (!std.mem.eql(u8, &computed_hex, stored.String)) return error.RecordHmacMismatch;
             try hmac_list.append(self.allocator, computed);
         }
     }
@@ -1649,8 +2704,8 @@ pub const AuthGraphManager = struct {
         while (it.next()) |key| {
             const grant_id = key.*;
             const node_id = self.storage.graph_grant_nodes.get(grant_id) orelse continue;
-            const computed = computeGraphGrantHmacFromNode(hmac_key, self.storage.store, node_id, grant_id);
-            const stored_hmac_prop = self.storage.store.getNodeProperty(node_id, "hmac");
+            const computed = try computeGraphGrantHmacFromNode(hmac_key, self.storage.store, node_id, grant_id);
+            const stored_hmac_prop = (try self.storage.store.getNodePropertyOrError(node_id, "hmac"));
             if (stored_hmac_prop == null or stored_hmac_prop.? != .String) {
                 return error.RecordHmacMismatch;
             }
@@ -1702,51 +2757,10 @@ fn autoGenerateHmacKeyFile(path: []const u8) !HmacKeyResult {
 
 // -- HMAC Computation Helpers (module-level) --
 
+/// SONNY-6484: one definition, shared with the writer
+/// (`UserStorageBackend.persistUserWithHmac`).
 fn computeUserHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.UserRecord) [32]u8 {
-    var id_buf: [20]u8 = undefined;
-    const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{record.id}) catch "0";
-    var created_buf: [20]u8 = undefined;
-    const created_str = std.fmt.bufPrint(&created_buf, "{d}", .{record.created_at}) catch "0";
-    var updated_buf: [20]u8 = undefined;
-    const updated_str = std.fmt.bufPrint(&updated_buf, "{d}", .{record.updated_at}) catch "0";
-    var pwd_changed_buf: [20]u8 = undefined;
-    const pwd_changed_str = std.fmt.bufPrint(&pwd_changed_buf, "{d}", .{record.password_changed_at}) catch "0";
-    var lockout_buf: [20]u8 = undefined;
-    const lockout_str = std.fmt.bufPrint(&lockout_buf, "{d}", .{record.lockout_until}) catch "0";
-    var last_login_buf: [20]u8 = undefined;
-    const last_login_str = std.fmt.bufPrint(&last_login_buf, "{d}", .{record.last_login}) catch "0";
-    var failed_buf: [10]u8 = undefined;
-    const failed_str = std.fmt.bufPrint(&failed_buf, "{d}", .{record.failed_login_attempts}) catch "0";
-    var auth_version_buf: [20]u8 = undefined;
-    const auth_version_str = std.fmt.bufPrint(&auth_version_buf, "{d}", .{record.auth_version}) catch "0";
-
-    const mfa_secret = record.getMFASecret() orelse "";
-    const attributes_json = record.getAttributesJson() orelse "";
-
-    const props = [_]auth_hmac.KeyValue{
-        .{ .key = "attributes_json", .value = attributes_json },
-        .{ .key = "auth_version", .value = auth_version_str },
-        .{ .key = "created_at", .value = created_str },
-        .{ .key = "email", .value = record.getEmail() },
-        .{ .key = "failed_login_attempts", .value = failed_str },
-        .{ .key = "hash_algorithm", .value = record.getHashAlgorithm() },
-        .{ .key = "id", .value = id_str },
-        .{ .key = "is_active", .value = if (record.is_active) "true" else "false" },
-        .{ .key = "is_default_user", .value = if (record.is_default_user) "true" else "false" },
-        .{ .key = "is_superuser", .value = if (record.is_superuser) "true" else "false" },
-        .{ .key = "last_login", .value = last_login_str },
-        .{ .key = "lockout_until", .value = lockout_str },
-        .{ .key = "mfa_enabled", .value = if (record.mfa_enabled) "true" else "false" },
-        .{ .key = "mfa_secret", .value = mfa_secret },
-        .{ .key = "password_changed_at", .value = pwd_changed_str },
-        .{ .key = "password_hash", .value = record.getPasswordHash() },
-        .{ .key = "password_reset_required", .value = if (record.password_reset_required) "true" else "false" },
-        .{ .key = "salt", .value = if (sliceUntilZero(&record.salt)) |s| s else "" },
-        .{ .key = "updated_at", .value = updated_str },
-        .{ .key = "username", .value = record.getUsername() },
-    };
-
-    return computeRecordHmacChecked(hmac_key, &props);
+    return user_storage.userRecordHmac(hmac_key, record);
 }
 
 fn computeRoleHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.RoleRecord) [32]u8 {
@@ -1836,7 +2850,7 @@ fn computePolicyHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.
 
     const kind_value: ?[]const u8 = switch (record.kind) {
         .legacy => null,
-        .gps, .rls => record.kind.property().?,
+        .gps, .rls, .rls_deny, .rls_attribute => record.kind.property().?,
         // Not a value any writer stores: it can only match a record signed
         // with it, and no loader uses an `.invalid` record anyway.
         .invalid => "<invalid>",
@@ -1877,26 +2891,26 @@ fn graphGrantId(user_id: u64, graph_name: []const u8, action: u8) u64 {
 }
 
 /// Compute the HMAC for a GraphGrant node by reading its properties from the store.
-fn computeGraphGrantHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.GraphStore, node_id: u64, grant_id: u64) [32]u8 {
+fn computeGraphGrantHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.GraphStore, node_id: u64, grant_id: u64) ![32]u8 {
     var id_buf: [20]u8 = undefined;
     const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{grant_id}) catch "0";
 
     // Read properties directly from the graph node (grants have no in-memory cache).
-    const user_id_val = if (store.getNodeProperty(node_id, "user_id")) |v| if (v == .Int) v.Int else 0 else 0;
+    const user_id_val = if ((try store.getNodePropertyOrError(node_id, "user_id"))) |v| if (v == .Int) v.Int else 0 else 0;
     var uid_buf: [20]u8 = undefined;
     const uid_str = std.fmt.bufPrint(&uid_buf, "{d}", .{user_id_val}) catch "0";
 
-    const graph_name = if (store.getNodeProperty(node_id, "graph_name")) |v| if (v == .String) v.String else "" else "";
+    const graph_name = if ((try store.getNodePropertyOrError(node_id, "graph_name"))) |v| if (v == .String) v.String else "" else "";
 
-    const action_val = if (store.getNodeProperty(node_id, "action")) |v| if (v == .Int) v.Int else 0 else 0;
+    const action_val = if ((try store.getNodePropertyOrError(node_id, "action"))) |v| if (v == .Int) v.Int else 0 else 0;
     var action_buf: [10]u8 = undefined;
     const action_str = std.fmt.bufPrint(&action_buf, "{d}", .{action_val}) catch "0";
 
-    const granted_at_val = if (store.getNodeProperty(node_id, "granted_at")) |v| if (v == .Int) v.Int else 0 else 0;
+    const granted_at_val = if ((try store.getNodePropertyOrError(node_id, "granted_at"))) |v| if (v == .Int) v.Int else 0 else 0;
     var granted_at_buf: [20]u8 = undefined;
     const granted_at_str = std.fmt.bufPrint(&granted_at_buf, "{d}", .{granted_at_val}) catch "0";
 
-    const granted_by_val = if (store.getNodeProperty(node_id, "granted_by")) |v| if (v == .Int) v.Int else 0 else 0;
+    const granted_by_val = if ((try store.getNodePropertyOrError(node_id, "granted_by"))) |v| if (v == .Int) v.Int else 0 else 0;
     var granted_by_buf: [20]u8 = undefined;
     const granted_by_str = std.fmt.bufPrint(&granted_by_buf, "{d}", .{granted_by_val}) catch "0";
 
@@ -1912,13 +2926,65 @@ fn computeGraphGrantHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.Gr
     return computeRecordHmacChecked(hmac_key, &props);
 }
 
-fn sliceUntilZero(bytes: []const u8) ?[]const u8 {
-    var len: usize = 0;
-    while (len < bytes.len) : (len += 1) {
-        if (bytes[len] == 0) break;
-    }
-    if (len == 0) return null;
-    return bytes[0..len];
+/// SONNY-6614: the HMAC of a MfaAttempts node, from its stored fields.
+fn computeMfaAttemptsHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.GraphStore, node_id: u64) ![32]u8 {
+    const int = struct {
+        fn get(st: *graph_store.GraphStore, nid: u64, key: []const u8, default: i64) !i64 {
+            return if ((try st.getNodePropertyOrError(nid, key))) |v| if (v == .Int) v.Int else default else default;
+        }
+    }.get;
+    var uid_buf: [20]u8 = undefined;
+    const uid_str = std.fmt.bufPrint(&uid_buf, "{d}", .{try int(store, node_id, "user_id", -1)}) catch "-1";
+    var count_buf: [20]u8 = undefined;
+    const count_str = std.fmt.bufPrint(&count_buf, "{d}", .{try int(store, node_id, "fail_count", -1)}) catch "-1";
+    var lock_buf: [20]u8 = undefined;
+    const lock_str = std.fmt.bufPrint(&lock_buf, "{d}", .{try int(store, node_id, "lockout_until_ms", -1)}) catch "-1";
+    const props = [_]auth_hmac.KeyValue{
+        .{ .key = "fail_count", .value = count_str },
+        .{ .key = "kind", .value = "MfaAttempts" },
+        .{ .key = "lockout_until_ms", .value = lock_str },
+        .{ .key = "user_id", .value = uid_str },
+    };
+    return computeRecordHmacChecked(hmac_key, &props);
+}
+
+/// SONNY-6608: the HMAC of a MfaRecoveryCodes node, from its stored fields.
+fn computeMfaRecoveryHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.GraphStore, node_id: u64) ![32]u8 {
+    const user_id_val = if ((try store.getNodePropertyOrError(node_id, "user_id"))) |v| if (v == .Int) v.Int else -1 else -1;
+    var uid_buf: [20]u8 = undefined;
+    const uid_str = std.fmt.bufPrint(&uid_buf, "{d}", .{user_id_val}) catch "-1";
+    const digests = if ((try store.getNodePropertyOrError(node_id, "digests"))) |v| if (v == .String) v.String else "" else "";
+    const created_val = if ((try store.getNodePropertyOrError(node_id, "created_at"))) |v| if (v == .Int) v.Int else 0 else 0;
+    var created_buf: [20]u8 = undefined;
+    const created_str = std.fmt.bufPrint(&created_buf, "{d}", .{created_val}) catch "0";
+    const props = [_]auth_hmac.KeyValue{
+        .{ .key = "created_at", .value = created_str },
+        .{ .key = "digests", .value = digests },
+        .{ .key = "kind", .value = "MfaRecoveryCodes" },
+        .{ .key = "user_id", .value = uid_str },
+    };
+    return computeRecordHmacChecked(hmac_key, &props);
+}
+
+/// SONNY-6341: the HMAC of a FleRoleGrant node, from its stored fields.
+fn computeFleRoleGrantHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.GraphStore, node_id: u64, grant_id: u64) ![32]u8 {
+    var id_buf: [20]u8 = undefined;
+    const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{grant_id}) catch "0";
+    const user_id_val = if ((try store.getNodePropertyOrError(node_id, "user_id"))) |v| if (v == .Int) v.Int else 0 else 0;
+    var uid_buf: [20]u8 = undefined;
+    const uid_str = std.fmt.bufPrint(&uid_buf, "{d}", .{user_id_val}) catch "0";
+    const role = if ((try store.getNodePropertyOrError(node_id, "role"))) |v| if (v == .String) v.String else "" else "";
+    const granted_at_val = if ((try store.getNodePropertyOrError(node_id, "granted_at"))) |v| if (v == .Int) v.Int else 0 else 0;
+    var granted_at_buf: [20]u8 = undefined;
+    const granted_at_str = std.fmt.bufPrint(&granted_at_buf, "{d}", .{granted_at_val}) catch "0";
+    const props = [_]auth_hmac.KeyValue{
+        .{ .key = "fle_role", .value = role },
+        .{ .key = "grant_id", .value = id_str },
+        .{ .key = "granted_at", .value = granted_at_str },
+        .{ .key = "kind", .value = "FleRoleGrant" },
+        .{ .key = "user_id", .value = uid_str },
+    };
+    return computeRecordHmacChecked(hmac_key, &props);
 }
 
 // -- Tests --
@@ -1983,7 +3049,8 @@ test "bootstrapDefaultAdmin creates user + role + chain root with valid HMAC cha
     // Verify user was created
     try testing.expect(mgr.hasAuthRecords());
     try testing.expect(std.mem.eql(u8, result.username, "geode"));
-    try testing.expectEqual(@as(usize, 32), result.password.len);
+    // SONNY-6331: a generated password meets the password policy.
+    try testing.expectEqual(@as(?[]const u8, null), geode_auth.PasswordPolicy.geodeSecure().validate(result.password));
 
     // Verify user is superuser and default
     const user = mgr.storage.getUser(result.user_id);
@@ -1998,7 +3065,7 @@ test "bootstrapDefaultAdmin creates user + role + chain root with valid HMAC cha
     try testing.expect(std.mem.eql(u8, role.?.getName(), "admin"));
 
     // Verify chain root exists
-    const chain_root = mgr.storage.loadChainRoot();
+    const chain_root = try mgr.storage.loadChainRoot();
     try testing.expect(chain_root != null);
     try testing.expectEqual(@as(u64, 2), chain_root.?.record_count); // 1 user + 1 role
 }
@@ -2158,7 +3225,7 @@ test "createUser adds user and maintains valid chain" {
     try testing.expect(std.mem.eql(u8, alice.?.getUsername(), "alice"));
 
     // Verify chain root count updated (admin user + admin role + alice)
-    const chain_root = mgr.storage.loadChainRoot();
+    const chain_root = try mgr.storage.loadChainRoot();
     try testing.expect(chain_root != null);
     try testing.expectEqual(@as(u64, 3), chain_root.?.record_count);
 
@@ -2202,22 +3269,22 @@ test "canUserAccessGraph returns true after grant and false after revoke" {
     const alice_id = try mgr.createUser(&hmac_key, "alice", "alice@example.com", pw_hash, false);
 
     // Pre-grant: alice cannot see the "trade" graph.
-    try testing.expect(!mgr.canUserAccessGraph("alice", "trade"));
+    try testing.expect(!try mgr.canUserAccessGraph("alice", "trade"));
 
     // Action byte 0 == Read per GraphGrantRecord.action encoding.
     try mgr.grantUserGraphPermission(&hmac_key, alice_id, "trade", 0);
 
     // Post-grant: alice sees "trade".
-    try testing.expect(mgr.canUserAccessGraph("alice", "trade"));
+    try testing.expect(try mgr.canUserAccessGraph("alice", "trade"));
     // Other graphs remain hidden.
-    try testing.expect(!mgr.canUserAccessGraph("alice", "other"));
+    try testing.expect(!try mgr.canUserAccessGraph("alice", "other"));
     // Other users still don't see "trade".
-    try testing.expect(!mgr.canUserAccessGraph("nobody", "trade"));
+    try testing.expect(!try mgr.canUserAccessGraph("nobody", "trade"));
 
     // Revoke the same action and verify visibility drops back to false.
     const removed = try mgr.revokeUserGraphPermission(&hmac_key, alice_id, "trade", 0);
     try testing.expect(removed);
-    try testing.expect(!mgr.canUserAccessGraph("alice", "trade"));
+    try testing.expect(!try mgr.canUserAccessGraph("alice", "trade"));
 }
 
 // CANARY: REQ=REQ-LSP-PERM-GRAPH-VISIBILITY-002; FEATURE="LspPermissionAwareCompletion"; ASPECT=AdminShortcut; STATUS=TESTED; TEST=test_canUserAccessGraph_admin_shortcut; OWNER=security; UPDATED=2026-05-14
@@ -2238,10 +3305,10 @@ test "canUserAccessGraph short-circuits true for superusers without any grant" {
     // bootstrapDefaultAdmin creates a superuser named "geode" with no
     // graph grants. The admin shortcut must still return true for any
     // graph name.
-    try testing.expect(mgr.canUserAccessGraph(bootstrap.username, "any_graph_name"));
-    try testing.expect(mgr.canUserAccessGraph(bootstrap.username, "another"));
+    try testing.expect(try mgr.canUserAccessGraph(bootstrap.username, "any_graph_name"));
+    try testing.expect(try mgr.canUserAccessGraph(bootstrap.username, "another"));
     // And an unknown user remains false.
-    try testing.expect(!mgr.canUserAccessGraph("ghost", "any"));
+    try testing.expect(!try mgr.canUserAccessGraph("ghost", "any"));
 }
 
 // CANARY: REQ=REQ-AUTH-GRAPH-MGR-002; FEATURE="AuthGraphManagerTests"; ASPECT=ChainIntegrity; STATUS=TESTED; TEST=test_bootstrapDefaultAdmin_creates_user; OWNER=security; UPDATED=2026-02-24

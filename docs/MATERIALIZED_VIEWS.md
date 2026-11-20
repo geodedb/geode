@@ -69,7 +69,12 @@ pub const RefreshMethod = enum {
 
 ### View Lifecycle Management
 
-```gql
+Not supported as GQL: Geode has no `CREATE MATERIALIZED VIEW` statement (it
+is a syntax error). The manager is reached through its Zig API
+(`MaterializedViewManager`, see the scope note above); the block below
+sketches the view definitions it models.
+
+```text
 -- Create materialized view with auto-scheduled refresh
 CREATE MATERIALIZED VIEW user_activity_summary AS
 MATCH (u:User)-[a:ACTION]->(t:Target)
@@ -129,7 +134,6 @@ pub fn canSatisfyQuery(self: *MaterializedViewManager, query: []const u8) ?[]con
 - **Query Acceleration**: 10-100x speedup for complex analytical queries
 - **Memory Efficiency**: Intelligent view storage with compression
 - **Cache Hit Optimization**: Automatic query routing to compatible views
-- **Distributed Coordination**: Cross-shard view consistency with MVCC integration
 
 ## Dependency Tracking & Incremental Refresh
 
@@ -214,8 +218,6 @@ pub const MaterializedViewManager = struct {
 
 - **Transaction-Safe Refreshes**: View refresh operations execute within proper transaction boundaries
 - **Isolation Guarantees**: MVCC snapshot isolation ensures consistent view refreshes
-- **Phantom Read Prevention**: Integration with phantom read prevention system for serializable isolation
-- **Distributed Coordination**: Cross-shard transaction coordination for federated view refreshes
 
 ## Enterprise Features
 
@@ -297,7 +299,6 @@ pub const MaterializedViewManager = struct {
 
 ### Integration Performance
 
-- **Distributed Coordination**: Leverages existing QUIC transport for <5ms cross-shard communication
 - **MVCC Integration**: <1ms overhead for transaction-safe view operations
 - **Query Optimization**: 10-100x speedup for queries served from materialized views
 

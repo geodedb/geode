@@ -105,7 +105,7 @@ ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
 # Provide an explicit GEODE_ADMIN_PASSWORD so the admin user is created
 # without the force-reset-on-first-login flag that comes with an
 # auto-generated password (see src/security/user_management.zig:570-591).
-ADMIN_PASS="${GEODE_ADMIN_PASSWORD:-match-read-scaling-pw}"
+ADMIN_PASS="${GEODE_ADMIN_PASSWORD:-Match Read Scaling Passphrase}"
 
 SERVER_PID=""
 cleanup() {
@@ -150,7 +150,7 @@ done
 log "server ready"
 
 # Build the DSN the loadtest expects.
-DSN="127.0.0.1:${PORT}?insecure=true&user=${ADMIN_USER}&pass=${ADMIN_PASS}"
+DSN="127.0.0.1:${PORT}?insecure=true&user=${ADMIN_USER}&pass=${ADMIN_PASS// /%20}"
 
 # Run the point_read scenario at concurrency 1 and 4 for a short burst.
 # A 3-second-per-level window is long enough for the handler-lock effect

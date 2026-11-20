@@ -103,7 +103,10 @@ have openssl || skip "openssl not available"
 have python3 || skip "python3 not available"
 [ -x "$BIN" ] || skip "geode binary not found at $BIN (build first: zig build)"
 
-TOKEN="netns-test-token"; HMAC="netns-test-hmac-0123456789abcdef0123456789abcdef"; ADMINPW="NetnsTestPw123!"
+# SONNY-6436: the auth-chain HMAC key must be 64 hex characters (the server
+# refuses any other), and the admin seed a passphrase meeting the password
+# policy (anything else forces a reset at the first login).
+TOKEN="netns-test-token"; HMAC="$(openssl rand -hex 32)"; ADMINPW="Netns Cluster Admin Passphrase"
 PEERS="geode-1.geode.test:4242,geode-2.geode.test:4242,geode-3.geode.test:4242"
 FAILED=0
 declare -A PID
@@ -216,7 +219,16 @@ subjectAltName=DNS:geode-1.geode.test,DNS:geode-2.geode.test,DNS:geode-3.geode.t
 extendedKeyUsage=serverAuth,clientAuth
 EOF
 openssl x509 -req -in "$WORK/leaf.csr" -CA "$WORK/ca.crt" -CAkey "$WORK/ca.key" -CAcreateserial -days 2 -extfile "$WORK/leaf.ext" -out "$WORK/leaf.crt" 2>/dev/null
-RUNUSER="${SUDO_USER:-$(id -un)}"
+# SONNY-6447: the user the nodes run as. SUDO_USER names the invoking user
+# only when this script itself runs as root under sudo; otherwise it is
+# whatever an outer session left in the environment (an ansible become, a
+# parent sudo shell) and can name a user that cannot even reach $WORK (every
+# node then fails with "Permission denied" and no node starts).
+if [ "$(id -u)" = "0" ] && [ -n "${SUDO_USER:-}" ] && id -u "$SUDO_USER" >/dev/null 2>&1; then
+  RUNUSER="$SUDO_USER"
+else
+  RUNUSER="$(id -un)"
+fi
 chown -R "$RUNUSER" "$WORK" 2>/dev/null || true
 chmod -R a+rX "$WORK"
 
@@ -332,8 +344,24 @@ assert_count_steady() {
 # would (correctly) refuse to start with RaftStorageDirLocked. Reaping reproduces
 # the k8s termination ordering so M4 actually exercises durable FileStorage
 # reload rather than a same-host two-writers race the product rightly forbids.
+#
+# bin_name_pattern prints an extended regex matching the basename of $BIN, its
+# first character in a bracket expression and the rest regex-escaped.
+bin_name_pattern() {
+  local name rest
+  name="$(basename "$BIN")"
+  rest="$(printf '%s' "${name:1}" | sed 's/[][\.*^$+?(){}|]/\\&/g')"
+  printf '[%s]%s' "${name:0:1}" "$rest"
+}
 kill_and_reap() {
-  local id=$1 t pat="geode serve .*--data-dir $WORK/data$id "
+  # SONNY-6447: the first character of the binary's name is bracketed ("[g]eode"
+  # for `geode`), so the pattern does not match the command line of `sudo
+  # pkill` itself. It did, and pkill SIGKILLed its own sudo, whose pty hang-up
+  # can end pkill before it reaches a geode with a higher pid (pids wrap at
+  # pid_max). SONNY-6456: the name comes from $BIN, so a binary under test
+  # that is not called `geode` is still found and reaped.
+  local id=$1 t pat
+  pat="$(bin_name_pattern) serve .*--data-dir $WORK/data$id "
   # SIGTERM first (graceful flush attempt), then give it a few seconds.
   [ -n "${PID[$id]:-}" ] && $SUDO kill "${PID[$id]}" 2>/dev/null
   for t in $(seq 1 5); do pgrep -f "$pat" >/dev/null 2>&1 || break; sleep 1; done
@@ -341,6 +369,12 @@ kill_and_reap() {
   # so the kernel reaps it and releases the flock. Then WAIT until truly gone.
   $SUDO pkill -9 -f "$pat" 2>/dev/null
   for t in $(seq 1 15); do pgrep -f "$pat" >/dev/null 2>&1 || break; sleep 1; done
+  # SONNY-6447: a survivor still holds {data_dir}/.geode.lock, and the
+  # replacement would (correctly) refuse to start with DataDirLocked; name it
+  # here instead of leaving that refusal as the only symptom.
+  if pgrep -f "$pat" >/dev/null 2>&1; then
+    fail "node$id: a prior process on $WORK/data$id survived SIGKILL for 15s: $(pgrep -af "$pat" | tr '\n' ' ')"
+  fi
   PID[$id]=""
 }
 
@@ -399,11 +433,16 @@ assert_raft_state_persisted() {
 #    liveness/heartbeat-driven re-resolve can recover the peer. That is the
 #    contract under test.
 reschedule_node() {
-  local id=$1 oldpfx="${IPLAST[$id]:-1}" newpfx oldip o
+  local id=$1 newpfx oldip o
+  local oldpfx="${IPLAST[$id]:-1}"   # a separate `local`: in one, $id is still the caller's
   newpfx=2; [ "$oldpfx" = "2" ] && newpfx=1
   oldip="$SUBNET.$oldpfx$id"
-  [ -n "${PID[$id]:-}" ] && $SUDO kill "${PID[$id]}" 2>/dev/null
-  PID[$id]=""; sleep 3
+  # SONNY-6451: reap the old process before its data dir is wiped and a new
+  # one starts on the SAME path (in k8s the new pod gets a different volume).
+  # A plain SIGTERM + `sleep 3` let a still-flushing old process recreate part
+  # of the wiped tree, and the new node then refused to start
+  # ("initializing the auth graph manager failed ... FileNotFound").
+  kill_and_reap "$id"
   for o in $NS_NODES; do
     [ "$o" = "$id" ] && continue
     $SUDO ip netns exec gt$o ip neigh replace "$oldip" lladdr 02:00:00:00:00:ee nud permanent dev vtp$o 2>/dev/null

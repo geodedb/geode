@@ -24,14 +24,16 @@ const distinct_set = @import("distinct_set.zig");
 /// Generate unique column names for RETURN items, using qualified names for duplicates
 /// For example, if both p.name and c.name exist, they become "p.name" and "c.name"
 pub fn generateUniqueColumnNames(allocator: std.mem.Allocator, items: []const ast.ReturnItem) ![][]const u8 {
-    var columns = try allocator.alloc([]const u8, items.len);
-    errdefer allocator.free(columns);
+    // SONNY-6483 (5): the names are worked out on a scratch arena, and on a
+    // failed allocation the columns already copied are freed (the qualified
+    // names and the columns leaked).
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+    const sa = scratch.allocator();
 
     // First pass: collect raw column names and their qualified forms
-    var raw_names = try allocator.alloc([]const u8, items.len);
-    defer allocator.free(raw_names);
-    var qualified_names = try allocator.alloc([]const u8, items.len);
-    defer allocator.free(qualified_names);
+    const raw_names = try sa.alloc([]const u8, items.len);
+    const qualified_names = try sa.alloc([]const u8, items.len);
 
     for (items, 0..) |item, i| {
         if (item.alias) |alias| {
@@ -46,18 +48,15 @@ pub fn generateUniqueColumnNames(allocator: std.mem.Allocator, items: []const as
                 .PropertyAccess => |prop| {
                     raw_names[i] = prop.property;
                     // Build qualified name: object.property
-                    const qualified = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prop.object, prop.property });
-                    qualified_names[i] = qualified;
+                    qualified_names[i] = try std.fmt.allocPrint(sa, "{s}.{s}", .{ prop.object, prop.property });
                 },
                 .Member => |mem| {
                     raw_names[i] = mem.field;
                     // Build qualified name if target is an identifier (e.g., p.name -> "p.name")
-                    if (mem.target.* == .Ident) {
-                        const qualified = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ mem.target.Ident.orig, mem.field });
-                        qualified_names[i] = qualified;
-                    } else {
-                        qualified_names[i] = mem.field;
-                    }
+                    qualified_names[i] = if (mem.target.* == .Ident)
+                        try std.fmt.allocPrint(sa, "{s}.{s}", .{ mem.target.Ident.orig, mem.field })
+                    else
+                        mem.field;
                 },
                 .Call => |call| {
                     if (call.callee.* == .Ident) {
@@ -76,6 +75,12 @@ pub fn generateUniqueColumnNames(allocator: std.mem.Allocator, items: []const as
         }
     }
 
+    const columns = try allocator.alloc([]const u8, items.len);
+    var filled: usize = 0;
+    errdefer {
+        for (columns[0..filled]) |c| allocator.free(c);
+        allocator.free(columns);
+    }
     // Second pass: detect duplicates and use qualified names where needed
     for (items, 0..) |_, i| {
         var is_duplicate = false;
@@ -85,32 +90,82 @@ pub fn generateUniqueColumnNames(allocator: std.mem.Allocator, items: []const as
                 break;
             }
         }
-        if (is_duplicate) {
-            // Use qualified name for duplicates
-            columns[i] = try allocator.dupe(u8, qualified_names[i]);
-        } else {
-            // Use raw name when no conflict
-            columns[i] = try allocator.dupe(u8, raw_names[i]);
-        }
-    }
-
-    // Clean up allocated qualified names (PropertyAccess and Member with Ident target allocate)
-    for (items, 0..) |item, i| {
-        if (item.alias == null) {
-            switch (item.expr) {
-                .PropertyAccess => allocator.free(qualified_names[i]),
-                .Member => |mem| {
-                    if (mem.target.* == .Ident) {
-                        allocator.free(qualified_names[i]);
-                    }
-                },
-                else => {},
-            }
-        }
+        // Use the qualified name for duplicates, the raw name otherwise.
+        columns[i] = try allocator.dupe(u8, if (is_duplicate) qualified_names[i] else raw_names[i]);
+        filled += 1;
     }
 
     return columns;
 }
+
+/// SONNY-6483: free what `generateUniqueColumnNames` returned.
+pub fn freeColumnNames(allocator: std.mem.Allocator, columns: []const []const u8) void {
+    for (columns) |c| allocator.free(c);
+    allocator.free(columns);
+}
+
+// CANARY: REQ=REQ-SONNY-6498-ERROR-PATH-OWNERSHIP; FEATURE="ExecutionResultOwnership"; ASPECT=ResultBuilder; STATUS=TESTED; TEST=tests/test_sonny6297_allocation_failure_sweep.zig; OWNER=execution; UPDATED=2026-11-13
+/// SONNY-6498: a result built row by row (EXPLAIN, PROFILE, a procedure's
+/// rows), owning every column name, row and cell made so far: `deinit` frees
+/// them when building fails, `finish` hands them to the result. A row is in
+/// the result as soon as it is made (its cells NULL), so a cell that cannot
+/// be made leaves nothing behind. The hand-built results leaked whatever
+/// they had made when an allocation failed.
+pub const ResultBuilder = struct {
+    allocator: std.mem.Allocator,
+    columns: std.ArrayList([]const u8) = .empty,
+    rows: std.ArrayList([]Value) = .empty,
+
+    pub fn init(allocator: std.mem.Allocator) ResultBuilder {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *ResultBuilder) void {
+        for (self.columns.items) |c| self.allocator.free(c);
+        self.columns.deinit(self.allocator);
+        for (self.rows.items) |r| {
+            for (r) |cell| value_utilities.freeValue(self.allocator, cell);
+            self.allocator.free(r);
+        }
+        self.rows.deinit(self.allocator);
+    }
+
+    /// A column named `name` (copied).
+    pub fn column(self: *ResultBuilder, name: []const u8) !void {
+        try self.columns.ensureUnusedCapacity(self.allocator, 1);
+        self.columns.appendAssumeCapacity(try self.allocator.dupe(u8, name));
+    }
+
+    /// A new row of `width` NULL cells, already the result's.
+    pub fn row(self: *ResultBuilder, width: usize) ![]Value {
+        try self.rows.ensureUnusedCapacity(self.allocator, 1);
+        const r = try self.allocator.alloc(Value, width);
+        @memset(r, Value{ .Null = {} });
+        self.rows.appendAssumeCapacity(r);
+        return r;
+    }
+
+    /// A string cell (a copy of `text`).
+    pub fn text(self: *ResultBuilder, s: []const u8) !Value {
+        return .{ .Str = try self.allocator.dupe(u8, s) };
+    }
+
+    /// A row of string cells.
+    pub fn textRow(self: *ResultBuilder, cells: []const []const u8) !void {
+        const r = try self.row(cells.len);
+        for (cells, r) |c, *cell| cell.* = try self.text(c);
+    }
+
+    /// The result: it owns its cells (`owns_value_memory`).
+    pub fn finish(self: *ResultBuilder) !ExecutionResult {
+        const rows = try self.rows.toOwnedSlice(self.allocator);
+        const columns = self.columns.toOwnedSlice(self.allocator) catch |err| {
+            self.rows = std.ArrayList([]Value).fromOwnedSlice(rows);
+            return err;
+        };
+        return .{ .columns = columns, .rows = rows, .flags = .empty, .owns_value_memory = true };
+    }
+};
 
 // ============================================================================
 // DISTINCT Deduplication
@@ -142,7 +197,7 @@ pub fn applyDistinct(allocator: std.mem.Allocator, result: *ExecutionResult) !vo
     var kept: usize = 0;
     for (result.rows, keep) |row, *k| {
         key.clearRetainingCapacity();
-        for (row) |val| try distinct_set.writeGroupKeyPart(&key.writer, scratch, val);
+        for (row) |val| try distinct_set.appendGroupKeyPart(&key, scratch, val);
         const gop = try seen.getOrPut(scratch, key.written());
         k.* = !gop.found_existing;
         if (k.*) {
@@ -182,6 +237,6 @@ pub fn createRowHashKey(allocator: std.mem.Allocator, row: []const Value) ![]u8 
     defer arena.deinit();
     var key: std.Io.Writer.Allocating = .init(allocator);
     defer key.deinit();
-    for (row) |val| try distinct_set.writeGroupKeyPart(&key.writer, arena.allocator(), val);
+    for (row) |val| try distinct_set.appendGroupKeyPart(&key, arena.allocator(), val);
     return allocator.dupe(u8, key.written());
 }

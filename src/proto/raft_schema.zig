@@ -379,11 +379,18 @@ pub const AppendEntriesResponse = struct {
     term: u64 = 0,
     success: bool = false,
     match_index: u64 = 0,
+    /// SONNY-6622: a rejection's backtracking hint (raft v0.2.2). New
+    /// fields: a peer that does not send them reads as 0, a rejection
+    /// without a hint, which the leader backs off from as before.
+    conflict_index: u64 = 0,
+    conflict_term: u64 = 0,
 
     pub const _desc_table = .{
         .term = fd(1, .{ .scalar = .uint64 }),
         .success = fd(2, .{ .scalar = .bool }),
         .match_index = fd(3, .{ .scalar = .uint64 }),
+        .conflict_index = fd(4, .{ .scalar = .uint64 }),
+        .conflict_term = fd(5, .{ .scalar = .uint64 }),
     };
 
     pub fn deinit(self: *AppendEntriesResponse, allocator: std.mem.Allocator) void {
@@ -399,6 +406,14 @@ pub const InstallSnapshot = struct {
     offset: u64 = 0,
     data: []const u8 = "",
     done: bool = false,
+    /// SONNY-6633: the BLAKE3 digest of the whole snapshot (final chunk
+    /// only; empty otherwise) and the cluster configuration it was taken
+    /// at. Without them a follower refused every snapshot (checksum
+    /// mismatch) or installed one with no voters.
+    checksum: []const u8 = "",
+    voters: std.ArrayList(u64) = .empty,
+    voters_outgoing: std.ArrayList(u64) = .empty,
+    is_joint: bool = false,
 
     pub const _desc_table = .{
         .term = fd(1, .{ .scalar = .uint64 }),
@@ -408,6 +423,10 @@ pub const InstallSnapshot = struct {
         .offset = fd(5, .{ .scalar = .uint64 }),
         .data = fd(6, .{ .scalar = .bytes }),
         .done = fd(7, .{ .scalar = .bool }),
+        .checksum = fd(8, .{ .scalar = .bytes }),
+        .voters = fd(9, .{ .repeated = .{ .scalar = .uint64 } }),
+        .voters_outgoing = fd(10, .{ .repeated = .{ .scalar = .uint64 } }),
+        .is_joint = fd(11, .{ .scalar = .bool }),
     };
 
     pub fn deinit(self: *InstallSnapshot, allocator: std.mem.Allocator) void {
@@ -417,9 +436,21 @@ pub const InstallSnapshot = struct {
 
 pub const InstallSnapshotResponse = struct {
     term: u64 = 0,
+    /// SONNY-6633: the follower refused the snapshot (e.g. its checksum).
+    /// A flag for failure, not success, so an older peer that sends
+    /// neither still acknowledges.
+    failed: bool = false,
+    /// SONNY-6665 (raft v0.2.5): on success the snapshot index the follower
+    /// holds; on a lost chunk the snapshot's index, with `next_offset` the
+    /// offset it expects next. 0 from a peer that sends neither.
+    last_index: u64 = 0,
+    next_offset: u64 = 0,
 
     pub const _desc_table = .{
         .term = fd(1, .{ .scalar = .uint64 }),
+        .failed = fd(2, .{ .scalar = .bool }),
+        .last_index = fd(3, .{ .scalar = .uint64 }),
+        .next_offset = fd(4, .{ .scalar = .uint64 }),
     };
 
     pub fn deinit(self: *InstallSnapshotResponse, allocator: std.mem.Allocator) void {

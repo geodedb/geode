@@ -26,6 +26,7 @@
 const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
+const tmpfs_room = @import("tmpfs_room.zig");
 const graph_store = geode.graph_store;
 const execution = geode.execution;
 const adapter_mod = geode.graph_storage_adapter;
@@ -35,7 +36,56 @@ const PropertyValue = graph_store.PropertyValue;
 const GRAPH = "g1";
 const LABEL = "Person";
 
+/// SONNY-6433: a test's scratch directory. Its data directory is on tmpfs
+/// (/dev/shm) when the host has one, as the write harness keeps its stores
+/// (SONNY-6333): every write here commits with an fsync, and on a loaded
+/// host's shared disk the seeding tests sat in the journal's fsync wait (the
+/// suite ran past 25 minutes; its TSan companion never finished). The
+/// storage code paths are the same; fsync on tmpfs returns at once.
+/// `cleanup` removes both the tmpfs directory and the `.zig-cache/tmp` one.
+const ScratchDir = struct {
+    inner: std.testing.TmpDir,
+    sub_path: @FieldType(std.testing.TmpDir, "sub_path"),
+
+    fn cleanup(self: *ScratchDir) void {
+        if (shmPath(&self.sub_path)) |path| {
+            std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), path.slice()) catch {};
+        }
+        self.inner.cleanup();
+    }
+};
+
+fn scratchDir() ScratchDir {
+    const inner = testing.tmpDir(.{});
+    return .{ .inner = inner, .sub_path = inner.sub_path };
+}
+
+const ShmPath = struct {
+    buf: [128]u8 = undefined,
+    len: usize = 0,
+    fn slice(self: *const ShmPath) []const u8 {
+        return self.buf[0..self.len];
+    }
+};
+
+/// The tmpfs data directory of scratch directory `sub_path`, or null when
+/// the host has no /dev/shm (`tmpDataDir` also needs `tmpfs_room.shmUsable`).
+fn shmPath(sub_path: []const u8) ?ShmPath {
+    if (comptime @import("builtin").os.tag != .linux) return null;
+    std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), "/dev/shm", .{}) catch return null;
+    var p = ShmPath{};
+    const written = std.fmt.bufPrint(&p.buf, "/dev/shm/geode-lazy-hydrate-{d}-{s}", .{ std.os.linux.getpid(), sub_path }) catch return null;
+    p.len = written.len;
+    return p;
+}
+
 fn tmpDataDir(allocator: std.mem.Allocator, sub_path: []const u8) ![]u8 {
+    // SONNY-6801: on tmpfs only when it has room; `cleanup` removes the
+    // tmpfs path either way.
+    if (tmpfs_room.shmUsable()) if (shmPath(sub_path)) |path| {
+        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), path.slice()) catch return error.ShmDirCreateFailed;
+        return allocator.dupe(u8, path.slice());
+    };
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
     const cwd_len = std.process.currentPath(std.Io.Threaded.global_single_threaded.io(), &cwd_buf) catch return error.GetCwdFailed;
     var actual_len = cwd_len;
@@ -115,7 +165,7 @@ test "PHASE 1b: open-no-scan + lazy hydrate correctness (valid snapshot)" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -201,7 +251,7 @@ test "PHASE 1b: concurrent first-queries hydrate a cold graph exactly once" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -278,7 +328,7 @@ test "PHASE 1b: hydrate A || read B -- concurrent cross-graph hydration is race-
     while (iter < 5) : (iter += 1) {
         graph_store.deinitGlobalStore();
 
-        var tmp = testing.tmpDir(.{});
+        var tmp = scratchDir();
         defer tmp.cleanup();
         const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
         defer allocator.free(data_dir);
@@ -329,7 +379,7 @@ test "PHASE 1b: hydrate A || read B -- concurrent cross-graph hydration is race-
                         const r = s.getNodesByLabel(GB, LABEL) orelse continue;
                         var it = s.iterateNodesInGraph(GB);
                         var cnt: usize = 0;
-                        while (it.next()) |_| cnt += 1;
+                        while (it.next() catch @panic("SONNY-6621: unexpected read failure")) |_| cnt += 1;
                         if (r.len == NB and cnt == NB and s.nodesInGraphCount(GB) == NB) good += 1;
                     }
                     if (good == 64) _ = ok.fetchAdd(1, .monotonic);
@@ -372,7 +422,7 @@ test "PHASE 1b: absent snapshot falls back to scan-rebuild (correct)" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -431,7 +481,7 @@ test "PHASE 1b shutdown: clean shutdown writes IdMap snapshot; reopen loads it (
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -491,7 +541,7 @@ test "PHASE 1b shutdown: read-only session persists snapshot on clean shutdown" 
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -551,7 +601,7 @@ test "PHASE 1b: crash (stale snapshot) -> reopen rebuilds from scan, correct" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -603,7 +653,7 @@ test "PHASE 1b: startup milestone -- ~30k clean restart reaches ready with no lo
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -718,7 +768,7 @@ test "H3 no-snapshot: by-id setEdgeProperty as FIRST access hydrates + edge upda
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -749,7 +799,7 @@ test "H3 no-snapshot: by-id setEdgeProperty as FIRST access hydrates + edge upda
     try testing.expect(graph_store.loop2ScanNodeCount() >= N);
 
     // The edge property update actually took effect and is readable (not dropped).
-    const edge = store.getEdgeHydrated(edge_ids[3]) orelse return error.EdgeMissing;
+    const edge = (try store.getEdgeHydratedChecked(edge_ids[3])) orelse return error.EdgeMissing;
     const w = edge.properties.get("weight") orelse return error.WeightMissing;
     try testing.expect(w == .Int and w.Int == 42);
 
@@ -775,7 +825,7 @@ test "H3 no-snapshot: coordinator-style node+edge .update gate needs ensureGraph
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -802,7 +852,7 @@ test "H3 no-snapshot: coordinator-style node+edge .update gate needs ensureGraph
     var node_gate_old = false;
     if (store.getNodePtr(node_id) != null) node_gate_old = true;
     var edge_gate_old = false;
-    if (store.getEdgePtr(edge_id) != null) edge_gate_old = true;
+    if ((try store.getEdgePtrHydratedChecked(edge_id)) != null) edge_gate_old = true;
     try testing.expect(!node_gate_old); // replicated node UPDATE would be dropped
     try testing.expect(!edge_gate_old); // replicated edge UPDATE would be dropped
     // The raw-accessor probes did NOT build the graph (still fully deferred).
@@ -815,15 +865,15 @@ test "H3 no-snapshot: coordinator-style node+edge .update gate needs ensureGraph
     // --- GREEN: the same by-id gates now resolve the real node/edge, so the
     // `.update` block runs and the property write applies. ---
     try testing.expect(store.getNodePtr(node_id) != null);
-    try testing.expect(store.getEdgePtr(edge_id) != null);
+    try testing.expect((try store.getEdgePtrHydratedChecked(edge_id)) != null);
     try testing.expect(graph_store.loop2ScanNodeCount() >= N); // build happened once
 
     try store.setNodeProperty(node_id, "role", .{ .String = "admin" });
     try store.setEdgeProperty(edge_id, "w", .{ .Int = 7 });
 
-    const role = store.getNodeProperty(node_id, "role") orelse return error.RoleMissing;
+    const role = (try store.getNodePropertyOrError(node_id, "role")) orelse return error.RoleMissing;
     try testing.expect(role == .String and std.mem.eql(u8, role.String, "admin"));
-    const edge = store.getEdgeHydrated(edge_id) orelse return error.EdgeMissing;
+    const edge = (try store.getEdgeHydratedChecked(edge_id)) orelse return error.EdgeMissing;
     const w = edge.properties.get("w") orelse return error.WeightMissing;
     try testing.expect(w == .Int and w.Int == 7);
 
@@ -834,7 +884,7 @@ test "H3 no-snapshot: open defers loop1; by-id first-access (empty IdMap) hydrat
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -868,14 +918,14 @@ test "H3 no-snapshot: open defers loop1; by-id first-access (empty IdMap) hydrat
     try testing.expect(graph_store.loop2ScanNodeCount() >= N);
 
     // The by-id write landed on the correct, real node.
-    const flag = store.getNodeProperty(seed_ids[7], "flag") orelse return error.FlagMissing;
+    const flag = (try store.getNodePropertyOrError(seed_ids[7], "flag")) orelse return error.FlagMissing;
     try testing.expect(flag == .Bool and flag.Bool == true);
 
     // (c) Node/edge counts and the pre-existing property read are correct.
     try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
     try testing.expectEqual(E, store.countEdgesForGraph(GRAPH));
     var nb: [32]u8 = undefined;
-    const name7 = store.getNodeProperty(seed_ids[7], "name") orelse return error.NameMissing;
+    const name7 = (try store.getNodePropertyOrError(seed_ids[7], "name")) orelse return error.NameMissing;
     try testing.expect(name7 == .String and std.mem.eql(u8, name7.String, nameFor(&nb, 7)));
 
     graph_store.deinitGlobalStore();
@@ -885,7 +935,7 @@ test "H3 no-snapshot: CREATE before any read gets a fresh id + no corruption" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -916,7 +966,7 @@ test "H3 no-snapshot: CREATE before any read gets a fresh id + no corruption" {
 
     // The seeded data was not corrupted by hydrating concurrently with the write.
     var nb: [32]u8 = undefined;
-    const name0 = store.getNodeProperty(seed_ids[0], "name") orelse return error.NameMissing;
+    const name0 = (try store.getNodePropertyOrError(seed_ids[0], "name")) orelse return error.NameMissing;
     try testing.expect(name0 == .String and std.mem.eql(u8, name0.String, nameFor(&nb, 0)));
 
     graph_store.deinitGlobalStore();
@@ -957,7 +1007,7 @@ test "GAP regression: count(r) (countEdgesForGraph) as FIRST access after no-sna
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1024,7 +1074,7 @@ test "GAP regression: count(n) (countNodesForGraph) as FIRST access after no-sna
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1066,7 +1116,7 @@ test "GAP regression: count(n) (countNodesForGraph) as FIRST access after no-sna
     // post-fix the `ensureGraphHydrated` guard at the top of
     // countNodesForGraph forces synchronous hydration first, so this already
     // returns the FULL count N.
-    try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+    try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
 
     // Proves the N above came from a real hydrate, not a lucky partial match.
     try testing.expect(graph_store.idMapScanGetPropCount() >= N);
@@ -1079,99 +1129,31 @@ test "GAP regression: count(n) (countNodesForGraph) as FIRST access after no-sna
 }
 
 // ===========================================================================
-// serializeSnapshot + getAll* deferred-hydration guard regression.
+// getAll* deferred-hydration guard regression.
 //
-// serializeSnapshot (src/graph_store.zig) and the getAll* readers
-// (getAllNodes / getAllNodesForTenant / getAllEdgesForTenant) now call
-// ensureAllGraphsHydrated as their FIRST statement -- the same fix class as the
-// count guards above. Before that fix, a snapshot or DROP TENANT cascade issued
-// right after a genuinely no-snapshot (H3-deferred) open enumerated the
-// still-empty deferred IdMaps and emitted a PARTIAL / empty result:
-//   * serializeSnapshot -> a partial cluster snapshot = silent data divergence
-//     on the automatic-replication callers (cluster.replicateShardToNode,
-//     raft_snapshot_manager.createSnapshotData) that never run a query first.
-//   * getAllNodesForTenant/getAllEdgesForTenant -> under-count in the DROP
-//     TENANT cascade = orphaned rows / false "empty tenant" success.
+// The getAll* readers (getAllNodes / getAllNodesForTenant /
+// getAllEdgesForTenant) call ensureAllGraphsHydrated as their FIRST statement
+// -- the same fix class as the count guards above. Before that fix, a DROP
+// TENANT cascade issued right after a genuinely no-snapshot (H3-deferred)
+// open enumerated the still-empty deferred IdMaps and under-counted:
+// orphaned rows / false "empty tenant" success. (The JSON-lines Raft
+// snapshot serializer this guard also covered was removed, SONNY-6636.)
 //
-// Each test seeds a no-snapshot graph, reopens it (loop1 IdMap scan-rebuild +
+// The test seeds a no-snapshot graph, reopens it (loop1 IdMap scan-rebuild +
 // loop2 both deferred to first access), and calls ONLY the reader under test as
 // the literal first access -- no other read triggers hydration as a side
 // effect. Removing the guard sends the test RED (partial/empty), which is what
 // makes it a real regression guard.
 //
-// To verify RED: comment out `self.ensureAllGraphsHydrated();` at the top of
-// serializeSnapshot (first test) or `@constCast(self).ensureAllGraphsHydrated();`
-// at the top of getAllNodesForTenant/getAllEdgesForTenant (second test) and
-// rerun `zig build test-startup-lazy-hydrate -j2 --summary all`.
-
-test "GAP regression: serializeSnapshot as FIRST access after no-snapshot open yields COMPLETE snapshot, not partial" {
-    const allocator = testing.allocator;
-    graph_store.deinitGlobalStore();
-
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
-    defer allocator.free(data_dir);
-
-    const N: usize = 200;
-    const M: usize = 150;
-    var seed_ids: [200]u64 = undefined;
-
-    // --- Phase 1: seed N nodes + M edges, light checkpoint (NO IdMap snapshot)
-    //     + crash-style deinit so the reopen is genuinely no-snapshot. ---
-    {
-        graph_store.setDataDirOverride(allocator, data_dir);
-        const store = graph_store.getGlobalStore(allocator);
-        var i: usize = 0;
-        while (i < N) : (i += 1) {
-            seed_ids[i] = try store.createNodeWithGraph(&[_][]const u8{LABEL}, GRAPH);
-        }
-        var e: usize = 0;
-        while (e < M) : (e += 1) {
-            _ = try store.createEdgeWithGraph(seed_ids[e], seed_ids[e + 1], "PARENT_OF", GRAPH);
-        }
-        try store.saveToFileEx(true); // light: flush engine pages, NO IdMap snapshot
-        graph_store.deinitGlobalStoreForTestCrash();
-        graph_store.setDataDirOverride(allocator, null);
-    }
-    try testing.expect(!snapshotExists(allocator, data_dir)); // genuinely no snapshot
-
-    // --- Phase 2: reopen. loop1 + loop2 both deferred. ---
-    graph_store.setDataDirOverride(allocator, data_dir);
-    defer graph_store.setDataDirOverride(allocator, null);
-    graph_store.resetLazyHydrateCounters();
-
-    const store = graph_store.getGlobalStore(allocator); // <- "server ready"
-
-    // EARLY-READY: confirm still deferred (nothing scanned) before serialize.
-    try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
-    try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
-    try testing.expectEqual(@as(u64, 0), graph_store.idMapFromSnapshotCount());
-
-    // THE REGRESSION GUARD: serializeSnapshot is the FIRST access. Pre-fix it
-    // enumerated the empty deferred IdMaps and produced an empty/partial
-    // snapshot; post-fix the ensureAllGraphsHydrated guard forces a full
-    // hydrate first, so every node and edge line is present.
-    const snap = try store.serializeSnapshot(allocator);
-    defer allocator.free(snap);
-
-    const node_lines = std.mem.count(u8, snap, "\"type\":\"node\"");
-    const edge_lines = std.mem.count(u8, snap, "\"type\":\"edge\"");
-    try testing.expectEqual(N, node_lines);
-    try testing.expectEqual(M, edge_lines);
-
-    // Proves the snapshot came from a real hydrate, not a lucky partial match.
-    try testing.expect(graph_store.idMapScanGetPropCount() >= N);
-    try testing.expect(graph_store.loop2ScanNodeCount() >= N);
-
-    graph_store.deinitGlobalStore();
-}
+// To verify RED: comment out `@constCast(self).ensureAllGraphsHydrated();`
+// at the top of getAllNodesForTenant/getAllEdgesForTenant and rerun
+// `zig build test-startup-lazy-hydrate -j2 --summary all`.
 
 test "GAP regression: getAllNodesForTenant/getAllEdgesForTenant as FIRST access after no-snapshot open return FULL set, not partial" {
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1268,7 +1250,7 @@ test "CRITICAL regression: full checkpoint on a deferred graph does not persist 
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1341,7 +1323,7 @@ test "CRITICAL regression: full checkpoint on a deferred graph does not persist 
         try testing.expectEqual(@as(u64, 0), graph_store.idMapFromSnapshotCount());
 
         // The data is intact: full node + edge counts (NOT 0), rebuilt from pages.
-        try testing.expectEqual(K + M, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(K + M, try store.countNodesForGraph(GRAPH, null));
         try testing.expectEqual(EDGES, store.countEdgesForGraph(GRAPH));
 
         // Proves session 3 rebuilt from durable pages rather than adopting an
@@ -1366,7 +1348,7 @@ test "GAP regression: getEdgeCount/allEdgeIds/getNodeCount as FIRST access after
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1453,7 +1435,7 @@ test "P3: warm reopen hydrates from loop2 snapshots — engine scan fully skippe
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1511,7 +1493,7 @@ test "P3: warm reopen hydrates from loop2 snapshots — engine scan fully skippe
         // Counts: label refcount, per-graph node count, untyped + typed edge
         // counts (typed comes straight from the counters snapshot).
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
-        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
         try testing.expectEqual(E, store.countEdgesForGraph(GRAPH));
         try testing.expectEqual(E, store.countEdgesByTypeForGraph(GRAPH, "PARENT_OF"));
         try testing.expectEqual(@as(usize, 0), store.countEdgesByTypeForGraph(GRAPH, "NO_SUCH_TYPE"));
@@ -1526,7 +1508,7 @@ test "P3: warm reopen hydrates from loop2 snapshots — engine scan fully skippe
         try testing.expectEqual(GraphStore.MergeLookupResult.not_found, miss);
 
         // Point read through the hydrate-on-miss node cache (no warm-up ran).
-        try testing.expect(store.getNodeProperty(seed_ids[3], "name") != null);
+        try testing.expect((try store.getNodePropertyOrError(seed_ids[3], "name")) != null);
 
         // Resident-set iteration (the MATCH fallback scan) must see EVERY
         // node even though the cache started COLD after the snapshot-served
@@ -1534,7 +1516,7 @@ test "P3: warm reopen hydrates from loop2 snapshots — engine scan fully skippe
         // silently dropping non-resident rows.
         var res_iter = store.iterateNodesInGraph(GRAPH);
         var n_seen: usize = 0;
-        while (res_iter.next()) |_| n_seen += 1;
+        while (try res_iter.next()) |_| n_seen += 1;
         try testing.expectEqual(N, n_seen);
 
         // Tenant-filtered label count walks the posting and hydrates each
@@ -1569,7 +1551,7 @@ test "P3: crash before checkpoint — stale loop2 snapshots rejected, scan fallb
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1643,7 +1625,7 @@ test "GAP-0065 FIX D: light-checkpoint + flushForCleanShutdown + clean deinit �
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1707,7 +1689,7 @@ test "GAP-0065 FIX D: light-checkpoint + flushForCleanShutdown + clean deinit �
         try testing.expectEqual(@as(u64, 0), graph_store.hydrationStreamingScanCount());
 
         // Correctness: counts, typed edges, MERGE found + authoritative miss.
-        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
         try testing.expectEqual(E, store.countEdgesForGraph(GRAPH));
         try testing.expectEqual(E, store.countEdgesByTypeForGraph(GRAPH, "PARENT_OF"));
         var out: u64 = 0;
@@ -1730,7 +1712,7 @@ test "GAP-0065 FIX D: durability comes from flushForCleanShutdown — force-exit
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1766,7 +1748,7 @@ test "GAP-0065 FIX D: durability comes from flushForCleanShutdown — force-exit
         try testing.expectEqual(N, got.len);
         try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
         try testing.expect(graph_store.hydrationFullScanSkipCount() >= 1);
-        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
 
         graph_store.deinitGlobalStore();
     }
@@ -1782,7 +1764,7 @@ test "GAP-0065 FIX D: kill-9 with a committed WAL tail → reopen REJECTS snapsh
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1816,7 +1798,7 @@ test "GAP-0065 FIX D: kill-9 with a committed WAL tail → reopen REJECTS snapsh
         const store = graph_store.getGlobalStore(allocator);
         installBoundedCaches(store);
         // touch: reload snapshots (proves session-1 flush produced a reload).
-        try testing.expectEqual(K, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(K, try store.countNodesForGraph(GRAPH, null));
         try testing.expect(graph_store.idMapFromSnapshotCount() >= 1);
 
         var i: usize = K;
@@ -1856,7 +1838,7 @@ test "GAP-0065 FIX D: kill-9 with a committed WAL tail → reopen REJECTS snapsh
 
         // FULL-KEY PARITY: every node id → name (both snapshotted and tail),
         // total counts, and every edge. No lost or corrupted record.
-        try testing.expectEqual(TOTAL, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(TOTAL, try store.countNodesForGraph(GRAPH, null));
         try testing.expectEqual(TOTAL, store.countNodesByLabel(GRAPH, LABEL, null));
         try testing.expectEqual(E, store.countEdgesForGraph(GRAPH));
         try testing.expectEqual(E, store.countEdgesByTypeForGraph(GRAPH, "PARENT_OF"));
@@ -1908,7 +1890,7 @@ test "GAP-0065 FIX C: from-dump ingest (no index query) + clean shutdown → FIR
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -1989,7 +1971,7 @@ test "GAP-0065 FIX C: from-dump ingest (no index query) + clean shutdown → FIR
         // Counts / labels / typed-edge counts served from the reloaded loop2 —
         // fast on the FIRST reopen (the count/GROUP-BY/DISTINCT-via-loop2 shapes).
         try testing.expectEqual(N, store.countNodesByLabel(G, LBL, null));
-        try testing.expectEqual(N, store.countNodesForGraph(G, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(G, null));
         try testing.expectEqual(E, store.countEdgesForGraph(G));
         try testing.expectEqual(E, store.countEdgesByTypeForGraph(G, "PARENT_OF"));
 
@@ -2027,7 +2009,7 @@ test "GAP-0065 FIX C: kill-9 with committed tail (from-dump indexed store) → r
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2067,7 +2049,7 @@ test "GAP-0065 FIX C: kill-9 with committed tail (from-dump indexed store) → r
         graph_store.resetLazyHydrateCounters();
         const store = graph_store.getGlobalStore(allocator);
         installBoundedCaches(store);
-        try testing.expectEqual(K, store.countNodesForGraph(G, null)); // reload proof
+        try testing.expectEqual(K, try store.countNodesForGraph(G, null)); // reload proof
         try testing.expect(graph_store.idMapFromSnapshotCount() >= 1);
 
         var i: usize = K;
@@ -2111,7 +2093,7 @@ test "GAP-0065 FIX C: kill-9 with committed tail (from-dump indexed store) → r
         try testing.expectEqual(@as(u64, 0), graph_store.hydrationFullScanSkipCount());
 
         // FULL-KEY PARITY over the snapshot + tail: names, counts, edges, MERGE.
-        try testing.expectEqual(TOTAL, store.countNodesForGraph(G, null));
+        try testing.expectEqual(TOTAL, try store.countNodesForGraph(G, null));
         try testing.expectEqual(TOTAL, store.countNodesByLabel(G, LBL, null));
         try testing.expectEqual(E, store.countEdgesForGraph(G));
         try testing.expectEqual(E, store.countEdgesByTypeForGraph(G, "PARENT_OF"));
@@ -2144,7 +2126,7 @@ test "P3 CRITICAL: full checkpoint on a deferred graph DELETES stale loop2 snaps
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2198,7 +2180,7 @@ test "P3 CRITICAL: full checkpoint on a deferred graph DELETES stale loop2 snaps
         graph_store.resetLazyHydrateCounters();
         const store = graph_store.getGlobalStore(allocator);
         installBoundedCaches(store);
-        try testing.expectEqual(K + M, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(K + M, try store.countNodesForGraph(GRAPH, null));
         try testing.expectEqual(K + M, store.countNodesByLabel(GRAPH, LABEL, null));
         try testing.expect(graph_store.loop2ScanNodeCount() >= K + M);
         graph_store.deinitGlobalStore();
@@ -2209,7 +2191,7 @@ test "P3: partial snapshot set — only the uncovered product is scan-rebuilt, n
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2260,7 +2242,7 @@ test "P3: partial snapshot set — only the uncovered product is scan-rebuilt, n
         // EXACT counts everywhere — the per-product skips must prevent any
         // double-count between restored products and the scan rebuild.
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
-        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
         try testing.expectEqual(E, store.countEdgesByTypeForGraph(GRAPH, "PARENT_OF"));
 
         var out: u64 = 0;
@@ -2277,7 +2259,7 @@ test "P3: full checkpoint on an idle mmap-adopted (case A) graph preserves loop2
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2324,7 +2306,7 @@ test "P3: full checkpoint on an idle mmap-adopted (case A) graph preserves loop2
         const store = graph_store.getGlobalStore(allocator);
         installBoundedCaches(store);
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
-        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
         graph_store.deinitGlobalStore();
     }
 }
@@ -2337,7 +2319,7 @@ test "P3 C1: failed (quarantined) hydration never persists partial loop2 snapsho
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2425,7 +2407,7 @@ test "P3 C2: graph-scoped scan never mutates the node cache; retained node point
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2468,7 +2450,7 @@ test "P3 C2: graph-scoped scan never mutates the node cache; retained node point
         defer ids.deinit(allocator);
 
         var n_seen: usize = 0;
-        while (it.next()) |node_ptr| {
+        while (try it.next()) |node_ptr| {
             ptrs.appendAssumeCapacity(node_ptr);
             ids.appendAssumeCapacity(node_ptr.id);
             n_seen += 1;
@@ -2574,7 +2556,7 @@ fn c3WarmReopenExecCheckpoint(allocator: std.mem.Allocator, data_dir: []const u8
 // Session 3 helper: expect a String property with the given value (hydrating
 // point read), or null when `expected` is null (property must be gone).
 fn c3ExpectProp(store: *GraphStore, node_id: u64, key: []const u8, expected: ?[]const u8) !void {
-    const got = store.getNodeProperty(node_id, key);
+    const got = (try store.getNodePropertyOrError(node_id, key));
     if (expected) |want| {
         const val = got orelse return error.DurableWriteDropped;
         try testing.expect(val == .String);
@@ -2589,7 +2571,7 @@ test "C3 e2e: MATCH...SET n.p on a cold node after warm reopen persists durably 
     graph_store.deinitGlobalStore();
     execution.cleanupCatalogInstance();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2620,7 +2602,7 @@ test "C3 e2e: MATCH...REMOVE n.prop on a cold node after warm reopen removes dur
     graph_store.deinitGlobalStore();
     execution.cleanupCatalogInstance();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2649,7 +2631,7 @@ test "C3 e2e: SET n = {map} on a cold node after warm reopen replaces durably (R
     graph_store.deinitGlobalStore();
     execution.cleanupCatalogInstance();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2679,7 +2661,7 @@ test "C3 e2e: MERGE ... ON MATCH SET on a cold node after warm reopen persists d
     graph_store.deinitGlobalStore();
     execution.cleanupCatalogInstance();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2753,7 +2735,7 @@ test "T3a: hydrate (scan) -> crash with NO checkpoint -> reopen hydrates from sn
     graph_store.deinitGlobalStore();
     _ = unsetenv(T3_PERSIST_KILL_SWITCH);
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2811,7 +2793,7 @@ test "T3a: hydrate (scan) -> crash with NO checkpoint -> reopen hydrates from sn
         try testing.expectEqual(@as(u64, 0), graph_store.loop2ScanNodeCount());
         try testing.expectEqual(@as(u64, 0), graph_store.idMapScanGetPropCount());
 
-        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
         try testing.expectEqual(E, store.countEdgesForGraph(GRAPH));
         try testing.expectEqual(E, store.countEdgesByTypeForGraph(GRAPH, "PARENT_OF"));
@@ -2831,7 +2813,7 @@ test "T3b: failed (quarantined) hydration persists NOTHING at the completion cal
     graph_store.deinitGlobalStore();
     _ = unsetenv(T3_PERSIST_KILL_SWITCH);
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2886,7 +2868,7 @@ test "T3c: injected persist failure — hydrating query still succeeds; next reo
     graph_store.deinitGlobalStore();
     _ = unsetenv(T3_PERSIST_KILL_SWITCH);
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -2966,7 +2948,7 @@ test "engine-direct single-label count serves the in-memory refcount, never the 
     graph_store.deinitGlobalStore();
     execution.cleanupCatalogInstance();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -3076,7 +3058,7 @@ test "GAP-ENT-0048 lazy-hydration: FULL checkpoint builds+persists a deferred (n
     adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
     defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -3199,7 +3181,7 @@ test "GAP-ENT-0048 snapshot-served: FULL checkpoint force-loads + parallel-build
     adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
     defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -3313,7 +3295,7 @@ test "GAP-ENT-0048e: eager build fires at FULL checkpoint with hydration_build_m
     adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
     defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -3433,7 +3415,7 @@ test "GAP-ENT-0048f: hydration builds+persists the exact index (race-free, no sh
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -3552,7 +3534,7 @@ test "GAP-ENT-0048g: prop_exact.idx survives a LIGHT checkpoint and reopen RELOA
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -3636,7 +3618,7 @@ test "GAP-0064 FIX A: absent-index reopen routes the exact build through the bac
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -3711,7 +3693,7 @@ test "GAP-0064 FIX A: reopen + concurrent readers + checkpoint — reads return 
     const allocator = testing.allocator;
     graph_store.deinitGlobalStore();
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -3852,7 +3834,7 @@ test "GAP-0064 review CRITICAL: lazy rebuild || FULL checkpoint — checkpoint s
     adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(true);
     defer adapter_mod.setEagerExactRebuildOnReopenDisabledForTest(null);
 
-    var tmp = testing.tmpDir(.{});
+    var tmp = scratchDir();
     defer tmp.cleanup();
     const data_dir = try tmpDataDir(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
@@ -3990,7 +3972,7 @@ test "SONNY-1979: getNodePtrForScan return survives a resident-cache shard grow 
     const before_addr = @intFromPtr(store.nodes.getPtr(x).?);
 
     // Scan-source X: resident HIT. Pre-fix this returns the volatile in-map slot.
-    const p = store.getNodePtrForScan(x).?;
+    const p = (try store.getNodePtrForScan(x)).?;
 
     // Force the resident cache to GROW → rehash → MOVE every value slot. Inserting
     // many new nodes outgrows every shard's initial AutoHashMap capacity, X's

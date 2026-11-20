@@ -30,7 +30,7 @@ BACKUP_DIR="$WORK_DIR/backups"
 LISTEN="127.0.0.1:8443"
 BIN="./zig-out/bin/geode"
 ADMIN_USER="geode"
-ADMIN_PW="gap0862-regression-pw"
+ADMIN_PW="Gap Backup Restore Regression Passphrase"
 export GEODE_ADMIN_PASSWORD="$ADMIN_PW"
 TLS="--insecure-tls-skip-verify"
 AUTH=(--user "$ADMIN_USER" --password "$ADMIN_PW")
@@ -67,6 +67,8 @@ echo -e "${YELLOW}Building Geode...${NC}"
 zig build >/dev/null 2>&1 || { echo "build failed"; exit 1; }
 
 mkdir -p "$DATA_DIR" "$BACKUP_DIR"
+HAD_DATA=0; [ -e "./data" ] && HAD_DATA=1
+HAD_LEGACY=0; [ -e "./server_backups/metadata.json" ] && HAD_LEGACY=1
 
 echo -e "${YELLOW}Starting Geode server (insecure TLS for test)...${NC}"
 $BIN serve --listen "$LISTEN" --data_dir "$DATA_DIR" $TLS >"$WORK_DIR/server.log" 2>&1 &
@@ -101,12 +103,50 @@ else
     bad "Backup file present" "no .backup file under $BACKUP_DIR"
 fi
 
-# Test 3: CLI restore
-RESTORE_OUT=$($BIN restore "$BACKUP_FILE" --server "$LISTEN" $TLS "${AUTH[@]}" --yes 2>&1)
-assert_match "CLI restore" "$RESTORE_OUT" "Restore completed successfully|RESTORE: (Restore initiated successfully|Point-in-time restore completed|Full backup restore completed)"
+# Test 2b (SONNY-6299): the backup holds no key material or lock file, and
+# the server keeps its own backups under its data directory, not in
+# ./server_backups of its working directory.
+if [ -n "$BACKUP_FILE" ] && grep -qaE 'server\.key|\.geode_hmac_key|\.geode_admin_password|\.geode\.lock' "$BACKUP_FILE"; then
+    bad "Backup holds no key material or lock file" "found a key/lock entry name in $BACKUP_FILE"
+else
+    ok "Backup holds no key material or lock file"
+fi
+if ls "$DATA_DIR"/backups/full_*.backup >/dev/null 2>&1 && [ ! -e "./server_backups/metadata.json" -o "$HAD_LEGACY" = 1 ]; then
+    ok "Server backups live under the data directory"
+else
+    bad "Server backups live under the data directory" "no $DATA_DIR/backups/full_*.backup (or a new ./server_backups)"
+fi
+
+# Test 3: CLI restore of the backup file into a fresh directory (offline;
+# SONNY-6280: it used to write nothing and still report success). The
+# backup holds auth records, and (SONNY-6299) not the HMAC key: without it
+# the restore refuses; with the source's key file it verifies and restores.
+NOKEY_OUT=$($BIN restore "$BACKUP_FILE" --data-dir "$WORK_DIR/restored-nokey" --yes 2>&1 || true)
+assert_match "CLI restore without the HMAC key refuses" "$NOKEY_OUT" "HmacKeyRequired"
+RESTORE_OUT=$($BIN restore "$BACKUP_FILE" --data-dir "$WORK_DIR/restored" --yes --hmac-key-file "$DATA_DIR/.geode_hmac_key" 2>&1)
+assert_match "CLI restore" "$RESTORE_OUT" "RESTORE: Restored and verified [0-9]+ files"
+assert_match "CLI restore verifies the auth chain" "$RESTORE_OUT" "HMAC chain verified"
+
+# Test 3b: server restore (SONNY-6288). The server restores its newest
+# server-side backup into a NEW directory beside its --data-dir and reports
+# it; it never writes into its data directory or into ./data in its working
+# directory (it used to, and answered "Restore completed" while serving the
+# old data). The running server keeps serving its current data.
+SERVER_BACKUP_OUT=$($BIN backup create --output "$BACKUP_DIR/server-side.backup" --server "$LISTEN" $TLS "${AUTH[@]}" 2>&1)
+assert_match "CLI backup create (server-side copy for restore)" "$SERVER_BACKUP_OUT" "Backup (created|completed) successfully|Backup completed:"
+SERVER_RESTORE_OUT=$($BIN restore --server "$LISTEN" $TLS "${AUTH[@]}" --yes 2>&1)
+assert_match "Server restore reports a new directory beside --data-dir" "$SERVER_RESTORE_OUT" "Restored into: ${DATA_DIR}\.restored-"
+assert_match "Server restore says the server still serves its data" "$SERVER_RESTORE_OUT" "still serves"
+if [ "$HAD_DATA" = 0 ] && [ -e "./data" ]; then
+    bad "Server restore wrote nothing into ./data" "./data exists in the server's working directory"
+else
+    ok "Server restore wrote nothing into ./data"
+fi
+AFTER_COUNT=$(q "MATCH (n) RETURN count(n) AS cnt" | grep -oE '"cnt":[0-9]+' | grep -oE '[0-9]+' | head -1)
+assert_match "Server keeps serving its data after a server restore (3 nodes)" "${AFTER_COUNT:-0}" "^3$"
 
 # Test 4: CLI restore of a non-existent file fails (negative)
-MISSING_OUT=$($BIN restore "$BACKUP_DIR/does-not-exist.backup" --server "$LISTEN" $TLS "${AUTH[@]}" --yes 2>&1 || true)
+MISSING_OUT=$($BIN restore "$BACKUP_DIR/does-not-exist.backup" --data-dir "$WORK_DIR/restored-missing" --yes 2>&1 || true)
 assert_match "CLI restore of missing file fails" "$MISSING_OUT" "[Ee]rror|not found|FileNotFound|failed|No backup"
 
 echo -e "\n${YELLOW}UNSUPPORTED: GQL statement surface (must reject)${NC}"

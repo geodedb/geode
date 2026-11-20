@@ -9,6 +9,7 @@ const write_shape = @import("../execution/write_shape.zig");
 const graph_store = @import("../graph_store.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 const stored_property_equality = @import("../execution/stored_property_equality.zig");
+const pattern_helpers = @import("../execution/pattern_helpers.zig");
 const property_value_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const result_utils = @import("../execution/result_utils.zig");
@@ -153,6 +154,10 @@ pub const NodeScanStream = struct {
     /// predicate is present this is unused and the count is streamed.
     count_precomputed: ?usize = null,
     count_emitted: bool = false,
+    /// count mode: the statement's OFFSET / LIMIT window excludes the one
+    /// aggregate row (OFFSET >= 1, or LIMIT 0), so the stream serves no row
+    /// (SONNY-6702).
+    count_windowed_out: bool = false,
 
     // Scratch storage for the single-binding environment so makeEnv hands out
     // stable slices. Reset per call; the stream is single-threaded per page.
@@ -286,15 +291,34 @@ pub const NodeScanStream = struct {
             .projection => {
                 // SONNY-1221: a projection's column types depend on its values.
                 // Type them with the executor path's own inference
-                // (`proto_util.buildSchemaDefinition`: the first non-null value
-                // among the first `column_type_sample_rows` rows) over the rows
-                // `prefetchSchemaSample` built -- exactly the rows this stream
-                // serves first -- so both paths report the same type for the
-                // same rows, and NULL only when every sampled value is null or
-                // no row matched. This used to hard-code NULL for every column.
+                // (`proto_util.buildSchemaDefinition`, over every row it is
+                // given) over the rows `prefetchSchemaSample` built -- exactly
+                // the rows this stream serves first -- so both paths report the
+                // same type for the same rows, and NULL only when every value
+                // is null or no row matched. This used to hard-code NULL for every column.
                 // Without the prefetch there are no rows to type from, and
                 // every column would silently come out NULL.
                 std.debug.assert(self.prefetch_attempted);
+                // CANARY: REQ=REQ-SONNY-6562-DECLARED-TYPE; FEATURE="ResultMetadata"; ASPECT=StreamSchemaUnread; STATUS=TESTED; TEST=tests/test_sonny6562_wire_metadata.zig; OWNER=engine; UPDATED=2026-11-15
+                // SONNY-6562: a declared type describes every value of its
+                // column (ISO/IEC 39075:2024 22.18). When the sample did not
+                // exhaust the scan, the rows after it are unread when this
+                // frame is sent and a property may hold any type in them, so
+                // each such column is the open dynamic union type, ANY. The
+                // sample's type was declared, and an eleventh row holding a
+                // string contradicted an INTEGER column. A column projecting
+                // the scanned node itself is a NODE in every row.
+                if (self.scanRemaining()) {
+                    var cols = try std.ArrayList(schema.ColumnDefinition).initCapacity(allocator, self.columns.len);
+                    for (self.columns, self.ret_items) |name, item| {
+                        const bare_node = item.expr == .Ident and std.mem.eql(u8, item.expr.Ident.orig, self.var_name);
+                        cols.appendAssumeCapacity(.{
+                            .name = try allocator.dupe(u8, name),
+                            .type = try allocator.dupe(u8, if (bare_node) "NODE" else "ANY"),
+                        });
+                    }
+                    return .{ .columns = cols };
+                }
                 const sample: [][]Value = if (self.prefetched) |pre| pre.result.rows[pre.next..] else &.{};
                 const view = ExecutionResult{
                     .columns = self.columns,
@@ -439,8 +463,14 @@ pub const NodeScanStream = struct {
                 }
             }
 
+            // CANARY: REQ=REQ-SONNY-2671-SCAN-PAGE-APPEND-OOM; FEATURE="EngineDirectNodeOwnership"; ASPECT=ReserveBeforeBuild; STATUS=TESTED; TEST=tests/test_sonny2671_scan_page_append_oom.zig; OWNER=engine; UPDATED=2026-11-13
+            // SONNY-2671: the row's slot is reserved before the row is built.
+            // Past the 256 rows reserved up front the append grows the list,
+            // and a failed grow dropped the built row (its cells and its
+            // node's tracking) in no list the page's errdefer frees.
+            try rows.ensureUnusedCapacity(allocator, 1);
             const row = try self.buildRow(allocator, node, owned_entities, &node_tracked);
-            try rows.append(allocator, row);
+            rows.appendAssumeCapacity(row);
             self.rows_emitted += 1;
         }
         graph_store.releaseGraphLock(lock);
@@ -482,7 +512,10 @@ pub const NodeScanStream = struct {
                 }
                 var produced_node_value = false;
                 for (self.ret_items, 0..) |item, i| {
-                    const value = try eval.evalExpr(allocator, item.expr, env);
+                    // SONNY-6449: nothing lent from the scratch arena, so a
+                    // cell is either the node's (copied below) or
+                    // `allocator`'s, which the result frees.
+                    const value = try eval.evalExprNothingLent(allocator, item.expr, env);
                     // SONNY-2472 / SONNY-2464: the cell never shares memory
                     // with the node (see "Node ownership" at `destroyNode`).
                     // It is set before `produced` counts it, so the errdefer
@@ -516,6 +549,11 @@ pub const NodeScanStream = struct {
     ) !ExecutionResult {
         var rows_mut = rows;
         const columns = try self.buildColumns(allocator);
+        // SONNY-2671: the columns are freed when the rows' slice cannot be.
+        errdefer {
+            for (columns) |c| allocator.free(c);
+            allocator.free(columns);
+        }
         const owned = owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0;
         const result = ExecutionResult{
             .columns = columns,
@@ -624,14 +662,17 @@ pub const NodeScanStream = struct {
             },
             .projection => {
                 var columns = try allocator.alloc([]const u8, self.columns.len);
+                // SONNY-2671: only the names copied so far are freed; every
+                // slot was, the ones not yet filled holding garbage (a crash
+                // on an allocation failure).
+                var filled: usize = 0;
                 errdefer {
-                    for (columns, 0..) |c, i| {
-                        if (i < self.columns.len) allocator.free(c);
-                    }
+                    for (columns[0..filled]) |c| allocator.free(c);
                     allocator.free(columns);
                 }
                 for (self.columns, 0..) |name, i| {
                     columns[i] = try allocator.dupe(u8, name);
+                    filled += 1;
                 }
                 return columns;
             },
@@ -639,7 +680,8 @@ pub const NodeScanStream = struct {
     }
 
     fn buildCountPage(self: *NodeScanStream, allocator: std.mem.Allocator) !Page {
-        if (self.count_emitted) {
+        if (self.count_emitted or self.count_windowed_out) {
+            self.count_emitted = true;
             var columns = try allocator.alloc([]const u8, 1);
             columns[0] = try allocator.dupe(u8, self.column_name);
             return .{
@@ -1032,6 +1074,9 @@ pub fn prepare(
     if (eligibility.mode == .count and where_expr == null and !has_inline_props) {
         if (graph_store.getGlobalAdapter()) |adapter| {
             if (eligibility.pattern.labels.len == 1) {
+                // SONNY-6523: only this count's own hydration may note a
+                // quarantined graph (checked below), not an earlier request's.
+                graph_store.clearQuarantinedReadError();
                 count_precomputed = graph_store.getGlobalStore(allocator).countNodesByLabel(graph_name, eligibility.pattern.labels[0], null);
             } else if (eligibility.pattern.labels.len == 0) {
                 // Unlabeled count: scan the engine node store (no clone). The
@@ -1045,6 +1090,10 @@ pub fn prepare(
             // `nodeMatchesPattern` verifies the FULL label set. (The previous
             // `scanAllNodes` arm counted EVERY node in the graph for
             // multi-label patterns — silent over-count.)
+            // SONNY-6523: the label count hydrates the graph; one whose
+            // hydration failed just now is quarantined, and its count is
+            // partial (it answered 0).
+            if (graph_store.takeQuarantinedReadError()) |err| return err;
         } else {
             // SONNY-1218: now redundant — prepare's shared
             // `adapterCanServeEngineDirect` guard declined before we got here.
@@ -1218,6 +1267,9 @@ pub fn prepare(
         .exec_context = context,
         .needed_keys = needed_keys,
         .count_precomputed = count_precomputed,
+        // SONNY-6702: an ungrouped count is ONE row; OFFSET >= 1 or LIMIT 0
+        // windows it out.
+        .count_windowed_out = eligibility.mode == .count and (offset >= 1 or (limit orelse 1) == 0),
         .env_names = .{var_name},
     };
 }
@@ -1332,13 +1384,18 @@ pub fn isEligible(q: *const ast.Query, session_tenant_id: ?[]const u8) bool {
 /// gRPC `LET $x = 1 IN (... SET ...) MATCH (n:G) RETURN count(*)` was
 /// answered here before the write-shape validator could refuse it, and
 /// `LET $x = 2 MATCH (n:G) WHERE n.i = $x RETURN n` read $x as unbound.
+/// SONNY-6383: `match_clauses` is listed and must describe the single plain
+/// MATCH (`write_shape.plainMatchClauses`); unlisted, it refused every
+/// parsed MATCH once the parser recorded it (0df2ad6a).
 const stream_fields = [_][]const u8{
-    "match", "where_clause", "filter_clause", "ret",
-    "limit", "offset",       "limit_param",   "offset_param",
+    "match",        "match_clauses", "where_clause", "filter_clause",
+    "ret",          "limit",         "offset",       "limit_param",
+    "offset_param",
 };
 
 fn eligibleQuery(q: *const ast.Query) ?Eligibility {
     if (!write_shape.onlyFields(q.*, &stream_fields)) return null;
+    if (!write_shape.plainMatchClauses(q.*)) return null;
     // One predicate: a WHERE and a FILTER together are both to hold, and the
     // stream applies one (`WHERE n.i > 0 FILTER n.i < 3` returned 9 rows).
     if (q.where_clause != null and q.filter_clause != null) return null;
@@ -1350,6 +1407,10 @@ fn eligibleQuery(q: *const ast.Query) ?Eligibility {
     if (q.call_clause != null or q.initial_call_subquery != null) return null;
     if (q.merge_statement != null or q.next_query != null or q.for_statement != null) return null;
     if (q.path_variable != null or q.has_recursive_cte or q.cte_list != null) return null;
+    // SONNY-6335 (3): an inline map on an FLE-encrypted field compares as
+    // WHERE reads it, in the executor (`nodeMatchesPattern` compares stored
+    // bytes, which for an encrypted value matched no one).
+    if (pattern_helpers.patternMapsNameEncryptedField(q.match)) return null;
     if (q.set_clauses.len != 0 or q.remove_clauses.len != 0 or q.delete_items.len != 0) return null;
     if (q.match.chains.len != 1) return null;
 
@@ -1768,6 +1829,10 @@ fn collectMatchingSlotIds(
         return try allocator.alloc(u64, 0);
     }
 
+    // SONNY-6702: the cap is checked after each append below, so a cap of 0
+    // (`LIMIT 0`) still collected one slot. No rows are wanted: collect none.
+    if (required_rows) |cap| if (cap == 0) return try allocator.alloc(u64, 0);
+
     const row_cap = required_rows orelse std.math.maxInt(usize);
     var result = try std.ArrayList(u64).initCapacity(allocator, if (required_rows) |cap| @min(cap, 1024) else 256);
     errdefer result.deinit(allocator);
@@ -2032,13 +2097,19 @@ fn seekIndexedCandidates(
     const pv = best_pv orelse return null;
     defer property_value_codec.freePropertyValue(allocator, pv);
 
-    return try adapter.getCandidateNodesByLabelAndProperty(
+    // SONNY-6362 item 6: a build of the index in flight -> scan instead.
+    return adapter.getCandidateNodesByLabelAndProperty(
         graph_name,
         pattern.labels[0],
         key,
         pv,
         allocator,
-    );
+    ) catch |err| switch (err) {
+        error.ExactIndexBusy => null,
+        // SONNY-6347: an index over an encrypted field cannot answer.
+        error.IndexOverEncryptedField => null,
+        else => err,
+    };
 }
 
 fn nodeMatchesPattern(
@@ -2141,13 +2212,13 @@ fn slotMatchesPredicate(
 }
 
 /// The snapshot executor's label-scan WHERE coercion, exactly
-/// (match_operations.zig generateCombinations): Bool is itself, Null is false,
-/// Int is nonzero, and anything else is false.
+/// (match_operations.zig generateCombinations): a row passes only when the
+/// condition is the Boolean True (SONNY-6425: ISO/IEC 39075 19.1 GR2; a
+/// non-zero Int counted as true).
 fn predicateHolds(where_result: Value) bool {
     return switch (where_result) {
         .Bool => |b| b,
         .Null => false,
-        .Int => |i| i != 0,
         else => false,
     };
 }
@@ -2161,7 +2232,8 @@ fn predicateHolds(where_result: Value) bool {
 /// with it. This holds on a deployment with encrypted fields too: a decrypt
 /// that creates the process-wide FLE key manager or blind index creates it on
 /// the process allocator (`fle_integration.singleton_allocator`), never on
-/// the evaluation allocator, so resetting `scratch` cannot free it.
+/// the evaluation allocator, so resetting `scratch` cannot free it (SONNY-2656,
+/// SONNY-2670).
 fn predicateAllocator(scratch: *std.heap.ArenaAllocator) std.mem.Allocator {
     return scratch.allocator();
 }

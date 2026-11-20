@@ -54,14 +54,15 @@
 // CANARY: REQ=REQ-TRANSPORT-GRPC-SHUTDOWN-002; FEATURE="GrpcServerLifecycle"; ASPECT=NoFalseSuccessOnShutdown; STATUS=TESTED; TEST=tests/test_grpc_shutdown_drain.zig; OWNER=transport; UPDATED=2026-09-01
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const testing = std.testing;
 const posix = std.posix;
 const linux = std.os.linux;
 
-const binary_path = "zig-out/bin/geode";
+const binary_path = geode_test_bin.geode_exe;
 const admin_username = "geode";
-const admin_password = "testpass123";
+const admin_password = "Test Pass Admin Passphrase";
 const ready_marker = "server ready";
 const ready_deadline_ms: i64 = 60_000;
 const cli_deadline_ms: i64 = 180_000;
@@ -443,6 +444,8 @@ test "control: SIGTERM with no in-flight work shuts down cleanly" {
 //    connectionThread.
 // ---------------------------------------------------------------------
 test "SIGTERM with an in-flight gRPC query does not use-after-free the store" {
+    // SONNY-6782: plaintext gRPC is served in Debug only (grpc_server.shouldAllowGrpcPlaintextFallback).
+    if (builtin.mode != .Debug) return error.SkipZigTest;
     const gpa = testing.allocator;
     var fx = (try setUp(gpa, "grpc", 24013, 24014)) orelse return error.SkipZigTest;
     defer fx.deinit();
@@ -503,6 +506,8 @@ test "SIGTERM with an in-flight gRPC query does not use-after-free the store" {
 //    for a statement that was abandoned mid-execution.
 // ---------------------------------------------------------------------
 test "an in-flight gRPC query interrupted by shutdown is not reported as an empty success" {
+    // SONNY-6782: plaintext gRPC is served in Debug only (grpc_server.shouldAllowGrpcPlaintextFallback).
+    if (builtin.mode != .Debug) return error.SkipZigTest;
     const gpa = testing.allocator;
     var fx = (try setUp(gpa, "false", 24015, 24016)) orelse return error.SkipZigTest;
     defer fx.deinit();

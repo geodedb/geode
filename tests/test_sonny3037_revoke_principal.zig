@@ -11,9 +11,14 @@
 // is none. And `geode grant` takes a permission id of its own: it took the
 // next user id, the same in every run, so each grant replaced the last.
 //
+// SONNY-6586: grant and revoke now store and remove the GraphGrant records
+// of the online GRANT <privilege> ON GRAPH (READ on graph g3037 here) to
+// users that exist; the principal rule above is unchanged.
+//
 // CANARY: REQ=REQ-SONNY-3037-REVOKE-PRINCIPAL; FEATURE="OfflineAuthStoreSafety"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny3037_revoke_principal.zig; OWNER=security; UPDATED=2026-09-27
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
@@ -24,7 +29,7 @@ const graph_store = geode.graph_store;
 const AuthGraphManager = auth_graph_manager.AuthGraphManager;
 const linux = std.os.linux;
 
-const binary_path = "./zig-out/bin/geode";
+const binary_path = geode_test_bin.geode_exe;
 const hmac_hex = "7c" ** 32;
 
 fn nowMillis() i64 {
@@ -116,21 +121,24 @@ fn makeStore(aa: std.mem.Allocator, tag: []const u8) ![]const u8 {
     return dir;
 }
 
-/// How many grants of `permission` the store records for `principal`.
-fn grants(dir: []const u8, permission: []const u8, principal: []const u8) !usize {
+const graph = "g3037";
+const strong_password = "Correct horse battery staple 3037";
+
+/// How many READ grants on `graph` the store records for `principal`.
+fn grants(dir: []const u8, principal: []const u8) !usize {
     var process = std.heap.ArenaAllocator.init(testing.allocator);
     defer process.deinit();
     const pa = process.allocator();
     var mgr = try cli_auth.initCliAuthManager(pa, dir);
-    var n: usize = 0;
-    var it = mgr.storage.permission_cache.valueIterator();
-    while (it.next()) |record| {
-        if (!std.mem.eql(u8, record.getName(), permission)) continue;
-        const holder = record.getConditions() orelse continue;
-        if (std.mem.eql(u8, holder, principal)) n += 1;
+    defer {
+        cli_auth.deinitCliAuthWithoutSaving(pa, &mgr);
+        graph_store.deinitGlobalStore();
     }
-    cli_auth.deinitAndSaveCliAuth(pa, &mgr);
-    graph_store.deinitGlobalStore();
+    const uid = (try mgr.findUserIdByName(principal)) orelse return error.NoSuchUser;
+    var n: usize = 0;
+    for (try mgr.listGraphGrants(pa)) |g| {
+        if (g.user_id == uid and g.action == 0 and std.mem.eql(u8, g.getGraphName(), graph)) n += 1;
+    }
     return n;
 }
 
@@ -162,22 +170,27 @@ test "SONNY-3037: geode revoke --from removes that principal's grant only, and r
     const dir = try makeStore(aa, "revoke");
     defer std.Io.Dir.cwd().deleteTree(io_fs, dir) catch {};
 
-    try expectExit(aa, io, &.{ binary_path, "grant", "read", "--to", "alice", "--data-dir", dir }, true);
-    try testing.expectEqual(@as(usize, 1), try grants(dir, "read", "alice"));
+    for ([_][]const u8{ "alice", "bob" }) |u| {
+        const email = try std.fmt.allocPrint(aa, "{s}@example.com", .{u});
+        try expectExit(aa, io, &.{ binary_path, "user", "create", u, email, "--password", strong_password, "--data-dir", dir }, true);
+    }
+
+    try expectExit(aa, io, &.{ binary_path, "grant", "read", "--to", "alice", "--graph", graph, "--data-dir", dir }, true);
+    try testing.expectEqual(@as(usize, 1), try grants(dir, "alice"));
 
     // bob holds no grant of read: refused, and alice keeps hers.
-    try expectExit(aa, io, &.{ binary_path, "revoke", "read", "--from", "bob", "--data-dir", dir }, false);
-    try testing.expectEqual(@as(usize, 1), try grants(dir, "read", "alice"));
+    try expectExit(aa, io, &.{ binary_path, "revoke", "read", "--from", "bob", "--graph", graph, "--data-dir", dir }, false);
+    try testing.expectEqual(@as(usize, 1), try grants(dir, "alice"));
 
     // With both holding it, revoking bob's leaves alice's.
-    try expectExit(aa, io, &.{ binary_path, "grant", "read", "--to", "bob", "--data-dir", dir }, true);
-    try testing.expectEqual(@as(usize, 1), try grants(dir, "read", "bob"));
+    try expectExit(aa, io, &.{ binary_path, "grant", "read", "--to", "bob", "--graph", graph, "--data-dir", dir }, true);
+    try testing.expectEqual(@as(usize, 1), try grants(dir, "bob"));
     // A grant does not replace another principal's.
-    try testing.expectEqual(@as(usize, 1), try grants(dir, "read", "alice"));
-    try expectExit(aa, io, &.{ binary_path, "revoke", "read", "--from", "bob", "--data-dir", dir }, true);
-    try testing.expectEqual(@as(usize, 0), try grants(dir, "read", "bob"));
-    try testing.expectEqual(@as(usize, 1), try grants(dir, "read", "alice"));
+    try testing.expectEqual(@as(usize, 1), try grants(dir, "alice"));
+    try expectExit(aa, io, &.{ binary_path, "revoke", "read", "--from", "bob", "--graph", graph, "--data-dir", dir }, true);
+    try testing.expectEqual(@as(usize, 0), try grants(dir, "bob"));
+    try testing.expectEqual(@as(usize, 1), try grants(dir, "alice"));
 
-    try expectExit(aa, io, &.{ binary_path, "revoke", "read", "--from", "alice", "--data-dir", dir }, true);
-    try testing.expectEqual(@as(usize, 0), try grants(dir, "read", "alice"));
+    try expectExit(aa, io, &.{ binary_path, "revoke", "read", "--from", "alice", "--graph", graph, "--data-dir", dir }, true);
+    try testing.expectEqual(@as(usize, 0), try grants(dir, "alice"));
 }

@@ -33,6 +33,8 @@
 // CANARY: REQ=REQ-SONNY-2805-TXN-SESSION; FEATURE="TransactionUndoLog"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2805_txn_sessions.zig; OWNER=engine; UPDATED=2026-09-26
 
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const schema = @import("schema");
@@ -427,7 +429,7 @@ fn committedW(st: *graph_store.GraphStore, graph: []const u8, index: usize, roun
     const ids = st.getNodesByLabel(graph, "W") orelse return 0;
     var n: usize = 0;
     for (ids) |id| {
-        const node = st.getNodePtrHydrated(id) orelse continue;
+        const node = (try st.getNodePtrHydratedChecked(id)) orelse continue;
         const s = node.properties.get("s") orelse continue;
         const r = node.properties.get("r") orelse continue;
         if (s == .Int and r == .Int and s.Int == @as(i64, @intCast(index)) and r.Int == @as(i64, @intCast(round))) n += 1;
@@ -530,7 +532,7 @@ test "SONNY-2799: the undo log keeps each transaction's changes and savepoints t
     try testing.expectError(error.SavepointNotFound, log.rollbackToSavepoint("sp", st));
 
     // B commits (its entry goes); A rolls back (U1 is undone).
-    log.commit(null);
+    try log.commit(null);
     txn_undo_log.setThreadTxnId(a);
     try log.rollback(st);
     try testing.expectEqual(@as(usize, 0), countLabel(st, "default", "U1"));
@@ -616,6 +618,8 @@ fn quicCount(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query:
 }
 
 test "SONNY-2805: over QUIC transaction control runs in program order, and a failed statement aborts its transaction until the client ends it" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const port = try util.getRandomPort();
     const io_fs = std.Io.Threaded.global_single_threaded.io();
@@ -627,7 +631,7 @@ test "SONNY-2805: over QUIC transaction control runs in program order, and a fai
     defer allocator.free(addr);
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir },
         util.TestEnv.standard(),
     );
     defer server.deinit();

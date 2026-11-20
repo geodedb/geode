@@ -90,11 +90,9 @@ test "security(NEW-8-residual, site-3): loadAllUsersFromResolver skips geode-clu
     defer user_mgmt.setPersistentUserResolver(null);
 
     // listUsers() triggers loadAllUsersFromResolver internally.
-    const users = try user_mgmt.listUsers();
-    // The snapshot array frame is allocated by the cache allocator (= testing.allocator).
-    // String fields are borrowed from the cache — do NOT call deinit on each User here;
-    // deinitUserStore() will free them.  Free only the array frame.
-    defer testing.allocator.free(users);
+    // SONNY-6312: a copy owned by the caller.
+    const users = try user_mgmt.listUsers(testing.allocator);
+    defer user_mgmt.freeUserSummaries(testing.allocator, users);
 
     // geode-cluster MUST NOT appear in the result.
     for (users) |u| {

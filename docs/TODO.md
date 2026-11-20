@@ -7,7 +7,7 @@
 > **Phase Completion**: ✅ **ALL 7 FEATURE PHASES COMPLETE** (Phases 2-7 + Phase 1)
 > **Security Status**: 🟢 Memory-safe user storage with proper deep-copy patterns; open security gaps tracked in [GAP_ANALYSIS.md](GAP_ANALYSIS.md)
 > **GPU Status**: ✅ **Vulkan/CUDA headers properly configured** in NixOS environment
-> **GQL Compliance**: ✅ 96/96 named ISO conformance-suite cases (`zig build test-iso-conformance`; parse-only scope)
+> **GQL Compliance**: ✅ 106/106 named ISO conformance-suite cases (`zig build test-iso-conformance`; parse-only scope)
 
 ---
 
@@ -116,7 +116,7 @@ python3 extended_test_runner.py
 
 ### Fix 1: P1 CRITICAL - Double-Free Memory Bug (1 test fixed)
 
-**File**: `src/cli/user_storage_secure.zig:167-204`
+**File**: `src/cli/user_storage_secure.zig:167-204` (never compiled; removed in SONNY-6298)
 
 - ✅ **Root Cause**: deleteUser() used shallow copy causing double-free
 - ✅ **Fix**: Implemented proper deep copy with independent allocations
@@ -181,6 +181,14 @@ python3 extended_test_runner.py
 - **Verification**: Both tests now passing ✅
 
 ### Critical Security Fix: Encrypted User Storage - 4 tests fixed (earlier in day)
+
+> **Status note (2026-11-11, SONNY-6298):** `src/cli/user_storage_secure.zig`
+> (and `user_storage_simple.zig`, `user_management.zig`) were reachable from
+> no executable or test in `build.zig`, so the encrypted `users.dat` storage
+> below never ran; the files have been removed. User records are stored in
+> the HMAC-chained `__geode_security` graph (read by
+> `src/server/persistent_auth_resolver.zig`; see
+> [GQL_AUTH_DDL.md](GQL_AUTH_DDL.md)).
 
 - ✅ **Replaced insecure JSON file storage** with encrypted database storage
 - ✅ **Fixed critical panic** in user_storage_secure.zig:62 (stat on closed file descriptor)
@@ -357,7 +365,7 @@ Skipped: 46 (setup requirements not met)
 - ✅ **Core functionality**: 100% (all basic queries, graph operations, transactions)
 - ✅ **Advanced features**: 100% (vector search, full-text search, analytics)
 - ✅ **Security**: 100% (authentication, encryption, audit logging, memory-safe user management)
-- ✅ **Performance**: Optimized (13.18x I/O improvement, memory-mapped operations)
+- ✅ **Performance**: Optimized (memory-mapped id map and hydration snapshot; the "13.18x I/O improvement" is unmeasured on the server path, SONNY-6511)
 
 ---
 
@@ -448,22 +456,22 @@ Skipped: 46 (setup requirements not met)
 - ✅ **Phase 1**: Quick wins (CREATE OR REPLACE, boolean comparison)
 - ✅ **Phase 2**: Parser extensions (map literals, deep nesting)
 - ✅ **Phase 3**: Set operations (UNION/INTERSECT/EXCEPT)
-- ✅ **Phase 4**: Transaction isolation (SSI, phantom read prevention)
-- ✅ **Phase 5**: Distributed query coordination (federation-aware optimization)
+- ❌ **Phase 4**: Transaction isolation (SSI, phantom read prevention). Not implemented in the server: the isolation code was never compiled and was removed 2026-11-11 (SONNY-6298)
+- ✅ **Phase 5**: Distributed coordination (Raft, cluster management). The federation-aware query coordination code from this phase was never compiled and was removed 2026-11-11 (SONNY-6279)
 - ✅ **Phase 6**: Materialized view refresh (3 refresh strategies)
-- ✅ **Phase 7**: Graph algorithm enhancements (20-90% performance gains)
+- ✅ **Phase 7**: Graph algorithm enhancements. The optimized algorithms behind the "20-90% performance gains" (`src/graph/centrality_optimized.zig` and its sibling modules) were never compiled by any build and were removed 2026-11-13 (SONNY-6511); the server runs `src/execution/centrality_algorithms.zig`
 - ✅ **Phase 8**: Mathematical functions (all trig, arithmetic, statistical functions)
 
 ### Completed Enterprise Features (2025)
 
-- ✅ **S3 Cloud Backup**: Production-ready with Digital Ocean Spaces integration
+- ❌ **Cloud (S3 / DigitalOcean Spaces) Backup**: NOT implemented. Backups are local files (`geode backup create` / `geode restore`); no command reaches object storage (SONNY-6290, corrected SONNY-6422). Real support is story SONNY-6356
 - ✅ **Vector Operations**: HNSW indexing with 6 distance metrics
-- ✅ **Performance Optimization**: 13.18x I/O improvement, memory-mapped operations
+- ✅ **Performance Optimization**: memory-mapped id map and hydration snapshot; the "13.18x I/O improvement" came from `src/performance/memory_mapped_io.zig`, which the server does not use (SONNY-6511)
 - ✅ **ML Graph Embeddings**: Node2Vec, GraphSAGE, DeepWalk
 - ✅ **Real-time Analytics**: Streaming analytics with pattern detection
 - ✅ **Enhanced RLS**: Advanced row-level security with policy optimization
 - ✅ **Audit Logging**: Tamper-evident logging with Ed25519 signatures
-- ✅ **TDE**: Transparent data encryption with <1% overhead
+- ✅ **TDE**: Transparent data encryption (measured overhead +0.7% with per-commit fsync, about +20% on the commit path without fsync; SONNY-6435)
 
 ---
 
@@ -474,7 +482,7 @@ These are intentionally deferred or out of scope:
 ### Advanced Sharding
 
 **Status**: Not planned
-**Reason**: Distributed query coordination (Phase 5) handles federation without requiring full sharding.
+**Reason**: Not planned. Cross-node query coordination is not implemented either (see [DISTRIBUTED_QUERY_COORDINATION.md](DISTRIBUTED_QUERY_COORDINATION.md)).
 
 ### Recursive Query Support (CTEs)
 

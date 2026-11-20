@@ -24,6 +24,11 @@ pub const Lexer = struct {
             return self.scanStringAny('"');
         }
 
+        // SONNY-6564: ISO/IEC 39075:2024 21.3 <accent quoted character
+        // sequence>, a <delimited identifier>: any word, a reserved one
+        // included, names a variable, label or property written this way.
+        if (c == '`') return self.scanAccentQuoted();
+
         if (self.matchMulti()) |tokv| return tokn(tokv);
 
         // Check for Unicode identifier start (or ASCII)
@@ -381,6 +386,41 @@ pub const Lexer = struct {
         }
 
         return .{ .kind = kind, .lexeme = self.src[start..self.idx], .loc = loc };
+    }
+
+    /// SONNY-6564: `...`, a doubled accent standing for one (21.1 <accent
+    /// quoted character sequence>; 21.3 SR 4: not zero-length). The token's
+    /// lexeme is the text between the accents, a doubled accent still
+    /// doubled (the parser undoubles it); unterminated or empty is invalid.
+    fn scanAccentQuoted(self: *Lexer) t.Token {
+        const loc: t.Location = .{ .line = self.line, .column = self.col };
+        const start = self.idx;
+        self.idx += 1;
+        self.col += 1;
+        const content_start = self.idx;
+        while (self.idx < self.src.len) {
+            const c = self.src[self.idx];
+            if (c == '`') {
+                if (self.idx + 1 < self.src.len and self.src[self.idx + 1] == '`') {
+                    self.idx += 2;
+                    self.col += 2;
+                    continue;
+                }
+                const content = self.src[content_start..self.idx];
+                self.idx += 1;
+                self.col += 1;
+                if (content.len == 0) return .{ .kind = .invalid, .lexeme = self.src[start..self.idx], .loc = loc };
+                return .{ .kind = .quoted_identifier, .lexeme = content, .loc = loc };
+            }
+            if (c == '\n') {
+                self.line += 1;
+                self.col = 1;
+            } else {
+                self.col += 1;
+            }
+            self.idx += 1;
+        }
+        return .{ .kind = .invalid, .lexeme = self.src[start..self.idx], .loc = loc };
     }
 
     fn scanQuotedIdentifier(self: *Lexer) t.Token {

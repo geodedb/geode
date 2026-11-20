@@ -11,20 +11,25 @@ geode serve --listen-quic 0.0.0.0:3141
 # With all options
 geode serve --listen-quic 0.0.0.0:3141 \
        --data-dir /var/geode/data \
-       --tls-cert server.crt \
-       --tls-key server.key \
-       --log-json \
-       --enable-tde
+       --cert server.crt \
+       --key server.key \
+       --log-level info
 ```
 
 ### Client Operations
 
+A release `geode` verifies the server: pass the CA that signed the server
+certificate with `--ca-cert` (SONNY-6453). Without it (and without
+`--insecure-tls-skip-verify` plus `GEODE_ALLOW_INSECURE_TLS=1`) a release
+build, or `GEODE_ENV=production`, refuses to connect; a Debug build from
+`make build` connects unverified with a warning.
+
 ```bash
 # Run single query
-geode query "MATCH (n) RETURN n LIMIT 10"
+geode query "MATCH (n) RETURN n LIMIT 10" --ca-cert ca.crt
 
 # Query with JSON output
-geode query "RETURN 1 AS x" --format json
+geode query "RETURN 1 AS x" --format json --ca-cert ca.crt
 
 # Interactive REPL
 gql
@@ -216,11 +221,11 @@ URL('https://example.com')
 
 ```bash
 # Query behavior
-export GEODE_ORDER_KEYS_EXPR=1       # Allow ORDER BY expressions
+export GEODE_ORDER_KEYS_EXPR=0       # Identifier-only ORDER BY keys (expressions are the default)
 
 # Performance
 export GEODE_TELEMETRY_PAGING=1      # Enable telemetry
-export GEODE_CDC_ENABLE=1            # Enable CDC
+export GEODE_CDC_ENABLE=1            # Start the CDC engine (it captures no changes: SONNY-6570)
 
 # QUIC settings
 export GEODE_QUIC_FORCE_CLOSE=1      # Force connection close
@@ -265,7 +270,7 @@ ls -la /var/geode/data
 
 ```bash
 # Enable verbose logging
-geode serve --log-level debug --log-json
+geode serve --log-level debug
 
 # Check query syntax
 geode query "EXPLAIN MATCH (n) RETURN n"
@@ -333,12 +338,6 @@ make fuzz
 ```bash
 # Run all benchmarks
 make bench
-
-# Extract benchmark results
-make bench 2>&1 | bench_extract
-
-# Compare with baseline
-bench_regress --baseline old.json --current new.json
 ```
 
 ## CANARY Markers

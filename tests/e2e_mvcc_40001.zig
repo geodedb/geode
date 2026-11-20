@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -56,7 +57,7 @@ test "MVCC serialization failure yields 40001" {
     try env.put("GEODE_DEFAULT_PASSWORD", util.defaultPassword());
 
     var server = std.process.Child.init(&.{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "serve",
         "--listen",
         addr,
@@ -76,7 +77,7 @@ test "MVCC serialization failure yields 40001" {
     // Trigger internal SerializationFailure via synthetic path in server (force path uses manager's conflict matrix in commit)
     util.progress("Running query...", .{});
     const args = &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "RETURN 1",
         "--server",

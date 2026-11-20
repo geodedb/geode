@@ -24,7 +24,11 @@ pub fn provideDiagnostics(
     caller: LspContext,
 ) ![]protocol.Diagnostic {
     var diagnostics = std.ArrayList(protocol.Diagnostic).initCapacity(allocator, 10) catch return error.OutOfMemory;
-    errdefer diagnostics.deinit(allocator);
+    // SONNY-6511: every `.message` is owned; an error frees them all.
+    errdefer {
+        for (diagnostics.items) |d| allocator.free(d.message);
+        diagnostics.deinit(allocator);
+    }
 
     // Parse the document using outcome to get better error info.
     // LSP-F-02/#770: route through the per-document AST cache. The
@@ -48,7 +52,7 @@ pub fn provideDiagnostics(
                     .source = "geode",
                     .message = try allocator.dupe(u8, "Double-dash (--) comments are a Geode extension and may not be supported by other GQL databases."),
                 };
-                try diagnostics.append(allocator, info_diag);
+                try appendOwned(allocator, &diagnostics, info_diag);
             }
 
             // Check for UNWIND (not standard GQL - Cypher/openCypher syntax)
@@ -68,7 +72,7 @@ pub fn provideDiagnostics(
                     .source = "geode",
                     .message = try allocator.dupe(u8, "UNWIND is not standard GQL (ISO/IEC 39075:2024). Use FOR ... IN ... instead."),
                 };
-                try diagnostics.append(allocator, uw_diag);
+                try appendOwned(allocator, &diagnostics, uw_diag);
             }
 
             // Then show the parse error at the actual location
@@ -81,7 +85,7 @@ pub fn provideDiagnostics(
                 .source = "geode",
                 .message = try allocator.dupe(u8, err_info.msg),
             };
-            try diagnostics.append(allocator, diag);
+            try appendOwned(allocator, &diagnostics, diag);
         },
         .Ok => |result| {
             // Arena cleanup: for an owned parse the top-level
@@ -99,7 +103,7 @@ pub fn provideDiagnostics(
                     .source = "geode",
                     .message = try allocator.dupe(u8, "Double-dash (--) comments are a Geode extension and may not be supported by other GQL databases."),
                 };
-                try diagnostics.append(allocator, diag);
+                try appendOwned(allocator, &diagnostics, diag);
             }
 
             // Check for UNWIND (not standard GQL - Cypher/openCypher syntax)
@@ -119,7 +123,7 @@ pub fn provideDiagnostics(
                     .source = "geode",
                     .message = try allocator.dupe(u8, "UNWIND is not standard GQL (ISO/IEC 39075:2024). Use FOR ... IN ... instead."),
                 };
-                try diagnostics.append(allocator, uw_diag);
+                try appendOwned(allocator, &diagnostics, uw_diag);
             }
 
             // Check for parser errors
@@ -133,17 +137,17 @@ pub fn provideDiagnostics(
                     .source = "geode",
                     .message = try allocator.dupe(u8, last_err),
                 };
-                try diagnostics.append(allocator, diag);
+                try appendOwned(allocator, &diagnostics, diag);
             }
 
             // Perform semantic analysis for undefined variable detection
             var analyzer = semantic.SemanticAnalyzer.init(allocator);
             defer analyzer.deinit();
 
-            const sem_errors = analyzer.analyze(result.program) catch {
-                // If semantic analysis fails, return existing diagnostics
-                return diagnostics.toOwnedSlice(allocator);
-            };
+            // SONNY-6511: the analyzer fails only when an allocation does;
+            // that error reaches the caller instead of a partial answer
+            // without the semantic and recommendation diagnostics.
+            const sem_errors = try analyzer.analyze(result.program);
 
             for (sem_errors) |sem_err| {
                 // Try to find the position of the undefined variable in the document
@@ -171,18 +175,22 @@ pub fn provideDiagnostics(
                     .source = "geode",
                     .message = try allocator.dupe(u8, sem_err.message),
                 };
-                try diagnostics.append(allocator, diag);
+                try appendOwned(allocator, &diagnostics, diag);
             }
 
-            // Run recommendation engine for context-aware suggestions
+            // Run recommendation engine for context-aware suggestions.
+            // SONNY-6511: its errors (out-of-memory included) reach the
+            // caller instead of reading as no recommendation, and each
+            // recommendation carries the range of the token it is about,
+            // found in the document text (the AST has no positions).
             var rec_engine = geode.recommendations.RecommendationEngine.init(allocator);
             defer rec_engine.deinit();
-            const suggestions = rec_engine.analyze(result.program) catch &[_]geode.recommendations.Recommendation{};
+            const suggestions = try rec_engine.analyzeSource(result.program, doc.text);
             for (suggestions) |suggestion| {
                 const rec_diag = protocol.Diagnostic{
                     .range = .{
                         .start = .{ .line = suggestion.line, .character = suggestion.column },
-                        .end = .{ .line = suggestion.line, .character = suggestion.column },
+                        .end = .{ .line = suggestion.line, .character = suggestion.end_column },
                     },
                     .severity = switch (suggestion.severity) {
                         .information => .Information,
@@ -191,7 +199,7 @@ pub fn provideDiagnostics(
                     .source = "geode",
                     .message = try allocator.dupe(u8, suggestion.message),
                 };
-                try diagnostics.append(allocator, rec_diag);
+                try appendOwned(allocator, &diagnostics, rec_diag);
             }
         },
     }
@@ -245,7 +253,7 @@ pub fn provideDiagnostics(
 
             const start_pos = offsetToLineCol(text, lbl_start);
             const end_pos = offsetToLineCol(text, j);
-            try diagnostics.append(allocator, .{
+            try appendOwned(allocator, &diagnostics, .{
                 .range = .{ .start = start_pos, .end = end_pos },
                 .severity = .Warning,
                 .source = "geode-lsp",
@@ -292,7 +300,7 @@ pub fn provideDiagnostics(
 
             const start_pos = offsetToLineCol(t_text, t_start);
             const end_pos = offsetToLineCol(t_text, k);
-            try diagnostics.append(allocator, .{
+            try appendOwned(allocator, &diagnostics, .{
                 .range = .{ .start = start_pos, .end = end_pos },
                 .severity = .Warning,
                 .source = "geode-lsp",
@@ -357,4 +365,11 @@ fn offsetToLineCol(text: []const u8, offset: usize) protocol.Position {
         }
     }
     return .{ .line = line, .character = col };
+}
+
+/// SONNY-6511: appends a diagnostic whose `.message` the list owns, freeing
+/// the message when the append fails.
+fn appendOwned(allocator: Allocator, list: *std.ArrayList(protocol.Diagnostic), diag: protocol.Diagnostic) !void {
+    errdefer allocator.free(diag.message);
+    try list.append(allocator, diag);
 }

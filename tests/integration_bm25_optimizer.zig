@@ -2,9 +2,9 @@ const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 
-// CANARY: REQ=REQ-BM25-INTEGRATION-001; FEATURE="BM25 Integration Testing"; ASPECT=EndToEndIntegration; STATUS=TESTED; TEST=TestCANARY_REQ_BM25_INTEGRATION_001_EndToEndWorkflow; OWNER=fts; UPDATED=2025-10-05
-// CANARY: REQ=REQ-BM25-INTEGRATION-002; FEATURE="BM25 Integration Testing"; ASPECT=PerformanceValidation; STATUS=TESTED; TEST=TestCANARY_REQ_BM25_INTEGRATION_002_PerformanceCharacteristics; OWNER=fts; UPDATED=2025-10-05
-// CANARY: REQ=REQ-BM25-INTEGRATION-003; FEATURE="BM25 Integration Testing"; ASPECT=QueryOptimization; STATUS=TESTED; TEST=TestCANARY_REQ_BM25_INTEGRATION_003_QueryOptimizationFlow; OWNER=fts; UPDATED=2025-10-05
+// CANARY: REQ=REQ-BM25-INTEGRATION-001; FEATURE="BM25 Integration Testing"; ASPECT=EndToEndIntegration; STATUS=IMPL; TEST=TestCANARY_REQ_BM25_INTEGRATION_001_EndToEndWorkflow; OWNER=fts; UPDATED=2026-11-14
+// CANARY: REQ=REQ-BM25-INTEGRATION-002; FEATURE="BM25 Integration Testing"; ASPECT=PerformanceValidation; STATUS=IMPL; TEST=TestCANARY_REQ_BM25_INTEGRATION_002_PerformanceCharacteristics; OWNER=fts; UPDATED=2026-11-14
+// CANARY: REQ=REQ-BM25-INTEGRATION-003; FEATURE="BM25 Integration Testing"; ASPECT=QueryOptimization; STATUS=IMPL; TEST=TestCANARY_REQ_BM25_INTEGRATION_003_QueryOptimizationFlow; OWNER=fts; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_BM25_INTEGRATION_001_EndToEndWorkflow" {
     // Test complete BM25 integration workflow from query to optimization

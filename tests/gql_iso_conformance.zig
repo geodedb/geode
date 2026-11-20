@@ -96,6 +96,21 @@ test "ISO Sec 7.9: Optional MATCH" {
     try expectParseOk("MATCH (n:Person) OPTIONAL MATCH (n)-[:HAS]->(p) RETURN n, p");
 }
 
+// SONNY-3184 / SONNY-6337: an optional match statement after a WITH (the
+// linear query's next statement), one with its own WHERE, and several in
+// sequence, each with its own WHERE.
+test "ISO Sec 7.9: OPTIONAL MATCH after WITH and with its own WHERE" {
+    try expectParseOk("MATCH (n:Person) WITH n OPTIONAL MATCH (n)-[:HAS]->(p) RETURN n, p");
+    try expectParseOk("MATCH (n:Person) OPTIONAL MATCH (n)-[:HAS]->(p) WHERE p.k > 1 RETURN n, p");
+    try expectParseOk("MATCH (n:Person) WHERE n.a > 1 OPTIONAL MATCH (n)-[:HAS]->(p) WHERE p.k > 1 OPTIONAL MATCH (p)-[:OF]->(q) WHERE q.k = 2 RETURN n, p, q");
+}
+
+// SONNY-3389: the statements after an inline CALL { } (RETURN with ORDER BY
+// and LIMIT).
+test "ISO Sec 15: CALL { } followed by RETURN ... ORDER BY ... LIMIT" {
+    try expectParseOk("CALL { MATCH (x:X) RETURN x.k AS k } RETURN k ORDER BY k DESC LIMIT 2");
+}
+
 test "ISO Sec 7.10: Pattern with alias" {
     try expectParseOk("MATCH p = (a)-[:KNOWS]->(b) RETURN p");
 }
@@ -386,7 +401,23 @@ test "ISO Sec 17.3: LIMIT" {
     try expectParseOk("MATCH (n:Person) RETURN n.name LIMIT 10");
 }
 
+// SONNY-6555 item 6: ISO/IEC 39075:2024 14.9 <order by and page statement>
+// puts the <offset clause> (OFFSET | SKIP, 16.19) before the <limit clause>
+// (16.18). This case read `LIMIT 10 OFFSET 5`, which is Geode's extension
+// order (kept, see the case below), under the standard's name.
 test "ISO Sec 17.4: OFFSET" {
+    try expectParseOk("MATCH (n:Person) RETURN n.name ORDER BY n.name OFFSET 5 LIMIT 10");
+}
+
+test "ISO 14.9: SKIP before LIMIT after a WITH" {
+    try expectParseOk("MATCH (n:Person) WITH n.name AS s ORDER BY s SKIP 5 LIMIT 10 RETURN s");
+}
+
+test "ISO 14.9: OFFSET before LIMIT after a UNION" {
+    try expectParseOk("MATCH (n:Person) RETURN n.name AS s UNION MATCH (m:Company) RETURN m.name AS s ORDER BY s OFFSET 5 LIMIT 10");
+}
+
+test "Geode extension: LIMIT before OFFSET" {
     try expectParseOk("MATCH (n:Person) RETURN n.name ORDER BY n.name LIMIT 10 OFFSET 5");
 }
 
@@ -497,6 +528,45 @@ test "ISO Let: Chained WITH clauses" {
 }
 
 // ============================================================================
+// Additional Compliance Tests: NEXT (linear composition)
+// ISO/IEC 39075:2024 9.2 <procedure body>: `<statement> NEXT [<yield
+// clause>] <statement>` (Feature GQ20); the result table of the statement
+// before NEXT is the working table of the one after it (9.2 GR 4), narrowed
+// by the <yield clause> (16.14). SONNY-6496 item 5. Parse-only: what the
+// statements answer is pinned in tests/test_sonny6343_next_and_call.zig, and
+// the scope after NEXT in tests/test_sonny6496_with_scope.zig.
+// CANARY: REQ=REQ-GQL-ISO-NEXT-001; FEATURE="ISOLinearComposition"; ASPECT=Next; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-11-13
+// ============================================================================
+
+test "ISO Next: RETURN NEXT RETURN" {
+    try expectParseOk("MATCH (n:Person) RETURN n.name AS name NEXT RETURN name");
+}
+
+test "ISO Next: three statements" {
+    try expectParseOk("RETURN 1 AS a NEXT RETURN a + 1 AS b NEXT RETURN b * 10 AS c");
+}
+
+test "ISO Next: NEXT then MATCH" {
+    try expectParseOk("MATCH (n:Person) RETURN n.age AS age NEXT MATCH (m:Person) WHERE m.age > age RETURN m.name AS name");
+}
+
+test "ISO Next: ORDER BY and LIMIT before NEXT" {
+    try expectParseOk("MATCH (n:Person) RETURN n.age AS age ORDER BY age DESC LIMIT 3 NEXT RETURN age");
+}
+
+test "ISO Next: NEXT YIELD" {
+    try expectParseOk("MATCH (n:Person) RETURN n.name AS name, n.age AS age NEXT YIELD age AS years RETURN years");
+}
+
+test "ISO Next: NEXT inside a subquery" {
+    try expectParseOk("MATCH (n:Person) WHERE n.age IN (MATCH (m:Person) RETURN m.age AS a ORDER BY a LIMIT 1 NEXT RETURN a) RETURN n.name");
+}
+
+test "ISO Next: NEXT with no result table before it is refused" {
+    try expectParseErr("MATCH (n:Person) SET n.seen = true NEXT RETURN 1 AS one");
+}
+
+// ============================================================================
 // Additional Compliance Tests: Schema / Catalog
 // CANARY: REQ=REQ-GQL-ISO-CATALOG-001; FEATURE="ISOCatalog"; ASPECT=SchemaManagement; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-06-11
 // ============================================================================
@@ -532,4 +602,74 @@ test "ISO Negative: Gibberish input" {
 
 test "ISO Negative: Dangling operator" {
     try expectParseErr("RETURN 1 +");
+}
+
+// ============================================================================
+// 21.3 <token>, <separator>, and <identifier> (SONNY-6564)
+// CANARY: REQ=REQ-GQL-ISO-SEC-21-3-001; FEATURE="ISOIdentifierWords"; ASPECT=ReservedWords; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-11-15
+// SR 18: a <non-delimited identifier> whose case-normal form (SR 17) is a
+// <reserved word> is not an identifier; a <non-reserved word> is one; a
+// <delimited identifier> may be any word. Full lists and every binding
+// position: tests/test_sonny6564_identifier_words.zig. (Geode keeps five
+// reserved words as names, PATH, VALUE, COUNT, AVG and TIMESTAMP, and any
+// word as a label or property name: docs/GQL_COMPLIANCE.md.)
+// ============================================================================
+
+test "ISO 21.3: a non-reserved word is a binding variable (TYPE, PROPERTY, NODE)" {
+    try expectParseOk("MATCH (type:T) SET type.x = 1 RETURN type");
+    try expectParseOk("MATCH (property:T) REMOVE property.x RETURN property");
+    try expectParseOk("MATCH (node)-[edge]->(graph) RETURN node, edge, graph");
+}
+
+test "ISO 21.3: a reserved word is not a binding variable" {
+    try expectParseErr("RETURN MATCH");
+    try expectParseErr("MATCH (match:X) RETURN match");
+    try expectParseErr("MATCH (n) RETURN n AS sum");
+    try expectParseErr("MATCH list = (a)->(b) RETURN 1");
+}
+
+test "ISO 21.3: the case-normal form decides (SR 17)" {
+    try expectParseErr("MATCH (MaTcH:X) RETURN 1");
+}
+
+test "ISO 21.3: a delimited identifier may be a reserved word" {
+    try expectParseOk("MATCH (`match`:X) RETURN `match`");
+    try expectParseOk("MATCH (n) RETURN n AS `sum`");
+}
+
+test "ISO 21.3: a reserved word still begins its own construct" {
+    try expectParseOk("MATCH (n) RETURN count(*), upper(n.s), abs(n.k)");
+}
+
+// ============================================================================
+// 16.11 <graph pattern quantifier> on an edge pattern (Features G036, G060,
+// G061; SONNY-6564)
+// CANARY: REQ=REQ-GQL-ISO-SEC-16-11-001; FEATURE="ISOGraphPatternQuantifier"; ASPECT=QuantifiedEdges; STATUS=TESTED; TEST=test-iso-conformance; OWNER=compliance; UPDATED=2026-11-15
+// ============================================================================
+
+test "ISO 16.11: general quantifier {m,n}" {
+    try expectParseOk("MATCH (a)-[:R]->{1,2}(b) RETURN b");
+}
+
+test "ISO 16.11: fixed quantifier {n}" {
+    try expectParseOk("MATCH (a)-[:R]->{2}(b) RETURN b");
+}
+
+test "ISO 16.11: unbounded quantifiers {m,}, + and *" {
+    try expectParseOk("MATCH (a)-[:R]->{1,}(b) RETURN b");
+    try expectParseOk("MATCH (a)-[:R]->+(b) RETURN b");
+    try expectParseOk("MATCH (a)-[:R]->*(b) RETURN b");
+}
+
+test "ISO 16.11: general quantifier without a lower bound {,n}" {
+    try expectParseOk("MATCH (a)-[:R]->{,3}(b) RETURN b");
+}
+
+test "ISO 16.11: a quantified abbreviated edge pattern" {
+    try expectParseOk("MATCH (a)->{1,2}(b) RETURN b");
+}
+
+test "ISO 16.11 SR 3: the upper bound is above 0 and not below the lower bound" {
+    try expectParseErr("MATCH (a)-[:R]->{0}(b) RETURN b");
+    try expectParseErr("MATCH (a)-[:R]->{3,1}(b) RETURN b");
 }

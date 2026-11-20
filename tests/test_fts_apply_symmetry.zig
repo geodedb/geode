@@ -33,9 +33,11 @@
 //! results" bug; see src/execution/property_mutation.zig:326 and
 //! docs/bugs/2026-06-07-fts-search-returns-zero-results-at-runtime.md).
 //! SYMMETRY therefore means the follower must match the executor's ACTUAL
-//! semantics — new term searchable AND the documented stale-posting residual
-//! present on BOTH sides — not semantics neither side can have with the
-//! pinned engine. The amended test pins exactly that.
+//! semantics. Since SONNY-6421 (executor) and SONNY-6433 (apply) both drop
+//! the old term without delete-then-reindex: replacing indexed text queues
+//! the covering index for a rebuild from the store at the end of the
+//! statement / applied entry. The test pins the new term searchable and the
+//! old one gone on the apply path.
 //!
 //! Harness mirrors tests/test_fts_e2e.zig (real store + real parser + real
 //! executor + real fts-storage engine — no mocks). Unique tokens ("zraven",
@@ -162,7 +164,7 @@ test "raft GNC2 create apply maintains the fulltext index like the executor path
 
     // Setup assertion (NOT the red): the node + property landed in the store.
     const nid = cr.deriveMultiNodeId(9001, 0);
-    const body = store.getNodeProperty(nid, "body") orelse return error.AppliedNodeMissingBody;
+    const body = (try store.getNodePropertyOrError(nid, "body")) orelse return error.AppliedNodeMissingBody;
     try testing.expectEqualStrings("replicated zraven doc", body.String);
 
     // 4. SYMMETRY CONTRACT (red before Task 13): the applied node must be
@@ -184,7 +186,7 @@ test "raft GNC2 create apply maintains the fulltext index like the executor path
     try testing.expectEqual(score_before_replay, try h.searchTopScore("doc_idx", "zraven"));
 }
 
-test "raft GUPD update apply maintains the fulltext index (new term indexed, executor-parity residual)" {
+test "raft GUPD update apply maintains the fulltext index (new term indexed, old term dropped like the executor)" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
     const a = testing.allocator;
@@ -209,63 +211,16 @@ test "raft GUPD update apply maintains the fulltext index (new term indexed, exe
     _ = try cr.applyUpdatePayload(a, store, payload);
 
     // Setup assertion (NOT the red): the store property WAS overwritten.
-    const body = store.getNodeProperty(nid, "body") orelse return error.UpdatedNodeMissingBody;
+    const body = (try store.getNodePropertyOrError(nid, "body")) orelse return error.UpdatedNodeMissingBody;
     try testing.expectEqualStrings("fresh zosprey token", body.String);
 
     // SYMMETRY CONTRACT (red before Task 13): the NEW term must be searchable,
     // exactly as it would be after an executor SET (which fires op `.upsert`).
     try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zosprey"));
-    // EXECUTOR-PARITY RESIDUAL (amended — see file header): the OLD term stays
-    // searchable on BOTH the executor and apply paths. The executor SET
-    // chokepoint deliberately does NOT delete-then-reindex (fts-storage
-    // tombstones are permanent per doc_id — delete+reindex would hide the node
-    // entirely; docs/bugs/2026-06-07-fts-search-returns-zero-results-at-
-    // runtime.md), so a follower dropping the stale posting while the leader
-    // keeps it would itself be divergence. When the engine gains
-    // un-tombstone-on-reindex, flip this expectation to 0 TOGETHER with the
-    // executor path.
-    try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zraven"));
-}
-
-// NOTE (concurrency precondition): the rebuild path exercised here
-// (rebuildAllFulltextIndexes) requires NO concurrent searches —
-// installSnapshotData has NO production caller yet (reportSnapshot wiring
-// pending); before wiring InstallSnapshot into raft_consensus, the
-// facade/engine drop-recreate must be made safe against concurrent
-// QUIC-worker searches (unlocked fts_facades map + engine deinit race).
-test "raft snapshot install rebuilds fulltext indexes from the restored store" {
-    var h = try Harness.init(testing.allocator);
-    defer h.deinit();
-    const a = testing.allocator;
-    const snap_mgr = geode.distributed.raft_snapshot_manager;
-
-    try h.run("CREATE INDEX doc_idx FOR (d:Doc) ON (d.body) USING fulltext");
-
-    // Executor-created doc, live-indexed (sanity-proven).
-    try h.run("CREATE (:Doc {body: 'snapshot zsnaptok doc'})");
-    try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zsnaptok"));
-
-    // Serialize a snapshot CONTAINING the doc.
-    const store = graph_store.getGlobalStore(a);
-    const snap = try snap_mgr.createSnapshotData(a, store);
-    defer a.free(snap.data);
-
-    // Executor-DELETE the doc: live maintenance fires `.delete`, which
-    // PERMANENTLY tombstones the node id in the fts engine.
-    try h.run("MATCH (d:Doc) DETACH DELETE d");
-    try testing.expectEqual(@as(usize, 0), try h.searchCount("doc_idx", "zsnaptok"));
-
-    // Install the snapshot: clearNodes + *NoSave recreate — which never touch
-    // FTS. The node comes back under its ORIGINAL id, so WITHOUT the rebuild
-    // hook the engine's tombstone keeps it invisible forever (red before
-    // Task 13). The rebuild drops + recreates the engine (fresh, tombstone-
-    // free) and re-backfills from the restored store.
-    try snap_mgr.installSnapshotData(a, store, snap.data, snap.checksum);
-
-    // Setup assertion (NOT the contract): the store row was restored.
-    const ids = store.getNodesByLabel(graph_store.DEFAULT_GRAPH_NAME, "Doc") orelse return error.RestoredNodeMissing;
-    try testing.expectEqual(@as(usize, 1), ids.len);
-
-    // SYMMETRY CONTRACT: the restored doc must be searchable again.
-    try testing.expectEqual(@as(usize, 1), try h.searchCount("doc_idx", "zsnaptok"));
+    // EXECUTOR PARITY: the OLD term is no longer found. The executor SET
+    // chokepoint queues the covering index for a statement-end rebuild when
+    // it replaces indexed text (SONNY-6421), and the apply path now does the
+    // same at the end of the applied entry (SONNY-6433); neither deletes and
+    // re-indexes the node (fts-storage tombstones are permanent per doc_id).
+    try testing.expectEqual(@as(usize, 0), try h.searchCount("doc_idx", "zraven"));
 }

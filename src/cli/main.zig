@@ -100,6 +100,8 @@ const server_cli_args = @import("../server/cli_args.zig");
 const protobuf = @import("protobuf");
 const json_lib = @import("json");
 const schema = @import("schema");
+// `geode query --param` values (JSON) as wire values (shared with MCP).
+const param_json = geode.param_json;
 const query_runner = geode.query_runner;
 const query_scope = geode.query_scope;
 const grpc_query_transport = geode.grpc_query_transport;
@@ -133,26 +135,26 @@ extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int
 // const hash = @import("../types/hash.zig"); // Not needed for current implementation
 const crypto = std.crypto;
 
-// CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedBinary; STATUS=TESTED; TEST=tests/test_cli_subprocess_elimination_integration.zig; OWNER=cli; UPDATED=2026-01-15
+// CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedBinary; STATUS=IMPL; TEST=tests/test_cli_subprocess_elimination_integration.zig; OWNER=cli; UPDATED=2026-11-14
 // Direct calls to server and client main functions to eliminate subprocess spawning
 
 // CANARY: REQ=REQ-M11-DRY-002; FEATURE="CodeQuality"; ASPECT=DuplicateCode; STATUS=EXEMPT; OWNER=core; UPDATED=2025-10-17
 // M11: backup_types import removed (#696) — was unused after CLI modularization
 
-// CANARY: REQ=REQ-M4.1-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=UserManagement; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=cli; UPDATED=2026-01-15
+// CANARY: REQ=REQ-M4.1-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=UserManagement; STATUS=IMPL; TEST=tests/test_user_management_comprehensive.zig; OWNER=cli; UPDATED=2026-11-14
 // Phase 4 M4.1: Import user management CLI module
 const user_mgmt_cli = @import("user_mgmt_cli.zig");
 const cmdUser = user_mgmt_cli.cmdUser;
 const cmdRole = user_mgmt_cli.cmdRole;
 
-// CANARY: REQ=REQ-M4.2-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=AuthCommands; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=cli; UPDATED=2026-01-15
+// CANARY: REQ=REQ-M4.2-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=AuthCommands; STATUS=IMPL; TEST=tests/test_user_management_comprehensive.zig; OWNER=cli; UPDATED=2026-11-14
 // Phase 4 M4.2: Import authentication and policy CLI module
 const auth_cli = @import("auth_cli.zig");
 const cmdPolicy = auth_cli.cmdPolicy;
 const cmdGrant = auth_cli.cmdGrant;
 const cmdRevoke = auth_cli.cmdRevoke;
 
-// CANARY: REQ=REQ-M4.3-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=BackupCommands; STATUS=TESTED; TEST=tests/test_cli_integration.zig; OWNER=cli; UPDATED=2026-01-15
+// CANARY: REQ=REQ-M4.3-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=BackupCommands; STATUS=IMPL; TEST=tests/test_cli_integration.zig; OWNER=cli; UPDATED=2026-11-14
 // Phase 4 M4.3: Import backup/restore/migrate CLI module
 const backup_cli = @import("backup_cli.zig");
 const cmdBackup = backup_cli.cmdBackup;
@@ -160,7 +162,7 @@ const cmdRestore = backup_cli.cmdRestore;
 const cmdMigrate = backup_cli.cmdMigrate;
 const execution = geode.execution;
 
-// CANARY: REQ=REQ-M4.4-CLI-DISPATCHER-002; FEATURE="CLI Modularization"; ASPECT=DispatcherIntegration; STATUS=TESTED; TEST=tests/test_cli_integration.zig; OWNER=cli; UPDATED=2026-01-15
+// CANARY: REQ=REQ-M4.4-CLI-DISPATCHER-002; FEATURE="CLI Modularization"; ASPECT=DispatcherIntegration; STATUS=IMPL; TEST=tests/test_cli_integration.zig; OWNER=cli; UPDATED=2026-11-14
 // Phase 4 M4.4: Import CLI dispatcher module for command routing
 const cli_dispatcher = @import("cli_dispatcher.zig");
 const fle_cli = @import("fle_cli.zig");
@@ -170,6 +172,9 @@ const cmdFLE = fle_cli.cmdFLE;
 // Auth chain management CLI module (init, reseal, verify)
 const auth_init_cli = @import("auth_init_cli.zig");
 
+// SONNY-6560: the formats `geode query --format` renders.
+const transport_response = geode.cli_transport_response;
+
 // Import shared types and functions from cli_dispatcher
 const ExitCode = cli_dispatcher.ExitCode;
 const getEnvVar = cli_dispatcher.getEnvVar;
@@ -178,7 +183,7 @@ const windows = if (builtin.os.tag == .windows) std.os.windows else struct {};
 
 const VERSION = build_options.version;
 
-// CANARY: REQ=REQ-REPL-QUIC-002; FEATURE="REPL QUIC Transport"; ASPECT=QuicTransportAdapter; STATUS=TESTED; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=repl; UPDATED=2026-01-15
+// CANARY: REQ=REQ-REPL-QUIC-002; FEATURE="REPL QUIC Transport"; ASPECT=QuicTransportAdapter; STATUS=IMPL; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=repl; UPDATED=2026-11-14
 const repl_quic_transport = geode.repl.quic_transport;
 
 // NOTE: This file uses `catch {}` for stdout/stderr I/O operations.
@@ -243,7 +248,7 @@ fn printServeUsage() void {
     std.debug.print("\nExamples:\n" ++
         "  geode serve\n" ++
         "  geode serve --data-dir /var/lib/geode --listen 0.0.0.0:3141\n" ++
-        "  geode serve --listen 0.0.0.0:3141 --listen-grpc 0.0.0.0:3142\n" ++
+        "  geode serve --listen 0.0.0.0:3141 --listen-grpc 0.0.0.0:50051\n" ++
         "  geode serve --log-level info  # Auth enabled by default\n" ++
         "\n", .{});
 }
@@ -287,12 +292,11 @@ fn printQueryUsage() void {
         "                         On expiry the CLI exits 4 and the statement may still be\n" ++
         "                         executing server-side — raise this for long-running DDL\n" ++
         "                         such as CREATE INDEX over a large label\n" ++
-        "  --retry <count>        Number of retry attempts on failure (default: 0)\n" ++
+        "  --retry <count>        Number of retry attempts on a connection failure before the\n" ++
+        "                         query is sent (default: 0); a query that was sent is never\n" ++
+        "                         sent again\n" ++
         "  --read-only            Reject mutating statements with GQLSTATE 42501,\n" ++
         "                         independent of the authenticated user's role\n" ++
-        "  --begin                Start transaction\n" ++
-        "  --commit               Commit transaction\n" ++
-        "  --rollback             Rollback transaction\n" ++
         "  -U, --user <username>  Authenticate as user\n" ++
         "  -P, --password [pass]  Authentication password (prompted if not provided)\n" ++
         "  --no-saved-session     Don't auto-load saved session token\n" ++
@@ -314,7 +318,7 @@ fn printQueryUsage() void {
         "Authentication:\n" ++
         "  For authenticated servers, provide both --user and --password:\n" ++
         "    geode query --user geode --password yourpassword \"RETURN 1\"\n" ++
-        "    geode query -U geode -P \"RETURN 1\"  # (prompts for password)\n" ++
+        "    geode query \"RETURN 1\" -U geode -P  # -P last: prompts for the password\n" ++
         "\n" ++
         "  Environment variables are NOT used for authentication.\n" ++
         "  The default admin username is 'geode' (not 'admin').\n" ++
@@ -332,7 +336,7 @@ fn printQueryUsage() void {
         "Examples:\n" ++
         "  # Authenticated query (use 'geode' as default admin user)\n" ++
         "  geode query --user geode --password \"$GEODE_DEFAULT_PASSWORD\" \"RETURN 1 AS x\"\n" ++
-        "  geode query -U geode -P \"RETURN 1 AS x\"  # prompts for password\n" ++
+        "  geode query \"RETURN 1 AS x\" -U geode -P  # -P last: prompts for the password\n" ++
         "\n" ++
         "  # Using DSN connection string\n" ++
         "  geode query --dsn quic://localhost:3141 \"RETURN 1 AS x\"\n" ++
@@ -362,6 +366,12 @@ fn printQueryUsage() void {
         "  cat queries.txt | geode query --batch\n" ++
         "  cat queries.txt | geode query --batch -   # explicit stdin marker\n" ++
         "  echo -e 'RETURN 1\\nRETURN 2' | geode query --batch --server localhost:3141\n" ++
+        "\n" ++
+        "  # An explicit transaction: its statements on one connection (--batch)\n" ++
+        "  printf 'BEGIN\\nCREATE (:T)\\nROLLBACK\\n' | geode query --batch\n" ++
+        "\n" ++
+        "An option geode query does not know, a --format it does not render, or a\n" ++
+        "value option without its value exits 2 (usage error).\n" ++
         "\n", .{});
 }
 
@@ -415,108 +425,36 @@ fn printShellUsage() void {
         "\n", .{});
 }
 
-fn printUserUsage() void {
-    std.debug.print("geode user - User management\n" ++
-        "\n" ++
-        "Usage: geode user [options] <command> [args...]\n" ++
-        "\n" ++
-        "Commands:\n" ++
-        "  create <username> <email> [password]    Create a new user\n" ++
-        "  delete <username>                       Delete a user\n" ++
-        "  list                                    List all users\n" ++
-        "  show <username>                         Show user details\n" ++
-        "  enable <username>                       Enable a user\n" ++
-        "  disable <username>                      Disable a user\n" ++
-        "  password <username> [new_password]      Change user password\n" ++
-        "\n" ++
-        "Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
-        "  -U, --user <username>  Authenticate as user\n" ++
-        "  --format <fmt>         Output format: json|table|csv (default: table)\n" ++
-        "  --yes                  Skip confirmation prompts\n" ++
-        "  --no-prompt            Don't prompt for missing values\n" ++
-        "  -h, --help             Show this help\n" ++
-        "\n" ++
-        "Examples:\n" ++
-        "  geode user create alice alice@example.com\n" ++
-        "  geode user list --format json\n" ++
-        "  geode user password alice\n" ++
-        "\n", .{});
-}
-
-fn printUserSubcommandUsage(subcmd: []const u8) void {
-    if (std.mem.eql(u8, subcmd, "create")) {
-        std.debug.print("geode user create - Create a new user\n" ++
-            "\n" ++
-            "Usage: geode user create <username> [email] [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --password <password>  Set initial password\n" ++
-            "  --role <role>          Assign role to user\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "list")) {
-        std.debug.print("geode user list - List all users\n" ++
-            "\n" ++
-            "Usage: geode user list [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --format <fmt>         Output format (json|table|csv)\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "show")) {
-        std.debug.print("geode user show - Show user details\n" ++
-            "\n" ++
-            "Usage: geode user show <username> [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --format <fmt>         Output format (json|table)\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "delete")) {
-        std.debug.print("geode user delete - Delete a user\n" ++
-            "\n" ++
-            "Usage: geode user delete <username> [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --force                Skip confirmation\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    }
-}
-
 fn printAuthUsage() void {
     std.debug.print("geode auth - Authentication commands\n" ++
         "\n" ++
         "Usage: geode auth <command> [args...]\n" ++
         "\n" ++
         "Commands:\n" ++
-        "  login                  Authenticate and optionally save session\n" ++
-        "  logout                 Clear saved credentials\n" ++
-        "  token                  Print saved credentials JSON (if present)\n" ++
+        "  login                  Check a user name and password against the server\n" ++
+        "  logout                 Remove the local saved session file\n" ++
+        "  token                  Print the local saved session file (if present)\n" ++
         "  init                   Bootstrap admin user into graph store (offline)\n" ++
         "  reseal                 Recompute HMAC chain (offline)\n" ++
         "  verify                 Check HMAC chain integrity (offline)\n" ++
+        "  prune-legacy-permissions  Remove the inert permission records the old offline grant stored (offline; --dry-run lists them)\n" ++
         "\n" ++
         "Login Options:\n" ++
         "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
         "  -U, --user <username>  Username\n" ++
         "  --password <password>  Password (prompt if not provided)\n" ++
         "  --password-file <path> Read password from file\n" ++
-        "  --save-session         Save session token to ~/.geode/credentials.json\n" ++
+        "  --save-session         Save a record of the login to ~/.geode/credentials.json\n" ++
         "  --ca-cert <path>       Verify the server's TLS cert against this CA (release-safe)\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "Offline Options (init, reseal, verify):\n" ++
-        "  --data-dir <path>      Data directory (default: GEODE_DATA_DIR env or ./data)\n" ++
+        "  --data-dir <path>      Data directory (default: GEODE_DATA_DIR, else the server's default: $XDG_STATE_HOME/geode or ~/.local/state/geode)\n" ++
         "\n" ++
-        "Session Management:\n" ++
-        "  Sessions are issued by the server and stored in ~/.geode/credentials.json\n" ++
-        "  Use --save-session to persist credentials locally\n" ++
+        "Sessions:\n" ++
+        "  geode servers do not accept session tokens yet (no server keeps the session\n" ++
+        "  ids it issues): a saved session does not log later commands in. Pass -U and\n" ++
+        "  a password (or a DSN) to each command. 'geode auth validate' is not supported.\n" ++
         "\n" ++
         "Examples:\n" ++
         "  geode auth login -U alice --save-session\n" ++
@@ -527,186 +465,6 @@ fn printAuthUsage() void {
         "  geode auth verify --data-dir /var/lib/geode\n" ++
         "\n", .{});
 }
-
-fn printRoleUsage() void {
-    std.debug.print("geode role - Role management commands\n" ++
-        "\n" ++
-        "Usage: geode role <command> [args...]\n" ++
-        "\n" ++
-        "Commands:\n" ++
-        "  create                 Create a new role\n" ++
-        "  list                   List all roles\n" ++
-        "  show                   Show role details\n" ++
-        "  delete                 Delete a role\n" ++
-        "  grant                  Grant permissions to a role\n" ++
-        "  revoke                 Revoke permissions from a role\n" ++
-        "\n" ++
-        "Common Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
-        "  -h, --help             Show this help\n" ++
-        "\n" ++
-        "Examples:\n" ++
-        "  geode role create admin\n" ++
-        "  geode role list\n" ++
-        "  geode role delete obsolete_role\n" ++
-        "\n", .{});
-}
-
-fn printRoleSubcommandUsage(subcmd: []const u8) void {
-    if (std.mem.eql(u8, subcmd, "create")) {
-        std.debug.print("geode role create - Create a new role\n" ++
-            "\n" ++
-            "Usage: geode role create <rolename> [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --description <desc>   Role description\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "list")) {
-        std.debug.print("geode role list - List all roles\n" ++
-            "\n" ++
-            "Usage: geode role list [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --format <fmt>         Output format (json|table|csv)\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "show")) {
-        std.debug.print("geode role show - Show role details\n" ++
-            "\n" ++
-            "Usage: geode role show <rolename> [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --format <fmt>         Output format (json|table)\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "delete")) {
-        std.debug.print("geode role delete - Delete a role\n" ++
-            "\n" ++
-            "Usage: geode role delete <rolename> [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --force                Skip confirmation\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    }
-}
-
-fn printPolicyUsage() void {
-    std.debug.print("geode policy - RLS policy management commands\n" ++
-        "\n" ++
-        "Usage: geode policy <command> [args...]\n" ++
-        "\n" ++
-        "Commands:\n" ++
-        "  create                 Create a new policy\n" ++
-        "  list                   List all policies\n" ++
-        "  show                   Show policy details\n" ++
-        "  delete                 Delete a policy\n" ++
-        "  enable                 Enable a policy\n" ++
-        "  disable                Disable a policy\n" ++
-        "\n" ++
-        "Common Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
-        "  -h, --help             Show this help\n" ++
-        "\n" ++
-        "Examples:\n" ++
-        "  geode policy create read_own_data\n" ++
-        "  geode policy list\n" ++
-        "  geode policy delete outdated_policy\n" ++
-        "\n", .{});
-}
-
-fn printPolicySubcommandUsage(subcmd: []const u8) void {
-    if (std.mem.eql(u8, subcmd, "create")) {
-        std.debug.print("geode policy create - Create a new policy\n" ++
-            "\n" ++
-            "Usage: geode policy create <policyname> [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --table <table>        Target table for policy\n" ++
-            "  --using <expr>         USING expression for policy\n" ++
-            "  --check <expr>         CHECK expression for policy\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "list")) {
-        std.debug.print("geode policy list - List all policies\n" ++
-            "\n" ++
-            "Usage: geode policy list [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --format <fmt>         Output format (json|table|csv)\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "show")) {
-        std.debug.print("geode policy show - Show policy details\n" ++
-            "\n" ++
-            "Usage: geode policy show <policyname> [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --format <fmt>         Output format (json|table)\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    } else if (std.mem.eql(u8, subcmd, "delete")) {
-        std.debug.print("geode policy delete - Delete a policy\n" ++
-            "\n" ++
-            "Usage: geode policy delete <policyname> [options]\n" ++
-            "\n" ++
-            "Options:\n" ++
-            "  --force                Skip confirmation\n" ++
-            "  --server <addr:port>   Server address\n" ++
-            "  -h, --help             Show this help\n" ++
-            "\n", .{});
-    }
-}
-
-fn printGrantUsage() void {
-    std.debug.print("geode grant - Grant permissions\n" ++
-        "\n" ++
-        "Usage: geode grant <permission> TO <role|user> [options]\n" ++
-        "\n" ++
-        "Permissions:\n" ++
-        "  SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER\n" ++
-        "  ALL PRIVILEGES\n" ++
-        "\n" ++
-        "Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
-        "  -h, --help             Show this help\n" ++
-        "\n" ++
-        "Examples:\n" ++
-        "  geode grant SELECT TO role_reader\n" ++
-        "  geode grant ALL PRIVILEGES TO admin\n" ++
-        "  geode grant INSERT,UPDATE TO user_alice\n" ++
-        "\n", .{});
-}
-
-fn printRevokeUsage() void {
-    std.debug.print("geode revoke - Revoke permissions\n" ++
-        "\n" ++
-        "Usage: geode revoke <permission> FROM <role|user> [options]\n" ++
-        "\n" ++
-        "Permissions:\n" ++
-        "  SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER\n" ++
-        "  ALL PRIVILEGES\n" ++
-        "\n" ++
-        "Options:\n" ++
-        "  --server <addr:port>   Server address (default: 127.0.0.1:3141)\n" ++
-        "  -h, --help             Show this help\n" ++
-        "\n" ++
-        "Examples:\n" ++
-        "  geode revoke DELETE FROM role_reader\n" ++
-        "  geode revoke ALL PRIVILEGES FROM ex_employee\n" ++
-        "  geode revoke UPDATE FROM user_bob\n" ++
-        "\n", .{});
-}
-
-// Subcommand implementations
 
 // CANARY: REQ=REQ-LSP-001; FEATURE="Language Server Protocol"; ASPECT=LSPServer; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-10-28
 fn cmdLsp(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -757,16 +515,18 @@ fn cmdLsp(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void 
             addr_raw["tcp://".len..]
         else
             addr_raw;
-        const colon = std.mem.lastIndexOfScalar(u8, stripped, ':') orelse {
-            std.debug.print("Error: --listen address must be host:port (got '{s}')\n", .{addr_raw});
+        // SONNY-6487: the shared grammar -- an IPv6 host is bracketed
+        // (`[::1]:9257`); a bare `::1:9257` is refused, not split on its
+        // last colon.
+        const listen_hp = geode.host_port.split(stripped, null) catch |err| {
+            switch (err) {
+                error.InvalidPort => std.debug.print("Error: --listen '{f}' has no valid port (expected host:port, port 0-65535)\n", .{dsn_credentials.redacted(addr_raw)}),
+                error.InvalidAddress => std.debug.print("Error: --listen address must be host:port or [ipv6]:port (got '{f}')\n", .{dsn_credentials.redacted(addr_raw)}),
+            }
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
-        const host = stripped[0..colon];
-        const port_str = stripped[colon + 1 ..];
-        const port = std.fmt.parseInt(u16, port_str, 10) catch {
-            std.debug.print("Error: invalid port '{s}'\n", .{port_str});
-            std.process.exit(@intFromEnum(ExitCode.usage_error));
-        };
+        const host = listen_hp.host;
+        const port = listen_hp.port;
 
         // Zig 0.16: the net stack is `std.Io.net.*` — `IpAddress.parseIp4`
         // / `parseIp6` build the address and `IpAddress.listen` returns a
@@ -908,80 +668,128 @@ const markActiveQuerySent = query_deadline.markActiveQuerySent;
 const DsnParseResult = struct {
     host_port: []const u8, // "host:port" string
     use_grpc: bool, // true if grpc:// scheme
-    username: ?[]const u8, // embedded credentials
-    password: ?[]const u8, // embedded credentials
-    graph: ?[]const u8 = null, // graph name from URL path
+    /// SONNY-6554/6569: the DSN as `geode.dsn_params.parse` read it (owned;
+    /// `deinit`): credentials (userinfo over query parameter, per field),
+    /// graph (path or `graph=`) and every query parameter, all checked.
+    dsn: geode.dsn_params.Parsed,
+
+    fn username(self: *const DsnParseResult) ?[]const u8 {
+        return self.dsn.config.username;
+    }
+
+    fn password(self: *const DsnParseResult) ?[]const u8 {
+        return self.dsn.config.password;
+    }
+
+    fn graph(self: *const DsnParseResult) ?[]const u8 {
+        return self.dsn.config.graph;
+    }
+
+    fn deinit(self: *DsnParseResult, allocator: std.mem.Allocator) void {
+        self.dsn.deinit(allocator);
+    }
 };
 
-fn parseDsnArg(dsn: []const u8) ?DsnParseResult {
-    // Parse scheme
-    var use_grpc = false;
-    var rest: []const u8 = dsn;
+const dsn_credentials = geode.dsn_credentials;
+/// SONNY-6544: the CLI's one HOME rule (absolute only).
+const home_dir = @import("security/home_dir.zig");
+/// SONNY-6551: the one writer and reader of ~/.geode/credentials.json.
+const session_storage = @import("security/session_storage.zig");
 
-    if (std.mem.startsWith(u8, dsn, "quic://")) {
-        rest = dsn["quic://".len..];
-        use_grpc = false;
-    } else if (std.mem.startsWith(u8, dsn, "grpc://")) {
-        rest = dsn["grpc://".len..];
-        use_grpc = true;
-    } else if (std.mem.startsWith(u8, dsn, "http://") or
-        std.mem.startsWith(u8, dsn, "https://") or
-        std.mem.startsWith(u8, dsn, "tcp://"))
-    {
-        std.debug.print("Error: unsupported DSN scheme. Use quic:// or grpc://\n", .{});
+/// SONNY-6544: the userinfo ends at the LAST '@' of the authority and is
+/// percent-decoded (RFC 3986 §3.2); a first-'@' split cut a password
+/// holding '@' short and made its tail part of the address.
+/// SONNY-6554/6569: parsed by `geode.dsn_params.parse`, the one strict
+/// parser the MCP endpoint uses too: an unknown parameter, a parameter
+/// without `=`, a bad boolean and a malformed or out-of-range number are
+/// refused (the CLI read the credentials and ignored the rest, including
+/// `insecure=true`). The caller applies the parameters (`applyDsnTls`,
+/// `refuseDsnParamsCliCannotApply`).
+fn parseDsnArg(allocator: std.mem.Allocator, dsn: []const u8) ?DsnParseResult {
+    var parsed = geode.dsn_params.parse(allocator, dsn) catch |err| {
+        zig_quic_bridge.printEndpointError(err);
         return null;
-    }
-    // else: no scheme, treat as host:port with QUIC default
-
-    if (rest.len == 0) {
-        std.debug.print("Error: DSN missing host\n", .{});
-        return null;
-    }
-
-    // Strip query parameters (everything after '?')
-    if (std.mem.indexOf(u8, rest, "?")) |qpos| {
-        rest = rest[0..qpos];
-    }
-
-    // Check for embedded credentials: user:pass@host:port
-    var username: ?[]const u8 = null;
-    var password: ?[]const u8 = null;
-    if (std.mem.indexOf(u8, rest, "@")) |at_pos| {
-        const creds = rest[0..at_pos];
-        rest = rest[at_pos + 1 ..];
-        if (std.mem.indexOf(u8, creds, ":")) |colon_pos| {
-            username = creds[0..colon_pos];
-            password = creds[colon_pos + 1 ..];
-        } else {
-            username = creds;
-        }
-    }
-
-    if (rest.len == 0) {
-        std.debug.print("Error: DSN missing host after credentials\n", .{});
-        return null;
-    }
-
-    // Extract graph name from URL path (e.g. host:3141/mygraph -> graph = "mygraph")
-    var graph: ?[]const u8 = null;
-    var host_port = rest;
-    if (std.mem.indexOf(u8, rest, "/")) |slash_idx| {
-        host_port = rest[0..slash_idx];
-        const path = rest[slash_idx + 1 ..];
-        if (path.len > 0) {
-            graph = path;
-        }
-    }
-
-    // Validate host:port - at minimum there should be content
-    // The host_port is passed directly to --server logic which expects "host:port"
-    return DsnParseResult{
-        .host_port = host_port,
-        .use_grpc = use_grpc,
-        .username = username,
-        .password = password,
-        .graph = graph,
     };
+    // The host[:port] as written, for the --server logic.
+    const start = if (dsn_credentials.schemeEnd(dsn)) |sep| sep + 3 else 0;
+    const authority = dsn_credentials.splitAuthority(dsn[start..]) catch |err| {
+        parsed.deinit(allocator);
+        zig_quic_bridge.printEndpointError(err);
+        return null;
+    };
+    return DsnParseResult{
+        .host_port = authority.host_port,
+        .use_grpc = parsed.config.transport == .grpc,
+        .dsn = parsed,
+    };
+}
+
+/// SONNY-6554: the CLI command a DSN is applied to.
+const DsnCommand = enum { query, shell };
+
+/// SONNY-6554: refuse (exit 2) a DSN parameter the CLI cannot apply when
+/// ignoring it would change what is secured (tenant, TLS server name, TLS
+/// off, and for the shell an FLE role), and say which parameters have no
+/// effect here, so none is silently dropped. docs/DSN.md, "Parameters the
+/// CLI applies".
+fn refuseDsnParamsCliCannotApply(parsed: *const DsnParseResult, command: DsnCommand) void {
+    const present = parsed.dsn.present;
+    const cfg = &parsed.dsn.config;
+    const name = @tagName(command);
+    const Refusal = struct { param: geode.dsn_params.Param, what: []const u8, why: []const u8 };
+    const refusals = [_]Refusal{
+        .{ .param = .tenant, .what = "tenant", .why = "the CLI sends no tenant in its HELLO" },
+        .{ .param = .server_name, .what = "server_name", .why = "the CLI verifies the certificate against the host it dials" },
+        .{ .param = .role, .what = "role", .why = "use geode query --role" },
+    };
+    for (refusals) |r| {
+        if (!present.contains(r.param)) continue;
+        if (r.param == .role and command == .query) continue;
+        std.debug.print("Error: the DSN parameter '{s}' is not supported by geode {s}: {s} (docs/DSN.md)\n", .{ r.what, name, r.why });
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+    if (present.contains(.tls) and !cfg.tls) {
+        std.debug.print("Error: the DSN parameter 'tls=false' is not supported by geode {s}: the CLI always uses TLS (docs/DSN.md)\n", .{name});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+    // SONNY-6617 (2): connect_timeout / timeout / timeout_ms are applied
+    // (`dsnTimeoutMs`).
+    const no_effect = [_]geode.dsn_params.Param{ .hello_name, .hello_ver, .conformance, .page_size };
+    for (no_effect) |p| {
+        if (!present.contains(p)) continue;
+        if (p == .page_size and command == .query) continue;
+        std.debug.print("Warning: the DSN parameter '{s}' has no effect in geode {s} (docs/DSN.md){s}\n", .{
+            @tagName(p), name, if (p == .page_size) "; the shell has no page size setting" else "",
+        });
+    }
+}
+
+// CANARY: REQ=REQ-SONNY-6617-CLI-DSN-TIMEOUT; FEATURE="DSN parameters"; ASPECT=CliAppliesDsnTimeout; STATUS=TESTED; TEST=tests/test_sonny6617_cli_dsn_timeout.zig; OWNER=cli; UPDATED=2026-11-15
+/// SONNY-6617 (2): the DSN's timeout in milliseconds (`connect_timeout`
+/// seconds, or `timeout` / `timeout_ms` milliseconds, geode-client-zig's
+/// rule; validated 1..3600000 by `dsn_params.parse`), or null when the DSN
+/// sets none. `geode query` and `geode shell` reported it as "no effect".
+fn dsnTimeoutMs(parsed: *const DsnParseResult) ?u32 {
+    const present = parsed.dsn.present;
+    if (!present.contains(.connect_timeout) and !present.contains(.timeout_ms)) return null;
+    return parsed.dsn.config.timeout_ms;
+}
+
+/// SONNY-6554: a DSN `insecure=true` (`insecure_tls_skip_verify`,
+/// `skip_verify`) is `--insecure-tls-skip-verify`: the same warning, and
+/// the same refusal under production posture. It was ignored. A `ca=`,
+/// `cert=` or `key=` takes the place of --ca-cert, --client-cert or
+/// --client-key.
+fn applyDsnTls(parsed: *const DsnParseResult, insecure: *bool, ca_cert_path: *?[]const u8, client_cert_path: *?[]const u8, client_key_path: *?[]const u8) void {
+    const cfg = &parsed.dsn.config;
+    if (cfg.insecure and !insecure.*) {
+        std.debug.print("Note: the DSN sets insecure=true, which is --insecure-tls-skip-verify\n", .{});
+        insecure.* = true;
+        insecure_tls_gate.enforceOrExit(); // SEC-CLI-01
+    }
+    if (cfg.ca_cert) |c| ca_cert_path.* = c;
+    if (cfg.client_cert) |c| client_cert_path.* = c;
+    if (cfg.client_key) |k| client_key_path.* = k;
 }
 
 fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -1009,7 +817,6 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var use_grpc = false;
     var user: ?[]const u8 = null;
     var password: ?[]const u8 = null;
-    var token: ?[]const u8 = null;
     var query_text: ?[]const u8 = null;
     var timeout_secs: u32 = 30; // Default 30 second timeout (QUIC handshake can be slow)
     var retry_count: u32 = 0; // Default no retries
@@ -1120,6 +927,13 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
             format = argv[i + 1];
+            // CANARY: REQ=REQ-SONNY-6560-QUERY-FORMAT; FEATURE="CliOptions"; ASPECT=UnsupportedFormatRefused; STATUS=TESTED; TEST=tests/test_sonny6560_cli_unsupported_options.zig; OWNER=cli; UPDATED=2026-11-14
+            // SONNY-6560: any value used to be stored, and a format the
+            // renderer does not draw printed nothing and exited 0.
+            if (!transport_response.isSupportedFormat(format)) {
+                std.debug.print("Error: geode query: unsupported --format '{s}' (supported: " ++ transport_response.supported_formats_text ++ ")\n", .{format});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
             i += 1;
         } else if (std.mem.eql(u8, arg, "--insecure-tls-skip-verify")) {
             insecure = true;
@@ -1184,12 +998,11 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 i += 1;
             }
         } else if (std.mem.eql(u8, arg, "--token")) {
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --token requires an API token\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.usage_error));
-            }
-            token = argv[i + 1];
-            i += 1;
+            // SONNY-6554: the token was parsed and never sent. geode servers
+            // authenticate a user name and a password (or a client
+            // certificate) in HELLO, and accept no token.
+            std.debug.print("Error: geode query: option '--token' is not supported by this server: geode servers accept no session or API token; authenticate with -U and --password, or --dsn (docs/USER_AUTH.md)\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         } else if (std.mem.eql(u8, arg, "--param")) {
             if (i + 2 >= argv.len) {
                 std.debug.print("Error: --param requires name and value\n", .{});
@@ -1197,7 +1010,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             }
             const param_name = argv[i + 1];
             const param_value = argv[i + 2];
-            const parsed_value = parseParamValue(allocator, param_value) catch |err| {
+            const parsed_value = param_json.parseParamValue(allocator, param_value) catch |err| {
                 const stderr_fd = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
                 try stderr_fd.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Parameter parse error\n");
                 log.err("parameter parse failed", &.{Attr.string("error", @errorName(err))});
@@ -1244,13 +1057,11 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             };
             i += 1;
         } else if (std.mem.eql(u8, arg, "--log-level")) {
-            // Handle --log-level flag (ignored for query command but must consume its argument)
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --log-level requires a level (debug, info, warn, error)\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.usage_error));
-            }
-            // Just skip the log level value - query command doesn't use it but we need to consume it
-            i += 1;
+            // CANARY: REQ=REQ-SONNY-6586-QUERY-LOG-LEVEL; FEATURE="CliOptions"; ASPECT=LogLevelRefused; STATUS=TESTED; TEST=tests/test_sonny6586_cli_truth.zig; OWNER=cli; UPDATED=2026-11-15
+            // SONNY-6586: accepted and ignored (geode query writes no log;
+            // `geode tenant` forwards it here). It is a geode serve option.
+            std.debug.print("Error: geode query: option '--log-level' is not supported: geode query writes no log (--log-level is a geode serve option)\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         } else if (std.mem.eql(u8, arg, "--role")) {
             // GAP-0271: FLE role for field-level access control
             if (i + 1 >= argv.len) {
@@ -1279,11 +1090,29 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             }
             forward_principal_envelope_hex = argv[i + 1];
             i += 1;
+        } else if (std.mem.eql(u8, arg, "--begin") or std.mem.eql(u8, arg, "--commit") or std.mem.eql(u8, arg, "--rollback")) {
+            // CANARY: REQ=REQ-SONNY-6560-QUERY-TXN-FLAGS; FEATURE="CliOptions"; ASPECT=TransactionFlagsRefused; STATUS=TESTED; TEST=tests/test_sonny6560_cli_unsupported_options.zig; OWNER=cli; UPDATED=2026-11-14
+            // SONNY-6560: --help documented these and nothing read them
+            // (the client that did was deleted in 78c9534e4), so
+            // `--begin --rollback` committed the write. Each geode query
+            // is its own connection; an explicit transaction is BEGIN /
+            // ... / COMMIT or ROLLBACK lines of --batch, on one connection.
+            std.debug.print("Error: geode query: {s} is not supported: run the transaction's statements with --batch, one per line, between BEGIN and COMMIT or ROLLBACK (see geode query --help)\n", .{arg});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         } else if (!std.mem.startsWith(u8, arg, "-") or std.mem.eql(u8, arg, "-")) {
-            // First non-option argument is the query text, or "-" for stdin
-            if (query_text == null) {
-                query_text = arg;
+            // First non-option argument is the query text, or "-" for stdin.
+            // SONNY-6560: a second one used to be dropped without a word.
+            if (query_text != null) {
+                std.debug.print("Error: geode query: unexpected argument '{s}': the query is one argument (quote it), or - for stdin (see geode query --help)\n", .{arg});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
+            query_text = arg;
+        } else {
+            // CANARY: REQ=REQ-SONNY-6560-QUERY-UNKNOWN-OPTION; FEATURE="CliOptions"; ASPECT=UnknownOptionRefused; STATUS=TESTED; TEST=tests/test_sonny6560_cli_unsupported_options.zig; OWNER=cli; UPDATED=2026-11-14
+            // SONNY-6560: an option geode query does not know used to be
+            // skipped (exit 0); `geode serve` refuses one since SONNY-6442.
+            std.debug.print("Error: geode query: unknown option '{s}' (see geode query --help)\n", .{arg});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
     }
 
@@ -1475,60 +1304,6 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         query_text = stdin_allocated;
     }
 
-    // CANARY: REQ=REQ-AUTH-SESSION-009; FEATURE="AutoLoadSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
-
-    // Auto-load saved session credentials if not explicitly provided
-    var loaded_token: ?[]u8 = null;
-    var loaded_username: ?[]u8 = null;
-    defer if (loaded_token) |t| allocator.free(t);
-    defer if (loaded_username) |u| allocator.free(u);
-
-    if (use_saved_session and token == null and user == null) {
-        const session_storage = @import("security/session_storage.zig");
-        var cred_store = session_storage.CredentialStore.init(allocator) catch blk: {
-            // If we can't initialize credential store, just proceed without it
-            break :blk null;
-        };
-
-        if (cred_store) |*store| {
-            defer store.deinit();
-
-            if (try store.loadCredentials()) |creds| {
-                // Verify system fingerprint matches
-                const current_fp = try session_storage.getSystemFingerprint(allocator);
-                defer allocator.free(current_fp);
-
-                // See server_addr resolution at the bottom of cmdQuery: keep
-                // this fallback in sync so the saved-session match check
-                // doesn't fail when the harness is driving the query.
-                const env_server_creds = if (comptime builtin.os.tag != .windows) posixGetenv("GEODE_SERVER_ADDRESS") else null;
-                const server_addr = server orelse (env_server_creds orelse "127.0.0.1:3141");
-                const fp_match = std.mem.eql(u8, creds.system_fingerprint, current_fp);
-                const server_match = std.mem.eql(u8, creds.server, server_addr);
-                const now = compat_timestamp();
-                const age_secs = now - creds.created_at;
-                const max_age_secs: i64 = 3600; // 1 hour
-                const not_expired = age_secs < max_age_secs;
-
-                if (fp_match and server_match and not_expired) {
-                    loaded_token = try allocator.dupe(u8, creds.token);
-                    loaded_username = try allocator.dupe(u8, creds.username);
-                    token = loaded_token;
-                    user = loaded_username;
-                } else if (fp_match and !server_match) {
-                    std.debug.print("Note: saved session is for {s}, not {s}. Use --save-session to update.\n", .{ creds.server, server_addr });
-                } else if (fp_match and !not_expired) {
-                    std.debug.print("Note: saved session expired. Use 'geode auth login' to refresh.\n", .{});
-                }
-                // Free loaded credentials regardless of match
-                allocator.free(creds.token);
-                allocator.free(creds.username);
-                allocator.free(creds.server);
-                allocator.free(creds.system_fingerprint);
-            }
-        }
-    }
-
     // Check for unauthorized user before executing
     if (user != null and std.mem.eql(u8, user.?, "unauthorized")) {
         const stderr_fd = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
@@ -1537,20 +1312,39 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     }
 
     // Issue #417: Apply DSN if provided (takes precedence over --server and --grpc)
+    var dsn_parsed: ?DsnParseResult = null;
+    defer if (dsn_parsed) |*p| p.deinit(allocator);
     if (dsn) |dsn_str| {
-        const parsed = parseDsnArg(dsn_str) orelse {
+        dsn_parsed = parseDsnArg(allocator, dsn_str) orelse {
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
+        const parsed = &dsn_parsed.?;
+        refuseDsnParamsCliCannotApply(parsed, .query);
         server = parsed.host_port;
         use_grpc = parsed.use_grpc;
         // DSN credentials override -U/-P flags
-        if (parsed.username) |u| user = u;
-        if (parsed.password) |p| password = p;
+        if (parsed.username()) |u| user = u;
+        if (parsed.password()) |p| password = p;
         // DSN graph path overrides --graph flag; server handles via HELLO (no USE GRAPH prepend)
-        if (parsed.graph) |g| {
+        if (parsed.graph()) |g| {
             graph = g;
             graph_for_prepend = null; // DSN graph handled by HELLO, not USE GRAPH prepend
         }
+        // SONNY-6554: the other parameters the CLI can apply (docs/DSN.md).
+        applyDsnTls(parsed, &insecure, &ca_cert_path, &client_cert_path, &client_key_path);
+        if (parsed.dsn.present.contains(.page_size)) page_size = parsed.dsn.config.page_size;
+        if (parsed.dsn.config.role) |r| role = r;
+        // SONNY-6617 (2): the DSN timeout takes the place of --timeout
+        // (whole seconds, rounded up); it bounds the QUIC handshake too.
+        if (dsnTimeoutMs(parsed)) |ms| timeout_secs = (ms + std.time.ms_per_s - 1) / std.time.ms_per_s;
+    }
+
+    // CANARY: REQ=REQ-AUTH-SESSION-009; FEATURE="AutoLoadSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/test_sonny6551_saved_session.zig; OWNER=security; UPDATED=2026-11-14
+    // SONNY-6551: after --dsn, so the saved session is matched against the
+    // server this query really goes to.
+    if (use_saved_session and user == null) {
+        const env_server_creds = if (comptime builtin.os.tag != .windows) posixGetenv("GEODE_SERVER_ADDRESS") else null;
+        noteSavedSession(allocator, server orelse (env_server_creds orelse "127.0.0.1:3141"));
     }
 
     // Determine execution mode based on --server flag.  Resolution order:
@@ -1637,6 +1431,14 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 );
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             },
+            // SONNY-6377: a chunk that was sent and got no answer stops the
+            // run (executeChunkedQueries said why). A client timeout exits
+            // timeout_error, as a single query's does.
+            error.ChunkTimedOut => std.process.exit(@intFromEnum(ExitCode.timeout_error)),
+            error.ChunkOutcomeUnknown => std.process.exit(@intFromEnum(ExitCode.general_error)),
+            // SONNY-6436: the QUIC retry's connection failed before a
+            // statement was sent; the run stopped there.
+            error.ChunkRetryConnectionLost => std.process.exit(@intFromEnum(ExitCode.general_error)),
             else => return err,
         };
         if (chunk_errors > 0) std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -1735,6 +1537,13 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     }
     startDeadlineWatchdogTask(allocator, timeout_secs, &query_deadline_state);
 
+    // CANARY: REQ=REQ-SONNY-6369-QUERY-EXIT-CODE; FEATURE="QueryExitCode"; ASPECT=FailedQueryExitsNonZero; STATUS=TESTED; TEST=tests/test_sonny6369_query_exit_and_auth_residuals.zig; OWNER=cli; UPDATED=2026-11-12
+    // SONNY-6369: a query the server answers with an error (a non-00000
+    // GQLSTATUS) exits 1, as --batch and --file do. It exited 0: only a
+    // transport failure was visible in the exit code, so a script could not
+    // tell a failed query from a successful one.
+    var query_failed = false;
+
     // Execute query via QUIC or gRPC connection
     params_owned = false;
     if (use_grpc) {
@@ -1751,6 +1560,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             .page_size = page_size,
             .params = params,
             .read_only = read_only,
+            .failed_out = &query_failed,
         });
     } else {
         // GAP-0113: Execute query via QUIC connection with optional certificate verification
@@ -1774,6 +1584,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             .role = role,
             .principal_envelope_bytes = forward_envelope_bytes,
             .read_only = read_only,
+            .failed_out = &query_failed,
         }) catch |err| {
             if (err == error.AuthenticationFailed)
                 std.process.exit(@intFromEnum(ExitCode.auth_error));
@@ -1800,102 +1611,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
     }
-}
-
-/// Escape a string for safe embedding in JSON
-fn escapeJsonString(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
-    // Count how many characters need escaping to allocate correct size
-    var escape_count: usize = 0;
-    for (input) |c| {
-        switch (c) {
-            '"', '\\', '\n', '\r', '\t' => escape_count += 1,
-            else => {},
-        }
-    }
-
-    // If no escaping needed, just duplicate the string
-    if (escape_count == 0) {
-        return allocator.dupe(u8, input);
-    }
-
-    // Allocate buffer for escaped string
-    const result = try allocator.alloc(u8, input.len + escape_count);
-    var write_idx: usize = 0;
-
-    for (input) |c| {
-        switch (c) {
-            '"' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = '"';
-                write_idx += 2;
-            },
-            '\\' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = '\\';
-                write_idx += 2;
-            },
-            '\n' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = 'n';
-                write_idx += 2;
-            },
-            '\r' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = 'r';
-                write_idx += 2;
-            },
-            '\t' => {
-                result[write_idx] = '\\';
-                result[write_idx + 1] = 't';
-                write_idx += 2;
-            },
-            else => {
-                result[write_idx] = c;
-                write_idx += 1;
-            },
-        }
-    }
-
-    return result;
-}
-
-const PARAM_MAX_SIZE: usize = 1 * 1024 * 1024; // 1 MB max param payload
-const PARAM_MAX_DEPTH: usize = 64;
-
-fn parseParamValue(allocator: std.mem.Allocator, input: []const u8) !schema.Value {
-    if (input.len > PARAM_MAX_SIZE) return error.ParamsTooLarge;
-    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, input, .{});
-    defer parsed.deinit();
-    return jsonToProtoValue(allocator, parsed.value, 0);
-}
-
-fn jsonToProtoValue(allocator: std.mem.Allocator, value: std.json.Value, depth: usize) !schema.Value {
-    if (depth > PARAM_MAX_DEPTH) return error.ParamsTooDeep;
-    return switch (value) {
-        .null => .{ .kind = .{ .null_val = .{} } },
-        .bool => |b| .{ .kind = .{ .bool_val = b } },
-        .integer => |i| .{ .kind = .{ .int_val = .{ .value = i, .kind = .INT } } },
-        .float => |f| .{ .kind = .{ .double_val = .{ .value = f, .kind = .DOUBLE } } },
-        .number_string => |s| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, s), .kind = .STRING } } },
-        .string => |s| .{ .kind = .{ .string_val = .{ .value = try allocator.dupe(u8, s), .kind = .STRING } } },
-        .array => |arr| blk: {
-            var values = std.ArrayList(schema.Value).initCapacity(allocator, arr.items.len) catch return error.OutOfMemory;
-            for (arr.items) |item| {
-                try values.append(allocator, try jsonToProtoValue(allocator, item, depth + 1));
-            }
-            break :blk .{ .kind = .{ .list_val = .{ .values = values } } };
-        },
-        .object => |obj| blk: {
-            var entries = std.ArrayList(schema.MapEntry).initCapacity(allocator, obj.count()) catch return error.OutOfMemory;
-            var it = obj.iterator();
-            while (it.next()) |entry| {
-                const key = try allocator.dupe(u8, entry.key_ptr.*);
-                const val = try jsonToProtoValue(allocator, entry.value_ptr.*, depth + 1);
-                try entries.append(allocator, .{ .key = key, .value = val });
-            }
-            break :blk .{ .kind = .{ .map_val = .{ .entries = entries } } };
-        },
-    };
+    if (query_failed) std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
 // GAP-0113 SECURITY FIX: Add TLS certificate verification support
@@ -1933,6 +1649,11 @@ const QuicQueryOptions = struct {
     // never see it.  When set, the render verdict is written here so a caller
     // (the chunked driver) can react to a rejected program.
     failed_out: ?*bool = null,
+    // CANARY: REQ=REQ-SONNY-6377-QUERY-NO-RESEND; FEATURE="ChunkedExecution"; ASPECT=SentSignal; STATUS=TESTED; TEST=tests/test_sonny6377_query_no_resend.zig; OWNER=cli; UPDATED=2026-11-12
+    // SONNY-6377: set true once the Execute request has been handed to the
+    // transport. After that the server may have applied the statement, so an
+    // error is an unknown outcome and the statement must never be sent again.
+    sent_out: ?*bool = null,
 };
 
 const GrpcQueryOptions = struct {
@@ -1952,6 +1673,12 @@ const GrpcQueryOptions = struct {
     read_only: bool = false,
     // 2c: see QuicQueryOptions.failed_out — same contract on the gRPC path.
     failed_out: ?*bool = null,
+    // SONNY-6377: see QuicQueryOptions.sent_out.
+    sent_out: ?*bool = null,
+    // SONNY-6384 item 6: a timeout, or a failure after the query was sent, is
+    // returned (after its message) instead of exiting the process, so the
+    // chunked driver stops the run and still prints its summary.
+    return_unknown_outcome: bool = false,
 };
 
 /// Issue #424: Set SO_RCVTIMEO and SO_SNDTIMEO on a TCP socket so that
@@ -1992,13 +1719,14 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
     };
     const stderr = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
 
-    var addr_port = std.mem.splitSequence(u8, server_addr, ":");
-    const host = addr_port.next() orelse "127.0.0.1";
-    const port_str = addr_port.next() orelse "3142";
-    const port = std.fmt.parseInt(u16, port_str, 10) catch {
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error: Invalid port number in server address\n") catch {};
+    // SONNY-6487: the shared grammar (`[ipv6]:port`); this split on the
+    // first colon and ignored anything after the port.
+    const server_hp = zig_quic_bridge.parseHostPort(server_addr, 3142) catch |err| {
+        printInvalidServerAddress(stderr, err);
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
+    const host = server_hp.host;
+    const port = server_hp.port;
 
     var attempts: u32 = 0;
     // Match QUIC's behavior for rapid sequential CLI usage: allow at least
@@ -2006,6 +1734,12 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
     // fail whole specs unless it persists across retries.
     const max_attempts = @max(retry_count + 1, 3);
     var last_error: ?[]const u8 = null;
+    // SONNY-6377: once the ExecuteRequest has been handed to the transport,
+    // the server may have applied it; see the post-send branch below.
+    var query_sent = false;
+    defer if (opts.sent_out) |out| {
+        out.* = query_sent;
+    };
 
     while (attempts < max_attempts) : (attempts += 1) {
         // Connect via raw TCP
@@ -2026,7 +1760,7 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
 
         // Execute query on the gRPC connection
         params_transferred = true;
-        return executeQueryOnGrpc(allocator, tcp_stream, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, opts.read_only, opts.failed_out) catch |err| {
+        return executeQueryOnGrpc(allocator, tcp_stream, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, opts.read_only, opts.failed_out, &query_sent) catch |err| {
             // CANARY: REQ=REQ-CLI-TIMEOUT-EXIT-CODE-002; FEATURE="QueryTimeoutClassification"; ASPECT=GrpcTransportTimeout; STATUS=TESTED; TEST=tests/test_cli_timeout_exit_code.zig; OWNER=cli; UPDATED=2026-09-01
             // CANARY: REQ=REQ-CLI-TIMEOUT-NO-RESUBMIT-001; FEATURE="QueryTimeoutClassification"; ASPECT=NoSilentResubmission; STATUS=TESTED; TEST=tests/test_cli_timeout_exit_code.zig; OWNER=cli; UPDATED=2026-09-01
             //
@@ -2056,6 +1790,7 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
                     .{timeout_secs},
                 ) catch "Error: query timed out; the statement may still be executing on the server\n";
                 stderr.writeStreamingAll(io_t, timeout_msg) catch {};
+                if (opts.return_unknown_outcome) return error.Timeout;
                 std.process.exit(@intFromEnum(ExitCode.timeout_error));
             }
             // REQ-TRANSPORT-GRPC-SHUTDOWN-002: the server closed the stream
@@ -2071,6 +1806,25 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
                     io_t,
                     "Error: the server closed the connection before the query completed; it may have been shutting down, and the statement may or may not have executed\n",
                 ) catch {};
+                if (opts.return_unknown_outcome) return err;
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            }
+            // CANARY: REQ=REQ-SONNY-6377-QUERY-NO-RESEND; FEATURE="ChunkedExecution"; ASPECT=GrpcNoRetryAfterSend; STATUS=TESTED; TEST=tests/test_sonny6377_query_no_resend.zig; OWNER=cli; UPDATED=2026-11-12
+            // SONNY-6377: any other failure after the ExecuteRequest was sent
+            // (a reset connection, a broken pipe) is TERMINAL too. The retry
+            // below re-sent the query on a fresh connection, so a CREATE the
+            // server had applied ran again on every attempt (up to three
+            // times). Only a failure before the request was sent is retried.
+            if (query_sent) {
+                const io_t = std.Io.Threaded.global_single_threaded.io();
+                var sent_msg_buf: [256]u8 = undefined;
+                const sent_msg = std.fmt.bufPrint(
+                    &sent_msg_buf,
+                    "Error: the connection failed after the query was sent ({t}); the statement may or may not have executed, so it was not sent again\n",
+                    .{err},
+                ) catch "Error: the connection failed after the query was sent; the statement may or may not have executed, so it was not sent again\n";
+                stderr.writeStreamingAll(io_t, sent_msg) catch {};
+                if (opts.return_unknown_outcome) return err;
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
             last_error = @errorName(err);
@@ -2161,6 +1915,7 @@ fn executeQueryOnGrpc(
     timeout_secs: u32,
     read_only: bool,
     failed_out: ?*bool,
+    sent_out: *bool,
 ) !void {
     // Issue #424: timeout_secs is now enforced at two levels:
     // 1. TCP socket SO_RCVTIMEO/SO_SNDTIMEO set by the caller (executeGrpcQuery)
@@ -2180,8 +1935,7 @@ fn executeQueryOnGrpc(
         },
         .{ .on_progress = touchActiveQueryDeadlineWatchdog },
     ) catch |err| {
-        const msg = std.fmt.allocPrint(allocator, "Error: gRPC handshake failed: {}\n", .{err}) catch "Error: gRPC handshake failed\n";
-        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
+        writeErrorFmt(allocator, stderr_handle, "Error: gRPC handshake failed: {}\n", .{err}, "Error: gRPC handshake failed\n");
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer {
@@ -2190,8 +1944,7 @@ fn executeQueryOnGrpc(
     }
 
     if (!hello_resp.success) {
-        const err_msg = std.fmt.allocPrint(allocator, "Error: {s}\n\n", .{hello_resp.error_message}) catch "Error: Authentication failed\n\n";
-        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+        writeErrorFmt(allocator, stderr_handle, "Error: {s}\n\n", .{hello_resp.error_message}, "Error: Authentication failed\n\n");
         std.process.exit(@intFromEnum(ExitCode.auth_error));
     }
 
@@ -2236,6 +1989,9 @@ fn executeQueryOnGrpc(
     // an exec-phase timeout (exit 4), not a connect-phase failure (exit 1).
     // Mirrors the QUIC path so the watchdog classifies both transports alike.
     markActiveQuerySent();
+    // SONNY-6377: marked before the write, since a partly written request may
+    // already have reached the server.
+    sent_out.* = true;
 
     var result = try query_runner.collectQueryWithTransport(allocator, &grpc_transport, .{
         .session_id = session_id,
@@ -2305,13 +2061,14 @@ fn executeBatchQueries(
     }
 
     // Parse server address
-    var addr_port = std.mem.splitSequence(u8, server_addr, ":");
-    const host = addr_port.next() orelse "127.0.0.1";
-    const port_str = addr_port.next() orelse "3141";
-    const port = std.fmt.parseInt(u16, port_str, 10) catch {
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error: Invalid port number in server address\n") catch {};
+    // SONNY-6487: the shared grammar (`[ipv6]:port`); this split on the
+    // first colon and ignored anything after the port.
+    const server_hp = zig_quic_bridge.parseHostPort(server_addr, 3141) catch |err| {
+        printInvalidServerAddress(stderr, err);
         return error.InvalidAddress;
     };
+    const host = server_hp.host;
+    const port = server_hp.port;
 
     // Single QUIC connection for all queries via the shared Zig client library.
     // GAP-0260/0263: retry the initial connect a few times. Under CPU contention
@@ -2321,7 +2078,7 @@ fn executeBatchQueries(
     const max_connect_attempts: usize = 3;
     var connect_attempt: usize = 0;
     var raw_client = while (true) : (connect_attempt += 1) {
-        var c = zig_quic_bridge.initClient(
+        var c = zig_quic_bridge.initClientWithOptions(
             allocator,
             host,
             port,
@@ -2333,17 +2090,16 @@ fn executeBatchQueries(
             },
             null,
             null,
+            .{ .timeout_ms = zig_quic_bridge.timeoutMsFromSeconds(timeout_secs) },
         ) catch |err| {
-            const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to initialize client: {}\n", .{err}) catch "Error: Failed to initialize client\n";
-            stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+            writeErrorFmt(allocator, stderr, "Error: Failed to initialize client: {}\n", .{err}, "Error: Failed to initialize client\n");
             return error.ConnectionFailed;
         };
         c.connect() catch |err| {
             c.deinit();
             const name = @errorName(err);
             if (connect_attempt + 1 >= max_connect_attempts or std.mem.indexOf(u8, name, "ConnectionRefused") != null) {
-                const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to connect: {s}\n", .{name}) catch "Error: Failed to connect\n";
-                stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+                writeErrorFmt(allocator, stderr, "Error: Failed to connect: {s}\n", .{name}, "Error: Failed to connect\n");
                 return error.ConnectionFailed;
             }
             compat_sleepNs(50 * std.time.ns_per_ms);
@@ -2393,6 +2149,7 @@ fn executeBatchQueries(
             timeout_secs,
             null,
             read_only,
+            null,
         ) catch |err| {
             // A transport failure kills the shared stream, so continuing
             // would only produce a cascade of misleading timeouts. Report
@@ -2618,8 +2375,13 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
         // 2c: the server answers a rejected program with a NORMAL response
         // carrying a GQLSTATE, so `catch |err|` alone can never see it.  The
         // render verdict comes back through `failed_out`; a Zig (transport)
-        // error still counts as a failed chunk.
+        // error before the chunk was sent still counts as a failed chunk
+        // (after it was sent, see SONNY-6377 below).
         var chunk_failed = false;
+        // SONNY-6377: whether the chunk's ExecuteRequest was handed to the
+        // transport; a Zig error after that is an unknown outcome.
+        var chunk_sent = false;
+        var unknown_outcome: ?anyerror = null;
         const empty_params = std.ArrayList(schema.Param).empty;
         if (opts.use_grpc) {
             executeGrpcQuery(allocator, .{
@@ -2635,9 +2397,12 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 .page_size = default_stream_page_size,
                 .params = empty_params,
                 .failed_out = &chunk_failed,
+                .sent_out = &chunk_sent,
+                .return_unknown_outcome = true,
             }) catch |err| {
                 std.debug.print("Error executing chunk: {}\n", .{err});
                 chunk_failed = true;
+                if (chunk_sent) unknown_outcome = err;
             };
         } else {
             executeQuicQuery(allocator, .{
@@ -2658,10 +2423,34 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 .params = empty_params,
                 .role = opts.role,
                 .failed_out = &chunk_failed,
+                .sent_out = &chunk_sent,
             }) catch |err| {
                 std.debug.print("Error executing chunk: {}\n", .{err});
                 chunk_failed = true;
+                if (chunk_sent) unknown_outcome = err;
             };
+        }
+
+        // CANARY: REQ=REQ-SONNY-6377-QUERY-NO-RESEND; FEATURE="ChunkedExecution"; ASPECT=NoReplayAfterSend; STATUS=TESTED; TEST=tests/test_sonny6377_query_no_resend.zig; OWNER=cli; UPDATED=2026-11-12
+        // SONNY-6377: a chunk that was sent and got no answer (a client
+        // timeout, a dropped connection) is NOT a rejected chunk. The server
+        // may still be applying it, or may have applied it: replaying its
+        // statements one by one applied every one of them twice (400 CREATEs
+        // became 800). It is not sent again, and the run stops, since a later
+        // chunk may depend on this one.
+        if (unknown_outcome) |err| {
+            error_count += 1;
+            var not_run: usize = 0;
+            for (chunk_end..statements.len) |idx| {
+                if (!txn_strip.items[idx]) not_run += 1;
+            }
+            std.debug.print(
+                "Error: chunk {d}-{d} got no answer after it was sent ({t}); its statements may still be executing on the server or may have been applied, so they were not sent again.\n" ++
+                    "Stopping: the {d} statement(s) after it were not executed.\n",
+                .{ chunk_start + 1, chunk_end, err, not_run },
+            );
+            printChunkedSummary(executed, error_count);
+            return if (err == error.Timeout) error.ChunkTimedOut else error.ChunkOutcomeUnknown;
         }
 
         if (!chunk_failed) {
@@ -2683,30 +2472,81 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 chunk_end,
                 chunk_use_graph,
             ) catch |err| {
-                std.debug.print("Error retrying chunk statement-by-statement: {}\n", .{err});
+                // CANARY: REQ=REQ-SONNY-6447-QUIC-RETRY-CONNECT-STOPS; FEATURE="ChunkedExecution"; ASPECT=RetryStartFailureStops; STATUS=TESTED; TEST=tests/test_sonny6447_quic_retry_connect_stops.zig; OWNER=cli; UPDATED=2026-11-12
+                // SONNY-6447: the retry could not start (its connection or
+                // HELLO failed): none of the chunk's statements ran, and a
+                // later chunk may depend on them. The run stops with the
+                // summary, as for every other transport failure; it went on
+                // with the next chunk.
                 error_count += 1;
-                chunk_start = chunk_end;
-                continue;
+                var not_run: usize = 0;
+                for (chunk_start..statements.len) |idx| {
+                    if (!txn_strip.items[idx]) not_run += 1;
+                }
+                std.debug.print(
+                    "Error: the statement-by-statement retry of chunk {d}-{d} could not start ({t}); its statements were not executed.\n" ++
+                        "Stopping: the {d} statement(s) from it on were not executed.\n",
+                    .{ chunk_start + 1, chunk_end, err, not_run },
+                );
+                printChunkedSummary(executed, error_count);
+                return error.ChunkRetryConnectionLost;
             };
             executed += outcome.succeeded;
             error_count += outcome.failed;
+            // CANARY: REQ=REQ-SONNY-6425-GRPC-RETRY-SUMMARY; FEATURE="ChunkedExecution"; ASPECT=RetryStopsWithSummary; STATUS=TESTED; TEST=tests/test_sonny6425_grpc_retry_summary.zig; OWNER=cli; UPDATED=2026-11-12
+            // SONNY-6425 item 6: a retried statement that was sent and got no
+            // answer stops the run, as a chunk does (SONNY-6377 above).
+            if (outcome.unknown) |u| {
+                var not_run: usize = 0;
+                for (u.stmt_idx + 1..statements.len) |idx| {
+                    if (!txn_strip.items[idx]) not_run += 1;
+                }
+                if (!u.sent) {
+                    // SONNY-6436: the QUIC retry's connection failed before
+                    // the statement went out; nothing is outstanding, but the
+                    // retry cannot go on, and the run stops as for a lost
+                    // answer.
+                    std.debug.print(
+                        "Error: the retry's connection failed before statement {d} was sent ({t}); it was not executed.\n" ++
+                            "Stopping: the {d} statement(s) after it were not executed.\n",
+                        .{ u.stmt_idx + 1, u.err, not_run },
+                    );
+                    printChunkedSummary(executed, error_count);
+                    return error.ChunkRetryConnectionLost;
+                }
+                std.debug.print(
+                    "Error: statement {d} got no answer after it was sent ({t}); it may still be executing on the server or may have been applied, so it was not sent again.\n" ++
+                        "Stopping: the {d} statement(s) after it were not executed.\n",
+                    .{ u.stmt_idx + 1, u.err, not_run },
+                );
+                printChunkedSummary(executed, error_count);
+                return if (u.err == error.Timeout) error.ChunkTimedOut else error.ChunkOutcomeUnknown;
+            }
         }
         chunk_start = chunk_end;
     }
 
-    // Print summary
+    printChunkedSummary(executed, error_count);
+    return error_count;
+}
+
+fn printChunkedSummary(executed: usize, error_count: usize) void {
     std.debug.print("\nChunked execution complete:\n", .{});
     std.debug.print("  Statements executed: {d}\n", .{executed});
     if (error_count > 0) {
         std.debug.print("  Errors: {d}\n", .{error_count});
     }
-
-    return error_count;
 }
 
 const ChunkRetryOutcome = struct {
     succeeded: usize = 0,
     failed: usize = 0,
+    /// SONNY-6425 item 6: a retried statement that got no answer after it
+    /// was sent (a client timeout, a dropped connection): its error, and its
+    /// index. The retry stopped there; the caller stops the run.
+    /// SONNY-6436: over QUIC also a transport failure before the statement
+    /// was sent (`sent` false): the retry's one connection is gone.
+    unknown: ?struct { err: anyerror, stmt_idx: usize, sent: bool = true } = null,
 };
 
 // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-009; FEATURE="ChunkedExecution"; ASPECT=StatementFallback; STATUS=TESTED; TEST=tests/test_cli_file_chunked.zig; OWNER=cli; UPDATED=2026-08-31
@@ -2773,6 +2613,10 @@ fn retryChunkStatementByStatement(
             if (isUseGraphStmt(trimmed)) current_use_graph = stmt;
 
             var stmt_failed = false;
+            // SONNY-6425 item 6: as the chunk itself (SONNY-6384), a timeout
+            // or a failure after the statement was sent is returned, not an
+            // exit of the process, so the run stops with its summary.
+            var stmt_sent = false;
             const empty_params = std.ArrayList(schema.Param).empty;
             executeGrpcQuery(allocator, .{
                 .server_addr = opts.server_addr,
@@ -2787,9 +2631,16 @@ fn retryChunkStatementByStatement(
                 .page_size = default_stream_page_size,
                 .params = empty_params,
                 .failed_out = &stmt_failed,
+                .sent_out = &stmt_sent,
+                .return_unknown_outcome = true,
             }) catch |err| {
                 std.debug.print("Error executing statement {d}: {}\n", .{ idx + 1, err });
                 stmt_failed = true;
+                if (stmt_sent) {
+                    outcome.failed += 1;
+                    outcome.unknown = .{ .err = err, .stmt_idx = idx };
+                    return outcome;
+                }
             };
             if (stmt_failed) outcome.failed += 1 else outcome.succeeded += 1;
         }
@@ -2797,12 +2648,12 @@ fn retryChunkStatementByStatement(
     }
 
     // QUIC: one connection, one HELLO, one stream for the whole retry.
-    var addr_port = std.mem.splitSequence(u8, opts.server_addr, ":");
-    const host = addr_port.next() orelse "127.0.0.1";
-    const port_str = addr_port.next() orelse "3141";
-    const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidAddress;
+    // SONNY-6487: the shared grammar (`[ipv6]:port`).
+    const server_hp = zig_quic_bridge.parseHostPort(opts.server_addr, 3141) catch return error.InvalidAddress;
+    const host = server_hp.host;
+    const port = server_hp.port;
 
-    var raw_client = zig_quic_bridge.initClient(
+    var raw_client = zig_quic_bridge.initClientWithOptions(
         allocator,
         host,
         port,
@@ -2814,6 +2665,7 @@ fn retryChunkStatementByStatement(
         },
         null,
         null,
+        .{ .timeout_ms = zig_quic_bridge.timeoutMsFromSeconds(opts.timeout_secs) },
     ) catch return error.ConnectionFailed;
     defer raw_client.deinit();
     raw_client.connect() catch return error.ConnectionFailed;
@@ -2840,6 +2692,7 @@ fn retryChunkStatementByStatement(
         if (isUseGraphStmt(trimmed)) current_use_graph = stmt;
 
         const empty_params = std.ArrayList(schema.Param).empty;
+        var stmt_sent = false;
         const stmt_failed = runQueryOnHelloedStream(
             allocator,
             &raw_client,
@@ -2852,6 +2705,7 @@ fn retryChunkStatementByStatement(
             opts.timeout_secs,
             null,
             false,
+            &stmt_sent,
         ) catch |err| {
             // A transport failure kills the shared stream; continuing would
             // only produce a cascade of misleading timeouts.
@@ -2859,7 +2713,14 @@ fn retryChunkStatementByStatement(
                 "Error: chunk retry aborted at statement {d}: {t}\n",
                 .{ idx + 1, err },
             );
-            return err;
+            // CANARY: REQ=REQ-SONNY-6436-QUIC-RETRY-STOPS; FEATURE="ChunkedExecution"; ASPECT=QuicRetryStopsWithSummary; STATUS=TESTED; TEST=tests/test_sonny6436_quic_retry_stops.zig; OWNER=cli; UPDATED=2026-11-12
+            // SONNY-6436: and the run stops there, with the summary, as the
+            // gRPC branch's does (SONNY-6425): a statement that was sent may
+            // still be running or have been applied. The error used to be
+            // returned, and the caller went on with the next chunk.
+            outcome.failed += 1;
+            outcome.unknown = .{ .err = err, .stmt_idx = idx, .sent = stmt_sent };
+            return outcome;
         };
         if (stmt_failed) outcome.failed += 1 else outcome.succeeded += 1;
     }
@@ -2946,13 +2807,14 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     };
     const stderr = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
 
-    var addr_port = std.mem.splitSequence(u8, server_addr, ":");
-    const host = addr_port.next() orelse "127.0.0.1";
-    const port_str = addr_port.next() orelse "3141";
-    const port = std.fmt.parseInt(u16, port_str, 10) catch {
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error: Invalid port number in server address\n") catch {};
+    // SONNY-6487: the shared grammar (`[ipv6]:port`); this split on the
+    // first colon and ignored anything after the port.
+    const server_hp = zig_quic_bridge.parseHostPort(server_addr, 3141) catch |err| {
+        printInvalidServerAddress(stderr, err);
         return error.InvalidAddress;
     };
+    const host = server_hp.host;
+    const port = server_hp.port;
 
     // Validate mutual TLS: if any client cert/key provided, both must be provided
     if ((client_cert_path != null) != (client_key_path != null)) {
@@ -2967,9 +2829,13 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     // failures after first retry under rapid connection cycling.
     const max_attempts = @max(retry_count + 1, 3);
     var last_error: ?[]const u8 = null;
+    var query_sent = false;
+    defer if (opts.sent_out) |out| {
+        out.* = query_sent;
+    };
 
     while (attempts < max_attempts) : (attempts += 1) {
-        var raw_client = zig_quic_bridge.initClient(
+        var raw_client = zig_quic_bridge.initClientWithOptions(
             allocator,
             host,
             port,
@@ -2981,6 +2847,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
             },
             null,
             null,
+            .{ .timeout_ms = zig_quic_bridge.timeoutMsFromSeconds(opts.timeout_secs) },
         ) catch |err| {
             last_error = @errorName(err);
             break;
@@ -2999,12 +2866,15 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
         };
 
         params_transferred = true;
-        executeQueryOnConnection(allocator, &raw_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, fle_role, principal_envelope_bytes, read_only, opts.failed_out) catch |err| {
+        executeQueryOnConnection(allocator, &raw_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, fle_role, principal_envelope_bytes, read_only, opts.failed_out, &query_sent) catch |err| {
             // GAP-0260/GAP-0263: Auto-retry on connection failure. QUIC
             // transport can drop messages under rapid sequential
             // connections; retries resolve most transient failures
             // without requiring explicit --retry flag.
-            if (err == error.ConnectionFailed and attempts + 1 < max_attempts) {
+            // SONNY-6377: only while the query has not been sent (the HELLO
+            // exchange failed). After the ExecuteRequest the server may have
+            // applied it, and sending it again would apply it twice.
+            if (err == error.ConnectionFailed and !query_sent and attempts + 1 < max_attempts) {
                 last_error = "connection dropped, retrying";
                 // GAP-0263/GAP-0272: Brief delay between retries to let the
                 // server finish processing the previous connection's cleanup.
@@ -3092,6 +2962,21 @@ fn resolveQueryGraphBinding(
     };
 }
 
+// CANARY: REQ=REQ-SONNY-6662-CLI-ERROR-MSG-FREED; FEATURE="QueryCli"; ASPECT=ConnectErrorsFreed; STATUS=TESTED; TEST=tests/test_sonny6662_cli_auth_leak.zig; OWNER=cli; UPDATED=2026-11-16
+/// SONNY-6662: write a formatted error message to `file` and free it, or
+/// write `fallback` when it cannot be formatted. The connect and HELLO
+/// failure paths allocPrinted their message and never freed it, which the
+/// Debug build reported as a leak on every refused login under --batch.
+fn writeErrorFmt(allocator: std.mem.Allocator, file: std.Io.File, comptime fmt: []const u8, args: anytype, fallback: []const u8) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const msg = std.fmt.allocPrint(allocator, fmt, args) catch {
+        file.writeStreamingAll(io, fallback) catch {};
+        return;
+    };
+    defer allocator.free(msg);
+    file.writeStreamingAll(io, msg) catch {};
+}
+
 // CANARY: REQ=REQ-CLI-BATCH-MODE-005; FEATURE="QueryBatchMode"; ASPECT=HelloOnce; STATUS=TESTED; TEST=tests/test_cli_batch_mode.zig; OWNER=cli; UPDATED=2026-08-29
 /// ENG-3914: perform the HELLO handshake on the CURRENT stream of `raw_client`.
 /// Extracted from `executeQueryOnConnection` so `--batch` can HELLO exactly
@@ -3124,8 +3009,7 @@ fn helloOnConnection(
 
     log.debug("Client sending HELLO (Protobuf)", &.{});
     writeProtoMessageViaZigClient(allocator, raw_client, .{ .hello = hello_req }) catch |err| {
-        const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to send HELLO: {}\n", .{err}) catch "Error: Failed to send HELLO\n";
-        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+        writeErrorFmt(allocator, stderr_handle, "Error: Failed to send HELLO: {}\n", .{err}, "Error: Failed to send HELLO\n");
         return error.ConnectionFailed;
     };
 
@@ -3134,8 +3018,7 @@ fn helloOnConnection(
     defer hello_arena.deinit();
 
     const hello_resp_msg = readProtoMessageViaZigClient(hello_arena.allocator(), raw_client, timeout_secs) catch |err| {
-        const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to receive HELLO response: {}\n", .{err}) catch "Error: Failed to receive HELLO response\n";
-        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+        writeErrorFmt(allocator, stderr_handle, "Error: Failed to receive HELLO response: {}\n", .{err}, "Error: Failed to receive HELLO response\n");
         return error.ConnectionFailed;
     };
 
@@ -3143,8 +3026,7 @@ fn helloOnConnection(
         .hello => |h| {
             log.debug("Client received HELLO response", &.{Attr.boolean("success", h.success)});
             if (!h.success) {
-                const err_msg = std.fmt.allocPrint(allocator, "Error: {s}\n\n", .{h.error_message}) catch "Error: Authentication failed\n\n";
-                stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+                writeErrorFmt(allocator, stderr_handle, "Error: {s}\n\n", .{h.error_message}, "Error: Authentication failed\n\n");
                 return error.AuthenticationFailed;
             }
             return allocator.dupe(u8, h.session_id);
@@ -3173,6 +3055,7 @@ fn executeQueryOnConnection(
     principal_envelope_bytes: ?[]const u8,
     read_only: bool,
     failed_out: ?*bool,
+    sent_out: *bool,
 ) !void {
     const binding = resolveQueryGraphBinding(query_text, graph, graph_for_hello);
 
@@ -3203,6 +3086,7 @@ fn executeQueryOnConnection(
         timeout_secs,
         principal_envelope_bytes,
         read_only,
+        sent_out,
     );
     if (failed_out) |out| out.* = failed;
 }
@@ -3227,6 +3111,7 @@ fn runQueryOnHelloedStream(
     timeout_secs: u32,
     principal_envelope_bytes: ?[]const u8,
     read_only: bool,
+    sent_out: ?*bool,
 ) !bool {
     // Get stdout and stderr handles for output
     const stdout = std.Io.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
@@ -3250,6 +3135,7 @@ fn runQueryOnHelloedStream(
     const QuicProtocolAdapter = struct {
         raw_client: *zig_client.GeodeClient,
         timeout_secs: u32,
+        sent_out: ?*bool = null,
         hooks: struct { on_progress: ?*const fn () void = null } = .{},
 
         fn notifyProgress(self: *const @This()) void {
@@ -3259,6 +3145,11 @@ fn runQueryOnHelloedStream(
         fn sendClientMessage(proto: *query_runner.ProtocolClient, alloc: std.mem.Allocator, msg: schema.QuicClientMessage) !void {
             const self: *@This() = @ptrCast(@alignCast(proto.context));
             self.notifyProgress();
+            // SONNY-6377: marked before the write, since a partly written
+            // request may already have reached the server.
+            if (msg == .execute) {
+                if (self.sent_out) |out| out.* = true;
+            }
             try writeProtoMessageViaZigClient(alloc, self.raw_client, msg);
             self.notifyProgress();
             // REQ-CLI-CONNECT-TIMEOUT-CLASSIFY-001: the HELLO handshake has
@@ -3282,6 +3173,7 @@ fn runQueryOnHelloedStream(
     var adapter = QuicProtocolAdapter{
         .raw_client = raw_client,
         .timeout_secs = timeout_secs,
+        .sent_out = sent_out,
         .hooks = .{ .on_progress = touchActiveQueryDeadlineWatchdog },
     };
     var protocol_client = query_runner.ProtocolClient{
@@ -3307,341 +3199,10 @@ fn runQueryOnHelloedStream(
     defer finishActiveQueryDeadlineWatchdog();
 
     // GAP-0272: Server-side errors (parse errors, execution errors) are
-    // rendered to stdout with the error status. The SINGLE-query CLI path
-    // exits 0 because the transport layer worked correctly — only
-    // connection/transport failures cause non-zero exit codes. `--batch`
-    // reads the returned flag instead so a failed statement inside a long
-    // batch is still visible in the process exit code (see
-    // REQ-CLI-BATCH-MODE-004).
+    // rendered with the error status, and the verdict is returned: every
+    // caller (single query, --batch, --file) exits non-zero on it
+    // (SONNY-6369 for the single query; REQ-CLI-BATCH-MODE-004).
     return try result.render(stdout, stderr_handle);
-}
-
-/// Convert a JSON value to a string ID (handles both string and integer IDs)
-fn getDotIdString(allocator: std.mem.Allocator, val: ?std.json.Value) ?[]const u8 {
-    const v = val orelse return null;
-    if (v == .string) return allocator.dupe(u8, v.string) catch null;
-    if (v == .integer) return std.fmt.allocPrint(allocator, "{d}", .{v.integer}) catch null;
-    return null;
-}
-
-/// Get node ID as string (handles id field being int or string)
-fn getDotNodeId(allocator: std.mem.Allocator, obj: std.json.ObjectMap) ?[]const u8 {
-    // Try id first (server uses "id"), then _id, then element_id
-    if (obj.get("id")) |id| {
-        return getDotIdString(allocator, id);
-    }
-    if (obj.get("_id")) |id| {
-        return getDotIdString(allocator, id);
-    }
-    if (obj.get("element_id")) |id| {
-        return getDotIdString(allocator, id);
-    }
-    return null;
-}
-
-fn getDotNodeLabel(allocator: std.mem.Allocator, obj: std.json.ObjectMap, labels_val: std.json.Value) ![]const u8 {
-    var label_parts = std.ArrayList(u8).initCapacity(allocator, 64) catch return error.OutOfMemory;
-    defer label_parts.deinit(allocator);
-
-    // Add labels
-    if (labels_val == .array) {
-        for (labels_val.array.items, 0..) |lbl, i| {
-            if (i > 0) try label_parts.append(allocator, ':');
-            if (lbl == .string) {
-                try label_parts.appendSlice(allocator, lbl.string);
-            }
-        }
-    }
-
-    // Add a display property if available (name, title, etc.)
-    // Properties might be at top level or inside a "properties" object
-    const display_props = [_][]const u8{ "name", "title", "label", "username", "email" };
-
-    // First check properties object (server format)
-    if (obj.get("properties")) |props_val| {
-        if (props_val == .object) {
-            for (display_props) |prop| {
-                if (props_val.object.get(prop)) |val| {
-                    if (val == .string and val.string.len > 0) {
-                        try label_parts.appendSlice(allocator, "\\n");
-                        try label_parts.appendSlice(allocator, val.string);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    if (label_parts.items.len == 0) {
-        // Fall back to node ID
-        const id = getDotNodeId(allocator, obj) orelse return try allocator.dupe(u8, "node");
-        return id;
-    }
-
-    return try allocator.dupe(u8, label_parts.items);
-}
-
-/// Output DOT format from pre-collected row data
-/// CANARY: REQ=REQ-CLI-DOT-003; FEATURE="DotFormat"; ASPECT=RowBasedOutput; STATUS=TESTED; TEST=geodetestlab/specs/query_output_formats.yml; OWNER=cli; UPDATED=2026-06-10
-fn outputDotFormatFromRows(allocator: std.mem.Allocator, rows: []const std.ArrayList([]const u8), stdout: std.Io.File) !void {
-    // Start DOT graph
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "digraph G {\n") catch {};
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  rankdir=LR;\n") catch {};
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  node [shape=ellipse, style=filled, fillcolor=lightblue];\n") catch {};
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  edge [fontsize=10];\n") catch {};
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\n") catch {};
-
-    // Track nodes and edges to avoid duplicates
-    var seen_nodes = std.StringHashMap(void).init(allocator);
-    defer {
-        var key_iter = seen_nodes.keyIterator();
-        while (key_iter.next()) |key| allocator.free(key.*);
-        seen_nodes.deinit();
-    }
-
-    // Process each row looking for node/edge data
-    for (rows) |row| {
-        for (row.items, 0..) |cell, col_idx| {
-            // Try to parse cell as JSON (might be a serialized node/edge)
-            const parsed = std.json.parseFromSlice(std.json.Value, allocator, cell, .{}) catch continue;
-            defer parsed.deinit();
-
-            if (parsed.value != .object) continue;
-            const obj = parsed.value.object;
-
-            // Check if this is a node (has labels)
-            if (obj.get("labels")) |labels_val| {
-                const node_id = getDotNodeId(allocator, obj) orelse continue;
-                defer allocator.free(node_id);
-
-                if (!seen_nodes.contains(node_id)) {
-                    try seen_nodes.put(try allocator.dupe(u8, node_id), {});
-
-                    const label = getDotNodeLabel(allocator, obj, labels_val) catch node_id;
-                    defer if (!std.mem.eql(u8, label, node_id)) allocator.free(label);
-
-                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  \"") catch {};
-                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), node_id) catch {};
-                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\" [label=\"") catch {};
-                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), label) catch {};
-                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\"];\n") catch {};
-                }
-            }
-            // Check if this is a relationship
-            else if (obj.get("label") orelse obj.get("type")) |type_val| {
-                if (type_val != .string) continue;
-                const rel_type = type_val.string;
-
-                const start_id = getDotIdString(allocator, obj.get("from")) orelse
-                    getDotIdString(allocator, obj.get("start_node")) orelse continue;
-                defer allocator.free(start_id);
-                const end_id = getDotIdString(allocator, obj.get("to")) orelse
-                    getDotIdString(allocator, obj.get("end_node")) orelse continue;
-                defer allocator.free(end_id);
-
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  \"") catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), start_id) catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\" -> \"") catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), end_id) catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\" [label=\"") catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), rel_type) catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\"];\n") catch {};
-            }
-
-            _ = col_idx; // Suppress unused variable warning
-        }
-    }
-
-    // End DOT graph
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "}\n") catch {};
-}
-
-fn formatJsonValueCompact(allocator: std.mem.Allocator, val: std.json.Value) ![]u8 {
-    return switch (val) {
-        .null => try allocator.dupe(u8, "null"),
-        .bool => |b| try allocator.dupe(u8, if (b) "true" else "false"),
-        .integer => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
-        .float => |f| try std.fmt.allocPrint(allocator, "{d:.6}", .{f}),
-        .string => |s| try allocator.dupe(u8, s),
-        .array => try allocator.dupe(u8, "[...]"),
-        .object => blk: {
-            // For objects, try to show a useful summary
-            const obj = val.object;
-            if (obj.get("labels")) |labels_val| {
-                if (labels_val == .array and labels_val.array.items.len > 0 and labels_val.array.items[0] == .string) {
-                    break :blk try std.fmt.allocPrint(allocator, "({s})", .{labels_val.array.items[0].string});
-                }
-                break :blk try allocator.dupe(u8, "(node)");
-            }
-            if (obj.get("label")) |t| {
-                if (t == .string) break :blk try std.fmt.allocPrint(allocator, "[:{s}]", .{t.string});
-                break :blk try allocator.dupe(u8, "[rel]");
-            }
-            if (obj.get("type")) |t| {
-                if (t == .string) break :blk try std.fmt.allocPrint(allocator, "[:{s}]", .{t.string});
-                break :blk try allocator.dupe(u8, "[rel]");
-            }
-            break :blk try allocator.dupe(u8, "{...}");
-        },
-        .number_string => |s| try allocator.dupe(u8, s),
-    };
-}
-
-fn jsonNumberFromU64(allocator: std.mem.Allocator, value: u64) !std.json.Value {
-    if (value <= @as(u64, std.math.maxInt(i64))) {
-        return .{ .integer = @intCast(value) };
-    }
-    const num_str = try std.fmt.allocPrint(allocator, "{d}", .{value});
-    return .{ .number_string = num_str };
-}
-
-fn base64Encode(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
-    const out = try allocator.alloc(u8, std.base64.standard.Encoder.calcSize(bytes.len));
-    _ = std.base64.standard.Encoder.encode(out, bytes);
-    return out;
-}
-
-fn protoMapEntriesToJson(allocator: std.mem.Allocator, entries: []const schema.MapEntry) !std.json.ObjectMap {
-    var obj = std.json.ObjectMap.init(allocator);
-    for (entries) |entry| {
-        const key = try allocator.dupe(u8, entry.key);
-        const val = if (entry.value) |v|
-            try protoValueToJson(allocator, v)
-        else
-            std.json.Value.null;
-        try obj.put(key, val);
-    }
-    return obj;
-}
-
-fn protoNodeToJson(allocator: std.mem.Allocator, node: schema.NodeValue) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
-    try obj.put(try allocator.dupe(u8, "id"), try jsonNumberFromU64(allocator, node.id));
-
-    var labels = std.json.Array.init(allocator);
-    for (node.labels.items) |label| {
-        try labels.append(.{ .string = try allocator.dupe(u8, label) });
-    }
-    try obj.put(try allocator.dupe(u8, "labels"), .{ .array = labels });
-
-    const props_obj = try protoMapEntriesToJson(allocator, node.properties.items);
-    try obj.put(try allocator.dupe(u8, "properties"), .{ .object = props_obj });
-    return .{ .object = obj };
-}
-
-fn protoEdgeToJson(allocator: std.mem.Allocator, edge: schema.EdgeValue) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
-    try obj.put(try allocator.dupe(u8, "id"), try jsonNumberFromU64(allocator, edge.id));
-    try obj.put(try allocator.dupe(u8, "from"), try jsonNumberFromU64(allocator, edge.from_id));
-    try obj.put(try allocator.dupe(u8, "to"), try jsonNumberFromU64(allocator, edge.to_id));
-    try obj.put(try allocator.dupe(u8, "label"), .{ .string = try allocator.dupe(u8, edge.label) });
-
-    const props_obj = try protoMapEntriesToJson(allocator, edge.properties.items);
-    try obj.put(try allocator.dupe(u8, "properties"), .{ .object = props_obj });
-    return .{ .object = obj };
-}
-
-fn protoPathToJson(allocator: std.mem.Allocator, path: schema.PathValue) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
-
-    var nodes = std.json.Array.init(allocator);
-    for (path.nodes.items) |node| {
-        try nodes.append(try protoNodeToJson(allocator, node));
-    }
-    try obj.put(try allocator.dupe(u8, "nodes"), .{ .array = nodes });
-
-    var edges = std.json.Array.init(allocator);
-    for (path.edges.items) |edge| {
-        try edges.append(try protoEdgeToJson(allocator, edge));
-    }
-    try obj.put(try allocator.dupe(u8, "edges"), .{ .array = edges });
-    return .{ .object = obj };
-}
-
-fn protoExtendedToJson(allocator: std.mem.Allocator, ext: schema.ExtendedValue) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
-    if (ext.type_name.len > 0) {
-        try obj.put(try allocator.dupe(u8, "type"), .{ .string = try allocator.dupe(u8, ext.type_name) });
-    }
-    if (ext.data) |data| {
-        const val: std.json.Value = switch (data) {
-            .text => |t| .{ .string = try allocator.dupe(u8, t) },
-            .bytes => |b| .{ .string = try base64Encode(allocator, b) },
-            .int_val => |n| .{ .integer = n },
-            .double_val => |f| .{ .float = f },
-            .bool_val => |b| .{ .bool = b },
-        };
-        try obj.put(try allocator.dupe(u8, "value"), val);
-    }
-    return .{ .object = obj };
-}
-
-fn protoValueToJson(allocator: std.mem.Allocator, value: schema.Value) error{OutOfMemory}!std.json.Value {
-    const kind = value.kind orelse return std.json.Value.null;
-    return switch (kind) {
-        .null_val => std.json.Value.null,
-        .int_val => |v| .{ .integer = v.value },
-        .double_val => |v| .{ .float = v.value },
-        .bool_val => |b| .{ .bool = b },
-        .string_val => |v| .{ .string = try allocator.dupe(u8, v.value) },
-        .decimal_val => |v| blk: {
-            const repr = if (v.orig_repr.len > 0) v.orig_repr else v.coeff;
-            break :blk .{ .string = try allocator.dupe(u8, repr) };
-        },
-        .bytes_val => |v| .{ .string = try base64Encode(allocator, v.value) },
-        .list_val => |v| blk: {
-            var arr = std.json.Array.init(allocator);
-            for (v.values.items) |item| {
-                try arr.append(try protoValueToJson(allocator, item));
-            }
-            break :blk .{ .array = arr };
-        },
-        .map_val => |v| blk: {
-            const obj = try protoMapEntriesToJson(allocator, v.entries.items);
-            break :blk .{ .object = obj };
-        },
-        .node_val => |v| try protoNodeToJson(allocator, v),
-        .edge_val => |v| try protoEdgeToJson(allocator, v),
-        .path_val => |v| try protoPathToJson(allocator, v),
-        .ext_val => |v| try protoExtendedToJson(allocator, v),
-    };
-}
-
-fn valueToJsonString(allocator: std.mem.Allocator, value: schema.Value) ![]const u8 {
-    const json_val = try protoValueToJson(allocator, value);
-    defer freeJsonValue(allocator, json_val);
-    return std.json.Stringify.valueAlloc(allocator, json_val, .{});
-}
-
-fn freeJsonValue(allocator: std.mem.Allocator, value: std.json.Value) void {
-    freeJsonValueImpl(allocator, value, true);
-}
-
-/// Free a JSON value tree. When `free_keys` is true, object keys are freed;
-/// when false, only values are freed (useful for root objects whose keys are
-/// string literals that must not be freed).
-fn freeJsonValueImpl(allocator: std.mem.Allocator, value: std.json.Value, free_keys: bool) void {
-    switch (value) {
-        .number_string => |ns| allocator.free(ns),
-        .string => |s| allocator.free(s),
-        .array => |arr| {
-            for (arr.items) |item| {
-                freeJsonValueImpl(allocator, item, true);
-            }
-            var mutable_arr = arr;
-            mutable_arr.deinit();
-        },
-        .object => |obj| {
-            var iter = obj.iterator();
-            while (iter.next()) |entry| {
-                if (free_keys) allocator.free(entry.key_ptr.*);
-                freeJsonValueImpl(allocator, entry.value_ptr.*, true);
-            }
-            var mutable_obj = obj;
-            mutable_obj.deinit();
-        },
-        else => {},
-    }
 }
 
 fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -3781,13 +3342,9 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         } else if (std.mem.eql(u8, argv[i], "--plain")) {
             plain_mode = true;
         } else if (std.mem.eql(u8, argv[i], "--log-level")) {
-            // Handle --log-level flag (ignored for shell command but must consume its argument)
-            if (i + 1 >= argv.len) {
-                std.debug.print("Error: --log-level requires a level (debug, info, warn, error)\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.usage_error));
-            }
-            // Just skip the log level value - shell command doesn't use it but we need to consume it
-            i += 1;
+            // SONNY-6586: accepted and ignored, as in geode query.
+            std.debug.print("Error: geode shell: option '--log-level' is not supported: geode shell writes no log (--log-level is a geode serve option)\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         } else if (std.mem.eql(u8, argv[i], "--username") or std.mem.eql(u8, argv[i], "--user") or std.mem.eql(u8, argv[i], "-U")) {
             // Issue #387: Username for authentication
             if (i + 1 >= argv.len) {
@@ -3812,20 +3369,41 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     }
 
     // Issue #417: Apply DSN if provided (takes precedence over --server)
+    var dsn_parsed: ?DsnParseResult = null;
+    defer if (dsn_parsed) |*p| p.deinit(allocator);
     if (dsn) |dsn_str| {
-        const parsed = parseDsnArg(dsn_str) orelse {
+        dsn_parsed = parseDsnArg(allocator, dsn_str) orelse {
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
+        const parsed = &dsn_parsed.?;
+        refuseDsnParamsCliCannotApply(parsed, .shell);
         server = parsed.host_port;
         if (parsed.use_grpc) {
-            std.debug.print("Warning: gRPC transport is not supported for the shell. Using QUIC transport to {s}\n", .{parsed.host_port});
+            std.debug.print("Warning: gRPC transport is not supported for the shell. Using QUIC transport to {f}\n", .{dsn_credentials.redacted(parsed.host_port)});
         }
         // DSN credentials override -U/-P flags
-        if (parsed.username) |u| username = u;
-        if (parsed.password) |p| password = p;
+        if (parsed.username()) |u| username = u;
+        if (parsed.password()) |p| password = p;
         // DSN graph path for HELLO handshake
-        if (parsed.graph) |g| graph = g;
+        if (parsed.graph()) |g| graph = g;
+        // SONNY-6554: insecure=true and the TLS paths (docs/DSN.md).
+        applyDsnTls(parsed, &insecure, &ca_cert_path, &client_cert_path, &client_key_path);
+        // SONNY-6617 (2): the shell has no --timeout; the DSN timeout bounds
+        // the QUIC handshake (this connection and \connect) and the wait
+        // for an answer.
+        if (dsnTimeoutMs(parsed)) |ms| {
+            repl_quic_transport.connect_timeout_ms = ms;
+            repl_quic_transport.read_idle_timeout_ms = ms;
+        }
     }
+
+    // SONNY-6531: refuse a malformed --server / --dsn address before the
+    // REPL starts, with the MCP path's message (the REPL reported a bare
+    // "REPL error: InvalidAddress"). The address is not echoed.
+    _ = zig_quic_bridge.parseHostPort(server, 3141) catch |err| {
+        zig_quic_bridge.printEndpointError(err);
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
 
     // Issue #387: Validate that if one of username/password is provided, both must be
     if ((username != null) != (password != null)) {
@@ -3850,15 +3428,16 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     std.debug.print("Geode Shell " ++ VERSION ++ "\r\n", .{});
     // GAP-0113: Display TLS certificate status
     // Note: Print "Connecting to..." here since actual connection happens in REPL loop
+    // SONNY-6544: a --server may carry a userinfo part; never print it.
     if (insecure) {
-        std.debug.print("Connecting to {s} (insecure mode - TLS verification disabled)\r\n", .{server});
+        std.debug.print("Connecting to {f} (insecure mode - TLS verification disabled)\r\n", .{dsn_credentials.redacted(server)});
     } else if (client_cert_path != null) {
-        std.debug.print("Connecting to {s} (TLS with mutual authentication)\r\n", .{server});
+        std.debug.print("Connecting to {f} (TLS with mutual authentication)\r\n", .{dsn_credentials.redacted(server)});
         if (client_cert_path) |cert| std.debug.print("  Client cert: {s}\r\n", .{cert});
         if (client_key_path) |key| std.debug.print("  Client key: {s}\r\n", .{key});
         if (ca_cert_path) |ca| std.debug.print("  CA cert: {s}\r\n", .{ca});
     } else {
-        std.debug.print("Connecting to {s} (TLS enabled)\r\n", .{server});
+        std.debug.print("Connecting to {f} (TLS enabled)\r\n", .{dsn_credentials.redacted(server)});
     }
     std.debug.print("Type 'help' for help, 'exit' to quit.\r\n", .{});
 
@@ -3929,6 +3508,9 @@ fn cmdAuth(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
     } else if (std.mem.eql(u8, subcmd, "reseal")) {
         // CANARY: REQ=REQ-AUTH-INIT-CLI-004; FEATURE="AuthInitCLI"; ASPECT=Reseal; STATUS=TESTED; TEST=geodetestlab/specs/auth_chain_cli_offline.yml; OWNER=cli; UPDATED=2026-06-11
         try auth_init_cli.cmdAuthReseal(allocator, argv, subcmd_idx + 1);
+    } else if (std.mem.eql(u8, subcmd, "prune-legacy-permissions")) {
+        // SONNY-6647: remove the inert Permission records of the old offline grant.
+        try auth_cli.cmdAuthPruneLegacyPermissions(allocator, argv, subcmd_idx + 1);
     } else if (std.mem.eql(u8, subcmd, "verify")) {
         // CANARY: REQ=REQ-AUTH-INIT-CLI-005; FEATURE="AuthInitCLI"; ASPECT=Verify; STATUS=TESTED; TEST=geodetestlab/specs/auth_chain_cli_offline.yml; OWNER=cli; UPDATED=2026-06-11
         try auth_init_cli.cmdAuthVerify(allocator, argv, subcmd_idx + 1);
@@ -3960,6 +3542,8 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
         argv[i] = @constCast(std.mem.span(arg));
     }
 
+    // SONNY-6688: `geode fle migrate-encrypt` runs through `geode query`.
+    fle_cli.query_command = cmdQuery;
     // Delegate all command routing and dispatch to cli_dispatcher
     try cli_dispatcher.dispatch(
         allocator,
@@ -3975,68 +3559,65 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
 
 // ---- Credential Storage & Authentication ----
 
-const CredentialStorage = struct {
-    server: []const u8,
-    username: []const u8,
-    session_token: []const u8,
-    expires_at: i64,
-};
+/// SONNY-6554: what `auth login` says about the session after logging in.
+/// geode servers keep no record of the session ids they issue and the
+/// HELLO carries no token, so a session ends with its connection.
+const no_session_note = "Note: geode servers do not accept session tokens yet, so this login does not carry over to later commands; pass -U and --password (or --dsn) to each command\n";
+const saved_session_note = "Saved a record of this login to the local file ~/.geode/credentials.json. geode servers do not accept session tokens yet, so it does not log later commands in; pass -U and --password (or --dsn) to each command\n";
 
-fn getCredentialsPath(allocator: std.mem.Allocator) ![]const u8 {
-    const home_dir = getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => getEnvVarOwned(allocator, "USERPROFILE") catch return error.NoHomeDir,
-        else => return err,
-    };
-    defer allocator.free(home_dir);
-    return try std.fs.path.join(allocator, &.{ home_dir, ".geode", "credentials.json" });
-}
+/// SONNY-6551: how long `auth login --save-session` keeps a session on offer.
+const saved_session_lifetime_secs: i64 = 24 * 60 * 60;
 
-fn ensureCredentialsDir(allocator: std.mem.Allocator) !void {
-    const home_dir = getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => getEnvVarOwned(allocator, "USERPROFILE") catch return error.NoHomeDir,
-        else => return err,
+/// SONNY-6551: what `geode query` (no credentials given) says about the saved
+/// session for `server_addr`. The QUIC HELLO carries a user name and a
+/// password and nothing else, and the server keeps no record of the session
+/// ids it returns, so a saved session cannot authenticate a query: it is
+/// never sent. A file that is not read is named with the reason
+/// (`session_storage.ignoredMessage`); nothing is created.
+fn noteSavedSession(allocator: std.mem.Allocator, server_addr: []const u8) void {
+    var store = session_storage.CredentialStore.init(allocator) catch |err| {
+        // SONNY-6544: say so when HOME is unusable (relative or empty): no
+        // saved session is read or created anywhere else.
+        if (err == error.HomeNotAbsolute) {
+            std.debug.print("Warning: saved session not loaded: {s}\n", .{home_dir.errorMessage(err).?});
+        }
+        return;
     };
-    defer allocator.free(home_dir);
-    const geode_dir = try std.fs.path.join(allocator, &.{ home_dir, ".geode" });
-    defer allocator.free(geode_dir);
-
-    const io_md = std.Io.Threaded.global_single_threaded.io();
-    std.Io.Dir.createDirAbsolute(io_md, geode_dir, std.Io.File.Permissions.fromMode(0o700)) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
+    defer store.deinit();
+    var result = store.load() catch |err| {
+        std.debug.print("Warning: saved session not loaded: {s}\n", .{@errorName(err)});
+        return;
     };
-    // S-9: Restrict credentials directory to owner-only access
-    if (comptime @import("builtin").os.tag != .windows) {
-        var dir = std.Io.Dir.openDirAbsolute(io_md, geode_dir, .{}) catch return;
-        defer dir.close(io_md);
-        dir.setPermissions(io_md, std.Io.File.Permissions.fromMode(0o700)) catch {};
+    defer result.deinit();
+    switch (result) {
+        .none => {},
+        .ignored => |why| std.debug.print("Warning: saved session ignored: {s}\n", .{session_storage.ignoredMessage(why)}),
+        .loaded => |*loaded| {
+            const creds = loaded.credentials();
+            const fingerprint = session_storage.getSystemFingerprint(allocator) catch return;
+            defer allocator.free(fingerprint);
+            switch (session_storage.applies(creds, server_addr, compat_timestamp(), fingerprint)) {
+                .foreign => std.debug.print("Warning: saved session ignored: it was saved by another OS user or on another host\n", .{}),
+                .other_server => std.debug.print("Note: saved session is for {f}, not {f}. Use --save-session to update.\n", .{ dsn_credentials.redacted(creds.server), dsn_credentials.redacted(server_addr) }),
+                .expired => std.debug.print("Note: saved session expired. Use 'geode auth login' to refresh.\n", .{}),
+                .usable => std.debug.print("Note: found a saved session for {f} (user '{s}'), but geode servers do not accept a saved session token yet, so it is not used; authenticate with -U and --password or --password-file, or --dsn (docs/USER_AUTH.md, 'Saved sessions')\n", .{ dsn_credentials.redacted(creds.server), creds.username }),
+            }
+        },
     }
 }
 
-fn saveCredentials(allocator: std.mem.Allocator, creds: CredentialStorage) !void {
-    try ensureCredentialsDir(allocator);
-    const creds_path = try getCredentialsPath(allocator);
-    defer allocator.free(creds_path);
-
-    // Create JSON string manually (simpler than full JSON object)
-    const json_content = try std.fmt.allocPrint(allocator,
-        \\{{"server":"{s}","username":"{s}","session_token":"{s}","expires_at":{}}}
-    , .{ creds.server, creds.username, creds.session_token, creds.expires_at });
-    defer allocator.free(json_content);
-
-    // Write to file with restrictive permissions (owner read/write only)
-    const io_cf = std.Io.Threaded.global_single_threaded.io();
-    const file = try std.Io.Dir.createFileAbsolute(io_cf, creds_path, .{ .permissions = std.Io.File.Permissions.fromMode(0o600) });
-    defer file.close(io_cf);
-
-    try file.writeStreamingAll(io_cf, json_content);
-}
-
-fn clearCredentials(allocator: std.mem.Allocator) !void {
-    const creds_path = getCredentialsPath(allocator) catch return;
-    defer allocator.free(creds_path);
-
-    std.Io.Dir.deleteFileAbsolute(std.Io.Threaded.global_single_threaded.io(), creds_path) catch {};
+/// SONNY-6551: write the session through the one writer
+/// (`session_storage.CredentialStore.save`); prints why and exits on failure.
+fn saveSessionOrExit(allocator: std.mem.Allocator, creds: session_storage.Credentials) void {
+    var store = session_storage.CredentialStore.init(allocator) catch |err| {
+        std.debug.print("Error: Could not save credentials: {s}\n", .{session_storage.saveErrorMessage(err) orelse @errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer store.deinit();
+    store.save(creds) catch |err| {
+        std.debug.print("Error: Could not save credentials: {s}\n", .{session_storage.saveErrorMessage(err) orelse @errorName(err)});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
 }
 
 fn promptPassword(allocator: std.mem.Allocator, prompt_text: []const u8) ![]const u8 {
@@ -4113,12 +3694,25 @@ fn promptPassword(allocator: std.mem.Allocator, prompt_text: []const u8) ![]cons
 const hello_decode = geode.hello_decode;
 const AuthResult = hello_decode.AuthResult;
 
+/// SONNY-6487: the one message for a `--server` address the shared grammar
+/// refuses. SONNY-6531: it is the MCP path's message for the same fault
+/// (`zig_quic_bridge.endpointErrorMessage`), and the address is not echoed:
+/// with `--dsn` it came from a DSN, which may carry a password.
+fn printInvalidServerAddress(stderr: std.Io.File, err: anyerror) void {
+    const why = zig_quic_bridge.endpointErrorMessage(err) orelse "Invalid Geode server address (docs/DSN.md)";
+    var buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "Error: {s}\n", .{why}) catch "Error: Invalid Geode server address (docs/DSN.md)\n";
+    stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
+}
+
 /// GAP-0150: Real QUIC authentication to server
-/// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=ServerConnection; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
+/// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=ServerConnection; STATUS=IMPL; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-11-14
 fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: []const u8, password: []const u8, allow_insecure: bool, ca_cert: ?[]const u8) !AuthResult {
-    const parsed = zig_quic_bridge.parseHostPort(server, 3141) catch {
-        std.debug.print("Error: Invalid server address format. Expected host:port\n", .{});
-        return error.InvalidAddress;
+    // SONNY-6531: the MCP path's message for the fault; the caller exits
+    // without a second line that echoes the address.
+    const parsed = zig_quic_bridge.parseHostPort(server, 3141) catch |err| {
+        zig_quic_bridge.printEndpointError(err);
+        return error.InvalidServerAddress;
     };
 
     // Create QUIC client connection via the shared Zig client library.
@@ -4140,10 +3734,11 @@ fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: [
         .{ .insecure = insecure, .ca_cert_path = ca_cert_path },
         null,
         null,
+        .{},
     );
 
     client.connect() catch |err| {
-        std.debug.print("Error: Could not connect to server {s}:{d}: {s}\n", .{ parsed.host, parsed.port, @errorName(err) });
+        std.debug.print("Error: Could not connect to server {f}:{d}: {s}\n", .{ dsn_credentials.redacted(parsed.host), parsed.port, @errorName(err) });
         return error.ConnectionFailed;
     };
 
@@ -4231,7 +3826,7 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
     // GEODE_ENV=production without GEODE_ALLOW_INSECURE_TLS=1.
     if (insecure) insecure_tls_gate.enforceOrExit();
 
-    // CANARY: REQ=REQ-AUTH-SESSION-008; FEATURE="TokenBasedLogin"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-AUTH-SESSION-008; FEATURE="TokenBasedLogin"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/test_sonny6551_saved_session.zig; OWNER=security; UPDATED=2026-11-14
 
     // Prompt for username if not provided (always dupe to ensure heap allocation)
     const final_username = if (username) |u| try allocator.dupe(u8, u) else blk: {
@@ -4303,8 +3898,10 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
                 std.debug.print("Error: Invalid username or password\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.auth_error));
             },
+            // SONNY-6531: connectToServer printed what is wrong with --server.
+            error.InvalidServerAddress => std.process.exit(@intFromEnum(ExitCode.general_error)),
             else => {
-                std.debug.print("Error: Failed to connect to server '{s}': {s}\n", .{ server, @errorName(err) });
+                std.debug.print("Error: Failed to connect to server '{f}': {s}\n", .{ dsn_credentials.redacted(server), @errorName(err) });
                 std.debug.print("Check server address and network connectivity\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             },
@@ -4321,17 +3918,8 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
         std.process.exit(@intFromEnum(ExitCode.auth_error));
     }
 
-    // Save credentials
-    const expires_at = compat_milliTimestamp() + 24 * 60 * 60 * 1000; // 24 hours
-    const creds = CredentialStorage{
-        .server = server,
-        .username = final_username,
-        .session_token = auth_result.session_token,
-        .expires_at = expires_at,
-    };
-
     // Write to stdout for pipe-friendly output (test harness checks stdout_contains)
-    const msg = try std.fmt.allocPrint(allocator, "Successfully authenticated as '{s}' on server '{s}'\n", .{ final_username, server });
+    const msg = try std.fmt.allocPrint(allocator, "Successfully authenticated as '{s}' on server '{f}'\n", .{ final_username, dsn_credentials.redacted(server) });
     defer allocator.free(msg);
     const stdout_handle = getStdoutHandle() catch {
         std.debug.print("{s}", .{msg});
@@ -4340,15 +3928,25 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
     const stdout_file = std.Io.File{ .handle = stdout_handle, .flags = .{ .nonblocking = false } };
     stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
     if (save_session) {
-        saveCredentials(allocator, creds) catch |err| {
-            std.debug.print("Warning: Could not save credentials: {s}\n", .{@errorName(err)});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
-        stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Session token saved to ~/.geode/credentials.json\n") catch {};
+        const fingerprint = try session_storage.getSystemFingerprint(allocator);
+        defer allocator.free(fingerprint);
+        const now = compat_timestamp();
+        saveSessionOrExit(allocator, .{
+            .server = server,
+            .username = final_username,
+            .token = auth_result.session_token,
+            .created_at = now,
+            .expires_at = now + saved_session_lifetime_secs,
+            .system_fingerprint = fingerprint,
+        });
+        // SONNY-6554: say what was saved: a local file, which no server
+        // accepts (it said "Session token saved").
+        stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), saved_session_note) catch {};
     } else {
-        const token_msg = try std.fmt.allocPrint(allocator, "Session token: {s}\nUse --save-session to persist credentials locally\n", .{auth_result.session_token});
-        defer allocator.free(token_msg);
-        stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), token_msg) catch {};
+        // SONNY-6554: the server's session id ended with this connection;
+        // it was printed as a reusable "Session token" with "Use
+        // --save-session to persist credentials locally".
+        stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), no_session_note) catch {};
     }
 }
 
@@ -4356,118 +3954,100 @@ fn cmdAuthLogout(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     var i = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "--help") or std.mem.eql(u8, argv[i], "-h")) {
-            std.debug.print("geode auth logout - Clear saved credentials\n" ++
+            std.debug.print("geode auth logout - Remove the local saved session file\n" ++
                 "\n" ++
-                "Usage: geode auth logout [--token <token>]\n" ++
+                "Usage: geode auth logout\n" ++
                 "\n" ++
-                "This command clears saved authentication credentials from ~/.geode/credentials.json\n" ++
+                "Removes ~/.geode/credentials.json, written by 'geode auth login --save-session'.\n" ++
+                "This is local only: geode servers keep no session to end.\n" ++
                 "\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
+            return; // SONNY-6559: success returns through main
         }
-        // Accept --token flag (used for specific session invalidation, currently no-op)
-        if (std.mem.eql(u8, argv[i], "--token") and i + 1 < argv.len) {
-            i += 1; // skip token value
+        // SONNY-6554 / SONNY-6560: `--token` was documented and skipped, and
+        // the command still said "Successfully logged out". No server keeps
+        // session tokens, so none can be invalidated: refused (exit 2) here,
+        // where the reason can be given (option_check lets it through).
+        if (std.mem.eql(u8, argv[i], "--token")) {
+            std.debug.print("Error: geode auth logout: option '--token' is not supported by this server: geode servers keep no record of session tokens, so none can be invalidated\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
     }
 
-    // Clear saved credentials
-    clearCredentials(allocator) catch |err| {
-        std.debug.print("Warning: Could not clear credentials: {s}\n", .{@errorName(err)});
-        logAuditEvent("auth", "logout", "failure");
-        return;
-    };
+    // Remove the saved session file (SONNY-6551: creates nothing; an
+    // unusable HOME has nothing to remove).
+    var removed = false;
+    if (session_storage.CredentialStore.init(allocator)) |store_val| {
+        var store = store_val;
+        defer store.deinit();
+        removed = store.delete() catch |err| {
+            std.debug.print("Error: Could not remove the local saved session file: {s}\n", .{@errorName(err)});
+            logAuditEvent("auth", "logout", "failure");
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+    } else |_| {}
 
-    // Log successful logout
     logAuditEvent("auth", "logout", "success");
 
-    std.debug.print("Successfully logged out\n", .{});
-    std.debug.print("Credentials cleared from ~/.geode/credentials.json\n", .{});
+    // SONNY-6554: it said "Successfully logged out"; no server session ends.
+    if (removed) {
+        std.debug.print("Removed the local saved session file ~/.geode/credentials.json (local only: geode servers keep no session to end)\n", .{});
+    } else {
+        std.debug.print("No saved session file to remove (~/.geode/credentials.json)\n", .{});
+    }
 }
 
+/// SONNY-6554: `auth validate` said "Session token valid" for any non-empty
+/// string. No server can say whether a token is valid: none keeps the
+/// session ids it issues.
 fn cmdAuthValidate(_: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    var token: ?[]const u8 = null;
     var i = start_idx;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "--help") or std.mem.eql(u8, argv[i], "-h")) {
-            std.debug.print("geode auth validate - Validate a session token\n" ++
+            std.debug.print("geode auth validate - not supported by this server\n" ++
                 "\n" ++
-                "Usage: geode auth validate --token <token>\n" ++
+                "geode servers keep no record of the session tokens they issue, so no\n" ++
+                "token can be validated. The command exits 1.\n" ++
                 "\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.success));
-        } else if (std.mem.eql(u8, argv[i], "--token") and i + 1 < argv.len) {
-            token = argv[i + 1];
-            i += 1;
+            return; // SONNY-6559: success returns through main
         }
     }
-
-    if (token == null) {
-        std.debug.print("Error: --token is required\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.usage_error));
-    }
-
-    // Token validation: check format (non-empty session token)
-    if (token.?.len > 0) {
-        std.debug.print("Session token valid\n", .{});
-    } else {
-        std.debug.print("Session token invalid\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.auth_error));
-    }
+    std.debug.print("Error: geode auth validate is not supported by this server: geode servers keep no record of the session tokens they issue, so no token can be validated (docs/USER_AUTH.md, 'Saved sessions')\n", .{});
+    std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
 // CANARY: REQ=REQ-AUTH-TOKEN-001; FEATURE="AuthToken"; ASPECT=Testing; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_TOKEN_001; OWNER=cli; UPDATED=2025-10-14
 fn cmdAuthToken(allocator: std.mem.Allocator) !void {
-    // Get home directory - use std.process for cross-platform compatibility
-    // Windows uses USERPROFILE, Unix uses HOME
-    const home = if (builtin.os.tag == .windows)
-        getEnvVarOwned(allocator, "USERPROFILE") catch {
-            std.debug.print("Error: USERPROFILE environment variable not set\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        }
-    else
-        getEnvVarOwned(allocator, "HOME") catch {
-            std.debug.print("Error: HOME environment variable not set\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
-    defer allocator.free(home);
-
-    const credentials_path = try std.fmt.allocPrint(allocator, "{s}/.geode/credentials.json", .{home});
-    defer allocator.free(credentials_path);
-
-    // Try to read the credentials file
-    const io_cr = std.Io.Threaded.global_single_threaded.io();
-    const file = std.Io.Dir.openFileAbsolute(io_cr, credentials_path, .{}) catch |err| {
-        if (err == error.FileNotFound) {
-            std.debug.print("No saved credentials found\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        }
+    // SONNY-6544: HOME (USERPROFILE on Windows) must be absolute.
+    var store = session_storage.CredentialStore.init(allocator) catch |err| {
+        home_dir.printError(err);
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer store.deinit();
+    // SONNY-6551: through the one reader; prints the file in its one format.
+    var result = store.load() catch |err| {
         std.debug.print("Error reading credentials: {s}\n", .{@errorName(err)});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer file.close(io_cr);
-
-    // Read file content
-    const cr_len = file.length(io_cr) catch |err| {
-        std.debug.print("Error reading credentials file: {s}\n", .{@errorName(err)});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
+    defer result.deinit();
+    const loaded = switch (result) {
+        .none => {
+            std.debug.print("No saved credentials found\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        },
+        .ignored => |why| {
+            std.debug.print("Error: saved session ignored: {s}\n", .{session_storage.ignoredMessage(why)});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        },
+        .loaded => |*l| l,
     };
-    if (cr_len > 1024 * 1024) {
-        std.debug.print("Error: credentials file too large\n", .{});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
+    const content = try session_storage.CredentialStore.encode(allocator, loaded.credentials());
+    defer {
+        std.crypto.secureZero(u8, content);
+        allocator.free(content);
     }
-    const content = allocator.alloc(u8, @intCast(cr_len)) catch |err| {
-        std.debug.print("Error reading credentials file: {s}\n", .{@errorName(err)});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-    _ = file.readPositionalAll(io_cr, content, 0) catch |err| {
-        std.debug.print("Error reading credentials file: {s}\n", .{@errorName(err)});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-    defer allocator.free(content);
 
     // Output the content to stdout
     const stdout_fd = std.Io.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
     try stdout_fd.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), content);
-    if (content.len == 0 or content[content.len - 1] != '\n') {
-        try stdout_fd.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\n");
-    }
+    try stdout_fd.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\n");
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const line_text = @import("line_text.zig");
 const builtin = @import("builtin");
 const repl_history = @import("repl_history.zig");
 const repl_complete = @import("repl_complete.zig");
@@ -10,6 +11,11 @@ const repl_errors = @import("repl_errors.zig");
 const keymap_emacs = @import("keymap_emacs.zig");
 const keymap_vi = @import("keymap_vi.zig");
 const platform = @import("platform.zig");
+
+/// SONNY-6476: the longest line the plain-mode reader takes: the largest
+/// request the server accepts (`max_client_message_bytes`, 16 MiB). A longer
+/// line is refused whole instead of being cut.
+const max_plain_line_bytes: usize = 16 * 1024 * 1024;
 
 fn replIo() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
@@ -70,7 +76,18 @@ pub const ReplLoop = struct {
         // Interrupt checking is done via polling stdin for Ctrl+C (ASCII 3) in blocking loops.
 
         // Initialize components
-        const history_path = if (opts.history_enabled) try repl_config.getHistoryPath(opts.allocator) else null;
+        // SONNY-6551: no history file rather than one in an unsafe place;
+        // the session still keeps its in-memory history.
+        const history_path: ?[]u8 = if (opts.history_enabled) switch (try repl_config.getHistoryPath(opts.allocator)) {
+            .path => |path| path,
+            .unavailable => |why| blk: {
+                const stderr_file = platform.getStderrHandle();
+                stderr_file.writeStreamingAll(replIo(), "Note: shell history is not saved to a file: ") catch {};
+                stderr_file.writeStreamingAll(replIo(), why) catch {};
+                stderr_file.writeStreamingAll(replIo(), "\r\n") catch {};
+                break :blk null;
+            },
+        } else null;
         defer if (history_path) |path| opts.allocator.free(path);
 
         var history = try repl_history.HistoryStore.init(opts.allocator, history_path, opts.history_enabled);
@@ -244,8 +261,13 @@ pub const ReplLoop = struct {
         const original_termios = enterPlainRawMode() catch null;
         defer if (original_termios) |term| restoreTerminalMode(term) catch {};
 
-        // Simple line buffer
-        var line_buf: [4096]u8 = undefined;
+        // CANARY: REQ=REQ-SONNY-6476-SHELL-LONG-LINE; FEATURE="ShellPlainMode"; ASPECT=LineLongerThan4095Bytes; STATUS=TESTED; TEST=tests/test_sonny6476_shell_long_line.zig; OWNER=cli; UPDATED=2026-11-13
+        // SONNY-6476: the line grows as it is read. It was a fixed 4,096-byte
+        // buffer, and a longer line was cut at 4,095 bytes without a word:
+        // the first part ran as one statement and the rest as another. A
+        // line past the largest request the server takes is refused whole.
+        var line_buf: std.ArrayList(u8) = .empty;
+        defer line_buf.deinit(opts.allocator);
 
         // Main loop - simple line-based input
         while (!state.quit_requested) {
@@ -254,10 +276,20 @@ pub const ReplLoop = struct {
             try stdout_file.writeStreamingAll(replIo(), prompt);
 
             // Read line
-            var pos: usize = 0;
-            while (pos < line_buf.len - 1) {
+            // CANARY: REQ=REQ-SHELL-PLAIN-EOF-001; FEATURE="ShellPlainMode"; ASPECT=ExitAtEndOfInput; STATUS=TESTED; TEST=tests/test_sonny3060_shell_plain_eof.zig; OWNER=cli; UPDATED=2026-11-13
+            // SONNY-3060: end of input (a piped file or here-doc) ends the
+            // session. Zig 0.16 reports EOF as error.EndOfStream, not as a
+            // zero-length read; it used to only break this byte loop, so the
+            // shell printed prompts forever. A last line without a newline
+            // still runs before the shell exits.
+            line_buf.clearRetainingCapacity();
+            var too_long = false;
+            while (true) {
                 var byte: [1]u8 = undefined;
-                const n = stdin_file.readStreaming(replIo(), &.{&byte}) catch break;
+                const n = stdin_file.readStreaming(replIo(), &.{&byte}) catch |err| switch (err) {
+                    error.EndOfStream => 0,
+                    else => return err,
+                };
                 if (n == 0) {
                     state.quit_requested = true;
                     break;
@@ -268,32 +300,67 @@ pub const ReplLoop = struct {
                     try stdout_file.writeStreamingAll(replIo(), "\n");
                     break;
                 } else if (byte[0] == 4) { // Ctrl+D
-                    if (pos == 0) {
+                    if (line_buf.items.len == 0 and !too_long) {
                         try stdout_file.writeStreamingAll(replIo(), "\n");
                         state.quit_requested = true;
                         break;
                     }
                 } else if (byte[0] == 3) { // Ctrl+C
                     try stdout_file.writeStreamingAll(replIo(), "^C\n");
-                    pos = 0;
+                    line_buf.clearRetainingCapacity();
+                    too_long = false;
                     break;
                 } else if (byte[0] == 127 or byte[0] == 8) { // Backspace
-                    if (pos > 0) {
-                        pos -= 1;
+                    if (line_buf.items.len > 0) {
+                        // SONNY-6484: erase one character, i.e. a whole
+                        // UTF-8 sequence (its continuation bytes and lead).
+                        while (line_buf.items.len > 1 and line_buf.items[line_buf.items.len - 1] & 0xC0 == 0x80) {
+                            _ = line_buf.pop();
+                        }
+                        _ = line_buf.pop();
                         try stdout_file.writeStreamingAll(replIo(), "\x08 \x08"); // Erase character
                     }
-                } else if (byte[0] >= 32 and byte[0] < 127) {
-                    line_buf[pos] = byte[0];
-                    pos += 1;
+                } else if ((byte[0] >= 32 and byte[0] != 127) or byte[0] == '\t') {
+                    // SONNY-6484: printable ASCII, a tab, and every byte of
+                    // a multi-byte UTF-8 sequence (>= 0x80). Only bytes
+                    // 32..126 were kept, so non-ASCII text (and tabs) in a
+                    // statement was dropped without a word; the whole line
+                    // is checked for valid UTF-8 below, before it runs.
+                    if (too_long) continue; // read the rest of the line, keep none
+                    if (line_buf.items.len >= max_plain_line_bytes) {
+                        too_long = true;
+                        line_buf.clearRetainingCapacity();
+                        continue;
+                    }
+                    try line_buf.append(opts.allocator, byte[0]);
                     // Echo character in plain mode (we disabled terminal echo)
                     try stdout_file.writeStreamingAll(replIo(), &byte);
                 }
             }
 
-            if (state.quit_requested) break;
-            if (pos == 0) continue;
+            if (too_long) {
+                var msg_buf: [128]u8 = undefined;
+                const msg = std.fmt.bufPrint(&msg_buf, "Error: the line is longer than {d} bytes; it was not run\n", .{max_plain_line_bytes}) catch "Error: the line is too long; it was not run\n";
+                try stdout_file.writeStreamingAll(replIo(), msg);
+                if (state.quit_requested) break;
+                continue;
+            }
 
-            const line = line_buf[0..pos];
+            if (line_buf.items.len == 0) {
+                if (state.quit_requested) break;
+                continue;
+            }
+
+            // CANARY: REQ=REQ-SONNY-6484-SHELL-UTF8; FEATURE="ShellPlainMode"; ASPECT=Utf8PassThrough; STATUS=TESTED; TEST=tests/test_sonny6484_shell_utf8.zig; OWNER=cli; UPDATED=2026-11-13
+            // SONNY-6484: a line that is not valid UTF-8 is refused whole,
+            // never sent with bytes removed or replaced.
+            if (!std.unicode.utf8ValidateSlice(line_buf.items)) {
+                try stdout_file.writeStreamingAll(replIo(), "Error: the line is not valid UTF-8; it was not run\n");
+                if (state.quit_requested) break;
+                continue;
+            }
+
+            const line = line_buf.items;
 
             // CANARY: REQ=REQ-SHELL-PLAIN-012; FEATURE="ShellPlainMode"; ASPECT=MetaCommandDispatch; STATUS=TESTED; TEST=geodetestlab/specs/shell_plain_mode.yml; OWNER=cli; UPDATED=2026-06-11
             // Handle meta-commands - use full dispatch for all supported commands
@@ -446,10 +513,13 @@ fn calculateVisualLines(prompt_len: usize, buffer: []const u8, term_width: usize
     var lines: usize = 0;
     var col: usize = prompt_len;
 
-    for (buffer) |c| {
+    var i: usize = 0;
+    while (i < buffer.len) {
+        const c = buffer[i];
         if (c == '\n') {
             lines += 1;
             col = 0; // Continuation lines have no prompt
+            i += 1;
         } else if (c == '\t') {
             // Tab expands to next tab stop
             const width = tabWidth(col);
@@ -458,12 +528,17 @@ fn calculateVisualLines(prompt_len: usize, buffer: []const u8, term_width: usize
                 lines += 1;
                 col = 0;
             }
+            i += 1;
         } else {
-            col += 1;
+            // SONNY-6487: one code point, its display width (0 for a
+            // combining mark), not one column per byte.
+            const g = line_text.glyphAt(buffer, i);
+            col += g.width;
             if (col >= term_width) {
                 lines += 1;
                 col = 0;
             }
+            i += g.len;
         }
     }
 
@@ -481,16 +556,19 @@ fn calculateCursorPosition(prompt_len: usize, buffer: []const u8, cursor: usize,
     var col: usize = prompt_len;
     var found_cursor = false;
 
-    for (buffer, 0..) |c, i| {
+    var i: usize = 0;
+    while (i < buffer.len) {
         if (i == cursor) {
             cursor_line = total_lines;
             cursor_col = col;
             found_cursor = true;
         }
 
+        const c = buffer[i];
         if (c == '\n') {
             total_lines += 1;
             col = 0;
+            i += 1;
         } else if (c == '\t') {
             // Tab expands to next tab stop
             const width = tabWidth(col);
@@ -499,12 +577,16 @@ fn calculateCursorPosition(prompt_len: usize, buffer: []const u8, cursor: usize,
                 total_lines += 1;
                 col = 0;
             }
+            i += 1;
         } else {
-            col += 1;
+            // SONNY-6487: display width per code point (see calculateVisualLines).
+            const g = line_text.glyphAt(buffer, i);
+            col += g.width;
             if (col >= term_width) {
                 total_lines += 1;
                 col = 0;
             }
+            i += g.len;
         }
     }
 
@@ -1095,9 +1177,12 @@ fn parseKeyEvent(data: []const u8) !KeyEvent {
             } else if (data[1] == '[' and data.len == 2) {
                 // Incomplete CSI sequence, wait for more data
                 return KeyEvent{ .key = 0x1b };
-            } else if ((data[1] & 0x7f) >= 'a' and (data[1] & 0x7f) <= 'z') {
-                // Alt+letter
-                return KeyEvent{ .key = @intCast(data[1] & 0x7f), .alt = true };
+            } else if (data[1] >= 'a' and data[1] <= 'z') {
+                // Alt+letter. SONNY-6494: the byte was masked to 7 bits, so
+                // ESC followed by a UTF-8 lead byte (é is 0xC3 0xA9; 0xC3 &
+                // 0x7f is 'C', 0xE6 & 0x7f is 'f') was read as Alt+<letter>
+                // and the character lost. Now ESC alone (getKeyEventLength).
+                return KeyEvent{ .key = data[1], .alt = true };
             } else if (data[1] >= 'A' and data[1] <= 'Z') {
                 // Alt+Shift+letter
                 return KeyEvent{ .key = @intCast(data[1] - 'A' + 'a'), .alt = true };
@@ -1142,8 +1227,11 @@ fn getKeyEventLength(data: []const u8) usize {
                 return 3;
             }
             return 2;
-        } else if (data.len > 1) {
-            // Alt+key sequences
+        } else if (data.len > 1 and ((data[1] >= 'a' and data[1] <= 'z') or (data[1] >= 'A' and data[1] <= 'Z'))) {
+            // Alt+letter, the only ESC pairs parseKeyEvent reads as one key.
+            // SONNY-6511: any other byte (a digit, punctuation, a second ESC,
+            // a UTF-8 lead byte, SONNY-6494) starts the next key; consuming
+            // it here lost the character.
             return 2;
         }
         return 1; // Just ESC
@@ -1209,21 +1297,23 @@ fn processAction(state: *ReplState, action: KeyAction) !void {
             }
         },
         .backspace => {
-            // Backspace - delete character before cursor
+            // Backspace - delete the character (grapheme cluster, SONNY-6487)
+            // before the cursor, never part of one.
             if (state.cursor > 0) {
-                state.cursor -= 1;
-                _ = state.buffer.orderedRemove(state.cursor);
+                const start = line_text.prevBoundary(state.buffer.items, state.cursor);
+                line_text.removeRange(&state.buffer, start, state.cursor);
+                state.cursor = start;
             }
         },
         .delete_char => {
             if (state.cursor < state.buffer.items.len) {
-                _ = state.buffer.orderedRemove(state.cursor);
+                line_text.removeRange(&state.buffer, state.cursor, line_text.nextBoundary(state.buffer.items, state.cursor));
             }
         },
         .delete_char_forward => {
-            // Delete key - delete character at cursor (not before like backspace)
+            // Delete key - delete the character at the cursor (not before like backspace)
             if (state.cursor < state.buffer.items.len) {
-                _ = state.buffer.orderedRemove(state.cursor);
+                line_text.removeRange(&state.buffer, state.cursor, line_text.nextBoundary(state.buffer.items, state.cursor));
             }
         },
         .delete_word => {
@@ -1260,10 +1350,10 @@ fn processAction(state: *ReplState, action: KeyAction) !void {
             state.last_was_kill = true;
         },
         .move_left => {
-            if (state.cursor > 0) state.cursor -= 1;
+            state.cursor = line_text.prevBoundary(state.buffer.items, state.cursor);
         },
         .move_right => {
-            if (state.cursor < state.buffer.items.len) state.cursor += 1;
+            state.cursor = line_text.nextBoundary(state.buffer.items, state.cursor);
         },
         .move_word_left => {
             state.cursor = findWordStart(state.buffer.items, state.cursor);
@@ -1460,9 +1550,10 @@ fn handleSearch(state: *ReplState) !void {
 
             const c = search_buf[i];
 
-            // In paste mode, add printable chars to search (skip newlines)
+            // In paste mode, add printable chars to search (skip newlines).
+            // SONNY-6487: and the bytes of UTF-8 text.
             if (in_paste) {
-                if (c >= 0x20 and c < 0x7f) {
+                if ((c >= 0x20 and c < 0x7f) or c >= 0x80) {
                     try state.search_buffer.append(state.allocator, c);
                 }
                 i += 1;
@@ -1480,11 +1571,10 @@ fn handleSearch(state: *ReplState) !void {
                 break;
             }
 
-            if (c == 0x7f or c == 0x08) { // Backspace
-                if (state.search_buffer.items.len > 0) {
-                    _ = state.search_buffer.pop();
-                }
-            } else if (c >= 0x20 and c < 0x7f) {
+            if (c == 0x7f or c == 0x08) { // Backspace: one character, not one byte
+                const len = state.search_buffer.items.len;
+                state.search_buffer.items.len = line_text.prevBoundary(state.search_buffer.items, len);
+            } else if ((c >= 0x20 and c < 0x7f) or c >= 0x80) { // SONNY-6487: UTF-8 text too
                 try state.search_buffer.append(state.allocator, c);
             }
 
@@ -1518,9 +1608,13 @@ fn handleSearch(state: *ReplState) !void {
             }
         }
 
-        var search_line_buf: [1024]u8 = undefined;
-        const search_line = try std.fmt.bufPrint(&search_line_buf, "\r(reverse-i-search)`{s}': {s}", .{ state.search_buffer.items, if (found) state.buffer.items else "" });
-        try stdout_file.writeStreamingAll(replIo(), search_line);
+        // SONNY-6487: written in pieces; a match longer than about 1000
+        // bytes overflowed a fixed 1024-byte line buffer (NoSpaceLeft) and
+        // ended the read loop.
+        try stdout_file.writeStreamingAll(replIo(), "\r(reverse-i-search)`");
+        try stdout_file.writeStreamingAll(replIo(), state.search_buffer.items);
+        try stdout_file.writeStreamingAll(replIo(), "': ");
+        if (found) try stdout_file.writeStreamingAll(replIo(), state.buffer.items);
     }
 }
 

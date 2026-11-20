@@ -9,12 +9,14 @@
 //   - Graph-RBAC bind authorization (REQ-MULTI-GRAPH-RBAC-WIRE-002):
 //     the rbac_allowed check runs on every authenticated graph bind.
 //
-// Every test spawns the real ./zig-out/bin/geode server and speaks the real
+// Every test spawns this build's geode server (geode_test_bin) and speaks the real
 // length-prefixed protobuf protocol over QUIC.  No mocks.
 //
 // CANARY: REQ=REQ-GAP-0514-QUIC-HANDLER; FEATURE="CanaryReconciliation"; ASPECT=QuicHandlerRegression; STATUS=TESTED; TEST=tests/test_gap0514_quic_handler.zig; OWNER=server; UPDATED=2026-06-11
 
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -22,6 +24,8 @@ const util = @import("proto_test_util.zig");
 // REQ-TXN-SAVEPOINT-004 (QuicSavepoint) + REQ-TXN-SAVEPOINT-005 (QuicRollbackTo)
 // ---------------------------------------------------------------------------
 test "savepoint/rollback_to over QUIC: txn-gated, happy lane, unknown-name refused" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try util.spawnServerRandom(allocator, util.TestEnv.standard());
@@ -40,8 +44,8 @@ test "savepoint/rollback_to over QUIC: txn-gated, happy lane, unknown-name refus
     try testing.expect(!(try client.rollbackTo(allocator, "sp0")));
 
     // Happy lane: BEGIN -> SAVEPOINT -> mutate -> ROLLBACK TO -> COMMIT.
-    // Undo-log semantics themselves are covered by tests/test_twophase_unit.zig;
-    // this drives the QUIC dispatch + session-auth + txn gating around them.
+    // This drives the QUIC dispatch + session-auth + txn gating around the
+    // session's undo log.
     var begin_res = try client.begin(allocator);
     defer begin_res.deinit(allocator);
     try testing.expect(begin_res.tx_id.len > 0);
@@ -64,6 +68,8 @@ test "savepoint/rollback_to over QUIC: txn-gated, happy lane, unknown-name refus
 // REQ-MULTI-GRAPH-RBAC-WIRE-002 (QuicGraphAuth)
 // ---------------------------------------------------------------------------
 test "HELLO graph binding: valid graph binds (RBAC-checked), oversize/malformed names refused" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     // Graph auto-create at HELLO requires the persistent storage adapter
@@ -82,7 +88,7 @@ test "HELLO graph binding: valid graph binds (RBAC-checked), oversize/malformed 
     defer allocator.free(addr);
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir },
         util.TestEnv.standard(),
     );
     defer server.deinit();

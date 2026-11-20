@@ -34,6 +34,8 @@ No SBOM/CVE scan in Phase 2 (scanners missing). 24 git-pinned Zig modules in `bu
 
 ## Notes
 
+**Finding 2, truthiness (resolved 2026-11-12, SONNY-6436):** the raw-string interpreter (`ContextEvaluator`, reachable only in a `-Dallow-rls-raw-interp=true` build since GAP-0732) now admits a row only when the predicate is the boolean TRUE, as the compiled VM does: a non-zero integer, a non-empty string or any other non-boolean value (`raw = "1"`) denies, `=` / `<>` with a null side or values that do not compare deny, and `func() = x` is a comparison. Regression: `zig build test-sonny6436-rls-raw-truthiness`. The comma split of call arguments (`has_permission('a,b')`) remains.
+
 `@enumFromInt(expr.bytecode[pc])` at `rls_core.zig:647` on an out-of-range byte panics in safe builds (illegal-enum-value) — a compiled-policy byte outside `{0x00-0x05, 0x10-0x12, 0x20-0x25, 0x30-0x32, 0x40-0x42, 0xFF}` crashes the auth worker. Additional **fail-closed DoS** primitive, likelihood Low (requires write path). **Confidence: confirmed** for all #1–#12 at static-analysis level; exploitability of #1/#2 is **suspected** pending a live write-path for compiled/raw policies (GAP-0510 parser land).
 
 ---

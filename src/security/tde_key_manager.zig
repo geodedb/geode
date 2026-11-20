@@ -7,6 +7,7 @@
 /// Extracted as part of Phase 1, M1.3 of the modularization effort.
 const std = @import("std");
 const cb = @import("crypto_backend");
+const host_port_lib = @import("../client/host_port.zig");
 
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
@@ -71,40 +72,6 @@ pub const KeyStatus = struct {
     key_id: [32]u8 = undefined,
 };
 
-/// Key provider types
-pub const KeyProvider = enum {
-    StaticEnv,
-    MockKms,
-    AwsKms,
-    AzureKeyVault,
-    GcpKms,
-};
-
-/// Key hierarchy initialization result
-pub const KeyHierarchyResult = struct {
-    master_key_id: []const u8,
-    data_keys: u32,
-    backup_keys: u32,
-};
-
-/// Key rotation result
-pub const RotateKeysResult = struct {
-    old_key_id: []const u8,
-    new_key_id: []const u8,
-    records_migrated: u64,
-    duration_ms: u64,
-};
-
-/// Encryption status result
-pub const EncryptionStatusResult = struct {
-    enabled: bool,
-    key_loaded: bool,
-    data_encrypted: bool,
-    backups_encrypted: bool,
-    algorithm: []const u8,
-    key_length: u32,
-};
-
 /// KMS configuration result
 pub const ConfigureKMSResult = struct {
     provider_name: []const u8,
@@ -112,56 +79,6 @@ pub const ConfigureKMSResult = struct {
     endpoint: []const u8,
     test_result: []const u8,
 };
-
-/// Provider configuration result
-pub const ConfigureProviderResult = struct {
-    provider_type: []const u8,
-    status: []const u8,
-    key_source: []const u8,
-    mock_endpoint: ?[]const u8,
-};
-
-/// Rotation state result
-pub const GetRotationStateResult = struct {
-    current_generation: i64,
-    last_rotation_time: []const u8,
-    rotation_in_progress: bool,
-    scheduled_rotation: ?i64,
-};
-
-/// Rotation configuration result
-pub const ConfigureRotationResult = struct {
-    status: []const u8,
-    next_rotation_time: []const u8,
-};
-
-/// Data key derivation result
-pub const DeriveDataKeyResult = struct {
-    key_id: u32,
-    key_hash: []const u8,
-    key_type: []const u8,
-    derivation_method: []const u8,
-};
-
-/// Cleanup result
-pub const CleanupKeyHierarchyResult = struct {
-    keys_zeroized: i64,
-    hierarchy_cleared: bool,
-};
-
-/// Rotation state
-pub const RotationState = struct {
-    current_generation: u32 = 1,
-    last_rotation_time: i64 = 0,
-    rotation_in_progress: bool = false,
-    scheduled_rotation: ?i64 = null,
-};
-
-/// Global rotation state
-var rotation_state = RotationState{};
-
-/// Current key provider
-var current_provider: KeyProvider = .StaticEnv;
 
 /// Loads encryption key from GEODE_TDE_KEY (32 bytes hex) with secure key ID derivation.
 /// GAP-0085: Key ID derived using HKDF to prevent collision and avoid key material exposure
@@ -233,217 +150,57 @@ pub fn loadRawKey(allocator: std.mem.Allocator) !?[KeyBytes]u8 {
     return k;
 }
 
-/// Initialize key hierarchy with master/data/backup keys
-pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !KeyHierarchyResult {
-    // Generate master key
-    var master_key: [32]u8 = undefined;
-    try cb.Csprng.bytes(&master_key);
-
-    // Generate derived keys
-    const data_key_count: u32 = 10; // Number of data encryption keys
-    const backup_key_count: u32 = 3; // Number of backup encryption keys
-
-    // Create data keys using inline derivation
-    for (0..data_key_count) |i| {
-        var i_bytes: [8]u8 = undefined;
-        std.mem.writeInt(u64, &i_bytes, i, .little);
-        var stream = try cb.Hash.Stream.init(.sha256);
-        defer stream.deinit();
-        try stream.update(&master_key);
-        try stream.update("data_key");
-        try stream.update(&i_bytes);
-        var data_key: [32]u8 = undefined;
-        _ = try stream.final(&data_key);
-    }
-
-    // Create backup keys using inline derivation
-    for (0..backup_key_count) |i| {
-        var i_bytes: [8]u8 = undefined;
-        std.mem.writeInt(u64, &i_bytes, i, .little);
-        var stream = try cb.Hash.Stream.init(.sha256);
-        defer stream.deinit();
-        try stream.update(&master_key);
-        try stream.update("backup_key");
-        try stream.update(&i_bytes);
-        var backup_key: [32]u8 = undefined;
-        _ = try stream.final(&backup_key);
-    }
-
-    // Generate master key ID (hash of master key)
-    var hash: [32]u8 = undefined;
-    _ = try cb.Hash.digest(.sha256, &master_key, &hash);
-    const key_id = try allocator.alloc(u8, 64);
-    // Format hash as hex string manually
-    for (hash, 0..) |byte, i| {
-        _ = try std.fmt.bufPrint(key_id[i * 2 .. i * 2 + 2], "{x:0>2}", .{byte});
-    }
-
-    return .{
-        .master_key_id = key_id,
-        .data_keys = data_key_count,
-        .backup_keys = backup_key_count,
-    };
-}
-
-/// Rotate encryption keys with zero-downtime migration
-pub fn rotateKeys(allocator: std.mem.Allocator) !RotateKeysResult {
-    const start_time = compat_milliTimestamp();
-
-    // Load current key
-    const old_key = try loadRawKey(allocator) orelse return error.NoCurrentKey;
-
-    // Generate new master key
-    var new_master_key: [32]u8 = undefined;
-    try cb.Csprng.bytes(&new_master_key);
-
-    // Calculate key IDs
-    var old_hash: [32]u8 = undefined;
-    _ = try cb.Hash.digest(.sha256, &old_key, &old_hash);
-    const old_key_id = try allocator.alloc(u8, 64);
-    // Format hash as hex string manually
-    for (old_hash, 0..) |byte, i| {
-        _ = try std.fmt.bufPrint(old_key_id[i * 2 .. i * 2 + 2], "{x:0>2}", .{byte});
-    }
-
-    var new_hash: [32]u8 = undefined;
-    _ = try cb.Hash.digest(.sha256, &new_master_key, &new_hash);
-    const new_key_id = try allocator.alloc(u8, 64);
-    // Format hash as hex string manually
-    for (new_hash, 0..) |byte, i| {
-        _ = try std.fmt.bufPrint(new_key_id[i * 2 .. i * 2 + 2], "{x:0>2}", .{byte});
-    }
-
-    // Simulate re-encryption of data
-    var records_migrated: u64 = 0;
-
-    // Re-encrypt data files (simulated)
-    for (0..1000) |_| {
-        // In production, this would:
-        // 1. Read encrypted record with old key
-        // 2. Decrypt with old key
-        // 3. Re-encrypt with new key
-        // 4. Write back
-        records_migrated += 1;
-
-        // Simulate some work
-        try cb.Csprng.bytes(&new_master_key);
-    }
-
-    const duration_ms: u64 = @intCast(compat_milliTimestamp() - start_time);
-
-    return .{
-        .old_key_id = old_key_id,
-        .new_key_id = new_key_id,
-        .records_migrated = records_migrated,
-        .duration_ms = duration_ms,
-    };
-}
-
-/// Get comprehensive encryption status across all components
-pub fn getEncryptionStatus(allocator: std.mem.Allocator, enabled: bool) !EncryptionStatusResult {
-    const is_enabled = enabled;
-    const key_loaded = if (try loadRawKey(allocator)) |_| true else false;
-
-    // Check encryption status of different components
-    // In production, these would check actual file headers/metadata
-    const data_encrypted = is_enabled and key_loaded;
-    const backups_encrypted = is_enabled and key_loaded;
-
-    return .{
-        .enabled = is_enabled,
-        .key_loaded = key_loaded,
-        .data_encrypted = data_encrypted,
-        .backups_encrypted = backups_encrypted,
-        .algorithm = try allocator.dupe(u8, "AES-256-GCM"),
-        .key_length = 256,
-    };
-}
-
 /// Configure KMS integration for key management.
 ///
-/// GAP-0296: When `provider` looks like a URL or `host:port` reachable
-/// endpoint, attempt a TCP probe with a short timeout. If the endpoint
-/// is unreachable, the caller (server startup) must refuse to start
-/// (fail-closed contract). Symbolic provider names ("aws", "azure",
-/// "gcp", "hashicorp") keep the legacy local-roundtrip simulation
-/// because the real cloud SDKs are not linked in.
+/// GAP-0296: `provider` must be a reachable endpoint (`host:port` or
+/// `<scheme>://host:port[/path]`); it is probed with a TCP connect, and an
+/// unreachable endpoint reports configured=false so server startup refuses
+/// to start (fail-closed contract). Reachability is all that is checked: no
+/// key is fetched from or wrapped by the endpoint.
+///
+/// SONNY-6348: a symbolic provider name ("aws", "azure", "gcp",
+/// "hashicorp", "local") used to report configured=true after a local
+/// AES-GCM round trip with a random key, so startup logged "KMS configured"
+/// without contacting any KMS. No cloud KMS SDK is linked in; such a name
+/// now reports configured=false and startup refuses it.
 pub fn configureKMS(allocator: std.mem.Allocator, provider: []const u8) !ConfigureKMSResult {
-    // Detect the symbolic provider set vs an actual endpoint string.
     const is_symbolic = std.mem.eql(u8, provider, "aws") or
         std.mem.eql(u8, provider, "azure") or
         std.mem.eql(u8, provider, "gcp") or
         std.mem.eql(u8, provider, "hashicorp") or
         std.mem.eql(u8, provider, "local");
 
-    if (!is_symbolic) {
-        // Treat as a reachability probe. Accept either `host:port` or
-        // `<scheme>://host:port[/path]`.  Anything else fails closed.
-        const reachable = probeKmsReachable(allocator, provider) catch false;
-        if (!reachable) {
-            return .{
-                .provider_name = try allocator.dupe(u8, provider),
-                .configured = false,
-                .endpoint = try allocator.dupe(u8, provider),
-                .test_result = try std.fmt.allocPrint(
-                    allocator,
-                    "FAILED: KMS endpoint unreachable ({s})",
-                    .{provider},
-                ),
-            };
-        }
+    if (is_symbolic) {
         return .{
             .provider_name = try allocator.dupe(u8, provider),
-            .configured = true,
-            .endpoint = try allocator.dupe(u8, provider),
-            .test_result = try allocator.dupe(u8, "SUCCESS: KMS endpoint reachable"),
+            .configured = false,
+            .endpoint = try allocator.dupe(u8, ""),
+            .test_result = try std.fmt.allocPrint(
+                allocator,
+                "FAILED: '{s}' is a provider name, not a KMS endpoint; no {s} KMS client is built in (GEODE_KMS_URL must be host:port or scheme://host:port)",
+                .{ provider, provider },
+            ),
         };
     }
 
-    // Configure endpoint based on provider
-    const endpoint = if (std.mem.eql(u8, provider, "aws"))
-        try allocator.dupe(u8, "kms.us-east-1.amazonaws.com")
-    else if (std.mem.eql(u8, provider, "azure"))
-        try allocator.dupe(u8, "vault.azure.net")
-    else if (std.mem.eql(u8, provider, "gcp"))
-        try allocator.dupe(u8, "cloudkms.googleapis.com")
-    else if (std.mem.eql(u8, provider, "hashicorp"))
-        try allocator.dupe(u8, "vault.local:8200")
-    else
-        try allocator.dupe(u8, "local://keys");
-
-    // Test KMS connection using inline encryption (avoiding circular dependency)
-    const test_data = "test_data";
-    const test_result = blk: {
-        // Test encrypt/decrypt roundtrip using AES-256-GCM
-        // SEC-06: Use ephemeral random key and nonce instead of static values
-        var key: [32]u8 = undefined;
-        var nonce: [12]u8 = undefined;
-        try cb.Csprng.bytes(&key);
-        try cb.Csprng.bytes(&nonce);
-
-        // Encrypt test data
-        var encrypted: [test_data.len]u8 = undefined;
-        var tag: [16]u8 = undefined;
-        try cb.Aead.seal(.aes_256_gcm, &key, &nonce, &.{}, test_data, &encrypted, &tag);
-
-        // Decrypt test data
-        var decrypted: [test_data.len]u8 = undefined;
-        cb.Aead.open(.aes_256_gcm, &key, &nonce, &.{}, &encrypted, &tag, &decrypted) catch {
-            break :blk try allocator.dupe(u8, "FAILED: Decryption failed");
+    const reachable = probeKmsReachable(allocator, provider) catch false;
+    if (!reachable) {
+        return .{
+            .provider_name = try allocator.dupe(u8, provider),
+            .configured = false,
+            .endpoint = try allocator.dupe(u8, provider),
+            .test_result = try std.fmt.allocPrint(
+                allocator,
+                "FAILED: KMS endpoint unreachable ({s})",
+                .{provider},
+            ),
         };
-
-        if (std.mem.eql(u8, &decrypted, test_data)) {
-            break :blk try allocator.dupe(u8, "SUCCESS: Encrypt/decrypt roundtrip passed");
-        } else {
-            break :blk try allocator.dupe(u8, "FAILED: Data mismatch");
-        }
-    };
-
+    }
     return .{
         .provider_name = try allocator.dupe(u8, provider),
         .configured = true,
-        .endpoint = endpoint,
-        .test_result = test_result,
+        .endpoint = try allocator.dupe(u8, provider),
+        .test_result = try allocator.dupe(u8, "SUCCESS: KMS endpoint reachable (TCP connect only; no key is fetched from it)"),
     };
 }
 
@@ -465,11 +222,11 @@ fn probeKmsReachable(allocator: std.mem.Allocator, endpoint: []const u8) !bool {
             host_port = host_port[0..slash_idx];
         }
     }
-    const colon_idx = std.mem.lastIndexOfScalar(u8, host_port, ':') orelse return false;
-    const host = host_port[0..colon_idx];
-    const port_str = host_port[colon_idx + 1 ..];
-    if (host.len == 0 or port_str.len == 0) return false;
-    const port = std.fmt.parseInt(u16, port_str, 10) catch return false;
+    // SONNY-6487: host:port or [ipv6]:port (the shared grammar).
+    const hp = host_port_lib.split(host_port, null) catch return false;
+    if (hp.host.len == 0) return false;
+    const host = hp.host;
+    const port = hp.port;
 
     // We only support IP-literal hosts for the fail-closed probe.  Bare
     // hostnames would require DNS, which the harness scenario does not
@@ -486,149 +243,6 @@ fn probeKmsReachable(allocator: std.mem.Allocator, endpoint: []const u8) !bool {
     }) catch return false;
     stream.close(io);
     return true;
-}
-
-/// Configure key provider
-pub fn configureProvider(allocator: std.mem.Allocator, provider_type: []const u8) !ConfigureProviderResult {
-    // Validate and set provider
-    if (std.mem.eql(u8, provider_type, "StaticEnv")) {
-        current_provider = .StaticEnv;
-        return .{
-            .provider_type = try allocator.dupe(u8, "StaticEnv"),
-            .status = try allocator.dupe(u8, "configured"),
-            .key_source = try allocator.dupe(u8, "environment"),
-            .mock_endpoint = null,
-        };
-    } else if (std.mem.eql(u8, provider_type, "MockKms")) {
-        current_provider = .MockKms;
-        return .{
-            .provider_type = try allocator.dupe(u8, "MockKms"),
-            .status = try allocator.dupe(u8, "configured"),
-            .key_source = try allocator.dupe(u8, "mock"),
-            .mock_endpoint = try allocator.dupe(u8, "http://localhost:8080/mock-kms"),
-        };
-    } else if (std.mem.eql(u8, provider_type, "AwsKms")) {
-        current_provider = .AwsKms;
-        return .{
-            .provider_type = try allocator.dupe(u8, "AwsKms"),
-            .status = try allocator.dupe(u8, "configured"),
-            .key_source = try allocator.dupe(u8, "aws-kms"),
-            .mock_endpoint = null,
-        };
-    } else {
-        return error.InvalidKeyProvider;
-    }
-}
-
-/// Get current rotation state
-pub fn getRotationState(allocator: std.mem.Allocator) !GetRotationStateResult {
-    const timestamp_str = try std.fmt.allocPrint(allocator, "{d}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{ 2025, 10, 25, 0, 0, 0 });
-
-    return .{
-        .current_generation = rotation_state.current_generation,
-        .last_rotation_time = timestamp_str,
-        .rotation_in_progress = rotation_state.rotation_in_progress,
-        .scheduled_rotation = rotation_state.scheduled_rotation,
-    };
-}
-
-/// Configure key rotation schedule
-pub fn configureRotation(allocator: std.mem.Allocator, max_age_hours: u32) !ConfigureRotationResult {
-    // Calculate next rotation time
-    const now = compat_milliTimestamp();
-    const next_rotation_ms = now + (@as(i64, max_age_hours) * 3600 * 1000);
-    rotation_state.scheduled_rotation = next_rotation_ms;
-
-    const next_time_str = try std.fmt.allocPrint(allocator, "2025-11-{d:0>2}T00:00:00Z", .{25 + (max_age_hours / 24)});
-
-    return .{
-        .status = try allocator.dupe(u8, "configured"),
-        .next_rotation_time = next_time_str,
-    };
-}
-
-/// Derive data encryption key from master key
-pub fn deriveDataKey(allocator: std.mem.Allocator, key_id: u32) !DeriveDataKeyResult {
-    // Generate key material using HKDF
-    var ikm: [32]u8 = undefined;
-    try cb.Csprng.bytes(&ikm);
-
-    // Derive key using SHA-256 based HKDF
-    var derived_key: [32]u8 = undefined;
-    const salt = "geode-data-key";
-    const info_bytes = std.mem.asBytes(&key_id);
-
-    // Simple KDF: Hash(salt || ikm || info)
-    {
-        var stream = try cb.Hash.Stream.init(.sha256);
-        defer stream.deinit();
-        try stream.update(salt);
-        try stream.update(&ikm);
-        try stream.update(info_bytes);
-        _ = try stream.final(&derived_key);
-    }
-
-    // Calculate key hash for identification
-    var key_hash_bytes: [32]u8 = undefined;
-    _ = try cb.Hash.digest(.sha256, &derived_key, &key_hash_bytes);
-    const key_hash = try std.fmt.allocPrint(allocator, "{x}", .{key_hash_bytes});
-
-    return .{
-        .key_id = key_id,
-        .key_hash = key_hash,
-        .key_type = try allocator.dupe(u8, "DATA_ENCRYPTION_KEY"),
-        .derivation_method = try allocator.dupe(u8, "HKDF-SHA256"),
-    };
-}
-
-/// Derive backup encryption key from master key
-pub fn deriveBackupKey(allocator: std.mem.Allocator, key_id: u32) !DeriveDataKeyResult {
-    var ikm: [32]u8 = undefined;
-    try cb.Csprng.bytes(&ikm);
-
-    var derived_key: [32]u8 = undefined;
-    const salt = "geode-backup-key";
-    const info_bytes = std.mem.asBytes(&key_id);
-
-    {
-        var stream = try cb.Hash.Stream.init(.sha256);
-        defer stream.deinit();
-        try stream.update(salt);
-        try stream.update(&ikm);
-        try stream.update(info_bytes);
-        _ = try stream.final(&derived_key);
-    }
-
-    var key_hash_bytes: [32]u8 = undefined;
-    _ = try cb.Hash.digest(.sha256, &derived_key, &key_hash_bytes);
-    const key_hash = try std.fmt.allocPrint(allocator, "{x}", .{key_hash_bytes});
-
-    return .{
-        .key_id = key_id,
-        .key_hash = key_hash,
-        .key_type = try allocator.dupe(u8, "BACKUP_ENCRYPTION_KEY"),
-        .derivation_method = try allocator.dupe(u8, "HKDF-SHA256"),
-    };
-}
-
-/// Cleanup key hierarchy
-pub fn cleanupKeyHierarchy(_: std.mem.Allocator) !CleanupKeyHierarchyResult {
-    // Zeroize all keys in hierarchy
-    var keys: [3][32]u8 = undefined;
-    for (&keys) |*key| {
-        @memset(key, 0);
-    }
-
-    // Reset rotation state
-    rotation_state.current_generation = 1;
-    rotation_state.last_rotation_time = 0;
-    rotation_state.rotation_in_progress = false;
-    rotation_state.scheduled_rotation = null;
-
-    return .{
-        .keys_zeroized = 3,
-        .hierarchy_cleared = true,
-    };
 }
 
 // =============================================================================
@@ -836,18 +450,7 @@ test "deriveKey - invalid length" {
     try testing.expectError(error.InvalidKey, deriveKey(hex, &key));
 }
 
-test "initializeKeyHierarchy - creates keys" {
-    const testing = std.testing;
-
-    const result = try initializeKeyHierarchy(testing.allocator);
-    defer testing.allocator.free(result.master_key_id);
-
-    try testing.expectEqual(@as(u32, 10), result.data_keys);
-    try testing.expectEqual(@as(u32, 3), result.backup_keys);
-    try testing.expect(result.master_key_id.len == 64);
-}
-
-test "configureKMS - AWS provider" {
+test "configureKMS - a symbolic provider name is not a configured KMS" {
     const testing = std.testing;
 
     const result = try configureKMS(testing.allocator, "aws");
@@ -856,63 +459,8 @@ test "configureKMS - AWS provider" {
     defer testing.allocator.free(result.test_result);
 
     try testing.expect(std.mem.eql(u8, result.provider_name, "aws"));
-    try testing.expect(result.configured);
-    try testing.expect(std.mem.indexOf(u8, result.endpoint, "kms.us-east-1") != null);
-}
-
-test "configureProvider - StaticEnv" {
-    const testing = std.testing;
-
-    const result = try configureProvider(testing.allocator, "StaticEnv");
-    defer testing.allocator.free(result.provider_type);
-    defer testing.allocator.free(result.status);
-    defer testing.allocator.free(result.key_source);
-
-    try testing.expect(std.mem.eql(u8, result.status, "configured"));
-    try testing.expect(std.mem.eql(u8, result.key_source, "environment"));
-}
-
-test "getRotationState - returns current state" {
-    const testing = std.testing;
-
-    const result = try getRotationState(testing.allocator);
-    defer testing.allocator.free(result.last_rotation_time);
-
-    try testing.expectEqual(@as(i64, 1), result.current_generation);
-    try testing.expect(!result.rotation_in_progress);
-}
-
-test "deriveDataKey - generates key" {
-    const testing = std.testing;
-
-    const result = try deriveDataKey(testing.allocator, 123);
-    defer testing.allocator.free(result.key_hash);
-    defer testing.allocator.free(result.key_type);
-    defer testing.allocator.free(result.derivation_method);
-
-    try testing.expectEqual(@as(u32, 123), result.key_id);
-    try testing.expect(std.mem.eql(u8, result.key_type, "DATA_ENCRYPTION_KEY"));
-}
-
-test "deriveBackupKey - generates key" {
-    const testing = std.testing;
-
-    const result = try deriveBackupKey(testing.allocator, 7);
-    defer testing.allocator.free(result.key_hash);
-    defer testing.allocator.free(result.key_type);
-    defer testing.allocator.free(result.derivation_method);
-
-    try testing.expectEqual(@as(u32, 7), result.key_id);
-    try testing.expect(std.mem.eql(u8, result.key_type, "BACKUP_ENCRYPTION_KEY"));
-}
-
-test "cleanupKeyHierarchy - resets state" {
-    const testing = std.testing;
-
-    const result = try cleanupKeyHierarchy(testing.allocator);
-
-    try testing.expectEqual(@as(i64, 3), result.keys_zeroized);
-    try testing.expect(result.hierarchy_cleared);
+    try testing.expect(!result.configured);
+    try testing.expect(std.mem.startsWith(u8, result.test_result, "FAILED"));
 }
 
 // =============================================================================

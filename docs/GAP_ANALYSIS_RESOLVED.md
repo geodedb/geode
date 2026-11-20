@@ -6,6 +6,49 @@ This document contains gaps that have been verified as resolved from previous ga
 **Last Verified**: June 16, 2026
 **GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
+> **Status note (2026-11-11, SONNY-6298):** some resolution evidence below
+> cites files that were reachable from no executable or test in `build.zig`,
+> were never compiled, and have since been removed:
+> `src/dist/{rpc,scaffold}.zig`, `src/distributed/raft.zig`,
+> `src/performance/async_io_simple.zig`, `src/planner/stats_registry.zig`,
+> `src/server/index_optimizer.zig`, `src/server/txn/isolation_integration.zig`,
+> `src/transactions/transaction_manager.zig`, `src/util/yaml{,_test}.zig`,
+> `src/security/key_provider.zig` and `src/security/backup_key_envelope.zig`.
+> A fix cited only in those files never ran (for example GAP-0017's key
+> wrapping in `key_provider.zig`, and GAP-0210's RPC transport). The entries
+> are kept as the historical record.
+>
+> The same holds for these files, removed later in SONNY-6298:
+> `src/runtime/poller_iface.zig` (GAP-0238),
+> `src/containers/{cursor_container,signaled_queue}.zig` (GAP-0239) and
+> `src/sentinel.zig` (GAP-0218: the `SentinelAllocator` was never compiled,
+> so no allocation was ever guarded by it).
+> `src/graph/path_algorithms.zig` (GAP-0084) was not compiled either; the
+> `RELATIONSHIPS(path)` function the server runs is in `src/eval.zig`.
+> `src/cli/user_storage_secure.zig` (GAP-0001) was never compiled either: the
+> AES-256-GCM `users.dat` file it describes was never written by Geode. User
+> records are stored in the HMAC-chained `__geode_security` graph (read by
+> `src/server/persistent_auth_resolver.zig`; see `docs/GQL_AUTH_DDL.md`).
+> The distributed modules cited below as delivered are gone too, and no
+> build artifact compiled them, so the fixes cited only in them never ran in
+> the server: `federation.zig`, `query_transport.zig`,
+> `query_coordinator.zig`, `enhanced_query_coordinator.zig` and `mod.zig`
+> (SONNY-6279); `twophase.zig`, `network_transport.zig`,
+> `enhanced_query_transport.zig`, `sharding.zig`, `node_registry.zig`,
+> `federation_flag.zig`, `query_planner.zig` and `raft_persistent.zig`
+> (SONNY-6563: it persisted the term, not the vote); `federation_root.zig`
+> (`35eaaad98`). That covers the 2PC, query-transport, federation and
+> scatter-gather resolutions below (e.g. the `twophase.zig`,
+> `query_transport.zig`, `federation.zig` and `enhanced_query_transport.zig`
+> evidence), the `raft_persistent.zig` half of GAP-0889, and the
+> enhanced-query-transport half of GAP-0870. The server's distributed code is
+> listed in `src/distributed/README.md` (SONNY-6592).
+> `src/security/rls_enhanced.zig`, cited for GAP-0047, GAP-0287 and GAP-0294,
+> was never compiled either (removed in SONNY-6298). The RLS code the server
+> runs is `src/security/rls_core.zig`: it has `current_user()` / `has_role()`
+> (GAP-0047), an octet-parsing IPv4 `cidrMatch` with a unit test (GAP-0287),
+> and the evaluation-error paths in `match_operations.zig` deny (GAP-0294).
+
 **Current Status**: 7 open/partial actionable gaps (2 Critical — both Blocked; 3 High — GAP-0885 open/partial, GAP-0893 Blocked-vendor, GAP-0900 write-throughput serialization root-caused 2026-06-17; 2 Medium — GAP-0873 deferred, GAP-0897 observability; 0 Low). GAP-0899 (checkpoint-vs-writer crash) closed 2026-06-17. See docs/GAP_ANALYSIS.md.
 
 ## 2026-06-17 — GAP-0899: checkpoint vs concurrent-writer data race → server crash (Closed)
@@ -184,7 +227,7 @@ round are archived here exactly as struck in `docs/GAP_ANALYSIS.md`:
 
 | Gap-ID | Severity | Area | Closure evidence | Original required completion |
 |---|---|---|---|---|
-| ~~GAP-0514~~ | ~~Medium~~ | Governance | **Closed (Phase 6 P3, 2026-06-11).** Repo-wide CANARY IMPL is 223/5094 (4.4%, TESTED 85.2%) — under the ≤250 (≤5%) acceptance target. Phase 6 (P1 commits + P2 `3741b52f..84136152` + P3 `7f81059d..9eb236a9`) reconciled every hotspot file with RUN-backed evidence only: P3 closed query_planner.zig 13→0, enhanced_query_transport.zig 11→1, sharding.zig 10→0, query_transport.zig 9→0 (→9 EXEMPT, outside the build graph), transport/quic.zig 8→1, geode_auth_lib.zig 8→0, execution.zig 6→0. Honest residuals (223) are enumerated per-file in the journal — dominated by grpc_server.zig (17, vendor grpc_zig 0.1.7 listener crash blocks end-to-end verification), PTY-only REPL lanes, and fault-injection-only lanes. Prior history: **Partial (Phase 5, 2026-06-10).** CANARY IMPL debt reduced 547→493 (11.0%→9.9%; TESTED 78.7%→79.8%) by reconciling the top REPL/CLI/QUIC hotspots: stale reference-only promotions (markers already carrying a genuine `test_quic_condition_timedwait_cadence`/`test_gps_mcp_wire` ref) + harness-spec-backed promotions (each spec re-run green against the binary — `transaction_chunked_execution` 19/19, `query_file_flag_comprehensive` 30/30, `query_file_flag_edge_cases` 28/28, `cli_flags_comprehensive` 23/23, `query_output_formats` 22/22, `shell_source_batch` 50/50). Per-file: quic_connection_handler 40→22, cli/main 30→12 (later corrected to 30→18 by the 2026-06-10 honesty-audit remediation, below), transport/quic 18→8, server_init 22→19, repl_dispatch 36→31 (later corrected to 36→36, below). Commits `40121c11`/`2000406a`/`caf1e26d`/`514ca4c0`. **Honesty-audit remediation (2026-06-10, commit follows):** a follow-up audit of commits `2000406a` and `caf1e26d` found **12 paper promotions**. After per-aspect verification (reading each spec's blocks vs. the marked code and re-running the candidate spec green), **6 were re-pointed with verified coverage** (CLI `REQ-CLI-CHUNKED-EXEC-001..006` → `transaction_chunked_execution.yml`, 19/19 green) and **6 were reverted to IMPL** (CLI `REQ-CLI-CHUNKED-EXEC-007` NullCheck — no coverage anywhere; REPL `REQ-SOURCE-CHUNKED-001/002/003/004/006` — no spec drives the REPL `source`-command path). **Still open** — post-remediation IMPL = 499 (10.0%), TESTED = 3975 (79.6%) per regenerated `status.csv`. Surviving markers in the reconciled hotspots are genuinely uncovered; the corrected accounting is in the GAP-0514 Phase 5 section. | Re-run `make status-generate`, reconcile stale markers, and move implemented features to TESTED/BENCHED/COMPLETE only with matching tests. |
+| ~~GAP-0514~~ | ~~Medium~~ | Governance | **Note 2026-11-11 (SONNY-6298): IMPL is 257/5,937 (4.3%, TESTED 88.1%), above the ≤250 target again — 42 TESTED markers whose only cited test, `tests/test_tde_kms_integration.zig`, never compiled were downgraded to IMPL.** **Closed (Phase 6 P3, 2026-06-11).** Repo-wide CANARY IMPL is 223/5094 (4.4%, TESTED 85.2%) — under the ≤250 (≤5%) acceptance target. Phase 6 (P1 commits + P2 `3741b52f..84136152` + P3 `7f81059d..9eb236a9`) reconciled every hotspot file with RUN-backed evidence only: P3 closed query_planner.zig 13→0, enhanced_query_transport.zig 11→1, sharding.zig 10→0, query_transport.zig 9→0 (→9 EXEMPT, outside the build graph), transport/quic.zig 8→1, geode_auth_lib.zig 8→0, execution.zig 6→0. Honest residuals (223) are enumerated per-file in the journal — dominated by grpc_server.zig (17, vendor grpc_zig 0.1.7 listener crash blocks end-to-end verification), PTY-only REPL lanes, and fault-injection-only lanes. Prior history: **Partial (Phase 5, 2026-06-10).** CANARY IMPL debt reduced 547→493 (11.0%→9.9%; TESTED 78.7%→79.8%) by reconciling the top REPL/CLI/QUIC hotspots: stale reference-only promotions (markers already carrying a genuine `test_quic_condition_timedwait_cadence`/`test_gps_mcp_wire` ref) + harness-spec-backed promotions (each spec re-run green against the binary — `transaction_chunked_execution` 19/19, `query_file_flag_comprehensive` 30/30, `query_file_flag_edge_cases` 28/28, `cli_flags_comprehensive` 23/23, `query_output_formats` 22/22, `shell_source_batch` 50/50). Per-file: quic_connection_handler 40→22, cli/main 30→12 (later corrected to 30→18 by the 2026-06-10 honesty-audit remediation, below), transport/quic 18→8, server_init 22→19, repl_dispatch 36→31 (later corrected to 36→36, below). Commits `40121c11`/`2000406a`/`caf1e26d`/`514ca4c0`. **Honesty-audit remediation (2026-06-10, commit follows):** a follow-up audit of commits `2000406a` and `caf1e26d` found **12 paper promotions**. After per-aspect verification (reading each spec's blocks vs. the marked code and re-running the candidate spec green), **6 were re-pointed with verified coverage** (CLI `REQ-CLI-CHUNKED-EXEC-001..006` → `transaction_chunked_execution.yml`, 19/19 green) and **6 were reverted to IMPL** (CLI `REQ-CLI-CHUNKED-EXEC-007` NullCheck — no coverage anywhere; REPL `REQ-SOURCE-CHUNKED-001/002/003/004/006` — no spec drives the REPL `source`-command path). **Still open** — post-remediation IMPL = 499 (10.0%), TESTED = 3975 (79.6%) per regenerated `status.csv`. Surviving markers in the reconciled hotspots are genuinely uncovered; the corrected accounting is in the GAP-0514 Phase 5 section. | Re-run `make status-generate`, reconcile stale markers, and move implemented features to TESTED/BENCHED/COMPLETE only with matching tests. |
 | ~~GAP-0863~~ | ~~High~~ | Verification baseline / test gates | **Closed 2026-06-10** (commits `487a2424` test-e2e compile, `5083a30e` perf-c FLE teardown, `4f689520` stream-pool observation + this docs rebaseline; `8bdb9737` FLE-catalog isolation landed earlier on the 06-09 branch). Every actionable item in the open evidence was fixed and re-verified at `0eefbb9a`: `test-e2e` compiles and runs end-to-end (Zig 0.16 migration across 22 files; the stale `graph_algos_stub` import rewritten against the real `geode.graph.community_*` API; 84/86 steps, 68/71 tests), `test-perf-c-introspection-index` 8/8 with 0 leaks (test-teardown gap, not a production leak), `test-stream-pool-concurrent-lanes` 3/3 (deterministic barrier-held observation), and `test-perf` reclassified PASS (exits 0 twice idle; 44/48 + 4 opt-in slow-bench skips). The protobuf 2PC wire blocker is gated (`test-txn-coordinator-2pc` self-skips, 0/4 skip = PASS). `docs/KNOWN_TEST_ISSUES.md` rebaselined: **expected local baseline is now 174/179 named `test-*` steps — 2 FAIL (`test-e2e` 3 subtests, `test-gpu` compile), 3 TIMEOUT (`test-all`, `test-cluster-3node-subprocess`, `test-cluster-replicable-mutations` — the latter an intentionally-red TDD reproduction)**. **Residuals:** (a) a fresh `../geode-test-harness` integration run is still owed before publishing harness pass-rate claims — folded into GAP-0864's docs-truth scope; (b) `gql_conformance` T11/T12/T14 — bare `count(*)` after `SESSION SET PROPERTY GRAPH` returns 0 via the count-pushdown fast path (`match_operations.countNodesFastPath` counts the in-memory store before the lazy on-disk graph load) + the fixture assumes pre-seeded `G1`/`G2` datasets nothing in-repo seeds — new follow-up, see register note below; (c) `test-gpu` compile debt is GAP-0878 (this round). | ~~Make the local gate green or explicitly quarantine environment-only targets; migrate the `test-e2e`/benchmark/fuzz paths to Zig 0.16; remove or export the stale `graph_algos_stub` test API; fix the FLE leak and stream-pool assertion; resolve or gate the protobuf 2PC wire blocker; re-run the harness from a clean checkout before publishing pass-rate claims.~~ ✅ Done (harness re-run residual folded into GAP-0864). |
 | ~~GAP-0864~~ | ~~High~~ | Documentation claims / status truth | **Closed 2026-06-11** (end-of-round docs rebaseline). Every stale claim island in the open evidence was fixed to named-suite-scoped truth: `docs/IMPLEMENTATION_STATUS_OCTOBER_2025.md` feature table rewritten with residual-scoped statuses + canonical-source banner; `docs/SERVER_FEATURES.md` header/`:491`/footer rebaselined (96/96 ISO parse-only, baseline → KNOWN_TEST_ISSUES.md, `Production Ready` removed); `docs/TESTING.md` per-category "100%" reframed as the dated-historical harness snapshot; `docs/CURRENT_ARCHITECTURE.md` marked HISTORICAL with per-line snapshot qualifiers; `docs/README.md` overview + Quality Metrics rebaselined. REVERSE-direction fixes verified against code: `docs/GQL_AUTH_DDL.md` limitation #3 now records GPS policy DDL persistence as implemented (GAP-0858, `zig build test-gap0858`; residual = manual GQL→bytecode expression path); `docs/DESIGN_TDE_KMS.md` rebaselined — real `VaultTransitClient`/`AwsKmsClient` HTTP paths in `src/security/external_kms_client.zig` (+ `zig build test-remote-kms`), per-tenant keys deferred (GAP-0873). Sweep pass also fixed remaining unqualified user-facing claims: all `70/70` ISO references updated to **96/96 (verified `zig build test-iso-conformance --summary all` 2026-06-11; parse-only scope)** across `README.md`, `CLAUDE.md`, `docs/GQL_COMPLIANCE.md`, `docs/FEATURES_OVERVIEW.md`, `docs/gql/GQL_CONFORMANCE_PROFILE.md`, `docs/LSP_IMPLEMENTATION.md`, `docs/TODO.md`; executed-query `gql_conformance` 20/20 cited (GAP-0892); unscoped `Production Ready` footers removed from `EXPRESSION_OPERATORS`, `BM25_INDEX_OPTIMIZER_INTEGRATION`, `ARGON2ID_IMPLEMENTATION`, `TDE_FILE_LEVEL_ENCRYPTION`, `ADVANCED_SECURITY_FEATURES_OCTOBER_2025`, `FIELD_LEVEL_ENCRYPTION`, `testing/module_testing_guide`, `docker/DOCKER_MSQUIC_FIPS_COMPLETION`. `CLAUDE.md` status header rebaselined (baseline → KNOWN_TEST_ISSUES.md ~175/179; CANARY 223/5,094 = 4.4%, GAP-0514 closed; gzip backup encoder real per GAP-0880 slice; FTS phrase/proximity real per GAP-0869; MFA narrowed to TOTP + scoped step-up per GAP-0884; GAP-0858 policy persistence). Historical/dated reports (`docs/audit/`, `docs/architecture/`, `completion_reports/`, dated audits, WORK_TRACKER, client fix logs) intentionally left as dated records. | ~~Rebaseline or mark historical every remaining status page; make `docs/GAP_ANALYSIS.md` and `docs/KNOWN_TEST_ISSUES.md` the canonical current truth; ban broad `Complete`, `100%`, and `Production Ready` wording unless it names the exact suite and excludes known residuals.~~ ✅ Done. |
 | ~~GAP-0865~~ | ~~High~~ | Time-series persistence / durability / backup | **Closed 2026-06-10** (commit `521fd629`). Investigation found the gap evidence (`docs/optimizing-ts-storage.md`) was written against the legacy ChunkStorage model; the pinned `timeseries-storage` v0.2.3 engine already provides WAL-first crash-atomic writes (fail-closed replay + segment verification), retention (`pruneExpired`), AES-256-GCM TDE over WAL/segments/manifest, and backup helpers — the residual gap was geode's integration. Closed: (a) fail-closed open by default in the wrapper/adapter/server (`GEODE_TS_DURABILITY=best_effort` explicit opt-out; the wrapper now creates `{dir}/timeseries`, closing the fresh-dir silent in-memory fallback); (b) WAL background syncer started (geode never called `startBackgroundSyncer`, leaving the fsync window unbounded); (c) retention wired (`GEODE_TS_RETENTION_DAYS` -> engine `retention_max_age_ms`; `Store.runRetention()` + throttled ingest-path prune actually unlink expired segments); (d) backup round-trip verified — `readPerGraphStoragePayload` (post-GAP-0862) already archives the timeseries trees, the `GraphStore-only` claim was stale; (e) TDE wired (`GEODE_TS_TDE=1` + `GEODE_TDE_KEY`, fail-closed). Bonus: durable-path `queryRange` iterator-arena leak fixed. Regression `tests/ts_durability.zig` (`zig build test-ts-durability`, 7/7). Docs rebaselined: `docs/TIMESERIES.md` durability contract, `docs/optimizing-ts-storage.md` marked historical with a per-claim resolution table. | Done — regression gate `test-ts-durability`. Honest residuals (documented, not re-opened): live-ingest backup is a crash-consistent (unquiesced) snapshot; retention granularity is whole segments; series ids are deterministic Wyhash (not keyed `opaqueSeriesId`) — acceptable single-tenant; TS TDE keys are global, not per-tenant; no in-place plaintext->encrypted migration. |
@@ -1026,6 +1069,14 @@ The benchmark now:
 - **Resolution Date:** January 16, 2026
 
 **Summary**: Implemented real network transport for Raft/2PC RPCs using QUIC protocol.
+
+> **Status note (2026-11-11, SONNY-6298):** `src/dist/rpc.zig` and
+> `src/dist/scaffold.zig`, cited below as the evidence for this closure, were
+> reachable from no executable or test in `build.zig`; they were never
+> compiled and were removed. The cluster's Raft traffic is carried by
+> `src/distributed/cluster.zig` (QUIC, `transport/quic`) driving
+> `src/distributed/raft_consensus.zig`. The evidence below is kept as the
+> historical record.
 
 ### Implementation Evidence
 
@@ -2687,6 +2738,11 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 ### GAP-0083: FLE Key Rotation (Resolved - previously completed)
 
 - **Resolution:** Key rotation with version tracking and re-encryption support
+- **Correction (2026-11-12, SONNY-6386):** not true. Nothing rotated an FLE
+  key: `fle_commands.rotateKey` printed a completed rotation without touching
+  a key, and `geode fle rotate-key` bumped a version in a throwaway in-memory
+  key manager and exited 0 (nothing persisted, no field re-encrypted). Both
+  now refuse as unsupported. Real rotation is story SONNY-6387.
 
 ---
 
@@ -2946,6 +3002,10 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 - **Resolution Evidence:**
   - src/admin/fle_commands.zig — All 6 FLE admin commands implemented:
     - rotateKey() — Key rotation for FEK, SK, and TRK scopes with proper validation
+      (correction 2026-11-12, SONNY-6386: it printed a rotation it did not
+      perform; it now validates its arguments and returns `error.Unsupported`
+      until SONNY-6387, and `showRotationStatus()` no longer reports a TRK as
+      "Active" or a rotation check it never made)
     - grantPlaintext() — Grants READ_PLAINTEXT permission via FLE catalog
     - revokePlaintext() — Revokes READ_PLAINTEXT permission via FLE catalog
     - showRotationStatus() — Displays tenant key rotation status
@@ -5284,7 +5344,7 @@ Source: `/codepros:gap-close` for the Geode language server (LSP). Inputs: `/tmp
 - **Resolved date:** 2026-06-10
 - **Resolution evidence:**
   - Commit `fa6ba9ac` — `fix: close quality #813/#812/#728`. Removed dangerous/dead entries: `^\.env$` (would have masked a real committed .env), `^certs/server\.key$`, `^data/server\.key$`, `^source-test-.*`, `^src/tests/test_.*\.zig$`, `^src/audit_demo\.zig$` (no findings), and the `clients/test-harness/certs/` path (tree relocated; history stays covered by the targeted `commits` allowlist for the two rotated-key SHAs).
-  - Narrowed `^docs/` → 4 specific files, `^tests/` → 9 specific fixture files, `^src/crypto/` → `aead.zig`+`hkdf.zig` (re-export false positives). All 24 masked findings were individually reviewed (test master keys, AWS docs vectors `AKIAIOSFODNN7EXAMPLE`, JWT/private-key filter fixtures) — none real.
+  - Narrowed `^docs/` → 4 specific files, `^tests/` → 9 specific fixture files, `^src/crypto/` → `aead.zig`+`hkdf.zig` (re-export false positives). All 24 masked findings were individually reviewed (test master keys, AWS docs vectors `AKIAIOSFODNN7EXAMPLE`, JWT/private-key filter fixtures) — none real. <!-- gitleaks:allow -->
   - Policy comment added: new fixtures should use inline `gitleaks:allow`; never allowlist whole directories, `.env`, or production key paths.
   - Verified: CI command `gitleaks detect --source . --config .gitleaks.toml --redact --no-git --exit-code 1` clean; negative test — planted secrets in `docs/NEW_DOC.md` and `.env` ARE flagged with the tightened config (previously masked). No pre-commit gitleaks hook exists (`.pre-commit-config.yaml`); enforcement is the `governance-gitleaks` CI job.
   - GitLab issue [#728](https://gitlab.com/devnw/codepros/geode/geode/-/issues/728) ready to close.
@@ -7676,6 +7736,8 @@ Three changes eliminate the write-lock stall during MERGE:
 
 **Tests:** `tests/test_gap_0511_regression.zig` (6 tests covering deferred rebuild, adapter-backed MERGE/DELETE snapshot elision, relationship endpoint lookup, startup metadata repair)
 
+SONNY-6528 (item 6, 2026-11-14): the file was never compiled (imported only by `tests/all_tests.zig`); its adapter-backed MERGE/DELETE and `commitDeferRebuilds` cases now run as `zig build test-gap0511-regression`. The per-transaction batched rebuild case (superseded by geode#875's incremental insert, `test-geode875-incremental-index`) and the sequential `rebuildAdvancedIndex` case (function removed; rebuild mutex covered by `test-vector-index-reader-quiescence`, `test-sonny6421-index-maintenance`, `test-geode875-nonblocking-backfill`) were not revived.
+
 ---
 
 ## GAP-0514: CANARY IMPL Coverage Sprint
@@ -7731,6 +7793,7 @@ This work is broken into phases because the test-infrastructure requirements dif
 - **Blocker:** The 5 pre-existing test failures must be fixed first. Each is a small, targeted code fix (freeing a hash-map on a failed branch, updating an expectation to match current struct output, etc.) but they touch security-sensitive code paths and need careful review.
 - **Cross-reference:** GAP-0516 (MCP NotImplemented stubs) was closed in principle — the handlers return spec-compliant `MethodNotFound`/`"[]"`/silent success. Phase 4 is about the test activation hygiene, not the handler behavior.
 - **Update (2026-06-10):** rather than root the whole `src/mcp/` directory (still blocked by the `lsp.zig`/`client.zig` dead-test failures), GAP-0516 and GAP-0830 were closed with **dedicated standalone regression files** (`tests/test_gap0516_mcp_capabilities.zig` → `test-gap0516`, `tests/test_gap0830_mcp_lsp_bridge.zig` → `test-gap0830`) that drive the real dispatch/bridge code through single-module roots — avoiding the directory-wide blocker entirely. One of the named pre-existing failures, the **`getCompletions` leak**, was rooted out and FIXED as part of GAP-0830. The remaining `lsp.zig`/`client.zig` dead-test items (`validateQuery` assertion drift, `getHover` `"contents":null` expectation now stale because the JSON encoder omits null optionals → emits `{}`, bearer-token IPv6 parsing) are still un-rooted and tracked here for the directory-rooting follow-up.
+- **Update (2026-11-13, SONNY-6484):** `src/mcp/{lsp,resources,server,tools,client}.zig` are now rooted (`zig build test-sonny6484-inline`, 57 tests). The items above were resolved: the `validateQuery` recommendation leak and a `getHover` example leak were fixed in the product, `getHover` emits `{"contents":null}` again (the documented shape), `getCompletions` answers an empty document with the clause keywords, and a bare IPv6 endpoint (`::1`) is refused (docs/DSN.md requires brackets) instead of being misread.
 
 ### Phase 5 — REPL/CLI/QUIC hotspot reconciliation + reference-only promotions — **PARTIAL (2026-06-10)**
 

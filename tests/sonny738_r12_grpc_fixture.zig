@@ -14,6 +14,8 @@ const harness = @import("node_scan_stream_harness.zig");
 const graph_store = geode.graph_store;
 const user_mgmt = geode.user_management;
 const gps = geode.security.gps;
+const execution = geode.execution;
+const index_manager = geode.index_manager;
 
 pub fn sleepMs(ms: u64) void {
     std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, ms) * std.time.ns_per_ms), .awake) catch {};
@@ -163,6 +165,12 @@ pub const Fixture = struct {
         // The undo log is created by its first user, with that user's
         // allocator; BEGIN would create it with the requests' arena.
         _ = geode.txn_undo_log.getGlobalUndoLog(testing.allocator);
+        // SONNY-3379: the same for the process-wide index manager: the first
+        // CREATE INDEX would create it with the requests' arena, which
+        // `deinit` frees (the HNSW pool's workers then run on freed memory
+        // and the catalog cleanup calls into it).
+        _ = try index_manager.ensureGlobalIndexManager(testing.allocator);
+        errdefer index_manager.cleanupGlobalIndexManager();
         try self.st.createGraph("g1");
         try self.st.createGraph("g2");
         self.auth_was_enabled = user_mgmt.isAuthEnabled();
@@ -177,6 +185,11 @@ pub const Fixture = struct {
     pub fn deinit(self: *Fixture) void {
         grpc.setSessionStore(null);
         self.sessions.deinit();
+        // SONNY-3379: the catalog (whose cleanup calls into the index
+        // manager), then the index manager (joining its HNSW workers), and
+        // only then the request arena and the store.
+        execution.cleanupCatalogInstance();
+        index_manager.cleanupGlobalIndexManager();
         self.arena.deinit();
         gps.setInsecureAllowAll(self.allow_all_was);
         user_mgmt.setAuthEnabled(self.auth_was_enabled);

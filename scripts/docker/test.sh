@@ -37,6 +37,10 @@ log_fail() {
     ((FAILED_TESTS++))
 }
 
+# SONNY-6453: a release geode refuses an unverified connection; verify the
+# server against its CA (a path inside the container).
+CA_CERT="${GEODE_CA_CERT:-/certs/ca.crt}"
+
 # Function to run a query
 run_query() {
     local server=$1
@@ -44,9 +48,9 @@ run_query() {
     local container="${3:-geode}"
 
     if [[ "$VERBOSE" == "true" ]]; then
-        docker exec "$container" geode query "$query" --server "$server" 2>&1
+        docker exec "$container" geode query "$query" --server "$server" --ca-cert "$CA_CERT" 2>&1
     else
-        docker exec "$container" geode query "$query" --server "$server" 2>&1 | grep -v debug
+        docker exec "$container" geode query "$query" --server "$server" --ca-cert "$CA_CERT" 2>&1 | grep -v debug
     fi
 }
 
@@ -129,7 +133,7 @@ EOF
 
     docker cp /tmp/txn_test.gql "$container":/tmp/txn_test.gql
 
-    if docker exec "$container" sh -c "geode query < /tmp/txn_test.gql --server 127.0.0.1:7567" 2>&1 | grep -q '"x":1'; then
+    if docker exec "$container" sh -c "geode query < /tmp/txn_test.gql --server 127.0.0.1:7567 --ca-cert $CA_CERT" 2>&1 | grep -q '"x":1'; then
         log_pass "Transaction execution"
     else
         log_fail "Transaction execution"

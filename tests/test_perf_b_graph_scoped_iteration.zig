@@ -25,7 +25,7 @@ fn collectIds(allocator: std.mem.Allocator, store: *graph_store.GraphStore, grap
     var out = std.ArrayList(u64).empty;
     errdefer out.deinit(allocator);
     var it = store.iterateNodesInGraph(graph_name);
-    while (it.next()) |node| try out.append(allocator, node.id);
+    while (try it.next()) |node| try out.append(allocator, node.id);
     return out.toOwnedSlice(allocator);
 }
 
@@ -116,13 +116,13 @@ test "PERF-B: empty / absent graph yields an empty iterator" {
 
     // Graph that was never created — iterator must be empty, not error.
     var it_absent = store.iterateNodesInGraph("does_not_exist");
-    try testing.expect(it_absent.next() == null);
+    try testing.expect((try it_absent.next()) == null);
     try testing.expectEqual(@as(usize, 0), store.nodesInGraphCount("does_not_exist"));
 
     // Empty graph (created but no nodes inserted) is exactly the same shape.
     try store.createGraph("empty");
     var it_empty = store.iterateNodesInGraph("empty");
-    try testing.expect(it_empty.next() == null);
+    try testing.expect((try it_empty.next()) == null);
     try testing.expectEqual(@as(usize, 0), store.nodesInGraphCount("empty"));
 
     // Create + delete every node — the inner set survives but is empty.
@@ -132,7 +132,7 @@ test "PERF-B: empty / absent graph yields an empty iterator" {
     store.deleteNodeNoSave(id);
     try testing.expectEqual(@as(usize, 0), store.nodesInGraphCount("empty"));
     var it_after = store.iterateNodesInGraph("empty");
-    try testing.expect(it_after.next() == null);
+    try testing.expect((try it_after.next()) == null);
 }
 
 test "PERF-B: batch create and reserved-id paths both feed the index" {

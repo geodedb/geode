@@ -9,13 +9,13 @@
 // row-shaped, and the federated QueryResults type (rows + schema) cannot carry
 // them; there is also no coherent way to merge N independent remote plan trees.
 // So the three distributed result consumers (federation.zig + the two
-// query_transport.zig consumers) now reject a remote .explain/.profile payload
+// query_transport.zig consumers) rejected a remote .explain/.profile payload
 // with the structured, self-documenting DistributedExplainUnsupported error
-// instead of the opaque error.Unsupported.
+// instead of the opaque error.Unsupported. Those consumers were never
+// compiled and were removed in SONNY-6279; proto_util still maps the error.
 //
 // This test pins the contract of the shared choke point those consumers call.
-// It is stdlib-only (no QUIC/protobuf), mirroring the isolation strategy of
-// src/distributed/test_query_transport_node_registry.zig.
+// It is stdlib-only (no QUIC/protobuf).
 
 const std = @import("std");
 const de = @import("distributed_explain");

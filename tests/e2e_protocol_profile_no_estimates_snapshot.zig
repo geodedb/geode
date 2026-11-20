@@ -1,8 +1,11 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("profile_test_util.zig");
 
 test "protocol: PROFILE --no-estimates structural stability" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const out = try util.runProfile(testing.allocator, "PROFILE RETURN 1 AS x LIMIT 1", &.{"GEODE_DISABLE_ESTIMATES=1"});
     defer testing.allocator.free(out);
     // Ensure planner_estimates block removed or zeroed (with --no-estimates we expect omission)

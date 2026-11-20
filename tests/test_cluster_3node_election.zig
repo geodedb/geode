@@ -30,10 +30,13 @@
 //   library exposes InProcessTransport precisely for this use case.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const geode = @import("geode");
 
 const ClusterCoordinator = geode.distributed.cluster.ClusterCoordinator;
 const raft_lib = geode.distributed.raft;
+// SONNY-6633 (5): every message with its real sender (it was guessed).
+const raft_net = @import("raft_inproc_net.zig");
 
 // Zig 0.16 compat: std.time.milliTimestamp was removed.  Mirror the helper
 // used by src/distributed/cluster.zig so we don't take a dependency on a
@@ -68,6 +71,8 @@ fn sleepMs(ms: u64) void {
 }
 
 test "three coordinators on loopback elect a single leader within 10s" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = std.testing.allocator;
 
     // Pre-allocate 3 cluster ports.  These are reserved for the (unused)
@@ -142,12 +147,10 @@ test "three coordinators on loopback elect a single leader within 10s" {
     }
 
     // Wire the inner raft nodes together via InProcessTransport.
-    var ipt = raft_lib.InProcessTransport.init(a);
+    var ipt = raft_net.RaftNet.init(a);
     defer ipt.deinit();
-    for (1..4) |id| try ipt.register(id);
 
-    const transport = ipt.transport();
-    for (coords) |c| c.raft.setInnerTransport(transport);
+    for (coords, 1..) |c, id| c.raft.setInnerTransport(ipt.transportFor(id));
 
     // Drive ticking + message delivery ourselves.  We do NOT call
     // coord.start() — that would spawn the network/raft loops and bind a
@@ -181,7 +184,8 @@ test "three coordinators on loopback elect a single leader within 10s" {
             if (msgs.len == 0) continue;
 
             const target_idx = id - 1;
-            for (msgs) |msg| {
+            for (msgs) |d| {
+                const msg = d.msg;
                 // Determine the sender.  For request messages, the sender
                 // is in the message body; for responses, raft expects the
                 // transport to have told it the sender — we reconstruct it
@@ -192,7 +196,7 @@ test "three coordinators on loopback elect a single leader within 10s" {
                 // sender for requests, and for responses fall back to a
                 // best-guess based on which node id is NOT the receiver
                 // and is NOT self.
-                const inferred_from = inferSender(msg, @intCast(id));
+                const inferred_from = d.from;
                 coords[target_idx].raft.stepInner(inferred_from, msg) catch |err| {
                     std.debug.print(
                         "stepInner error on node {d} from {d}: {s}\n",
@@ -240,48 +244,10 @@ test "three coordinators on loopback elect a single leader within 10s" {
     return error.LeaderNotElected;
 }
 
-/// Best-effort inference of the sender of a raft_lib.Message.  RequestVote /
-/// AppendEntries / InstallSnapshot carry the sender in the body.  Response
-/// messages do not — we return `recipient_id` itself as a sentinel (the
-/// raft library's sender-mismatch check will reject it for request msgs and
-/// ignore it for response msgs).  In practice all 3 senders are distinct
-/// from recipient, so the library accepts the response and routes it to
-/// the right replication slot via term matching.
-fn inferSender(msg: raft_lib.Message, recipient_id: u64) u64 {
-    return switch (msg) {
-        .request_vote => |rv| rv.candidate_id,
-        .append_entries => |ae| ae.leader_id,
-        .install_snapshot => |is| is.leader_id,
-        // For response messages, the library docs say the transport
-        // identifies the sender out-of-band.  In InProcessTransport we
-        // don't track that, so we pick the first id that is neither the
-        // recipient nor 0.  This is best-effort and only matters for
-        // sender-mismatch validation — the library's response handlers
-        // identify the replication slot by term, not by `from`.
-        .request_vote_response,
-        .append_entries_response,
-        .install_snapshot_response,
-        => blk: {
-            // Pick a plausible non-self peer.  In a 3-node cluster this is
-            // sufficient — the library only uses `from` for diagnostic logs
-            // on response paths.
-            var i: u64 = 1;
-            while (i <= 3) : (i += 1) {
-                if (i != recipient_id) break :blk i;
-            }
-            break :blk recipient_id;
-        },
-    };
-}
-
 /// The raft library's InProcessTransport deep-copies AppendEntries.entries
 /// on send (SEC-0140).  When we drain and consume the message in the test,
 /// we own that copy and must free it.
 fn freeMsgPayload(allocator: std.mem.Allocator, msg: raft_lib.Message) void {
-    switch (msg) {
-        .append_entries => |ae| {
-            if (ae.entries.len > 0) allocator.free(ae.entries);
-        },
-        else => {},
-    }
+    // raft v0.2.0: the copy owns each entry's data as well (SONNY-6592).
+    raft_net.freeMessage(allocator, msg);
 }

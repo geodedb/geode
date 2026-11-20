@@ -25,6 +25,7 @@ const ast = @import("../gql/ast.zig");
 // SONNY-2686: the session gate below (`sessionAllowsKeyResolvedWrites`).
 const execution = @import("../execution.zig");
 const tenancy = @import("tenancy.zig");
+const tenant_visibility = @import("tenant_visibility.zig");
 const write_shape = @import("write_shape.zig");
 
 // ----------------------------------------------------------------------
@@ -79,6 +80,11 @@ pub fn isEnabled() bool {
 // tenant scope or an RLS policy restricts must take the general executor, or a
 // key lookup binds, updates or attaches an edge to a row the session may not
 // see. `simple_node_create` finds nothing and is not gated.
+//
+// SONNY-2976 / SONNY-2724: the node MERGE primitives now match only within the
+// request's tenant, so the node MERGE shapes also serve a tenant-scoped
+// session (`sessionAllowsTenantScopedNodeMerges`); the edge shapes keep the
+// stricter gate, and RLS still declines every shape.
 // ----------------------------------------------------------------------
 
 /// SONNY-2686: may the key-resolved write fast paths serve a request that runs
@@ -87,11 +93,57 @@ pub fn isEnabled() bool {
 ///     request in the general executor, so the fast path must not serve it);
 ///   * no RLS policy that could apply: none installed, or no user for one to
 ///     apply to (the identity `passesRLSFilter` evaluates under).
-/// The QUIC handler also checks its own server-side label engine.
+/// The QUIC handler also checks the label-deny engine (the same one since
+/// SONNY-2729).
 pub fn sessionAllowsKeyResolvedWrites(ctx: *const execution.ExecutionContext) bool {
     if (tenancy.isStrictTenancy()) return false;
     const tenant = tenancy.resolveTenantFilter(ctx.tenant_id) catch return false;
     if (tenant != null) return false;
+    const has_user = blk: {
+        if (ctx.principal) |p| {
+            if (p.username != null) break :blk true;
+        }
+        break :blk ctx.user != null;
+    };
+    return !(has_user and execution.activeRlsPoliciesConfigured());
+}
+
+// CANARY: REQ=REQ-SONNY-2846-UNIQUE-ENFORCEMENT; FEATURE="ConstraintEnforcement"; ASPECT=FastPathDecline; STATUS=TESTED; TEST=tests/test_sonny2846_unique_constraint_enforcement.zig; OWNER=transport; UPDATED=2026-11-11
+/// SONNY-2846: must the server's node-writing fast paths (simple CREATE,
+/// bulk MERGE, `/*+BATCH*/` MERGE, `USE GRAPH g; MERGE`) decline `graph`,
+/// sending the write to the executor? Yes when a UNIQUE or NODE KEY
+/// constraint, or (SONNY-6281) a NOT NULL or EXISTS one, applies in it:
+/// only the executor checks one (at the end of
+/// the statement, `unique_constraints`). The adapter's bulk helpers check
+/// again under the graph lock (`graph_store.refuseIfUniqueFenced`).
+pub fn uniqueConstraintsDeclineFastPath(graph: []const u8) bool {
+    return @import("unique_constraints.zig").graphFenced(graph);
+}
+
+// CANARY: REQ=REQ-SONNY-2724-NODE-MERGE-TENANT-FAST-PATH; FEATURE="MergeRowVisibility"; ASPECT=SessionGate; STATUS=TESTED; TEST=tests/test_sonny2724_quic_fast_path_gate.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-2724: may the NODE MERGE fast paths (`simple_node_merge`, the
+/// graph-selector MERGE and the `/*+BATCH*/` batch) serve a request under
+/// `ctx`? As `sessionAllowsKeyResolvedWrites`, except that a concrete tenant
+/// scope is allowed, under strict tenancy too: the adapter primitives they
+/// call match a node only of the request's own tenant and tag what they
+/// create with it (SONNY-2976), which is what the executor's MERGE does for
+/// such a session (`crud_operations.findMergeMatch` matches the exact tenant).
+/// Still refused:
+///   * an unscoped request under strict tenancy (the executor refuses it,
+///     42501);
+///   * SONNY-6338: a tenant with descendants in the tenant hierarchy. Such a
+///     session sees its descendants' rows too (GAP-0846), and the executor's
+///     MERGE matches them, while the adapter primitives match the exact tag;
+///     for every other tenant the two sets are the same;
+///   * a user while an RLS policy is installed (the executor applies the
+///     policy to the match, and refuses a hidden one);
+/// The relationship MERGE and the MATCH … CREATE edge fast paths keep the
+/// stricter gate: their endpoint and edge resolution is not the executor's
+/// for a tenant-scoped session (MATCH is tenant-hierarchy aware, and an edge
+/// must be visible with both endpoints, SONNY-2693).
+pub fn sessionAllowsTenantScopedNodeMerges(ctx: *const execution.ExecutionContext) bool {
+    const filter_tenant = tenancy.resolveTenantFilter(ctx.tenant_id) catch return false;
+    if (tenant_visibility.tenantHasDescendants(filter_tenant)) return false;
     const has_user = blk: {
         if (ctx.principal) |p| {
             if (p.username != null) break :blk true;
@@ -378,7 +430,10 @@ fn matchMergeEdgeSpecFromQuery(q: ast.Query) ?MatchMergeEdgeSpec {
     // Must be a MATCH + MERGE(relationship) shape with nothing else attached.
     const merge_stmt = q.merge_statement orelse return null;
     // SONNY-3166: every other field of the query empty (compile-time field walk).
-    if (!write_shape.onlyFields(q, &.{ "match", "merge_statement" })) return null;
+    // SONNY-6383: the parser's record of the MATCH clauses, when they are
+    // plain MATCHes (an OPTIONAL MATCH keeps a record it matches nothing for).
+    if (!write_shape.onlyFields(q, &.{ "match", "match_clauses", "merge_statement" })) return null;
+    if (!write_shape.plainMatchClauses(q)) return null;
 
     // Disqualify every clause the full executor might mutate/materialize.
     if (q.create_pattern != null) return null;
@@ -404,6 +459,13 @@ fn matchMergeEdgeSpecFromQuery(q: ast.Query) ?MatchMergeEdgeSpec {
     if (q.ret.distinct) return null;
     // The MERGE itself must not RETURN.
     if (merge_stmt.return_clause != null) return null;
+    // SONNY-3241: one SET clause at most (as the node MERGE fast path,
+    // `buildSimpleNodeMergeSpec`), and only a bare one: the adapter writes
+    // the SET's properties on the edge it creates AND on the one it
+    // matches, which is a bare SET's meaning; an ON CREATE SET ran on a
+    // matched edge too, and `ON CREATE SET r.c = 1 SET r.b = 2` set c there.
+    if (!write_shape.onlyFieldsOf(ast.MergeStatement, merge_stmt.*, &.{ "pattern", "on_create", "on_match", "set_is_bare" })) return null;
+    if (merge_stmt.on_create.len != 0 and !merge_stmt.set_is_bare) return null;
 
     // MATCH: exactly two simple node-pattern chains (the two endpoints).
     const match_chains = q.match.chains;
@@ -427,10 +489,12 @@ fn matchMergeEdgeSpecFromQuery(q: ast.Query) ?MatchMergeEdgeSpec {
     if (hop.rel.dir != .right) return null;
     if (hop.rel.types.len != 1) return null;
     if (hop.rel.min_len != null or hop.rel.max_len != null) return null;
+    // SONNY-3357: a relationship's properties are part of the pattern MERGE
+    // matches, and the adapter's edge MERGE matches on endpoints and type
+    // only (it wrote them onto whichever edge it found). Such a statement is
+    // the executor's (`crud_operations.findExistingEdge`).
     if (hop.rel.props) |eprops| {
-        for (eprops) |ep| {
-            if (!isScalarPropExpr(ep.value.*)) return null;
-        }
+        if (eprops.len != 0) return null;
     }
 
     // MERGE endpoints must be bare refs to the matched vars.
@@ -794,7 +858,9 @@ fn matchEdgeSpecFromQuery(q: ast.Query) ?MatchCreateEdgeSpec {
     // SONNY-3166: every other field of the query empty (compile-time field
     // walk, so a new field is refused until named here); the checks below
     // stay as the documented shape.
-    if (!write_shape.onlyFields(q, &.{ "match", "create_pattern" })) return null;
+    // SONNY-6383: as in `matchMergeEdgeSpecFromQuery`.
+    if (!write_shape.onlyFields(q, &.{ "match", "match_clauses", "create_pattern" })) return null;
+    if (!write_shape.plainMatchClauses(q)) return null;
     if (q.where_clause != null) return null;
     if (q.filter_clause != null) return null;
     if (q.with_clause != null) return null;

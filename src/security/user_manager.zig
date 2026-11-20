@@ -946,7 +946,7 @@ fn printPolicyHelp() !void {
     , .{});
 }
 
-// CANARY: REQ=REQ-CLI-USER-CMD-001; FEATURE="User CLI Commands"; ASPECT=UserManagement; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-CLI-USER-CMD-001; FEATURE="User CLI Commands"; ASPECT=UserManagement; STATUS=IMPL; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-11-14
 fn handleUserCommand(allocator: Allocator, args: [][]const u8) !void {
     const stdout = std.Io.getStdOut().writer();
 
@@ -1058,7 +1058,7 @@ fn handleUserCommand(allocator: Allocator, args: [][]const u8) !void {
     }
 }
 
-// CANARY: REQ=REQ-CLI-ROLE-CMD-001; FEATURE="Role CLI Commands"; ASPECT=RoleManagement; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-CLI-ROLE-CMD-001; FEATURE="Role CLI Commands"; ASPECT=RoleManagement; STATUS=IMPL; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-11-14
 fn handleRoleCommand(allocator: Allocator, args: [][]const u8) !void {
     const stdout = std.Io.getStdOut().writer();
 
@@ -1159,7 +1159,7 @@ fn handleRoleCommand(allocator: Allocator, args: [][]const u8) !void {
     }
 }
 
-// CANARY: REQ=REQ-CLI-POLICY-CMD-001; FEATURE="Policy CLI Commands"; ASPECT=PolicyManagement; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-CLI-POLICY-CMD-001; FEATURE="Policy CLI Commands"; ASPECT=PolicyManagement; STATUS=IMPL; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-11-14
 fn handlePolicyCommand(allocator: Allocator, args: [][]const u8) !void {
     const stdout = std.Io.getStdOut().writer();
 

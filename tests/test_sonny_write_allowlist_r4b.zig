@@ -446,8 +446,7 @@ test "SONNY-3322: a relationship variable reads its relationship after 150 and 6
         .{ .head = "INSERT (a0:V {k: 0})-[r:T {w: 3}]->(b0:V {k: 0})", .sep = ", ", .chain = create_chain, .tail = ", (z:Z {w: r.w})", .then = "MATCH (z:Z) RETURN z.w", .want = "3" },
         // MERGE: three clauses a chain (at most 1024 clauses a part).
         // MERGE: each later clause merges one more relationship from a0 to a
-        // node of its own (at most 1024 clauses a part; a relationship MERGE
-        // matches on the endpoints and type, not the properties).
+        // node of its own (at most 1024 clauses a part).
         .{ .head = "MERGE (a0:V {k: 0}) MERGE (b0:V {k: 0}) MERGE (a0)-[r:T {w: 3}]->(b0)", .sep = " ", .chain = "MERGE (a0)-[:T {w: {k}0}]->(:V {k: {k}})", .tail = " ON CREATE SET a0.w = r.w RETURN a0.w, r.w", .want = "3|3" },
     };
     var failures: usize = 0;
@@ -631,7 +630,8 @@ const CartJob = struct {
     fn run(self: *CartJob) void {
         const cart = "MATCH (a:P)-[:E]->(b), (c:P)-[:E]->(d)";
         var ok = true;
-        // `range(1, 1500)`'s pairs, as the store counts them.
+        // `range(1, 1500)`'s pairs, as the store counts them: 1,499, the end
+        // is exclusive (SONNY-6466).
         var counted = runProgram(self.s, allocator, "MATCH (p:P) RETURN count(*) AS n") catch return;
         const pairs = (h.renderRows(self.s.arena.allocator(), counted) catch return)[0];
         counted.deinit(allocator);
@@ -641,7 +641,7 @@ const CartJob = struct {
         defer geode.read_budget.setBudgetBytesForTest(0);
         ok = self.check(cart ++ " RETURN 1 AS one LIMIT 1", &.{"1"}, null, 10_000) and ok;
         // The WHERE is applied to each binding as the join completes it (2.25
-        // million evaluated, 1,500 kept).
+        // million evaluated, 1,499 kept).
         ok = self.check(cart ++ " WHERE c.i = a.i RETURN count(*) AS n", &.{pairs}, null, 300_000) and ok;
         // The whole product is past the budget: 53200, not an OOM.
         ok = self.check(cart ++ " RETURN a.i, c.i", null, error.ReadQueryBudgetExceeded, 120_000) and ok;
@@ -649,7 +649,7 @@ const CartJob = struct {
     }
 };
 
-test "SONNY-3368 (I-1): LIMIT 1 over two 1,500-pair chains is bounded, a WHERE streams, and the whole product answers the read budget's error" {
+test "SONNY-3368 (I-1): LIMIT 1 over two 1,499-pair chains is bounded, a WHERE streams, and the whole product answers the read budget's error" {
     var s = try openSession(.in_memory);
     defer s.deinit();
     var setup = try runProgram(&s, stmt_alloc, "FOR i IN range(1, 1500) CREATE (:P {i: i})-[:E]->(:P2 {i: i})");
@@ -852,12 +852,10 @@ test "SONNY-3319 (I-4): a label SET checks the node's vectors against the new la
 test "SONNY-3322 (m-4): a MERGE's RETURN {rel: r} holds the store's relationship, not the scope's freed copy" {
     var s = try openSession(.in_memory);
     defer s.deinit();
-    // An arena: the map a RETURN builds is not freed with the result (a
-    // separate, pre-existing leak), and this test is about the edge in it.
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    var merged = try runProgram(&s, arena.allocator(), "MERGE (a:W {k: 1}) MERGE (a)-[r:T]->(b:W {k: 2}) RETURN {rel: r} AS m, r AS r");
-    defer merged.deinit(arena.allocator());
+    // On the testing allocator: the map a RETURN builds is freed with the
+    // result (SONNY-3378; this ran on an arena for that leak).
+    var merged = try runProgram(&s, testing.allocator, "MERGE (a:W {k: 1}) MERGE (a)-[r:T]->(b:W {k: 2}) RETURN {rel: r} AS m, r AS r");
+    defer merged.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 1), merged.rows.len);
     const map = merged.rows[0][0];
     try testing.expect(map == .Map);

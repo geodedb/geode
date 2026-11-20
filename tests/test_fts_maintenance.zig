@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024-2025 CodePros
 //
-// CANARY: REQ=REQ-GQL-FTS-DDL-001; FEATURE="Fulltext node write-maintenance"; ASPECT=E2E; STATUS=TESTED; TEST=self; OWNER=index; UPDATED=2026-05-31
+// CANARY: REQ=REQ-GQL-FTS-DDL-001; FEATURE="Fulltext node write-maintenance"; ASPECT=E2E; STATUS=IMPL; TEST=self; OWNER=index; UPDATED=2026-11-14
 //
 //! A4b end-to-end: prove that a fulltext index created BEFORE any inserts stays
 //! current as nodes are CREATEd / SET / DELETEd through GQL — WITHOUT a manual

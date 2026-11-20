@@ -164,16 +164,16 @@ test "typed-edge enum: exact vs oracle across 2 types under bounded edge cache; 
 
     resetPathCounters();
 
-    const parent_ids = store.getEdgesByType(testing.allocator, "PARENT_OF", null, "default");
+    const parent_ids = try store.getEdgesByType(testing.allocator, "PARENT_OF", null, "default");
     defer if (parent_ids.len > 0) testing.allocator.free(parent_ids);
     try expectExactIdSet(testing.allocator, parent_ids, parent_oracle.items);
 
-    const accept_ids = store.getEdgesByType(testing.allocator, "ACCEPTED_AS", null, "default");
+    const accept_ids = try store.getEdgesByType(testing.allocator, "ACCEPTED_AS", null, "default");
     defer if (accept_ids.len > 0) testing.allocator.free(accept_ids);
     try expectExactIdSet(testing.allocator, accept_ids, accept_oracle.items);
 
     // Unseen type: empty (label id never registered).
-    const none_ids = store.getEdgesByType(testing.allocator, "NO_SUCH_TYPE", null, "default");
+    const none_ids = try store.getEdgesByType(testing.allocator, "NO_SUCH_TYPE", null, "default");
     defer if (none_ids.len > 0) testing.allocator.free(none_ids);
     try testing.expectEqual(@as(usize, 0), none_ids.len);
 
@@ -229,11 +229,11 @@ test "typed-edge enum: concrete-tenant + multi-chain executor shapes route throu
 
     // Storage-level: tenant-filtered enumeration is exact.
     {
-        const alpha_ids = store.getEdgesByType(testing.allocator, "LINKED", "tenant_alpha", "default");
+        const alpha_ids = try store.getEdgesByType(testing.allocator, "LINKED", "tenant_alpha", "default");
         defer if (alpha_ids.len > 0) testing.allocator.free(alpha_ids);
         try testing.expectEqual(ALPHA, alpha_ids.len);
         for (alpha_ids) |eid| {
-            const e = store.getEdgePtrHydrated(eid) orelse return error.EdgeBodyLost;
+            const e = (try store.getEdgePtrHydratedChecked(eid)) orelse return error.EdgeBodyLost;
             try testing.expectEqualStrings("tenant_alpha", e.tenant_id);
         }
     }
@@ -373,11 +373,11 @@ test "typed-edge enum: reopen serves mmap-base edges AND post-open overlay edges
         try testing.expect(store.edges.effectiveCap() != 0);
         resetPathCounters();
 
-        const rel_a_ids = store.getEdgesByType(testing.allocator, "REL_A", null, "default");
+        const rel_a_ids = try store.getEdgesByType(testing.allocator, "REL_A", null, "default");
         defer if (rel_a_ids.len > 0) testing.allocator.free(rel_a_ids);
         try expectExactIdSet(testing.allocator, rel_a_ids, rel_a_oracle.items);
 
-        const rel_b_ids = store.getEdgesByType(testing.allocator, "REL_B", null, "default");
+        const rel_b_ids = try store.getEdgesByType(testing.allocator, "REL_B", null, "default");
         defer if (rel_b_ids.len > 0) testing.allocator.free(rel_b_ids);
         try expectExactIdSet(testing.allocator, rel_b_ids, rel_b_oracle.items);
 
@@ -430,7 +430,7 @@ test "typed-edge enum: 50k-node/50k-edge chain enumerates via the index scan wit
     graph_store.edge_id_property_fallback_reads.store(0, .monotonic);
 
     const start_ns = nowMonotonicNs();
-    const ids = store.getEdgesByType(testing.allocator, "PARENT_OF", null, "default");
+    const ids = try store.getEdgesByType(testing.allocator, "PARENT_OF", null, "default");
     defer if (ids.len > 0) testing.allocator.free(ids);
     const end_ns = nowMonotonicNs();
     const elapsed_ns: u64 = if (end_ns > start_ns) @intCast(end_ns - start_ns) else 0;

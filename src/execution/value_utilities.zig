@@ -15,6 +15,7 @@ const property_codec = @import("../property_value_codec.zig");
 const execution = @import("../execution.zig");
 const value_types = @import("../value_types.zig");
 const decimal_text = @import("../types/decimal_text.zig");
+const query_arena = @import("../server/query_arena.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-019; FEATURE="JSON Library Migration"; ASPECT=ValueUtilities; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-24
 const json_lib = @import("json");
@@ -267,25 +268,47 @@ pub fn duplicateValue(allocator: std.mem.Allocator, value: Value) !Value {
     return switch (value) {
         .Null, .Int, .Bool, .Decimal => value, // These are copy-by-value
         .Str => |s| .{ .Str = try allocator.dupe(u8, s) },
+        // SONNY-6297: a failed allocation frees the part copied so far (a
+        // list's earlier elements, a map's earlier entries, the pending key
+        // and value).
         .List => |list| blk: {
             const new_list = try allocator.alloc(Value, list.len);
+            var filled: usize = 0;
+            errdefer {
+                for (new_list[0..filled]) |item| freeValue(allocator, item);
+                allocator.free(new_list);
+            }
             for (list, 0..) |item, i| {
                 new_list[i] = try duplicateValue(allocator, item);
+                filled += 1;
             }
             break :blk .{ .List = new_list };
         },
         .Map => |map_const| blk: {
             var map = map_const;
             var new_map = std.StringHashMap(Value).init(allocator);
+            errdefer freeValue(allocator, .{ .Map = new_map });
+            try new_map.ensureTotalCapacity(map.count());
             var it = map.iterator();
             while (it.next()) |entry| {
                 const key = try allocator.dupe(u8, entry.key_ptr.*);
+                errdefer allocator.free(key);
                 const val = try duplicateValue(allocator, entry.value_ptr.*);
-                try new_map.put(key, val);
+                new_map.putAssumeCapacity(key, val);
             }
             break :blk .{ .Map = new_map };
         },
-        .Node, .Edge, .Path => value, // These contain pointers but we'll shallow copy for now
+        // CANARY: REQ=REQ-SONNY-6613-PATH-OWNERSHIP; FEATURE="PathValues"; ASPECT=OwnedPathCopies; STATUS=TESTED; TEST=tests/test_sonny6613_path_ownership.zig; OWNER=engine; UPDATED=2026-11-15
+        // SONNY-6613: a path's node and relationship arrays are copied (the
+        // nodes and relationships they point at are not), so the copy is
+        // the holder's to free (`freeValue`). A copy by reference dangled
+        // once the result the path came from freed its arrays.
+        .Path => |path| blk: {
+            const nodes = try allocator.dupe(*const graph_store.Node, path.nodes);
+            errdefer allocator.free(nodes);
+            break :blk .{ .Path = .{ .nodes = nodes, .edges = try allocator.dupe(*const graph_store.Edge, path.edges) } };
+        },
+        .Node, .Edge => value, // These contain pointers but we'll shallow copy for now
         else => value, // Fallback for any other types
     };
 }
@@ -323,12 +346,38 @@ pub fn callAlwaysAllocates(callee: ast_mod.Expr) bool {
 /// END`) leaks its intermediate under a strict allocator — same magnitude
 /// as the pre-GAP-0535 behavior, and absorbed by the per-request arena
 /// (GAP-0755) in production.
+///
+/// SONNY-6449: a projection evaluates its items on `lentAllocator`; while a
+/// scratch arena is installed (inside every executor entry point) what they
+/// computed is the arena's, so nothing is adopted: every value is copied.
 pub fn ensureOwnedProjectionValue(allocator: std.mem.Allocator, expr: ast_mod.Expr, value: Value) !Value {
-    switch (expr) {
+    if (!valuesAreLent()) switch (expr) {
         .Call => |call| if (callAlwaysAllocates(call.callee.*)) return value,
         else => {},
-    }
+    };
     return duplicateValue(allocator, value);
+}
+
+// CANARY: REQ=REQ-SONNY-6449-PROJECTION-OWNERSHIP; FEATURE="ExecutionResultOwnership"; ASPECT=LentProjectionValues; STATUS=TESTED; TEST=tests/test_sonny6449_projection_value_ownership.zig; OWNER=execution; UPDATED=2026-11-12
+/// SONNY-6449: the allocator a projection (the RETURN and WITH items, the
+/// rows of a CREATE's or MERGE's RETURN) evaluates its row values on: the
+/// statement's scratch arena, which every executor entry point installs
+/// (`query_arena.StatementScratch`). What an item computes (a string
+/// concatenation, a list or map literal, a function's string) is then the
+/// arena's, as a member read's copy is (`eval.lentValueAllocator`): a row
+/// that borrows it is valid for the whole statement, nothing frees it, and
+/// it never leaks; a result handed to the caller copies it
+/// (`adoptProjectionRowValues`), or is copied out of an arena the entry
+/// point opened (`execution.detachFromStatementScratch`). Outside an entry
+/// point (no scratch arena) it is `allocator`.
+pub fn lentAllocator(allocator: std.mem.Allocator) std.mem.Allocator {
+    return query_arena.currentScratchAllocator() orelse allocator;
+}
+
+/// SONNY-6449: whether `lentAllocator` is a scratch arena: a value it
+/// allocated is then never freed by the code that evaluated it.
+pub fn valuesAreLent() bool {
+    return query_arena.currentScratchAllocator() != null;
 }
 
 /// GAP-0535: convert a projected result into one that fully OWNS its row
@@ -341,9 +390,31 @@ pub fn adoptProjectionRowValues(
     items: []const ast_mod.ReturnItem,
 ) !void {
     if (result.owns_value_memory) return; // already owned
+    // SONNY-6449: what the projection computed on a scratch arena is the
+    // arena's (`lentAllocator`): copied, never adopted.
+    const lent = valuesAreLent();
+    // SONNY-6297: a failed copy frees the cells made owned before it and
+    // leaves them NULL; the result stays borrowed and freed none of them.
+    var rows_done: usize = 0;
+    var cells_done: usize = 0;
+    errdefer {
+        for (result.rows[0..rows_done]) |row| {
+            for (row) |*val| {
+                freeValue(allocator, val.*);
+                val.* = .Null;
+            }
+        }
+        if (rows_done < result.rows.len) {
+            for (result.rows[rows_done][0..cells_done]) |*val| {
+                freeValue(allocator, val.*);
+                val.* = .Null;
+            }
+        }
+    }
     for (result.rows) |row| {
+        cells_done = 0;
         for (row, 0..) |val, i| {
-            const adopt = i < items.len and adoptable: {
+            const adopt = !lent and i < items.len and adoptable: {
                 switch (items[i].expr) {
                     .Call => |call| break :adoptable callAlwaysAllocates(call.callee.*),
                     else => break :adoptable false,
@@ -352,21 +423,25 @@ pub fn adoptProjectionRowValues(
             if (!adopt) {
                 row[i] = try duplicateValue(allocator, val);
             }
+            cells_done += 1;
         }
+        rows_done += 1;
     }
     result.owns_value_memory = true;
 }
 
 // CANARY: REQ=REQ-SONNY-3148-WRITE-LEAKS; FEATURE="WriteStatementOwnership"; ASPECT=EvaluatedValueOwnership; STATUS=TESTED; TEST=tests/test_sonny3148_write_leaks.zig; OWNER=engine; UPDATED=2026-09-27
 /// SONNY-3148: whether `eval.evalExpr` allocates the value of `expr` for it:
-/// a list literal's list, a map literal's map, a string concatenation, and a
-/// call that always allocates (`callAlwaysAllocates`). Every other
+/// a list literal's list, a map literal's map, a string concatenation (`||`,
+/// and `+` of two strings or two lists, which allocates its string or list
+/// the same way: SONNY-3148 follow-up, it was left to leak), and a call that
+/// always allocates (`callAlwaysAllocates`). Every other
 /// expression may borrow its value (an identifier or a parameter the
 /// caller's, a string literal the AST's, a property the store's).
 pub fn evaluatesFresh(expr: ast_mod.Expr) bool {
     return switch (expr) {
         .ArrayLit, .Map => true,
-        .Binary => |b| b.op == .Concat,
+        .Binary => |b| b.op == .Concat or b.op == .Add,
         .Call => |call| callAlwaysAllocates(call.callee.*),
         else => false,
     };
@@ -398,7 +473,18 @@ pub fn freeEvaluatedValue(allocator: std.mem.Allocator, expr: ast_mod.Expr, valu
             }
             map.deinit();
         },
-        .Binary => |b| if (b.op == .Concat and value == .Str) allocator.free(value.Str),
+        // `+` of two strings or two lists allocates the result (its list
+        // holds the operands' elements, which are not its own); of numbers
+        // or temporal values, nothing.
+        .Binary => |b| switch (b.op) {
+            .Concat => if (value == .Str) allocator.free(value.Str),
+            .Add => switch (value) {
+                .Str => |str| allocator.free(str),
+                .List => |list| allocator.free(list),
+                else => {},
+            },
+            else => {},
+        },
         .Call => |call| if (callAlwaysAllocates(call.callee.*) and value == .Str) allocator.free(value.Str),
         else => {},
     }
@@ -428,7 +514,14 @@ pub fn rowsHoldEvaluated(rows: []const []Value, expr: ast_mod.Expr, value: Value
             }
             return false;
         },
-        .Binary, .Call => return evaluatesFresh(expr) and value == .Str and rowsHoldBytes(rows, value.Str),
+        .Binary, .Call => {
+            if (!evaluatesFresh(expr)) return false;
+            return switch (value) {
+                .Str => |str| rowsHoldBytes(rows, str),
+                .List => |list| expr == .Binary and expr.Binary.op == .Add and rowsHoldBytes(rows, std.mem.sliceAsBytes(list)),
+                else => false,
+            };
+        },
         else => return false,
     }
 }
@@ -492,10 +585,43 @@ pub fn ownResultValues(allocator: std.mem.Allocator, result: *ExecutionResult) !
     // is not a shape any producer builds. Copying under it would pair
     // `duplicateValue` with a free that is not its inverse.
     if (result.free_value != null) return error.Unsupported;
-    for (result.rows) |row| {
-        for (row) |*val| val.* = try duplicateValue(allocator, val.*);
+    // SONNY-6297: a failed copy frees the copies made before it and leaves
+    // those cells NULL. The result stays borrowed (its deinit frees no
+    // value), so the copies leaked.
+    var rows_done: usize = 0;
+    var cells_done: usize = 0;
+    var flags_done: usize = 0;
+    errdefer {
+        for (result.rows[0..rows_done]) |row| {
+            for (row) |*val| {
+                freeValue(allocator, val.*);
+                val.* = .Null;
+            }
+        }
+        if (rows_done < result.rows.len) {
+            for (result.rows[rows_done][0..cells_done]) |*val| {
+                freeValue(allocator, val.*);
+                val.* = .Null;
+            }
+        }
+        for (result.flags.items[0..flags_done]) |*flag| {
+            allocator.free(flag.*);
+            flag.* = "";
+        }
     }
-    for (result.flags.items) |*flag| flag.* = try allocator.dupe(u8, flag.*);
+    for (result.rows) |row| {
+        cells_done = 0;
+        for (row) |*val| {
+            val.* = try duplicateValue(allocator, val.*);
+            cells_done += 1;
+        }
+        rows_done += 1;
+    }
+    cells_done = 0;
+    for (result.flags.items) |*flag| {
+        flag.* = try allocator.dupe(u8, flag.*);
+        flags_done += 1;
+    }
     result.owns_value_memory = true;
 }
 
@@ -530,10 +656,17 @@ pub fn repointValueAllocators(val: *Value, allocator: std.mem.Allocator) void {
     }
 }
 
-/// Helper function to free a Value's allocated memory
+/// Helper function to free a Value's allocated memory. SONNY-6613: a path's
+/// node and relationship arrays are the value's (as `duplicateValue` copies
+/// them); the nodes and relationships are not. A row of a result that does
+/// not own its values keeps its path arrays in the result's entity tracker.
 pub fn freeValue(allocator: std.mem.Allocator, value: Value) void {
     switch (value) {
         .Str => |s| allocator.free(s),
+        .Path => |path| {
+            allocator.free(path.nodes);
+            allocator.free(path.edges);
+        },
         .List => |list| {
             for (list) |item| {
                 freeValue(allocator, item);
@@ -619,44 +752,17 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                     try writer.writeAll("\":");
                     switch (entry.value_ptr.*) {
                         .String => |s| {
-                            // GAP-0203: Skip FLE entirely when no encrypted fields configured
                             // CANARY: REQ=REQ-PERF-FLE-SKIP-003; FEATURE="FLESkipOptimization"; ASPECT=NodePropertyWrite; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
-                            if (fle_integration.hasEncryptedFields()) {
-                                // Field-Level Encryption: decrypt if configured
-                                const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
-                                const user_role = fle_integration.rolePreferringActiveContext();
-                                const fle_ctx = fle_integration.EncryptionContext{
-                                    .tenant_id = fle_integration.tenantPreferringActiveContext(),
-                                    .schema_name = type_name,
-                                    .allocator = allocator,
-                                    .current_user_role = user_role,
-                                };
-                                const record_id_buf = try std.fmt.allocPrint(allocator, "{d}", .{node.id});
-                                defer allocator.free(record_id_buf);
-
-                                const decrypted = fle_integration.decryptFieldIfNeeded(
-                                    fle_ctx,
-                                    type_name,
-                                    entry.key_ptr.*,
-                                    s,
-                                    record_id_buf,
-                                    true,
-                                ) catch |err| blk_decrypt: {
-                                    if (err == error.SearchNotPermitted) {
-                                        break :blk_decrypt "[REDACTED]";
-                                    }
-                                    break :blk_decrypt s;
-                                };
-
-                                try writer.writeByte('"');
-                                try writer.writeAll(decrypted);
-                                try writer.writeByte('"');
-                            } else {
-                                // Fast path: no FLE configured, write string directly
-                                try writer.writeByte('"');
-                                try writeJsonEscapedString(writer, s);
-                                try writer.writeByte('"');
-                            }
+                            // SONNY-6327: the shared FLE read policy (lock-free
+                            // with no FLE field configured). A decrypt failure is
+                            // an error, never the stored bytes; the value is
+                            // JSON-escaped (decrypted text was written raw).
+                            const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
+                            const shown = try fle_integration.readStoredStringForEntity(allocator, .node, type_name, entry.key_ptr.*, s, node.id, node.tenant_id);
+                            defer allocator.free(shown);
+                            try writer.writeByte('"');
+                            try writeJsonEscapedString(writer, shown);
+                            try writer.writeByte('"');
                         },
                         .Int => |i| try writer.print("{d}", .{i}),
                         .Float => |f| try writer.print("{d}", .{f}),
@@ -694,42 +800,13 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                     const prop_value = entry.value_ptr.*;
                     switch (prop_value) {
                         .String => |s| {
-                            // GAP-0203: Skip FLE entirely when no encrypted fields configured
                             // CANARY: REQ=REQ-PERF-FLE-SKIP-004; FEATURE="FLESkipOptimization"; ASPECT=EdgePropertyWrite; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
-                            if (fle_integration.hasEncryptedFields()) {
-                                const type_name = edge.label;
-                                const fle_ctx = fle_integration.EncryptionContext{
-                                    .tenant_id = fle_integration.tenantPreferringActiveContext(),
-                                    .schema_name = type_name,
-                                    .allocator = allocator,
-                                    .current_user_role = fle_integration.rolePreferringActiveContext(),
-                                };
-                                const record_id_buf = try std.fmt.allocPrint(allocator, "edge_{d}", .{edge.id});
-                                defer allocator.free(record_id_buf);
-
-                                const decrypted = fle_integration.decryptFieldIfNeeded(
-                                    fle_ctx,
-                                    type_name,
-                                    entry.key_ptr.*,
-                                    s,
-                                    record_id_buf,
-                                    true,
-                                ) catch |err| blk_decrypt: {
-                                    if (err == error.SearchNotPermitted) {
-                                        break :blk_decrypt "[REDACTED]";
-                                    }
-                                    break :blk_decrypt s;
-                                };
-
-                                try writer.writeByte('"');
-                                try writer.writeAll(decrypted);
-                                try writer.writeByte('"');
-                            } else {
-                                // Fast path: no FLE configured, write string directly
-                                try writer.writeByte('"');
-                                try writeJsonEscapedString(writer, s);
-                                try writer.writeByte('"');
-                            }
+                            // SONNY-6327: the same policy as a node's property.
+                            const shown = try fle_integration.readStoredStringForEntity(allocator, .edge, edge.label, entry.key_ptr.*, s, edge.id, edge.tenant_id);
+                            defer allocator.free(shown);
+                            try writer.writeByte('"');
+                            try writeJsonEscapedString(writer, shown);
+                            try writer.writeByte('"');
                         },
                         .Int => |i| try writer.print("{d}", .{i}),
                         .Float => |f| try writer.print("{d}", .{f}),

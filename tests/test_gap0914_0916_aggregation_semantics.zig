@@ -5,7 +5,7 @@
 //   GAP-0914 — "GROUP BY on an unresolvable identifier collapses to one null
 //   group". `RETURN n.cat AS s, count(*) AS c GROUP BY nosuch` silently
 //   grouped every row under a single null key instead of erroring — a silent
-//   wrong result. Expected: error.UnknownGroupKey (SQLSTATE 42703).
+//   wrong result. Expected: error.UnknownGroupKey (SQLSTATE 42002 since SONNY-6543).
 //
 //   GAP-0916 — "`sum()` of a string column silently returns 0" while
 //   `avg()` of the same column returns NULL — inconsistent, and neither
@@ -93,8 +93,10 @@ test "GAP-0914: GROUP BY on an unresolvable identifier errors instead of one nul
     defer h.deinit();
     try seedCategories(&h);
 
+    // SONNY-6525 item 2: refused by the statement's scope check (42000,
+    // VariableNotInScope) before the GROUP BY's own UnknownGroupKey.
     try testing.expectError(
-        error.UnknownGroupKey,
+        error.VariableNotInScope,
         h.exec("MATCH (n:G14) RETURN n.cat AS s, count(*) AS c GROUP BY nosuch"),
     );
 }

@@ -8,8 +8,8 @@
 - `ops[]`: Ordered list of stage objects.
 - `peak_contributors[]`: Top 3 allocation deltas (bytes_alloc) with op names.
 - `total_time_ns`: Wall-clock pipeline time.
-- `spills`: `{sort_spills, distinct_spills, union_spills}` plus optional `spill_reason` (`forced|threshold`).
-- `memory`: `{net_bytes, peak_bytes, total_alloc_bytes}` — deterministic synthetic model on the fallback (v1) path, honest zeros on the trace-backed (v2) path; NOT measured allocations (GAP-0874 decision, see docs/EXPLAIN_PROFILE.md Current Limitations).
+- `spills`: `{sort_spills, distinct_spills, union_spills}`, plus `spill_reason` only when a counter is above 0. The executor never spills to disk, so every counter is 0 and `spill_reason` is absent (SONNY-6562).
+- `memory`: `{net_bytes, peak_bytes, total_alloc_bytes}` — zeros on both paths: allocations are not measured (GAP-0874 decision, see docs/EXPLAIN_PROFILE.md Current Limitations). Until SONNY-6596 the fallback (v1) path reported a fixed synthetic model.
 - `planner_estimates` (optional if estimates enabled):
   - `sum_estimate_bytes`
   - `sum_actual_bytes`
@@ -41,10 +41,8 @@
 | Variable                      | Effect                                                 |
 | ----------------------------- | ------------------------------------------------------ |
 | `GEODE_NULLS_LAST`            | Nulls last ordering policy                             |
-| `GEODE_SPILL_THRESHOLD_BYTES` | Triggers spill counters when `peak_bytes >= threshold` |
-| `GEODE_FORCE_SORT_SPILL`      | Force sort spill counter                               |
-| `GEODE_FORCE_DISTINCT_SPILL`  | Force distinct spill counter                           |
-| `GEODE_FORCE_UNION_SPILL`     | Force union spill counter                              |
+| `GEODE_SPILL_THRESHOLD_BYTES`, `GEODE_QUERY_MEM_LIMIT_BYTES` | Not read by the server (SONNY-6596; read into a setting nothing used until then). The executor never spills, so PROFILE reports no spill (it reported one when its synthetic peak passed the threshold until SONNY-6562) |
+| `GEODE_FORCE_SORT_SPILL`, `GEODE_FORCE_DISTINCT_SPILL`, `GEODE_FORCE_UNION_SPILL` | Not read by the server (SONNY-6435) |
 
 ## CLI Flags
 
@@ -61,7 +59,7 @@
 
 ### Standardized JSON Schema (schema_version=1)
 
-Variance envelopes emitted by `run_variance_benches` (and future consolidated runners) follow a normalized JSON Lines schema:
+Variance envelopes emitted by the variance benchmarks follow a normalized JSON Lines schema:
 
 ```json
 {
@@ -242,10 +240,11 @@ The following variance envelopes explicitly guard planner/path determinism and a
 | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------------- | ------------------- |
 | PathQuantifierBoundedVarianceEnvelope                                  | Bounded multi-branch path expansion deterministic timing stability     | cv, p95/mean    | cv≤0.23, ratio≤2.60 |
 | PathExpansionHeuristicVarianceEnvelope                                 | Heuristic pruning stability (branch ordering, deterministic tie-break) | cv, p95/mean    | cv≤0.25, ratio≤2.70 |
-| PlannerRewritePreValidationTimingVarianceEnvelope                      | Rewrite sub-phase timing stability                                     | cv, p95/mean    | cv≤0.22, ratio≤2.55 |
-| PlannerGroupValidationTimingVarianceEnvelope                           | Group validation sub-phase timing stability                            | cv, p95/mean    | cv≤0.22, ratio≤2.55 |
-| PlannerPipelineVarianceEnvelope / PlannerPipelinePhaseVarianceEnvelope | Integrated pipeline (rewrite→cardinality→cost) stability               | cv, p95/mean    | cv≤0.22, ratio≤2.55 |
-| PlannerAdaptiveReplanTriggerVarianceEnvelope                           | Adaptive replan trigger decision latency stability                     | cv, p95/mean    | cv≤0.22, ratio≤2.55 |
+
+The rewrite / group-validation timing, planner-pipeline and adaptive-replan
+envelopes that used to be listed here measured the synthetic
+`src/planner/pipeline.zig` runner and `adaptive_replan.zig`; the envelopes
+were removed in SONNY-6511, the runner (reached only by tests) in SONNY-6555.
 
 All emit dual schema versions during migration; schema v2 adds `sample_count`, range stats (`min_ns`,`max_ns`), and `thresholds_evaluated` objects for each metric. Consecutive threshold breaches (≥3 runs) mandate investigation (instrumentation drift, branching factor increase, scheduling jitter). Future enhancement: nested `phases` object with per-phase sub-metrics when cost model enumeration replaces any residual synthetic hooks.
 

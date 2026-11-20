@@ -18,8 +18,10 @@
 //     -> SILENT DIVERGENCE (followers never see it). This is the divergence proof.
 //
 // These tests spin up three REAL `geode serve` processes on distinct loopback
-// IPs (127.0.0.11/12/13) with CA-signed peer TLS -- the same fixture the
+// IPs (127.0.0.21/22/23) with CA-signed peer TLS -- the same fixture the
 // node-CREATE replication regression (test_cluster_3node_steady_state.zig) uses,
+// on addresses of its own (SONNY-6460: no other test step uses 127.0.0.21-23,
+// so this suite and the steady-state one run at the same time in the aggregate),
 // because true follower convergence can only be observed across SEPARATE stores
 // (separate processes). The in-process raft fixture shares ONE process-global
 // GraphStore and serializes raft on a single-threaded-IO mutex, so it cannot
@@ -38,17 +40,26 @@
 //
 // Skips (error.SkipZigTest, never silently passes) when: not linux, the geode
 // binary is missing (run `zig build` first), openssl is unavailable, or
-// 127.0.0.11 cannot be bound. Set GEODE_SKIP_SUBPROC_CLUSTER=1 to opt out on a
+// 127.0.0.21 cannot be bound. Set GEODE_SKIP_SUBPROC_CLUSTER=1 to opt out on a
 // flaky CI runner.
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
+const test_ports = @import("test_ports.zig");
 const builtin = @import("builtin");
 
-const BINARY_PATH = "./zig-out/bin/geode";
-const NODE_IPS = [_][]const u8{ "127.0.0.11", "127.0.0.12", "127.0.0.13" };
-const CLUSTER_PORT_STR = "4242";
+const BINARY_PATH = geode_test_bin.geode_exe;
+const NODE_IPS = [_][]const u8{ "127.0.0.21", "127.0.0.22", "127.0.0.23" };
+/// SONNY-6450 item 2: the nodes' client and cluster ports (both QUIC, so
+/// UDP), free ports from tests/test_ports.zig chosen when the cluster starts.
+/// They were 3141 and 4242: a second run on the host (parallel lanes, the
+/// pre-push shards), or any geode on those ports, answered this one. Each node
+/// keeps its own loopback address (127.0.0.21-23), which the peer TLS
+/// certificate names, and binds the same two ports on it.
+var client_port: u16 = 0;
+var cluster_port: u16 = 0;
 const STARTUP_DEADLINE_MS: i64 = 45_000;
-const ADMIN_PW = "ReplicableMutPw123!";
+const ADMIN_PW = "Replicable Mutations Admin Passphrase";
 
 // ---------------------------------------------------------------------------
 // Zig 0.16 compat shims (mirrored from test_cluster_3node_steady_state.zig so
@@ -109,11 +120,11 @@ fn binaryPresent() bool {
 /// query of this suite came back empty.
 var query_ca_path: ?[]const u8 = null;
 
-/// Run `geode query` against `ip:3141` and return captured stdout (caller frees
+/// Run `geode query` against `ip:client_port` and return captured stdout (caller frees
 /// with `gpa`). Bounded by a hard timeout so a hung query can't wedge the suite.
 /// A client that exits non-zero has its stderr printed, so a failure says why.
 fn runQuery(gpa: std.mem.Allocator, io: std.Io, aa: std.mem.Allocator, ip: []const u8, q: []const u8) ![]u8 {
-    const server = try std.fmt.allocPrint(aa, "{s}:3141", .{ip});
+    const server = try std.fmt.allocPrint(aa, "{s}:{d}", .{ ip, client_port });
     const ca = query_ca_path orelse return error.NoQueryCa;
     const argv = [_][]const u8{
         BINARY_PATH, "query",  "--server", server,
@@ -158,6 +169,8 @@ fn makeCerts(aa: std.mem.Allocator, io: std.Io) !Certs {
     // race on a shared cert/serial file.
     const dir = try std.fmt.allocPrint(aa, "/tmp/geode-repl-mut-{d}-{d}", .{ std.os.linux.getpid(), nowMillis() });
     std.Io.Dir.cwd().createDirPath(io, dir) catch {};
+    // SONNY-2413: the caller removes it on success; a failed openssl step must too.
+    errdefer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
     const j = struct {
         fn p(al: std.mem.Allocator, d: []const u8, f: []const u8) []const u8 {
             return std.fmt.allocPrint(al, "{s}/{s}", .{ d, f }) catch unreachable;
@@ -172,7 +185,7 @@ fn makeCerts(aa: std.mem.Allocator, io: std.Io) !Certs {
 
     try std.Io.Dir.cwd().writeFile(io, .{
         .sub_path = ext,
-        .data = "subjectAltName=IP:127.0.0.11,IP:127.0.0.12,IP:127.0.0.13,DNS:localhost\nextendedKeyUsage=serverAuth,clientAuth\n",
+        .data = "subjectAltName=IP:127.0.0.21,IP:127.0.0.22,IP:127.0.0.23,DNS:localhost\nextendedKeyUsage=serverAuth,clientAuth\n",
     });
     // Pin SHA-256 below: system LibreSSL otherwise defaults to SHA-1,
     // which the real peer certificate verifier correctly rejects.
@@ -368,9 +381,14 @@ fn startCluster(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io) !Clus
         return err;
     };
 
-    const peers = "127.0.0.11:4242,127.0.0.12:4242,127.0.0.13:4242";
+    client_port = try test_ports.freeUdpPort();
+    cluster_port = try test_ports.freeUdpPortExcept(&.{client_port});
+    const peers = try std.fmt.allocPrint(aa, "{s}:{d},{s}:{d},{s}:{d}", .{ NODE_IPS[0], cluster_port, NODE_IPS[1], cluster_port, NODE_IPS[2], cluster_port });
+    const cluster_port_str = try std.fmt.allocPrint(aa, "{d}", .{cluster_port});
     const token = "replicable-mutations-cluster-token";
-    const hmac = "replmut-hmac-0123456789abcdef0123456789abcdef";
+    // SONNY-6429: 64 hex characters. Since SONNY-6339 a GEODE_AUTH_HMAC_KEY
+    // that is not refuses startup (HmacKeyUnusable), and no node came up.
+    const hmac = "5e7a" ** 16;
 
     var cluster = Cluster{
         .children = undefined,
@@ -387,12 +405,12 @@ fn startCluster(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io) !Clus
         const ip = NODE_IPS[i];
         const data_dir = try std.fmt.allocPrint(aa, "{s}/data{d}", .{ certs.dir, i + 1 });
         std.Io.Dir.cwd().createDirPath(io, data_dir) catch {};
-        const listen = try std.fmt.allocPrint(aa, "{s}:3141", .{ip});
+        const listen = try std.fmt.allocPrint(aa, "{s}:{d}", .{ ip, client_port });
         const node_id = try std.fmt.allocPrint(aa, "{d}", .{i + 1});
 
         const args = [_][]const u8{
             BINARY_PATH,      "serve",          "--listen",    listen,
-            "--cluster-port", CLUSTER_PORT_STR, "--peers",     peers,
+            "--cluster-port", cluster_port_str, "--peers",     peers,
             "--data-dir",     data_dir,         "--cert",      certs.leaf,
             "--key",          certs.key,        "--log-level", "info",
         };
@@ -402,7 +420,7 @@ fn startCluster(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io) !Clus
         try env.put("GEODE_AUTH_HMAC_KEY", hmac);
         try env.put("GEODE_NODE_ID", node_id);
         try env.put("GEODE_PEERS", peers);
-        try env.put("GEODE_CLUSTER_PORT", CLUSTER_PORT_STR);
+        try env.put("GEODE_CLUSTER_PORT", cluster_port_str);
         try env.put("GEODE_CLUSTER_LISTEN_ADDRESS", ip);
         try env.put("GEODE_CLUSTER_CA_CERT", certs.ca);
         try env.put("GEODE_ADMIN_PASSWORD", ADMIN_PW);
@@ -507,10 +525,13 @@ fn assertMutationReplicatesUsing(
         },
         else => return err,
     };
+    // The write's own answer, printed if the followers never converge.
+    var write_answer: []const u8 = "(client timed out)";
     if (out) |response| {
         defer gpa.free(response);
         if (std.mem.indexOf(u8, response, "ClusterNotLeader") != null) return error.ClusterNotLeader;
         if (std.mem.indexOf(u8, response, "ClusterWriteNotReplicable") != null) return error.ClusterWriteNotReplicable;
+        write_answer = try aa.dupe(u8, response[0..@min(response.len, 400)]);
     }
 
     var expected: usize = 0;
@@ -544,6 +565,12 @@ fn assertMutationReplicatesUsing(
         "\n[repl] '{s}' did NOT converge on all {d} healthy follower(s) (expected read '{s}')\n",
         .{ label_for_msg, expected, expect_substr },
     );
+    std.debug.print("[repl] write on leader node {d} answered: {s}\n", .{ li + 1, write_answer });
+    const leader_read: []const u8 = if (runQuery(gpa, io, aa, NODE_IPS[li], read_q)) |r| blk: {
+        defer gpa.free(r);
+        break :blk try aa.dupe(u8, r[0..@min(r.len, 400)]);
+    } else |err| @errorName(err);
+    std.debug.print("[repl] leader node {d} reads: {s}\n", .{ li + 1, leader_read });
     for (0..3) |i| std.debug.print("[repl] node {d} last read: {s}\n", .{ i + 1, last_out[i] });
     return error.ReplicationIncomplete;
 }
@@ -1035,7 +1062,7 @@ test "cluster: unreplicated write surfaces fail closed (no silent divergence)" {
     const Surface = struct { name: []const u8, query: []const u8 };
     const surfaces = [_]Surface{
         .{ .name = "timeseries-insert", .query = "CALL geode.ts.insert(1, 'temp', 100, 42)" },
-        .{ .name = "auth-ddl-create-user", .query = "CREATE USER fcuser SET PASSWORD 'Str0ng!Pass1'" },
+        .{ .name = "auth-ddl-create-user", .query = "CREATE USER fcuser SET PASSWORD 'Str0ng Cluster User Passphrase 1'" },
         .{ .name = "graph-ddl-create-graph", .query = "CREATE GRAPH fcgraph" },
         .{ .name = "index-ddl-fulltext", .query = "CREATE INDEX fcidx FOR (n:FcDoc) ON (n.body) USING fulltext" },
         // fulltext rebuild (src/execution/fts_dispatch.zig handleFtsRebuild):
@@ -1045,6 +1072,19 @@ test "cluster: unreplicated write surfaces fail closed (no silent divergence)" {
         .{ .name = "fulltext-rebuild", .query = "CALL geode.fts.rebuild('fcidx')" },
         .{ .name = "tenant-create", .query = "CALL geode.tenant.create('fctenant')" },
         .{ .name = "policy-ddl-create-policy", .query = "CREATE POLICY fcpol ON GRAPH * FOR READ" },
+        // SONNY-3034: the geode.rls.* restrictions are stored in
+        // __geode_security, which has no replication slice.
+        .{ .name = "rls-add-deny-policy", .query = "CALL geode.rls.add_deny_policy('default', 'FcSecret', 'fcuser')" },
+        .{ .name = "rls-remove-deny-policy", .query = "CALL geode.rls.remove_deny_policy('default', 'FcSecret', 'fcuser')" },
+        .{ .name = "rls-add-attribute-policy", .query = "CALL geode.rls.add_attribute_policy('default', 'FcDoc', 'dept', 'department')" },
+        .{ .name = "rls-remove-attribute-policy", .query = "CALL geode.rls.remove_attribute_policy('default', 'FcDoc', 'dept', 'department')" },
+        // SONNY-1332: a user's own password change is intercepted by the
+        // transport (quic_connection_handler handleAlterUserSetPassword, the
+        // gRPC twin), not by admin_ddl, and wrote __geode_security on the
+        // one node it reached: the old password stayed valid on every other
+        // member. LAST: if a node accepts it, the admin password there
+        // changes and later probes against that node could not log in.
+        .{ .name = "auth-self-password-change", .query = "ALTER USER geode SET PASSWORD 'Changed Cluster Admin Passphrase 2'" },
     };
 
     var failures: std.ArrayList([]const u8) = .empty;
@@ -1172,4 +1212,83 @@ test "cluster: a lost mutation acknowledgement does not duplicate CREATE" {
         "\"c\":1}",
         runQueryDiscardingAcknowledgement,
     );
+}
+
+// ---------------------------------------------------------------------------
+// SONNY-6718: DECIMAL values replicate, and a MERGE that matches and SETs
+// replicates without killing the leader (3 real `geode serve` processes).
+// ---------------------------------------------------------------------------
+
+/// No node crashed: a process abort or an allocator panic would leave one of
+/// these in its captured output.
+fn expectNoNodeCrashed(cluster: *Cluster) !void {
+    drainAll(&cluster.captures, &cluster.children, cluster.gpa, cluster.io);
+    for (cluster.captures, 0..) |c, i| {
+        for ([_][]const u8{ "invalid pointer", "Invalid free", "panic:", "Segmentation fault" }) |needle| {
+            if (std.mem.indexOf(u8, c.buf.items, needle) != null) {
+                std.debug.print("\n[repl] node {d} crashed: its output contains '{s}'\n", .{ i + 1, needle });
+                return error.NodeCrashed;
+            }
+        }
+    }
+}
+
+// CANARY: REQ=REQ-SONNY-6718-CLUSTER-ORDINARY-WRITES; FEATURE="DistributedCluster"; ASPECT=DecimalReplicatesToFollowers; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-11-18
+test "SONNY-6718 cluster: DECIMAL values replicate to every follower with their scale" {
+    if (skipPreflight()) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    var cluster = try startCluster(gpa, arena.allocator(), threaded.io());
+    defer cluster.deinit();
+
+    try assertMutationReplicates(&cluster, "Dec#create", "CREATE (:Dec6718 {k: 1, v: 3.5, e: 1.50})", "MATCH (n:Dec6718 {k: 1}) RETURN n.v AS v", "\"v\":\"3.5\"");
+    // 1.50 keeps its scale (not 1.5).
+    try assertMutationReplicates(&cluster, "Dec#scale", "RETURN 1 AS x", "MATCH (n:Dec6718 {k: 1}) RETURN n.e AS e", "\"e\":\"1.50\"");
+    try assertMutationReplicates(&cluster, "Dec#type", "RETURN 1 AS x", "MATCH (n:Dec6718 {k: 1}) RETURN n.v AS v", "\"type\":\"DECIMAL\"");
+    try assertMutationReplicates(&cluster, "Dec#merge-create", "MERGE (n:Dec6718 {k: 2}) SET n.v = 0.25", "MATCH (n:Dec6718 {k: 2}) RETURN n.v AS v", "\"v\":\"0.25\"");
+    try assertMutationReplicates(&cluster, "Dec#match-set", "MATCH (n:Dec6718 {k: 1}) SET n.v = 4.75", "MATCH (n:Dec6718 {k: 1}) RETURN n.v AS v", "\"v\":\"4.75\"");
+    try expectNoNodeCrashed(&cluster);
+}
+
+// CANARY: REQ=REQ-SONNY-6718-CLUSTER-ORDINARY-WRITES; FEATURE="DistributedCluster"; ASPECT=MatchedMergeSetKeepsLeader; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-11-18
+test "SONNY-6718 cluster: a MERGE that matches and SETs replicates and the leader stays up" {
+    if (skipPreflight()) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    var cluster = try startCluster(gpa, arena.allocator(), threaded.io());
+    defer cluster.deinit();
+
+    try assertMutationReplicates(&cluster, "MSet#1", "MERGE (n:MSet6718 {id: 21}) SET n.v = 2", "MATCH (n:MSet6718) RETURN n.v AS v", "\"v\":2");
+    // The second MERGE MATCHES: its SET list was freed with the wrong
+    // allocator and aborted the leader process.
+    try assertMutationReplicates(&cluster, "MSet#2", "MERGE (n:MSet6718 {id: 21}) SET n.v = 3", "MATCH (n:MSet6718) RETURN n.v AS v", "\"v\":3");
+    try assertMutationReplicates(&cluster, "MSet#3", "MERGE (n:MSet6718 {id: 21}) ON MATCH SET n.m = 1, n.v = 4", "MATCH (n:MSet6718) RETURN n.v AS v, n.m AS m", "\"m\":1");
+    try assertMutationReplicates(&cluster, "MSet#count", "RETURN 1 AS x", "MATCH (n:MSet6718) RETURN count(n) AS c", "\"c\":1}");
+    try expectNoNodeCrashed(&cluster);
+    // And the cluster still takes a write.
+    try assertMutationReplicates(&cluster, "MSet#after", "CREATE (:MSetAfter6718 {i: 1})", "MATCH (n:MSetAfter6718) RETURN count(n) AS c", "\"c\":1}");
+}
+
+// CANARY: REQ=REQ-SONNY-6718-CLUSTER-ORDINARY-WRITES; FEATURE="DistributedCluster"; ASPECT=InsertMultiChainReplicates; STATUS=TESTED; TEST=tests/test_cluster_replicable_mutations.zig; OWNER=distributed; UPDATED=2026-11-18
+test "SONNY-6718 cluster: INSERT, a multi-chain CREATE and a list property replicate to followers" {
+    if (skipPreflight()) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    var cluster = try startCluster(gpa, arena.allocator(), threaded.io());
+    defer cluster.deinit();
+
+    try assertMutationReplicates(&cluster, "Ins", "INSERT (:Ins6718 {id: 5})", "MATCH (n:Ins6718) RETURN count(n) AS c", "\"c\":1}");
+    try assertMutationReplicates(&cluster, "Chains", "CREATE (a:CA6718 {k: 1}), (b:CB6718 {k: 2}), (a)-[:LINKS6718]->(b)", "MATCH (:CA6718)-[r:LINKS6718]->(:CB6718) RETURN count(r) AS c", "\"c\":1}");
+    try assertMutationReplicates(&cluster, "Two", "CREATE (:Two6718 {id: 8}), (:Two6718 {id: 9})", "MATCH (n:Two6718) RETURN count(n) AS c", "\"c\":2}");
+    try assertMutationReplicates(&cluster, "List", "CREATE (:Lst6718 {id: 1, l: [1, 2, 3]})", "MATCH (n:Lst6718) RETURN size(n.l) AS s", "\"s\":3");
+    try expectNoNodeCrashed(&cluster);
 }

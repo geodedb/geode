@@ -1,8 +1,11 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
 test "HELLO returns capabilities and PING returns ok" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("HELLO returns capabilities and PING returns ok");
     errdefer util.testFail();
 
@@ -11,8 +14,7 @@ test "HELLO returns capabilities and PING returns ok" {
     // Use random port to avoid conflicts
     var server = util.spawnServerRandom(allocator, util.TestEnv.standard()) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
-        util.testSkip();
-        return;
+        return err;
     };
     defer server.deinit();
 

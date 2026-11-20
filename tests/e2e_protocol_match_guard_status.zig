@@ -1,8 +1,10 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="MatchGuardStatusWireMapping"; ASPECT=Wire; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_MatchGuardStatusWireMapping; OWNER=engine; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-017; FEATURE="MatchGuardStatusWireMapping"; ASPECT=Wire; STATUS=TESTED; TEST=tests/e2e_protocol_match_guard_status.zig; OWNER=engine; UPDATED=2026-11-14
 // This test triggers the result guard (max_results=1) and expects ExecutionGuardTrip to appear in additional_statuses.
 
 fn hasStatus(statuses: [][]const u8, name: []const u8) bool {
@@ -13,6 +15,8 @@ fn hasStatus(statuses: [][]const u8, name: []const u8) bool {
 }
 
 test "protocol: MATCH guard trip surfaces additional ExecutionGuardTrip" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("MATCH guard trip surfaces ExecutionGuardTrip");
     errdefer util.testFail();
 
@@ -32,7 +36,7 @@ test "protocol: MATCH guard trip surfaces additional ExecutionGuardTrip" {
     };
 
     util.progress("Starting server on port {d} with MATCH_MAX_RESULTS=1...", .{port});
-    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, env) catch |err| {
+    var server = util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr }, env) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
         util.testSkip();
         return;
@@ -65,7 +69,11 @@ test "protocol: MATCH guard trip surfaces additional ExecutionGuardTrip" {
 
     try testing.expect(res.error_code == null);
     try testing.expect(res.rows.len <= 1);
-    try testing.expect(hasStatus(res.additional_statuses, "ExecutionGuardTrip"));
+    // SONNY-6548: the guard reports the trip as a flagger finding
+    // (execution.zig applyMatchGuard -> appendFlagIfMissing), not as an
+    // additional status.
+    try testing.expect(hasStatus(res.flagger_findings, "ExecutionGuardTrip"));
+    try testing.expect(!hasStatus(res.additional_statuses, "ExecutionGuardTrip"));
 
     util.testPass();
 }

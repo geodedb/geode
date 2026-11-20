@@ -15,6 +15,7 @@
 // CANARY: REQ=REQ-CLI-PORTABLE-ARGV-001; FEATURE="PortableProcessArgv"; ASPECT=CrossPlatform; STATUS=TESTED; TEST=tests/test_process_args.zig; OWNER=cli; UPDATED=2026-06-12
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const cli_args = @import("cli_args");
 // Reach the holder through cli_args so the test and parseArgs share one
@@ -84,21 +85,14 @@ test "init is idempotent (first capture wins)" {
 }
 
 test "parseArgsFromSlice consumes getArgs output (end-to-end shape)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // Proves the portable holder feeds the real parser with the same slice
     // type the prior /proc/self/cmdline path produced ([]const []const u8).
     process_args.resetForTesting();
     defer process_args.resetForTesting();
 
-    // `--no-auth` is debug-only: in non-Debug builds the parser hard-exits
-    // (src/server/cli_args.zig calls std.process.exit(1)), so it cannot appear
-    // in the argv under ReleaseSafe. Pick a build-mode-appropriate argv and
-    // assert the auth outcome for that mode.
-    const debug_build = @import("builtin").mode == .Debug;
-    const vector = if (comptime debug_build) [_][*:0]const u8{
-        "geode", "serve", "--listen", "0.0.0.0:3141", "--no-auth",
-    } else [_][*:0]const u8{
-        "geode", "serve", "--listen", "0.0.0.0:3141",
-    };
+    const vector = [_][*:0]const u8{ "geode", "serve", "--listen", "0.0.0.0:3141" };
     process_args.setForTesting(&vector);
 
     const args = try process_args.getArgs(testing.allocator);
@@ -109,9 +103,19 @@ test "parseArgsFromSlice consumes getArgs output (end-to-end shape)" {
 
     try testing.expect(config.listen_quic != null);
     try testing.expectEqualStrings("0.0.0.0:3141", config.listen_quic.?);
-    if (comptime debug_build) {
-        try testing.expect(!config.enable_auth); // --no-auth honored (debug only)
-    } else {
-        try testing.expect(config.enable_auth); // secure default: auth stays on
-    }
+}
+
+test "parseArgsFromSlice refuses --no-auth in every build mode (SONNY-6329)" {
+    // SONNY-6329: authentication cannot be disabled on a server; the flag
+    // used to set a field nothing read (Debug) or exit (other modes). It is
+    // refused through the same argv holder the server reads.
+    process_args.resetForTesting();
+    defer process_args.resetForTesting();
+    const vector = [_][*:0]const u8{ "geode", "serve", "--listen", "0.0.0.0:3141", "--no-auth" };
+    process_args.setForTesting(&vector);
+
+    const args = try process_args.getArgs(testing.allocator);
+    defer testing.allocator.free(args);
+
+    try testing.expectError(error.NoAuthUnsupported, cli_args.parseArgsFromSlice(testing.allocator, args));
 }

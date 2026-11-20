@@ -5,6 +5,7 @@ const value_types = geode.value_types;
 const Value = value_types.Value;
 const graph_store = geode.graph_store;
 
+const rls_types = @import("rls_types");
 const logging = @import("logging");
 const log = logging.scoped("rls");
 const Attr = logging.Attr;
@@ -15,203 +16,30 @@ const Attr = logging.Attr;
 // caching, but was never wired into the execution pipeline.  This module bridges the gap by
 // performing a label-based access check on every result row that contains Node or Edge values.
 
-/// A label-level RLS policy binding: "user U must not see rows containing label L in graph G".
-/// This is the minimum enforcement granularity — expression-level evaluation is deferred to a
-/// later phase once the value-type bridge between execution Values and RLS Values is complete.
-///
-/// SONNY-2710: each label (a node label, or an edge type) is a table, and its
-/// policies combine as PostgreSQL's do (`rls_core.PolicyVerdict`; the
-/// executor's engine, `rls_types.LabelPolicy`, says the same). A deny entry
-/// is a restrictive policy that fails for the user: it hides every row that
-/// carries the label. An allow entry is a permissive policy that passes: it
-/// never hides a row, and cannot undo a deny. This filter sees no expression
-/// policies, so here only deny entries decide.
-pub const LabelPolicy = struct {
-    graph: []const u8,
-    label: []const u8,
-    /// When `deny` is true the label is blocked; when false the label is allowed.
-    deny: bool = true,
-    /// Applicable username (empty = all users).
-    username: []const u8 = "",
-};
+// CANARY: REQ=REQ-SONNY-2729-ONE-LABEL-DENY-ENGINE; FEATURE="RLS Query Enforcement"; ASPECT=OneEngine; STATUS=TESTED; TEST=tests/test_sonny2729_one_label_deny_engine.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-2729 (part 2): the label-deny engine is rls_types' — the one the
+/// executor filters with inside the traversal — and so is its global.
+/// This module had a second engine type of its own (the same list of
+/// label entries, with its own global), which server/main.zig kept in step
+/// with the executor's by writing every deny to both
+/// (`addDenyToEngines`) and listing, counting and removing against one of
+/// them; a path that changed one and not the other, or a process that
+/// installed only one, left the post-filter and the executor disagreeing.
+/// A label is a table and its entries combine as PostgreSQL's policies do
+/// (SONNY-2710, `rls_types.LabelPolicy`); the post-filter sees no
+/// expression policies, so here only deny entries decide.
+pub const LabelPolicy = rls_types.LabelPolicy;
+pub const RLSFilterEngine = rls_types.RLSFilterEngine;
 
-/// Thread-safe, server-lifetime collection of label-level RLS policies.
-/// Designed as a singleton that lives for the duration of the server process.
-pub const RLSFilterEngine = struct {
-    allocator: std.mem.Allocator,
-    /// Protected by `mu`.
-    policies: std.ArrayList(LabelPolicy),
-    mu: std.Io.Mutex = std.Io.Mutex.init,
-
-    const Self = @This();
-
-    pub fn init(allocator: std.mem.Allocator) Self {
-        return .{
-            .allocator = allocator,
-            .policies = std.ArrayList(LabelPolicy).empty,
-        };
-    }
-
-    pub fn deinit(self: *Self) void {
-        // Free duped strings for each policy.
-        for (self.policies.items) |p| {
-            self.allocator.free(p.graph);
-            self.allocator.free(p.label);
-            if (p.username.len > 0) self.allocator.free(p.username);
-        }
-        self.policies.deinit(self.allocator);
-    }
-
-    /// Register a deny policy: rows containing nodes/edges with `label` in `graph` will be
-    /// filtered out for `username` (empty string = all users).
-    pub fn addDenyPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) !void {
-        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
-
-        const policy = LabelPolicy{
-            .graph = try self.allocator.dupe(u8, graph),
-            .label = try self.allocator.dupe(u8, label),
-            .deny = true,
-            .username = if (username.len > 0) try self.allocator.dupe(u8, username) else "",
-        };
-        try self.policies.append(self.allocator, policy);
-    }
-
-    /// SONNY-2710: register an allow entry (a permissive policy that passes
-    /// for `username`; see `LabelPolicy`). It hides no row.
-    pub fn addAllowPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) !void {
-        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
-
-        const g = try self.allocator.dupe(u8, graph);
-        errdefer self.allocator.free(g);
-        const l = try self.allocator.dupe(u8, label);
-        errdefer self.allocator.free(l);
-        const u: []const u8 = if (username.len > 0) try self.allocator.dupe(u8, username) else "";
-        errdefer if (u.len > 0) self.allocator.free(u);
-        try self.policies.append(self.allocator, .{ .graph = g, .label = l, .deny = false, .username = u });
-    }
-
-    /// Remove all deny policies matching graph+label+username exactly.
-    /// SONNY-2710: allow entries are left alone (`removeAllowPolicy`).
-    pub fn removeDenyPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) void {
-        self.removeEntries(graph, label, username, true);
-    }
-
-    /// SONNY-2710: remove all allow policies matching graph+label+username.
-    pub fn removeAllowPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) void {
-        self.removeEntries(graph, label, username, false);
-    }
-
-    fn removeEntries(self: *Self, graph: []const u8, label: []const u8, username: []const u8, deny: bool) void {
-        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
-
-        var i: usize = 0;
-        while (i < self.policies.items.len) {
-            const p = self.policies.items[i];
-            if (p.deny == deny and
-                std.mem.eql(u8, p.graph, graph) and
-                std.mem.eql(u8, p.label, label) and
-                std.mem.eql(u8, p.username, username))
-            {
-                self.allocator.free(p.graph);
-                self.allocator.free(p.label);
-                if (p.username.len > 0) self.allocator.free(p.username);
-                _ = self.policies.swapRemove(i);
-            } else {
-                i += 1;
-            }
-        }
-    }
-
-    /// Returns true if the given label is denied for user+graph.
-    pub fn isLabelDenied(self: *Self, graph: []const u8, label: []const u8, username: []const u8) bool {
-        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
-
-        for (self.policies.items) |p| {
-            if (!p.deny) continue;
-            if (!std.mem.eql(u8, p.graph, graph)) continue;
-            if (!std.mem.eql(u8, p.label, label)) continue;
-            // Empty username in policy means "applies to all users"
-            if (p.username.len == 0 or std.mem.eql(u8, p.username, username)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // CANARY: REQ=REQ-SONNY-2679-LABEL-SNAPSHOT-OWNED; FEATURE="RLS Query Enforcement"; ASPECT=SnapshotOwnsLabels; STATUS=TESTED; TEST=test-rls-filter; OWNER=security; UPDATED=2026-09-25
-    /// Snapshot denied labels for a specific user+graph into a HashSet.
-    /// Single lock acquisition instead of per-label locking. Free the set with
-    /// `freeDeniedLabels`.
-    ///
-    /// The set holds its own copy of every label (SONNY-2679 review). It used
-    /// to borrow each policy's string, which `removeDenyPolicy` frees under
-    /// this lock; the post-filter reads the set after the lock is released,
-    /// so a policy removed meanwhile left it reading freed memory. Holding
-    /// the lock for the set's lifetime instead would serialize every
-    /// post-filter against every policy change.
-    pub fn snapshotDeniedLabels(self: *Self, allocator: std.mem.Allocator, graph: []const u8, username: []const u8) !std.StringHashMap(void) {
-        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
-
-        var denied = std.StringHashMap(void).init(allocator);
-        errdefer freeDeniedLabels(&denied);
-        for (self.policies.items) |p| {
-            if (!p.deny) continue;
-            if (!std.mem.eql(u8, p.graph, graph)) continue;
-            if (p.username.len != 0 and !std.mem.eql(u8, p.username, username)) continue;
-            if (denied.contains(p.label)) continue;
-            const label = try allocator.dupe(u8, p.label);
-            errdefer allocator.free(label);
-            try denied.put(label, {});
-        }
-        return denied;
-    }
-
-    /// Free a set from `snapshotDeniedLabels`: its labels, then the set.
-    pub fn freeDeniedLabels(set: *std.StringHashMap(void)) void {
-        var it = set.keyIterator();
-        while (it.next()) |key| set.allocator.free(key.*);
-        set.deinit();
-    }
-
-    /// Return the number of currently active policies.
-    pub fn policyCount(self: *Self) usize {
-        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
-        return self.policies.items.len;
-    }
-
-    /// Return true iff at least one policy applies to `graph`.  Used as
-    /// a fast-path gate: callers skip the filter entirely when this
-    /// graph has no RLS policies attached, avoiding the snapshot /
-    /// row-scan work for the common msft-graph-ingest case where most
-    /// graphs have zero RLS config (user requirement, 2026-04-23).
-    pub fn hasPoliciesForGraph(self: *Self, graph: []const u8) bool {
-        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
-        for (self.policies.items) |p| {
-            if (!p.deny) continue;
-            if (std.mem.eql(u8, p.graph, graph)) return true;
-        }
-        return false;
-    }
-};
-
-/// Global singleton — set once at server startup, read by every connection handler.
-var g_rls_filter_engine: ?*RLSFilterEngine = null;
-
-/// Called from server/main.zig (or server_init.zig) during startup.
+/// The label-deny engine, set once at server startup (server/main.zig):
+/// rls_types' global, which the executor reads too.
 pub fn setGlobalRLSFilterEngine(engine: ?*RLSFilterEngine) void {
-    g_rls_filter_engine = engine;
+    rls_types.setGlobalRLSFilterEngine(engine);
 }
 
 /// Called by connection handlers to retrieve the engine.
 pub fn getGlobalRLSFilterEngine() ?*RLSFilterEngine {
-    return g_rls_filter_engine;
+    return rls_types.getGlobalRLSFilterEngine();
 }
 
 // CANARY: REQ=REQ-SONNY-2729-POSTFILTER-FAIL-CLOSED; FEATURE="RLS Query Enforcement"; ASPECT=FailClosed; STATUS=TESTED; TEST=tests/test_sonny2729_postfilter_fail_closed.zig; OWNER=security; UPDATED=2026-09-26
@@ -352,14 +180,23 @@ const AlgorithmRowCheck = struct {
                 .Int => |v| std.math.cast(u64, v) orelse continue,
                 else => continue,
             };
-            // If node not found in store, it may have been deleted — keep the
-            // row since there is no label to deny.
-            const node = self.store.getNodePtr(node_id) orelse continue;
-            for (node.labels) |label| {
-                if (self.denied.contains(label)) return false;
-            }
+            // CANARY: REQ=REQ-SONNY-3038-ALGO-EVICTED-NODE; FEATURE="RLS Algorithm Filtering"; ASPECT=EvictedNode; STATUS=TESTED; TEST=tests/test_sonny3038_auth_rls_low_findings.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-3038: a node evicted from the bounded resident cache is
+            // read from the engine, from a transient copy that touches no
+            // cache (`decideOnTransientNode`). The raw cache lookup missed it,
+            // and the row was kept as if the node had been deleted. Only a
+            // node in neither (deleted) has no label to deny.
+            const denied = self.store.decideOnTransientNode(node_id, self.denied, carriesDeniedLabel) orelse continue;
+            if (denied) return false;
         }
         return true;
+    }
+
+    fn carriesDeniedLabel(denied: *const std.StringHashMap(void), node: *const graph_store.Node) bool {
+        for (node.labels) |label| {
+            if (denied.contains(label)) return true;
+        }
+        return false;
     }
 };
 
@@ -511,63 +348,6 @@ fn valueContainsDeniedLabelAt(denied_labels: *const std.StringHashMap(void), val
         else => {},
     }
     return false;
-}
-
-// CANARY: REQ=REQ-SEC-RLS-FEDERATION-001; FEATURE="RLS Federation Filter"; ASPECT=PostMergeFilter; STATUS=TESTED; OWNER=security; UPDATED=2026-04-05
-// SEC-D007: Post-merge RLS filter for federated query results.
-// Federated QueryResults use BindingRow (cols: []const Value), which is the same value type
-// as ExecutionResult rows.  We use `anytype` for the results parameter so that this function
-// works with any struct that has a `.rows` field of BindingRow-like slice type where each
-// element has a `.cols` field of `[]const Value`.
-
-/// Apply label-based RLS filtering to any result set that exposes `.rows` containing
-/// BindingRow-compatible elements (each having `.cols: []const Value`).
-/// Designed for federation QueryResults but works generically.
-/// Returns the number of rows removed. The rows kept keep their order.
-/// SONNY-2729: when it cannot run, it returns
-/// `error.RowSecurityFilterUnavailable` and leaves the rows as they are: they
-/// are the caller's to free (this function cannot free a caller's row type),
-/// and the caller must withhold them all (federation.zig frees the merged
-/// result and returns the error).
-pub fn applyRLSToFederatedResults(
-    allocator: std.mem.Allocator,
-    results: anytype,
-    engine: *RLSFilterEngine,
-    username: []const u8,
-    graph_name: []const u8,
-) FilterError!usize {
-    // Fast path: no policies configured.
-    if (engine.policyCount() == 0) return 0;
-
-    // Fast path (user requirement 2026-04-23): skip when this graph
-    // has no RLS policies attached.
-    if (!engine.hasPoliciesForGraph(graph_name)) return 0;
-
-    // Snapshot denied labels once (single lock acquisition).
-    var denied = engine.snapshotDeniedLabels(allocator, graph_name, username) catch
-        return error.RowSecurityFilterUnavailable;
-    defer RLSFilterEngine.freeDeniedLabels(&denied);
-
-    if (denied.count() == 0) return 0;
-
-    var kept: usize = 0;
-    for (results.rows) |row| {
-        if (rowContainsDeniedLabel(&denied, row.cols)) continue;
-        @constCast(&results.rows[kept]).* = row;
-        kept += 1;
-    }
-    const removed = results.rows.len - kept;
-    results.rows = results.rows[0..kept];
-
-    if (removed > 0) {
-        log.info("rls_federation_filter", &.{
-            Attr.string("action", "federation_rows_filtered"),
-            Attr.string("user", username),
-            Attr.string("graph", graph_name),
-        });
-    }
-
-    return removed;
 }
 
 // ---- Unit tests ----
@@ -1104,71 +884,4 @@ test "applyAlgorithmRLSFilter: deleted node passes through" {
     const removed = try applyAlgorithmRLSFilter(allocator, &result, &engine, &store, "alice", "default");
     try std.testing.expectEqual(@as(usize, 0), removed);
     try std.testing.expectEqual(@as(usize, 1), result.rows.len);
-}
-
-// Test helper: minimal BindingRow-compatible struct for testing applyRLSToFederatedResults
-// without importing federation types (which would cause module path conflicts).
-const TestBindingRow = struct {
-    cols: []const Value,
-};
-const TestFederatedResults = struct {
-    rows: []const TestBindingRow,
-};
-
-test "applyRLSToFederatedResults: filters federation rows with denied labels" {
-    // SEC-D007: Verify that federated QueryResults are filtered by RLS.
-    const allocator = std.testing.allocator;
-
-    var engine = RLSFilterEngine.init(allocator);
-    defer engine.deinit();
-    try engine.addDenyPolicy("default", "Secret", "alice");
-
-    var store = try graph_store.GraphStore.init(allocator);
-    defer store.deinit();
-
-    try store.createNodeWithId(1, &[_][]const u8{"Public"}, "default");
-    try store.createNodeWithId(2, &[_][]const u8{"Secret"}, "default");
-
-    const node1 = store.getNodePtr(1).?;
-    const node2 = store.getNodePtr(2).?;
-
-    var rows_buf = try allocator.alloc(TestBindingRow, 2);
-    defer allocator.free(rows_buf);
-
-    const cols1 = try allocator.alloc(Value, 1);
-    defer allocator.free(cols1);
-    cols1[0] = .{ .Node = node1 };
-    rows_buf[0] = .{ .cols = cols1 };
-
-    const cols2 = try allocator.alloc(Value, 1);
-    defer allocator.free(cols2);
-    cols2[0] = .{ .Node = node2 };
-    rows_buf[1] = .{ .cols = cols2 };
-
-    var results = TestFederatedResults{
-        .rows = rows_buf,
-    };
-
-    const removed_count = try applyRLSToFederatedResults(allocator, &results, &engine, "alice", "default");
-    try std.testing.expectEqual(@as(usize, 1), removed_count);
-    try std.testing.expectEqual(@as(usize, 1), results.rows.len);
-
-    switch (results.rows[0].cols[0]) {
-        .Node => |n| try std.testing.expectEqualStrings("Public", n.labels[0]),
-        else => return error.TestUnexpectedResult,
-    }
-}
-
-test "applyRLSToFederatedResults: no policies returns 0" {
-    const allocator = std.testing.allocator;
-
-    var engine = RLSFilterEngine.init(allocator);
-    defer engine.deinit();
-
-    var results = TestFederatedResults{
-        .rows = &.{},
-    };
-
-    const removed_count = try applyRLSToFederatedResults(allocator, &results, &engine, "alice", "default");
-    try std.testing.expectEqual(@as(usize, 0), removed_count);
 }

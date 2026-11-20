@@ -10,10 +10,9 @@
 //   5. Coordinator-fragment construction: principal_envelope_bytes attaches to
 //      the per-fragment ExecuteRequest struct correctly.
 //
-// Note: NodeQuery struct has a `principal_envelope_bytes` field added in
-// Phase 7 Task 7-6.  That type lives in distributed/query_transport.zig which
-// has the full module graph (quic, protobuf, etc.) and can only be tested at
-// the integration level from within the src/ tree.  Here we test the
+// Note: the NodeQuery struct in distributed/query_transport.zig that carried
+// `principal_envelope_bytes` was never compiled and was removed in SONNY-6279
+// together with the federation query coordinators.  Here we test the
 // serialization/deserialization path and QueryOptions field availability,
 // which are the semantically important invariants accessible from tests/.
 

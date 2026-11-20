@@ -46,7 +46,7 @@ echo
 SERVER_PORT=8451
 DATA_DIR=$(mktemp -d /tmp/geode_integration_XXXXXX)
 ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
-ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-Geode Test Admin Passphrase}"
 
 GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
     ./zig-out/bin/geode serve --listen 127.0.0.1:${SERVER_PORT} --data_dir "${DATA_DIR}" >/tmp/geode_integration.log 2>&1 &
@@ -64,9 +64,9 @@ sleep 2
 
 # Test 1: QUIC mode
 echo "=== QUIC Mode Tests ==="
-run_test "Basic query" "./zig-out/bin/geode query 'RETURN 1 AS x ORDER BY x LIMIT 1' --server 127.0.0.1:${SERVER_PORT} --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS}"
-run_test "Error handling" "./zig-out/bin/geode query 'MATCH (n:InvalidLabel--)' --server 127.0.0.1:${SERVER_PORT} --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS} 2>&1 | grep -qi 'error'"
-run_test "Set operations" "./zig-out/bin/geode query 'RETURN 1 AS x UNION RETURN 1 AS x' --server 127.0.0.1:${SERVER_PORT} --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS}"
+run_test "Basic query" "./zig-out/bin/geode query 'RETURN 1 AS x ORDER BY x LIMIT 1' --server 127.0.0.1:${SERVER_PORT} --insecure --user ${ADMIN_USER} --password '${ADMIN_PASS}'"
+run_test "Error handling" "./zig-out/bin/geode query 'MATCH (n:InvalidLabel--)' --server 127.0.0.1:${SERVER_PORT} --insecure --user ${ADMIN_USER} --password '${ADMIN_PASS}' 2>&1 | grep -qi 'error'"
+run_test "Set operations" "./zig-out/bin/geode query 'RETURN 1 AS x UNION RETURN 1 AS x' --server 127.0.0.1:${SERVER_PORT} --insecure --user ${ADMIN_USER} --password '${ADMIN_PASS}'"
 echo
 
 # Test 4: Go client library (if available)

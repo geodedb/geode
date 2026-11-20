@@ -508,7 +508,7 @@ RETURN reverse([1, 2, 3])
 
 #### `range(start: INTEGER, end: INTEGER, step: INTEGER)` -> `LIST`
 
-Create a list of integers
+Geode extension (ISO GQL has no range function): integers from start up to, not including, end, by step (default 1); openCypher's range() includes end
 
 ```gql
 RETURN range(1, 10)
@@ -671,7 +671,7 @@ RETURN vectori32([1, 2, 3])
 L2 (Euclidean) distance between vectors
 
 ```gql
-RETURN vector_l2(n.embedding, $query)
+RETURN vector_l2(n.embedding, $query_vector)
 ```
 
 #### `vector_cosine(v1: VECTOR, v2: VECTOR)` -> `FLOAT`
@@ -679,7 +679,7 @@ RETURN vector_l2(n.embedding, $query)
 Cosine distance between vectors
 
 ```gql
-RETURN vector_cosine(n.embedding, $query)
+RETURN vector_cosine(n.embedding, $query_vector)
 ```
 
 #### `vector_dot(v1: VECTOR, v2: VECTOR)` -> `FLOAT`
@@ -687,7 +687,7 @@ RETURN vector_cosine(n.embedding, $query)
 Dot product of vectors
 
 ```gql
-RETURN vector_dot(n.embedding, $query)
+RETURN vector_dot(n.embedding, $query_vector)
 ```
 
 #### `distance(v1: VECTOR, v2: VECTOR)` -> `FLOAT`
@@ -695,7 +695,7 @@ RETURN vector_dot(n.embedding, $query)
 Default distance metric (L2)
 
 ```gql
-RETURN distance(n.embedding, $query)
+RETURN distance(n.embedding, $query_vector)
 ```
 
 #### `similarity(v1: VECTOR, v2: VECTOR)` -> `FLOAT`
@@ -703,7 +703,7 @@ RETURN distance(n.embedding, $query)
 Cosine similarity between vectors
 
 ```gql
-RETURN similarity(n.embedding, $query)
+RETURN similarity(n.embedding, $query_vector)
 ```
 
 #### `cosine(v1: VECTOR, v2: VECTOR)` -> `FLOAT`
@@ -711,7 +711,7 @@ RETURN similarity(n.embedding, $query)
 Cosine similarity (alias)
 
 ```gql
-RETURN cosine(n.embedding, $query)
+RETURN cosine(n.embedding, $query_vector)
 ```
 
 #### `euclidean(v1: VECTOR, v2: VECTOR)` -> `FLOAT`
@@ -719,7 +719,7 @@ RETURN cosine(n.embedding, $query)
 Euclidean distance (alias for vector_l2)
 
 ```gql
-RETURN euclidean(n.embedding, $query)
+RETURN euclidean(n.embedding, $query_vector)
 ```
 
 #### `manhattan(v1: VECTOR, v2: VECTOR)` -> `FLOAT`
@@ -727,7 +727,7 @@ RETURN euclidean(n.embedding, $query)
 Manhattan (L1) distance between vectors
 
 ```gql
-RETURN manhattan(n.embedding, $query)
+RETURN manhattan(n.embedding, $query_vector)
 ```
 
 ### Conversion Functions

@@ -1,8 +1,12 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const util = @import("proto_test_util.zig");
 
 // Protocol test: PROFILE includes GraphStore metrics.
 test "protocol: PROFILE graph_store metrics" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("PROFILE graph_store metrics");
     errdefer util.testFail();
 
@@ -11,8 +15,7 @@ test "protocol: PROFILE graph_store metrics" {
     // Get random port
     const port = util.getRandomPort() catch |err| {
         util.progress("Port allocation failed: {}", .{err});
-        util.testSkip();
-        return;
+        return err;
     };
     const addr = try util.formatAddr(allocator, port);
     defer allocator.free(addr);
@@ -21,15 +24,14 @@ test "protocol: PROFILE graph_store metrics" {
 
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr },
         util.TestEnv.standard(),
     );
     defer server.deinit();
 
     util.waitForServerReady(allocator, addr, 10000) catch |err| {
         util.progress("Server readiness timeout: {}", .{err});
-        util.testSkip();
-        return;
+        return err;
     };
 
     util.progress("Connecting client...", .{});

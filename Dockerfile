@@ -29,7 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy pre-downloaded Zig archives for both architectures (avoids entropy issues in Docker build)
 # Only the archive matching TARGETARCH needs to exist; the other COPY is allowed to fail via
 # the glob pattern which gracefully handles missing files.
-ARG ZIG_VERSION=0.15.2
+ARG ZIG_VERSION=0.16.0
 COPY docker/zig/zig-x86_64-linux-${ZIG_VERSION}.tar.xz* /tmp/
 COPY docker/zig/zig-aarch64-linux-${ZIG_VERSION}.tar.xz* /tmp/
 
@@ -101,8 +101,8 @@ RUN chmod +x /usr/local/bin/health-check.sh
 USER geode
 WORKDIR /home/geode
 
-# Set default log level (can be overridden with -e LOG_LEVEL=debug)
-ENV LOG_LEVEL=error
+# The log level is geode serve --log-level (in CMD below). geode reads no
+# LOG_LEVEL variable (SONNY-6442).
 
 # QUIC Performance Optimizations:
 # GSO (Generic Segmentation Offload) is enabled by default on Linux 4.18+
@@ -131,4 +131,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 # Default entrypoint and command
 ENTRYPOINT ["/usr/local/bin/geode", "serve"]
-CMD ["--data-dir", "/data", "--enable-auth"]
+CMD ["--data-dir", "/data", "--log-level", "error", "--enable-auth"]

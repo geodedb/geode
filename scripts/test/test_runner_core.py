@@ -230,6 +230,31 @@ def should_isolate(text):
 # ---------------------------------------------------------------------------
 
 
+class UnknownSecretError(KeyError):
+    """A ``${secret:NAME}`` the spec's secrets section does not declare.
+
+    The runners used to substitute ``default-NAME``: a value nobody chose,
+    which the server's password policy refuses for a password-named secret.
+    """
+
+    def __init__(self, name):
+        super().__init__(name)
+        self.name = name
+
+    def __str__(self):
+        return (
+            f"${{secret:{self.name}}} is not declared in the spec's secrets section "
+            "(built-in secrets: admin_password, user_password, api_token)"
+        )
+
+
+def declared_secret(secrets, name):
+    """The value of the declared secret ``name``; UnknownSecretError otherwise."""
+    if name not in secrets:
+        raise UnknownSecretError(name)
+    return secrets[name]
+
+
 def substitute_server_variables(
     text, spec_config=None, resolved_secrets=None, env_overrides=None, instance_id=None, loop_index=None
 ):
@@ -251,10 +276,10 @@ def substitute_server_variables(
     if "${secret" in text:
         secrets = resolved_secrets or {}
         text = text.replace("${secret:api_token}", secrets.get("api_token", "test-token-123"))
-        text = text.replace("${secret:user_password}", secrets.get("user_password", "UserPass123!"))
-        text = text.replace("${secret:admin_password}", secrets.get("admin_password", "geode-test-password"))
+        text = text.replace("${secret:user_password}", secrets.get("user_password", "Geode Test User Passphrase"))
+        text = text.replace("${secret:admin_password}", secrets.get("admin_password", "Geode Test Admin Passphrase"))
         for match in re.findall(r"\$\{secret:([^}]+)\}", text):
-            text = text.replace(f"${{secret:{match}}}", secrets.get(match, f"default-{match}"))
+            text = text.replace(f"${{secret:{match}}}", declared_secret(secrets, match))
 
     if "${GEODE_" in text or "${geode_" in text:
         secrets = resolved_secrets or {}
@@ -265,7 +290,7 @@ def substitute_server_variables(
             elif match in os.environ:
                 val = os.environ[match]
             elif match == "GEODE_ADMIN_PASSWORD":
-                val = secrets.get("admin_password", "geode-test-password")
+                val = secrets.get("admin_password", "Geode Test Admin Passphrase")
             elif match == "GEODE_SERVER_ADDRESS":
                 sp = "8443"
                 if spec_config and isinstance(spec_config, dict):
@@ -538,7 +563,7 @@ def start_server(binary, data_dir, port, args, timeout_ms=30000, env_overrides=N
         probe_env.update(env_overrides)
     username = (env_overrides or {}).get("GEODE_ADMIN_USERNAME", os.environ.get("GEODE_ADMIN_USERNAME", "geode"))
     password = (env_overrides or {}).get(
-        "GEODE_DEFAULT_PASSWORD", os.environ.get("GEODE_DEFAULT_PASSWORD", "geode-test-password")
+        "GEODE_DEFAULT_PASSWORD", os.environ.get("GEODE_DEFAULT_PASSWORD", "Geode Test Admin Passphrase")
     )
 
     while time.time() < deadline:

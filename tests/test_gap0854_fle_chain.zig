@@ -89,7 +89,8 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
     return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
 }
 
-// Local mirror of graph_store.isLikelyFleEnvelope (private). Used only to
+// The FLE envelope shape (the store's old isLikelyFleEnvelope, removed by
+// SONNY-6347: a shape is not proof; the store now authenticates). Used only to
 // assert — positively — that a value stored in a NORMAL graph really did get
 // turned into an FLE envelope (alg id 1-3 + matching length-prefix), so the
 // GAP-0854 security-graph guard cannot regress into disabling FLE everywhere.
@@ -129,9 +130,9 @@ test "GAP-0854: configureField on a colliding label does not corrupt the auth HM
     _ = setenv("GEODE_MASTER_KEY", TEST_MASTER_KEY_HEX, 1);
 
     // Isolate the PERSISTED FLE catalog to a per-test temp dir. Without this,
-    // `configureField('User','email')` persists to `{GEODE_DATA_DIR or
-    // /tmp}/geode_fle_catalog.dat` (fle_catalog.saveCatalog) — a process- and
-    // run-shared file. A later, otherwise-unrelated test (e.g.
+    // `configureField('User','email')` persists to the data directory's
+    // geode_fle_catalog.dat (fle_catalog.saveCatalog; before SONNY-6274 a
+    // process- and run-shared /tmp file when none was set). A later, otherwise-unrelated test (e.g.
     // tests/bulk_ingest/test_simple_merge_fastpath.zig) that lazily loads the
     // global catalog would then inherit this `User.email` encryption config and
     // FLE-encrypt its `email` property, breaking its plaintext assertion. Point
@@ -200,7 +201,7 @@ test "GAP-0854: configureField on a colliding label does not corrupt the auth HM
         try testing.expect(nodes.len >= 1);
         for (nodes) |node_id| {
             // Read the current (plaintext) email and write it straight back.
-            const email_val = store.getNodeProperty(node_id, "email") orelse continue;
+            const email_val = (try store.getNodePropertyOrError(node_id, "email")) orelse continue;
             if (email_val == .String) {
                 try store.setNodeProperty(node_id, "email", .{ .String = email_val.String });
             }
@@ -225,7 +226,7 @@ test "GAP-0854: configureField on a colliding label does not corrupt the auth HM
     {
         const nodes = store.getNodesByLabel(SECURITY_GRAPH_NAME, "User") orelse &[_]u64{};
         for (nodes) |node_id| {
-            const email_val = store.getNodeProperty(node_id, "email") orelse continue;
+            const email_val = (try store.getNodePropertyOrError(node_id, "email")) orelse continue;
             if (email_val == .String) {
                 try testing.expectEqualStrings("admin@localhost", email_val.String);
             }

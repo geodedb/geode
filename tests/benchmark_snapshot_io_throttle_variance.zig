@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot I/O Throttle"; ASPECT=SnapshotIOThrottleVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotIOThrottleVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
+// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot I/O Throttle"; ASPECT=SnapshotIOThrottleVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotIOThrottleVarianceEnvelope; OWNER=storage; UPDATED=2026-11-14
 
 fn simulateThrottle(iterations: usize, target_iops: u32) u64 {
     // Simulate a feedback loop controlling snapshot write IOPS by introducing sleep/jitter when rate exceeds target.

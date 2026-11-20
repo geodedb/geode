@@ -131,6 +131,14 @@ fn appendProps(list: *std.ArrayList(u8), a: Allocator, props: []const Prop) !voi
                 try appendU32(list, a, s.len);
                 try list.appendSlice(a, s);
             },
+            // SONNY-6718: same tag as cluster_replication.zig (coefficient, scale).
+            .Decimal => |d| {
+                try list.append(a, 5);
+                var b: [16]u8 = undefined;
+                std.mem.writeInt(i128, &b, d.coeff, .little);
+                try list.appendSlice(a, &b);
+                try list.append(a, d.scale);
+            },
             else => return CodecError.UnsupportedPropertyType,
         }
     }
@@ -190,6 +198,12 @@ const Reader = struct {
         self.pos += 8;
         return v;
     }
+    fn readI128(self: *Reader) !i128 {
+        if (self.pos + 16 > self.data.len) return CodecError.CorruptPayload;
+        const v = std.mem.readInt(i128, self.data[self.pos..][0..16], .little);
+        self.pos += 16;
+        return v;
+    }
     fn readU64(self: *Reader) !u64 {
         if (self.pos + 8 > self.data.len) return CodecError.CorruptPayload;
         const v = std.mem.readInt(u64, self.data[self.pos..][0..8], .little);
@@ -231,6 +245,7 @@ fn readProps(r: *Reader, allocator: Allocator) ![]Prop {
             2 => .{ .Float = @bitCast(try r.readU64()) },
             3 => .{ .Bool = (try r.byte()) != 0 },
             4 => .{ .String = try r.str32() },
+            5 => .{ .Decimal = .{ .coeff = try r.readI128(), .scale = try r.byte() } },
             else => return CodecError.CorruptPayload,
         };
         p.* = .{ .key = key, .value = val };
@@ -544,12 +559,38 @@ pub const TxnCoordinator = struct {
         });
     }
 
+    // CANARY: REQ=REQ-SONNY-6541-2PC-APPLY-CHECKPOINT-EXCLUSION; FEATURE="DistributedCluster"; ASPECT=DecideHoldsReplicatedApplyMutex; STATUS=TESTED; TEST=tests/test_sonny6541_2pc_apply_checkpoint_exclusion.zig; OWNER=distributed; UPDATED=2026-11-14
+    /// SONNY-6541 (2): each operation holds its graph's
+    /// `replicated_apply_mutex`, as a Raft graph mutation's apply does
+    /// (SONNY-6528 (1), `raft_apply.applyGraphMutationInner`): a checkpoint
+    /// of the graph waits for it. It runs on the Raft apply thread under the
+    /// node's `inner_mutex`, so it cannot take the graph's `rwlock`. The
+    /// graph is hydrated first, outside the mutex, without persisting the
+    /// products (SONNY-6547 (4): that persist is a checkpoint of the graph,
+    /// which waits up to 5 s for the graph's lock under `inner_mutex`).
     fn applyOperation(self: *TxnCoordinator, op: WriteSetOp) !void {
+        const op_graph = switch (op) {
+            .node_op => |n| n.graph,
+            .edge_op => |e| e.graph,
+        };
+        const graph_name = if (op_graph.len > 0) op_graph else graph_store.DEFAULT_GRAPH_NAME;
+        self.store.ensureGraphForReplicatedWrite(graph_name) catch |err| switch (err) {
+            error.GraphAlreadyExists => {},
+            else => return err,
+        };
+        try self.store.ensureGraphHydratedForReplicatedApply(graph_name);
+        const adapter = graph_store.getGlobalAdapter();
+        const apply_mg = if (adapter) |a| try a.beginReplicatedApply(graph_name) else null;
+        defer if (apply_mg) |mg| adapter.?.endReplicatedApply(mg);
+        return self.applyOperationLocked(op);
+    }
+
+    fn applyOperationLocked(self: *TxnCoordinator, op: WriteSetOp) !void {
         switch (op) {
             .node_op => |node_op| {
                 const graph_name = if (node_op.graph.len > 0) node_op.graph else graph_store.DEFAULT_GRAPH_NAME;
                 // Ensure the target graph exists (idempotent, mirrors raft_apply).
-                self.store.createGraph(graph_name) catch |err| switch (err) {
+                self.store.ensureGraphForReplicatedWrite(graph_name) catch |err| switch (err) {
                     error.GraphAlreadyExists => {},
                     else => return err,
                 };
@@ -576,7 +617,7 @@ pub const TxnCoordinator = struct {
                         // SILENTLY DROP this replicated property update. Hydrate
                         // the target graph first (no-op once hydrated / for a
                         // non-deferred graph) so the by-id gate sees the node.
-                        self.store.ensureGraphHydrated(graph_name);
+                        try self.store.ensureGraphHydratedForReplicatedApply(graph_name);
                         if (self.store.getNodePtr(node_op.node_id) != null) {
                             for (node_op.props) |p| {
                                 try self.store.setNodeProperty(node_op.node_id, p.key, p.value);
@@ -584,19 +625,22 @@ pub const TxnCoordinator = struct {
                         }
                     },
                     .delete => {
-                        self.store.deleteNode(node_op.node_id);
+                        // SONNY-6302: a failed delete fails the apply, as a
+                        // failed create or property write does (the void form
+                        // only logged it).
+                        try self.store.deleteNodeChecked(node_op.node_id);
                     },
                 }
             },
             .edge_op => |edge_op| {
                 const graph_name = if (edge_op.graph.len > 0) edge_op.graph else graph_store.DEFAULT_GRAPH_NAME;
-                self.store.createGraph(graph_name) catch |err| switch (err) {
+                self.store.ensureGraphForReplicatedWrite(graph_name) catch |err| switch (err) {
                     error.GraphAlreadyExists => {},
                     else => return err,
                 };
                 switch (edge_op.op_type) {
                     .create => {
-                        if (self.store.getEdgePtr(edge_op.edge_id) == null) {
+                        if ((try self.store.getEdgePtrHydratedChecked(edge_op.edge_id)) == null) {
                             self.store.createEdgeWithId(edge_op.edge_id, edge_op.source_id, edge_op.target_id, edge_op.edge_type, graph_name) catch |err| switch (err) {
                                 error.EdgeAlreadyExists => {},
                                 else => return err,
@@ -612,15 +656,15 @@ pub const TxnCoordinator = struct {
                         // first access, so the raw `getEdgePtr` gate would
                         // resolve null and SILENTLY DROP this replicated edge
                         // property update. Hydrate first (no-op once hydrated).
-                        self.store.ensureGraphHydrated(graph_name);
-                        if (self.store.getEdgePtr(edge_op.edge_id) != null) {
+                        try self.store.ensureGraphHydratedForReplicatedApply(graph_name);
+                        if ((try self.store.getEdgePtrHydratedChecked(edge_op.edge_id)) != null) {
                             for (edge_op.props) |p| {
                                 try self.store.setEdgeProperty(edge_op.edge_id, p.key, p.value);
                             }
                         }
                     },
                     .delete => {
-                        self.store.deleteEdge(edge_op.edge_id);
+                        try self.store.deleteEdgeChecked(edge_op.edge_id); // SONNY-6302
                     },
                 }
             },

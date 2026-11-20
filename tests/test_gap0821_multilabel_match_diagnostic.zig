@@ -25,6 +25,7 @@
 // correct invariant once we know what shape the regression takes (if any).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 
@@ -154,6 +155,8 @@ fn runMultiLabelScenario(
 }
 
 test "GAP-0821 diagnostic: smp_allocator ratio" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // Production allocator: what the server uses.
     const allocator = std.heap.smp_allocator;
 
@@ -177,6 +180,8 @@ test "GAP-0821 diagnostic: smp_allocator ratio" {
 }
 
 test "GAP-0821 diagnostic: smp_allocator ratio — large secondary label (10x)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // Same probe but with 1000 LT_Company (twice the LT_Person count).
     // If the label-index dispatch had any O(total_nodes) component, this is
     // where it would show up.
@@ -200,6 +205,8 @@ test "GAP-0821 diagnostic: smp_allocator ratio — large secondary label (10x)" 
 }
 
 test "GAP-0821 diagnostic: DebugAllocator ratio" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // Bench default (std.testing.allocator is DebugAllocator under the hood).
     // Pin it explicitly so the result is traceable.
     var dba: std.heap.DebugAllocator(.{}) = .init;

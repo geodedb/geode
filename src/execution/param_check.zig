@@ -18,11 +18,19 @@
 //!   LIMIT parameter the request supplies is a non-negative integer.
 //! - SONNY-3367, variable kinds (42000, `VariableKindConflict`): one name is
 //!   one kind of element (`queryKindsConflict`).
-//! - SONNY-3248, repeated SET targets (22G03, `RepeatedSetTarget`): one SET
+//! - SONNY-3248, repeated SET targets (22G0M, `RepeatedSetTarget`): one SET
 //!   clause assigns a property once (`setListRepeatsTarget`).
+//! - SONNY-3245, insert patterns (42000, `InvalidInsertPattern`): a CREATE
+//!   or INSERT pattern follows ISO/IEC 39075:2024 16.5 (`insertPatternInvalid`).
 //! - SONNY-3318, a path variable on an OPTIONAL MATCH after the first
 //!   pattern (0A000, `OptionalPathVariable`): no executor binds it (`count(p)`
 //!   answered 0 of the paths matched).
+//! - SONNY-6496, variable scope after a projection (42000,
+//!   `VariableNotInScope`): after a WITH or NEXT only the variables it
+//!   projects are in scope (scope_check.zig).
+//! - SONNY-6637, function operand counts (42000, `WrongArgumentCount`): a
+//!   call takes the number of operands the shared arity table gives
+//!   (`scope_check.checkCallArity`, src/eval/function_arity.zig).
 //!
 //! The walk goes over the whole statement like the write walk
 //! (write_walk.zig): iteratively, and by reflection over every AST type, so
@@ -33,11 +41,13 @@
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const Value = @import("../value_types.zig").Value;
+const scope_check = @import("scope_check.zig");
 
 /// What the checks refuse (the module doc has each one): `MissingParameter`
-/// (42P02), `VariableKindConflict` (42000), `RepeatedSetTarget` (22G03),
-/// `InvalidWindowParameter` (22G03) and `OptionalPathVariable` (0A000).
-pub const Error = error{ MissingParameter, OutOfMemory, VariableKindConflict, RepeatedSetTarget, InvalidWindowParameter, OptionalPathVariable };
+/// (42P02), `VariableKindConflict` (42000), `RepeatedSetTarget` (22G0M),
+/// `InvalidWindowParameter` (22G03), `OptionalPathVariable` (0A000) and
+/// `VariableNotInScope` (42000).
+pub const Error = error{ MissingParameter, OutOfMemory, VariableKindConflict, RepeatedSetTarget, InvalidWindowParameter, OptionalPathVariable, InvalidInsertPattern, VariableNotInScope, WrongArgumentCount };
 
 /// Every statement of `program` names only parameters in `supplied` (or ones
 /// it defines with LET). `values`: the supplied parameters' values (empty:
@@ -48,7 +58,7 @@ pub fn checkProgram(program: *const ast.Program, supplied: []const []const u8, v
 
 pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8, values: []const Value) Error!void {
     var sfa = std.heap.stackFallback(4096, std.heap.smp_allocator);
-    var c = Collector{ .alloc = sfa.get() };
+    var c = Collector{ .alloc = sfa.get(), .vars = scope_check.Checker.init(std.heap.smp_allocator) };
     defer c.deinit();
     c.push(.stmt, stmt);
     while (c.stack.pop()) |item| {
@@ -59,21 +69,36 @@ pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8, 
         // SONNY-3248 (round 4b-1b review I-E): it was refused (42P02), while
         // an EXISTS body's WHERE was accepted, and both read null; the
         // executor now evaluates each with the statement's parameters, its
-        // LETs among them (`evaluator_adapter.executeQueryWithEnv`).
+        // LETs among them (`evaluator_adapter.ExecutionCallbacks.runSubquery`).
         c.query_scope = item.scope;
         switch (item.kind) {
             .stmt => {
                 const s: *const ast.Statement = @ptrCast(@alignCast(item.ptr));
+                // SONNY-6525: the statement's queries start with nothing in
+                // scope.
+                if (!c.out_of_scope) c.vars.checkStatement(s) catch |err| switch (err) {
+                    error.VariableNotInScope => c.out_of_scope = true,
+                    error.OutOfMemory => c.failed = true,
+                };
                 switch (s.*) {
                     inline else => |*p| c.visit(@TypeOf(p.*), p),
                 }
             },
             .query => {
                 const q: *const ast.Query = @ptrCast(@alignCast(item.ptr));
+                // SONNY-6496: the query and the parts chained after it, in
+                // the scope each starts with (once per query).
+                if (!c.out_of_scope) c.vars.checkQuery(q) catch |err| switch (err) {
+                    error.VariableNotInScope => c.out_of_scope = true,
+                    error.OutOfMemory => c.failed = true,
+                };
                 c.visitFields(ast.Query, q);
             },
             .expr => {
                 const e: *const ast.Expr = @ptrCast(@alignCast(item.ptr));
+                if (!c.isProcedure(e)) scope_check.checkCallArity(e) catch {
+                    c.wrong_arity = true;
+                };
                 switch (e.*) {
                     .Param => |name| c.use(name),
                     inline else => |*p| c.visit(@TypeOf(p.*), p),
@@ -85,10 +110,13 @@ pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8, 
     if (c.kind_conflict) return error.VariableKindConflict;
     if (c.repeated_set_target) return error.RepeatedSetTarget;
     if (c.optional_path) return error.OptionalPathVariable;
+    if (c.invalid_insert) return error.InvalidInsertPattern;
+    if (c.wrong_arity) return error.WrongArgumentCount;
     for (c.used.items) |u| {
         if (has(supplied, u.name) or c.defines(u.scope, u.name)) continue;
         return error.MissingParameter;
     }
+    if (c.out_of_scope) return error.VariableNotInScope;
     // CANARY: REQ=REQ-SONNY-3248-LIMIT-PARAM; FEATURE="Pagination"; ASPECT=InvalidWindowValue; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4b.zig; OWNER=engine; UPDATED=2026-09-28
     // SONNY-3248 (round 4b-1 review m-2): a SKIP or LIMIT parameter the
     // request supplies is a non-negative integer. Any other value (-1, 2.0,
@@ -102,6 +130,70 @@ pub fn checkStatement(stmt: *const ast.Statement, supplied: []const []const u8, 
             break;
         }
     };
+}
+
+// CANARY: REQ=REQ-SONNY-3245-INSERT-PATTERN-RULES; FEATURE="CreateStatement"; ASPECT=InsertSyntaxRules; STATUS=TESTED; TEST=tests/test_sonny3245_create_merge_forms.zig; OWNER=engine; UPDATED=2026-11-12
+/// SONNY-3245: does CREATE / INSERT pattern `p` break ISO/IEC 39075:2024
+/// 16.5 <insert graph pattern>? `bound`: the MATCH of the same query part,
+/// whose variables the pattern's bound insert element patterns name. Each
+/// was accepted and did the wrong thing:
+/// - SR 10 a) iii): a bound insert element pattern carries no label or
+///   property specification. `MATCH (n) CREATE (n:Extra)` did nothing and
+///   `CREATE (n {extra: 1})` changed the matched node.
+/// - SR 10 b): only the defining (first) occurrence of a variable carries
+///   them. `CREATE (a:R), (a:R)` made two nodes.
+/// - Format: an inserted edge points left, right, or is `~[ ]~` (Feature
+///   GH02, which Geode does not support: its edges are directed), and has a
+///   <label set specification>, which joins labels with `&`, never `|`.
+///   `-[:T]-` stored a directed edge and `[:T|U]` stored a T edge; a stored
+///   edge has exactly one type, so neither several types nor a quantifier
+///   is accepted.
+fn insertPatternInvalid(p: ast.GraphPattern, bound: ?ast.GraphPattern) bool {
+    var declared_buf: [64][]const u8 = undefined;
+    var declared: usize = 0;
+    for (p.chains) |chain| {
+        // The node positions of the path: the head, or each hop's right
+        // with the first hop's left (a hop's left is the hop before's right).
+        const first: ?ast.NodePattern = if (chain.hops.len == 0) chain.head else chain.hops[0].left;
+        if (first) |n| {
+            if (nodeInvalid(n, bound, declared_buf[0..declared])) return true;
+            if (n.name) |name| if (declared < declared_buf.len) {
+                declared_buf[declared] = name;
+                declared += 1;
+            };
+        }
+        for (chain.hops) |hop| {
+            if (hop.rel.dir == .undirected) return true;
+            if (hop.rel.types.len > 1) return true;
+            if (hop.rel.min_len != null or hop.rel.max_len != null) return true;
+            if (nodeInvalid(hop.right, bound, declared_buf[0..declared])) return true;
+            if (hop.right.name) |name| if (declared < declared_buf.len) {
+                declared_buf[declared] = name;
+                declared += 1;
+            };
+        }
+    }
+    return false;
+}
+
+fn nodeInvalid(n: ast.NodePattern, bound: ?ast.GraphPattern, declared: []const []const u8) bool {
+    const name = n.name orelse return false;
+    const specified = n.labels.len > 0 or n.props != null;
+    if (!specified) return false;
+    if (has(declared, name)) return true;
+    const b = bound orelse return false;
+    return patternNames(b, name);
+}
+
+fn patternNames(p: ast.GraphPattern, name: []const u8) bool {
+    for (p.chains) |chain| {
+        if (chain.head) |h| if (h.name) |n| if (std.mem.eql(u8, n, name)) return true;
+        for (chain.hops) |hop| {
+            if (hop.left.name) |n| if (std.mem.eql(u8, n, name)) return true;
+            if (hop.right.name) |n| if (std.mem.eql(u8, n, name)) return true;
+        }
+    }
+    return false;
 }
 
 /// A SKIP or LIMIT value: a non-negative integer.
@@ -156,8 +248,19 @@ const Collector = struct {
     repeated_set_target: bool = false,
     /// SONNY-3318: an OPTIONAL MATCH after the first pattern names a path.
     optional_path: bool = false,
+    /// SONNY-3245: a CREATE or INSERT pattern breaks ISO 16.5.
+    invalid_insert: bool = false,
+    /// SONNY-6496: the projection-scope check, and whether it refused.
+    vars: scope_check.Checker,
+    out_of_scope: bool = false,
+    /// SONNY-6637: a function call with an operand count the arity table
+    /// refuses; and the procedures CALL names, which are no function calls.
+    wrong_arity: bool = false,
+    procedures: std.ArrayList(*const ast.Expr) = .empty,
 
     fn deinit(c: *Collector) void {
+        c.procedures.deinit(c.alloc);
+        c.vars.deinit();
         c.stack.deinit(c.alloc);
         c.used.deinit(c.alloc);
         c.windows.deinit(c.alloc);
@@ -187,13 +290,28 @@ const Collector = struct {
         return false;
     }
 
+    fn isProcedure(c: *const Collector, e: *const ast.Expr) bool {
+        for (c.procedures.items) |p| {
+            if (p == e) return true;
+        }
+        return false;
+    }
+
     fn visit(c: *Collector, comptime T: type, v: *const T) void {
+        if (T == ast.CallProcedure or T == ast.CallClause) {
+            c.procedures.append(c.alloc, &v.procedure) catch {
+                c.failed = true;
+            };
+        }
         if (T == ast.GraphPattern) {
             // A CREATE, INSERT or MERGE statement's own pattern (a query's
             // patterns are checked together in `visitFields`).
             if (patternKindsConflict(c.alloc, &.{v.*}, null, &.{})) |conflict| {
                 if (conflict) c.kind_conflict = true;
             } else |_| c.failed = true;
+        }
+        if (T == ast.CreateStatement or T == ast.InsertStatement) {
+            if (insertPatternInvalid(v.pattern, null)) c.invalid_insert = true;
         }
         if (T == ast.ForStatement) {
             // SONNY-3367 (round 4b-1b review I-A): a FOR's variables are
@@ -252,6 +370,9 @@ const Collector = struct {
                 if (conflict) c.kind_conflict = true;
             } else |_| c.failed = true;
             if (setListRepeatsTarget(v.set_clauses, v.set_clause_ends)) c.repeated_set_target = true;
+            if (v.create_pattern) |cp| {
+                if (insertPatternInvalid(cp, v.match)) c.invalid_insert = true;
+            }
             if (v.match.chains.len > 1) for (v.match.chains[1..]) |chain| {
                 if (chain.is_optional and chain.name != null) c.optional_path = true;
             };

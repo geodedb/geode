@@ -138,18 +138,22 @@ pub const ResultAccumulator = struct {
     }
 
     pub fn render(self: *ResultAccumulator, stdout: anytype, stderr: anytype) !bool {
-        if (self.wants_dot) {
-            if (self.rows_text) |rows| {
-                try outputDotFormatFromRows(self.allocator, rows.items, stdout);
+        // SONNY-6560: a graph format draws a successful row result. An error
+        // and an EXPLAIN/PROFILE plan render below as in every other format
+        // (the error on stderr, the plan on stdout); they used to print an
+        // empty graph and drop the error message and the plan.
+        if ((self.wants_dot or self.wants_mermaid) and !self.indicatesFailure() and self.result_kind == .rows) {
+            const kind: GraphKind = if (self.wants_dot) .dot else .mermaid;
+            const rows: []const std.ArrayList([]const u8) = if (self.rows_text) |r| r.items else &.{};
+            const left_out = try renderGraph(kind, self.allocator, rows, stdout);
+            if (left_out > 0) {
+                const io = std.Io.Threaded.global_single_threaded.io();
+                var err_out = if (@TypeOf(stderr) == std.Io.File) transport_response.Stream.init(stderr, io) else stderr;
+                var buf: [192]u8 = undefined;
+                const note = std.fmt.bufPrint(&buf, "Note: --format {s} draws nodes, relationships and paths; {d} value(s) that are none of these are not shown\n", .{ @tagName(kind), left_out }) catch unreachable;
+                err_out.writeAll(note) catch {};
             }
-            return self.indicatesFailure();
-        }
-
-        if (self.wants_mermaid) {
-            if (self.rows_text) |rows| {
-                try outputMermaidFormatFromRows(self.allocator, rows.items, stdout);
-            }
-            return self.indicatesFailure();
+            return false;
         }
 
         return transport_response.renderTransportResponseWithStreams(
@@ -547,103 +551,280 @@ fn getDotNodeId(allocator: std.mem.Allocator, obj: std.json.ObjectMap) ?[]const 
     return null;
 }
 
-fn getDotNodeLabel(allocator: std.mem.Allocator, obj: std.json.ObjectMap, labels_val: std.json.Value) ![]const u8 {
-    var parts = try std.ArrayList(u8).initCapacity(allocator, 64);
-    defer parts.deinit(allocator);
+// CANARY: REQ=REQ-SONNY-6560-GRAPH-FORMATS; FEATURE="CliOptions"; ASPECT=DotMermaidEveryShape; STATUS=TESTED; TEST=tests/test_sonny6560_cli_unsupported_options.zig; OWNER=cli; UPDATED=2026-11-14
+// SONNY-6560: --format dot and mermaid draw the nodes and relationships of
+// every cell: a node, a relationship, a path (its nodes and relationships)
+// and a list of them. They used to draw only a bare node or relationship
+// cell, so a path printed an empty graph, and DOT strings were written
+// unescaped (a name holding `"` broke the graph). A cell that holds no graph
+// element is counted, and the caller says how many were not shown.
 
-    if (labels_val == .array) {
-        for (labels_val.array.items, 0..) |label, idx| {
-            if (idx > 0) try parts.append(allocator, ':');
-            if (label == .string) try parts.appendSlice(allocator, label.string);
+const GraphKind = enum { dot, mermaid };
+
+/// The nodes and relationships of a result, in encounter order, each once.
+const GraphElements = struct {
+    allocator: std.mem.Allocator,
+    nodes: std.ArrayList(Node) = .empty,
+    edges: std.ArrayList(Edge) = .empty,
+    seen_nodes: std.StringHashMapUnmanaged(void) = .empty,
+    seen_edges: std.StringHashMapUnmanaged(void) = .empty,
+    /// Cells holding no node, relationship or path.
+    left_out: usize = 0,
+
+    const Node = struct {
+        id: []const u8,
+        labels: []const u8,
+        display: ?[]const u8,
+    };
+    const Edge = struct {
+        from: []const u8,
+        to: []const u8,
+        label: []const u8,
+    };
+
+    fn deinit(self: *GraphElements) void {
+        const a = self.allocator;
+        for (self.nodes.items) |n| {
+            a.free(n.labels);
+            if (n.display) |d| a.free(d);
+        }
+        self.nodes.deinit(a);
+        for (self.edges.items) |e| {
+            a.free(e.from);
+            a.free(e.to);
+            a.free(e.label);
+        }
+        self.edges.deinit(a);
+        var it = self.seen_nodes.keyIterator();
+        while (it.next()) |k| a.free(k.*);
+        self.seen_nodes.deinit(a);
+        var eit = self.seen_edges.keyIterator();
+        while (eit.next()) |k| a.free(k.*);
+        self.seen_edges.deinit(a);
+    }
+
+    fn addRows(self: *GraphElements, rows: []const std.ArrayList([]const u8)) !void {
+        for (rows) |row| {
+            for (row.items) |cell| try self.addCell(cell);
         }
     }
 
-    const display_props = [_][]const u8{ "name", "title", "label", "username", "email" };
-    if (obj.get("properties")) |props_val| {
-        if (props_val == .object) {
-            for (display_props) |prop| {
-                if (props_val.object.get(prop)) |val| {
-                    if (val == .string and val.string.len > 0) {
-                        try parts.appendSlice(allocator, "\\n");
-                        try parts.appendSlice(allocator, val.string);
-                        break;
+    fn addCell(self: *GraphElements, cell: []const u8) !void {
+        const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, cell, .{}) catch {
+            self.left_out += 1;
+            return;
+        };
+        defer parsed.deinit();
+        if (!try self.walk(parsed.value)) self.left_out += 1;
+    }
+
+    /// Adds the graph elements in `value`; false when it holds none.
+    fn walk(self: *GraphElements, value: std.json.Value) error{OutOfMemory}!bool {
+        switch (value) {
+            .array => |arr| {
+                var any = false;
+                for (arr.items) |item| any = (try self.walk(item)) or any;
+                return any;
+            },
+            .object => |obj| {
+                if (obj.get("labels")) |labels_val| return self.addNode(obj, labels_val);
+                if (obj.get("nodes")) |nodes_val| {
+                    if (nodes_val == .array) {
+                        var any = try self.walk(nodes_val);
+                        if (obj.get("edges")) |edges_val| any = (try self.walk(edges_val)) or any;
+                        return any;
+                    }
+                }
+                if (obj.get("label") orelse obj.get("type")) |type_val| {
+                    if (type_val == .string) return self.addEdge(obj, type_val.string);
+                }
+                return false;
+            },
+            else => return false,
+        }
+    }
+
+    fn addNode(self: *GraphElements, obj: std.json.ObjectMap, labels_val: std.json.Value) !bool {
+        const a = self.allocator;
+        const id = getDotNodeId(a, obj) orelse return false;
+        if (self.seen_nodes.contains(id)) {
+            a.free(id);
+            return true;
+        }
+        try self.seen_nodes.put(a, id, {});
+
+        var labels: std.ArrayList(u8) = .empty;
+        errdefer labels.deinit(a);
+        if (labels_val == .array) {
+            for (labels_val.array.items, 0..) |label, idx| {
+                if (idx > 0) try labels.append(a, ':');
+                if (label == .string) try labels.appendSlice(a, label.string);
+            }
+        }
+        var display: ?[]const u8 = null;
+        const display_props = [_][]const u8{ "name", "title", "label", "username", "email" };
+        if (obj.get("properties")) |props_val| {
+            if (props_val == .object) {
+                for (display_props) |prop| {
+                    if (props_val.object.get(prop)) |val| {
+                        if (val == .string and val.string.len > 0) {
+                            display = try a.dupe(u8, val.string);
+                            break;
+                        }
                     }
                 }
             }
         }
+        errdefer if (display) |d| a.free(d);
+        try self.nodes.append(a, .{ .id = id, .labels = try labels.toOwnedSlice(a), .display = display });
+        return true;
     }
 
-    if (parts.items.len == 0) {
-        return getDotNodeId(allocator, obj) orelse try allocator.dupe(u8, "node");
+    fn addEdge(self: *GraphElements, obj: std.json.ObjectMap, label: []const u8) !bool {
+        const a = self.allocator;
+        const from = getDotIdString(a, obj.get("from")) orelse
+            getDotIdString(a, obj.get("start_node")) orelse return false;
+        errdefer a.free(from);
+        const to = getDotIdString(a, obj.get("to")) orelse
+            getDotIdString(a, obj.get("end_node")) orelse {
+            a.free(from);
+            return false;
+        };
+        errdefer a.free(to);
+        // A relationship met twice (two paths through it) is drawn once.
+        if (getDotIdString(a, obj.get("id"))) |edge_id| {
+            if (self.seen_edges.contains(edge_id)) {
+                a.free(edge_id);
+                a.free(from);
+                a.free(to);
+                return true;
+            }
+            self.seen_edges.put(a, edge_id, {}) catch |err| {
+                a.free(edge_id);
+                return err;
+            };
+        }
+        try self.edges.append(a, .{ .from = from, .to = to, .label = try a.dupe(u8, label) });
+        return true;
     }
-    return try allocator.dupe(u8, parts.items);
+};
+
+/// Write `raw` as the inside of a DOT double-quoted string.
+fn writeDotEscaped(out: anytype, raw: []const u8) !void {
+    var start: usize = 0;
+    for (raw, 0..) |c, i| {
+        const esc: ?[]const u8 = switch (c) {
+            '"' => "\\\"",
+            '\\' => "\\\\",
+            '\n' => "\\n",
+            '\r' => "",
+            else => null,
+        };
+        if (esc) |e| {
+            try out.writeAll(raw[start..i]);
+            try out.writeAll(e);
+            start = i + 1;
+        }
+    }
+    try out.writeAll(raw[start..]);
 }
 
-fn outputDotFormatFromRows(
+/// A Mermaid node id: `n` and the element id, with anything but [A-Za-z0-9_] as `_`.
+fn writeMermaidId(out: anytype, id: []const u8) !void {
+    try out.writeAll("n");
+    for (id) |c| {
+        const ok = std.ascii.isAlphanumeric(c) or c == '_';
+        try out.writeAll(if (ok) &[_]u8{c} else "_");
+    }
+}
+
+/// CANARY: REQ=REQ-CLI-DOT-003; FEATURE="DotFormat"; ASPECT=RowBasedOutput; STATUS=TESTED; TEST=tests/test_sonny6560_cli_unsupported_options.zig; OWNER=cli; UPDATED=2026-11-15
+/// Render `rows` as a DOT digraph or a Mermaid flowchart; returns how many
+/// cells held no graph element (not drawn).
+fn renderGraph(kind: GraphKind, allocator: std.mem.Allocator, rows: []const std.ArrayList([]const u8), stdout: anytype) !usize {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var out = if (@TypeOf(stdout) == std.Io.File) transport_response.Stream.init(stdout, io) else stdout;
+
+    var graph: GraphElements = .{ .allocator = allocator };
+    defer graph.deinit();
+    try graph.addRows(rows);
+
+    switch (kind) {
+        .dot => {
+            try out.writeAll("digraph G {\n");
+            try out.writeAll("  rankdir=LR;\n");
+            try out.writeAll("  node [shape=ellipse, style=filled, fillcolor=lightblue];\n");
+            try out.writeAll("  edge [fontsize=10];\n\n");
+            for (graph.nodes.items) |n| {
+                try out.writeAll("  \"");
+                try writeDotEscaped(out, n.id);
+                try out.writeAll("\" [label=\"");
+                if (n.labels.len == 0 and n.display == null) {
+                    try writeDotEscaped(out, n.id);
+                } else {
+                    try writeDotEscaped(out, n.labels);
+                    if (n.display) |d| {
+                        try out.writeAll("\\n");
+                        try writeDotEscaped(out, d);
+                    }
+                }
+                try out.writeAll("\"];\n");
+            }
+            for (graph.edges.items) |e| {
+                try out.writeAll("  \"");
+                try writeDotEscaped(out, e.from);
+                try out.writeAll("\" -> \"");
+                try writeDotEscaped(out, e.to);
+                try out.writeAll("\" [label=\"");
+                try writeDotEscaped(out, e.label);
+                try out.writeAll("\"];\n");
+            }
+            try out.writeAll("}\n");
+        },
+        .mermaid => {
+            try out.writeAll("flowchart LR\n");
+            for (graph.nodes.items) |n| {
+                var raw: std.ArrayList(u8) = .empty;
+                defer raw.deinit(allocator);
+                if (n.labels.len == 0 and n.display == null) {
+                    try raw.appendSlice(allocator, n.id);
+                } else {
+                    try raw.appendSlice(allocator, n.labels);
+                    if (n.display) |d| {
+                        try raw.appendSlice(allocator, "<br/>");
+                        try raw.appendSlice(allocator, d);
+                    }
+                }
+                const label = try escapeMermaidLabel(allocator, raw.items);
+                defer allocator.free(label);
+                try out.writeAll("  ");
+                try writeMermaidId(out, n.id);
+                try out.writeAll("[\"");
+                try out.writeAll(label);
+                try out.writeAll("\"]\n");
+            }
+            for (graph.edges.items) |e| {
+                const escaped_type = try escapeMermaidLabel(allocator, e.label);
+                defer allocator.free(escaped_type);
+                try out.writeAll("  ");
+                try writeMermaidId(out, e.from);
+                try out.writeAll(" -->|\"");
+                try out.writeAll(escaped_type);
+                try out.writeAll("\"| ");
+                try writeMermaidId(out, e.to);
+                try out.writeAll("\n");
+            }
+        },
+    }
+    return graph.left_out;
+}
+
+pub fn outputDotFormatFromRows(
     allocator: std.mem.Allocator,
     rows: []const std.ArrayList([]const u8),
     stdout: anytype,
 ) !void {
-    var out = stdout;
-
-    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "digraph G {\n");
-    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  rankdir=LR;\n");
-    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  node [shape=ellipse, style=filled, fillcolor=lightblue];\n");
-    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  edge [fontsize=10];\n\n");
-
-    var seen_nodes = std.StringHashMap(void).init(allocator);
-    defer {
-        var iter = seen_nodes.keyIterator();
-        while (iter.next()) |key| allocator.free(key.*);
-        seen_nodes.deinit();
-    }
-
-    for (rows) |row| {
-        for (row.items) |cell| {
-            const parsed = std.json.parseFromSlice(std.json.Value, allocator, cell, .{}) catch continue;
-            defer parsed.deinit();
-
-            if (parsed.value != .object) continue;
-            const obj = parsed.value.object;
-
-            if (obj.get("labels")) |labels_val| {
-                const node_id = getDotNodeId(allocator, obj) orelse continue;
-                defer allocator.free(node_id);
-
-                if (!seen_nodes.contains(node_id)) {
-                    try seen_nodes.put(try allocator.dupe(u8, node_id), {});
-                    const label = getDotNodeLabel(allocator, obj, labels_val) catch node_id;
-                    defer if (!std.mem.eql(u8, label, node_id)) allocator.free(label);
-
-                    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  \"");
-                    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), node_id);
-                    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\" [label=\"");
-                    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), label);
-                    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\"];\n");
-                }
-            } else if (obj.get("label") orelse obj.get("type")) |type_val| {
-                if (type_val != .string) continue;
-
-                const start_id = getDotIdString(allocator, obj.get("from")) orelse
-                    getDotIdString(allocator, obj.get("start_node")) orelse continue;
-                defer allocator.free(start_id);
-
-                const end_id = getDotIdString(allocator, obj.get("to")) orelse
-                    getDotIdString(allocator, obj.get("end_node")) orelse continue;
-                defer allocator.free(end_id);
-
-                try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  \"");
-                try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), start_id);
-                try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\" -> \"");
-                try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), end_id);
-                try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\" [label=\"");
-                try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), type_val.string);
-                try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\"];\n");
-            }
-        }
-    }
-
-    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "}\n");
+    _ = try renderGraph(.dot, allocator, rows, stdout);
 }
 
 pub fn outputMermaidFormatFromRows(
@@ -651,123 +832,7 @@ pub fn outputMermaidFormatFromRows(
     rows: []const std.ArrayList([]const u8),
     stdout: anytype,
 ) !void {
-    const io = std.Io.Threaded.global_single_threaded.io();
-    var out = if (@TypeOf(stdout) == std.Io.File) transport_response.Stream.init(stdout, io) else stdout;
-
-    try out.writeAll("flowchart LR\n");
-
-    var seen_nodes = std.StringHashMap(void).init(allocator);
-    defer {
-        var iter = seen_nodes.keyIterator();
-        while (iter.next()) |key| allocator.free(key.*);
-        seen_nodes.deinit();
-    }
-
-    // Pass 1: emit nodes only, in encounter order.
-    for (rows) |row| {
-        for (row.items) |cell| {
-            const parsed = std.json.parseFromSlice(std.json.Value, allocator, cell, .{}) catch continue;
-            defer parsed.deinit();
-
-            if (parsed.value != .object) continue;
-            const obj = parsed.value.object;
-
-            if (obj.get("labels")) |labels_val| {
-                const node_id = getDotNodeId(allocator, obj) orelse continue;
-                defer allocator.free(node_id);
-
-                if (!seen_nodes.contains(node_id)) {
-                    try seen_nodes.put(try allocator.dupe(u8, node_id), {});
-
-                    const label = getMermaidNodeLabel(allocator, obj, labels_val) catch try allocator.dupe(u8, node_id);
-                    defer allocator.free(label);
-
-                    try out.writeAll("  n");
-                    try out.writeAll(node_id);
-                    try out.writeAll("[\"");
-                    try out.writeAll(label);
-                    try out.writeAll("\"]\n");
-                }
-            }
-        }
-    }
-
-    // Pass 2: emit edges only.
-    for (rows) |row| {
-        for (row.items) |cell| {
-            const parsed = std.json.parseFromSlice(std.json.Value, allocator, cell, .{}) catch continue;
-            defer parsed.deinit();
-
-            if (parsed.value != .object) continue;
-            const obj = parsed.value.object;
-
-            if (obj.get("labels") != null) continue;
-
-            if (obj.get("label") orelse obj.get("type")) |type_val| {
-                if (type_val != .string) continue;
-
-                const start_id = getDotIdString(allocator, obj.get("from")) orelse
-                    getDotIdString(allocator, obj.get("start_node")) orelse continue;
-                defer allocator.free(start_id);
-
-                const end_id = getDotIdString(allocator, obj.get("to")) orelse
-                    getDotIdString(allocator, obj.get("end_node")) orelse continue;
-                defer allocator.free(end_id);
-
-                const escaped_type = try escapeMermaidLabel(allocator, type_val.string);
-                defer allocator.free(escaped_type);
-
-                try out.writeAll("  n");
-                try out.writeAll(start_id);
-                try out.writeAll(" -->|\"");
-                try out.writeAll(escaped_type);
-                try out.writeAll("\"| n");
-                try out.writeAll(end_id);
-                try out.writeAll("\n");
-            }
-        }
-    }
-}
-
-fn getMermaidNodeLabel(
-    allocator: std.mem.Allocator,
-    obj: std.json.ObjectMap,
-    labels_val: std.json.Value,
-) ![]const u8 {
-    var raw = try std.ArrayList(u8).initCapacity(allocator, 64);
-    defer raw.deinit(allocator);
-
-    if (labels_val == .array) {
-        for (labels_val.array.items, 0..) |label, idx| {
-            if (idx > 0) try raw.append(allocator, ':');
-            if (label == .string) try raw.appendSlice(allocator, label.string);
-        }
-    }
-
-    const display_props = [_][]const u8{ "name", "title", "label", "username", "email" };
-    if (obj.get("properties")) |props_val| {
-        if (props_val == .object) {
-            for (display_props) |prop| {
-                if (props_val.object.get(prop)) |val| {
-                    if (val == .string and val.string.len > 0) {
-                        try raw.appendSlice(allocator, "<br/>");
-                        try raw.appendSlice(allocator, val.string);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    if (raw.items.len == 0) {
-        if (getDotNodeId(allocator, obj)) |id| {
-            defer allocator.free(id);
-            return try escapeMermaidLabel(allocator, id);
-        }
-        return try allocator.dupe(u8, "node");
-    }
-
-    return try escapeMermaidLabel(allocator, raw.items);
+    _ = try renderGraph(.mermaid, allocator, rows, stdout);
 }
 
 fn escapeMermaidLabel(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {

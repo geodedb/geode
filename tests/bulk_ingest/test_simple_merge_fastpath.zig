@@ -61,8 +61,9 @@ const Harness = struct {
         // master key (the pre-push shards run without GEODE_MASTER_KEY set) and
         // isolate the persisted FLE catalog so a SIBLING test that configured an
         // encrypted field (e.g. test_gap0854_fle_chain's ('User','email'))
-        // cannot leak its config into this process via the shared
-        // {GEODE_DATA_DIR or /tmp}/geode_fle_catalog.dat file. Point
+        // cannot leak its config into this process via a persisted
+        // geode_fle_catalog.dat (before SONNY-6274 a shared /tmp file when no
+        // data directory was set). Point
         // GEODE_DATA_DIR at this harness's own tmp dir and reset the in-memory
         // global catalog so it reloads from there (empty).
         _ = setenv("GEODE_MASTER_KEY", TEST_MASTER_KEY_HEX, 1);
@@ -140,7 +141,7 @@ fn findNodeByProperty(
 
 fn labelPostingLen(store: *graph_store.GraphStore, graph_name: []const u8, label: []const u8) usize {
     var buf: [256]u8 = undefined;
-    const key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ graph_name, label }) catch return 0;
+    const key = std.fmt.bufPrint(&buf, "{s}\x00{s}", .{ graph_name, label }) catch return 0;
     const posting = store.label_index.getPtr(key) orelse return 0;
     posting.lock();
     defer posting.unlock();

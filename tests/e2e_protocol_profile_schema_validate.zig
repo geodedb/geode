@@ -1,11 +1,17 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("profile_test_util.zig");
 
 // use shared util.runCli
 
+// SONNY-6548: a read now takes the trace-backed version-2 payload
+// (docs/EXPLAIN_PROFILE.md); the version-1 payload this checks comes from a
+// data change (and from tenant-bound and RLS sessions).
 test "protocol: PROFILE conforms to schema v1 minimal" {
-    const out = try util.runProfile(testing.allocator, "PROFILE RETURN 1 AS x ORDER BY x LIMIT 1", null);
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const out = try util.runProfile(testing.allocator, "PROFILE CREATE (:SchemaV1_6548 {k: 1})", null);
     defer testing.allocator.free(out);
     const profile_line = out;
     try testing.expect(std.mem.indexOf(u8, profile_line, "\"profile_version\":1") != null);

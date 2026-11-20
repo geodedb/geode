@@ -4,7 +4,7 @@ const graph_store = geode.graph_store;
 const tde_file = geode.tde_file_encryption;
 
 // Basic snapshot encryption round-trip test. Ensures ciphertext differs from plaintext and load yields original data.
-// CANARY: REQ=REQ-GQL-TDE-002; FEATURE="Snapshot encryption"; ASPECT=TEST; STATUS=TESTED; OWNER=security; UPDATED=2026-02-04
+// CANARY: REQ=REQ-GQL-TDE-002; FEATURE="Snapshot encryption"; ASPECT=TEST; STATUS=IMPL; OWNER=security; UPDATED=2026-11-14
 
 test "graphstore encryption round trip save+load" {
     var gpa = std.heap.DebugAllocator(.{}){};

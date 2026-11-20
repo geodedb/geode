@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 const schema = @import("schema");
@@ -16,6 +18,8 @@ fn execGrpc(client: *util.GrpcProtoClient, allocator: std.mem.Allocator, query: 
 // CANARY: REQ=REQ-GQL-017; FEATURE="Transport Parity Diagnostics IllegalOrderKey"; ASPECT=ProtocolE2E; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_017_TransportParity_IllegalOrderKey; OWNER=engine; UPDATED=2025-09-24
 
 test "protocol: transport parity diagnostics (IllegalOrderKey) QUIC vs gRPC (gated)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("transport parity diagnostics (IllegalOrderKey) QUIC vs gRPC");
     errdefer util.testFail();
 
@@ -24,13 +28,13 @@ test "protocol: transport parity diagnostics (IllegalOrderKey) QUIC vs gRPC (gat
     // Get two random ports for QUIC and gRPC
     const quic_port = util.getRandomPort() catch |err| {
         util.progress("QUIC port allocation failed: {}", .{err});
-        util.testSkip();
-        return;
+        // SONNY-6548: a failed parity run fails the smoke (it skipped and passed).
+        return err;
     };
     const grpc_port = util.getRandomPort() catch |err| {
         util.progress("gRPC port allocation failed: {}", .{err});
-        util.testSkip();
-        return;
+        // SONNY-6548: a failed parity run fails the smoke (it skipped and passed).
+        return err;
     };
 
     const addr = try util.formatAddr(allocator, quic_port);
@@ -50,44 +54,51 @@ test "protocol: transport parity diagnostics (IllegalOrderKey) QUIC vs gRPC (gat
     //     which `ORDER BY f(a)` is legal and returns rows. The IllegalOrderKey
     //     diagnostic only exists under the opt-in ident-only policy, so pin it
     //     with `GEODE_ORDER_KEYS_EXPR=0` (server_init.zig:233).
-    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--listen-grpc", grpc_addr }, &.{
+    var server = util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--listen-grpc", grpc_addr }, &.{
         "GEODE_GRPC_ALLOW_PLAINTEXT_FALLBACK=1",
         "GEODE_QUIC_PASSIVE_TEARDOWN=1",
         "GEODE_ORDER_KEYS_EXPR=0",
     }) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
-        util.testSkip();
-        return;
+        // SONNY-6548: a failed parity run fails the smoke (it skipped and passed).
+        return err;
     };
     defer server.deinit();
 
     // Wait for server readiness
     util.waitForServerReady(allocator, addr, 10000) catch |err| {
         util.progress("Server readiness timeout: {}", .{err});
-        util.testSkip();
-        return;
+        // SONNY-6548: a failed parity run fails the smoke (it skipped and passed).
+        return err;
     };
 
     util.progress("Connecting QUIC client...", .{});
     var quic = try util.QuicProtoClient.connect(allocator, addr);
     defer quic.deinit();
 
-    util.progress("Connecting gRPC client...", .{});
-    var grpc = try util.GrpcProtoClient.connect(allocator, grpc_addr);
-    defer grpc.deinit();
+    // SONNY-6782: plaintext gRPC is served in Debug only; a release build
+    // checks the QUIC half.
+    var grpc: ?util.GrpcProtoClient = null;
+    defer if (grpc) |*g| g.deinit();
+    if (util.grpc_plaintext_served) {
+        util.progress("Connecting gRPC client...", .{});
+        grpc = try util.GrpcProtoClient.connect(allocator, grpc_addr);
+    }
 
     util.progress("Authenticating both clients...", .{});
     var hello_q = try quic.hello(allocator, util.defaultUsername(), util.defaultPassword());
     hello_q.deinit(allocator);
-    var hello_g = try grpc.hello(allocator, util.defaultUsername(), util.defaultPassword());
-    hello_g.deinit(allocator);
+    if (grpc) |*g| {
+        var hello_g = try g.hello(allocator, util.defaultUsername(), util.defaultPassword());
+        hello_g.deinit(allocator);
+    }
 
     util.progress("Testing IllegalOrderKey parity...", .{});
     const q = "RETURN a ORDER BY f(a)";
     var qres = try execQuic(&quic, allocator, q);
     defer qres.deinit(allocator);
-    var gres = try execGrpc(&grpc, allocator, q);
-    defer gres.deinit(allocator);
+    var gres: ?util.ExecResult = if (grpc) |*g| try execGrpc(g, allocator, q) else null;
+    defer if (gres) |*r| r.deinit(allocator);
 
     // Both transports must reject, with the SAME status class and the SAME
     // message — that identity is what "transport parity" means here. The
@@ -98,12 +109,14 @@ test "protocol: transport parity diagnostics (IllegalOrderKey) QUIC vs gRPC (gat
     const expected_message = "function calls in ORDER BY are disabled";
 
     try testing.expect(qres.error_code != null);
-    try testing.expect(gres.error_code != null);
     try testing.expectEqualStrings("42000", qres.error_code.?);
-    try testing.expectEqualStrings("42000", gres.error_code.?);
     try testing.expectEqualStrings(expected_message, qres.error_message orelse "");
-    try testing.expectEqualStrings(expected_message, gres.error_message orelse "");
-    try testing.expectEqualStrings(qres.status_class, gres.status_class);
+    if (gres) |r| {
+        try testing.expect(r.error_code != null);
+        try testing.expectEqualStrings("42000", r.error_code.?);
+        try testing.expectEqualStrings(expected_message, r.error_message orelse "");
+        try testing.expectEqualStrings(qres.status_class, r.status_class);
+    }
 
     util.testPass();
 }

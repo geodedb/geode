@@ -263,17 +263,25 @@ test "ENG-3913(E): a predicate that fails to evaluate never silently deletes; DE
     );
     try testing.expectEqual(@as(usize, 2), try h.countRows("MATCH (n:EA) RETURN n"));
 
-    // (ii) Predicate classes the shared evaluator treats as non-matching select
-    // NO rows for RETURN, and must therefore delete NOTHING. (That the engine
-    // drops these rows rather than raising is an evaluator-wide behaviour, not
-    // a DELETE behaviour — the point here is that DELETE no longer has its own
-    // divergent swallow.)
-    try testing.expectEqual(@as(usize, 0), try h.countRows("MATCH (n:EA) WHERE n.id / 0 = 1 RETURN n"));
-    _ = try h.exec("MATCH (n:EA) WHERE n.id / 0 = 1 DELETE n");
+    // (ii) A predicate whose evaluation raises (ISO/IEC 39075 4.7.3: division
+    // by zero is the data exception 22012; an unknown function is refused)
+    // raises the SAME error from RETURN and from DELETE, and DELETE removes
+    // NOTHING. These used to select no rows silently; SONNY-6498 made the
+    // evaluator raise instead of swallowing, so this case now pins "same
+    // error, nothing deleted" (the point of ENG-3913: DELETE has no divergent
+    // swallow of its own).
+    const div_ret = h.exec("MATCH (n:EA) WHERE n.id / 0 = 1 RETURN n");
+    const div_del = h.exec("MATCH (n:EA) WHERE n.id / 0 = 1 DELETE n");
+    try testing.expect(std.meta.isError(div_ret));
+    try testing.expect(std.meta.isError(div_del));
+    if (div_ret) |_| unreachable else |e1| if (div_del) |_| unreachable else |e2| try testing.expectEqual(e1, e2);
     try testing.expectEqual(@as(usize, 2), try h.countRows("MATCH (n:EA) RETURN n"));
 
-    try testing.expectEqual(@as(usize, 0), try h.countRows("MATCH (n:EA) WHERE banana(n.id) = 1 RETURN n"));
-    _ = try h.exec("MATCH (n:EA) WHERE banana(n.id) = 1 DELETE n");
+    const fn_ret = h.exec("MATCH (n:EA) WHERE banana(n.id) = 1 RETURN n");
+    const fn_del = h.exec("MATCH (n:EA) WHERE banana(n.id) = 1 DELETE n");
+    try testing.expect(std.meta.isError(fn_ret));
+    try testing.expect(std.meta.isError(fn_del));
+    if (fn_ret) |_| unreachable else |e1| if (fn_del) |_| unreachable else |e2| try testing.expectEqual(e1, e2);
     try testing.expectEqual(@as(usize, 2), try h.countRows("MATCH (n:EA) RETURN n"));
 }
 

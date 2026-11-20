@@ -75,11 +75,8 @@ fn grantPlaintext(arena: std.mem.Allocator, type_name: []const u8, field_name: [
 
 fn roleHasPlaintext(allocator: std.mem.Allocator, type_name: []const u8, field_name: []const u8, role: []const u8) !bool {
     const catalog = try fle_integration.catalog_mod.globalCatalog(allocator);
-    const field_meta = catalog.getFieldMetadata(type_name, field_name) orelse return false;
-    for (field_meta.visibility.to_roles) |r| {
-        if (std.mem.eql(u8, r, role)) return true;
-    }
-    return false;
+    // SONNY-6327: answered under the catalog mutex (no borrowed role list).
+    return catalog.hasVisibilityRole(type_name, field_name, role);
 }
 
 test "FLE online grant: geode.fle.grantPlaintext adds role to field visibility (== offline grant effect)" {
@@ -130,7 +127,9 @@ test "FLE online grant: geode.fle.grantPlaintext adds role to field visibility (
     try grantPlaintext(arena, "Secret", "ssn", "analyst");
     {
         const catalog = try fle_integration.catalog_mod.globalCatalog(allocator);
-        const field_meta = catalog.getFieldMetadata("Secret", "ssn").?;
+        // SONNY-6327: a copy the test owns.
+        const field_meta = (try catalog.copyFieldMetadata(allocator, "Secret", "ssn")).?;
+        defer fle_integration.catalog_mod.freeFieldCopy(allocator, field_meta);
         var count: usize = 0;
         for (field_meta.visibility.to_roles) |r| {
             if (std.mem.eql(u8, r, "analyst")) count += 1;

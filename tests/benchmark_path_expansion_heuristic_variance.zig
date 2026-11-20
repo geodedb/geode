@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-016; FEATURE="Paths"; ASPECT=PathExpansionHeuristicVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_016_PathExpansionHeuristicVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-016; FEATURE="Paths"; ASPECT=PathExpansionHeuristicVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_016_PathExpansionHeuristicVarianceEnvelope; OWNER=planner; UPDATED=2026-11-14
 
 fn simulateHeuristicExpand(nodes: usize, avg_branch: usize, depth_limit: usize) u64 {
     // Simulate bounded path expansion with heuristic pruning threshold based on synthetic score.

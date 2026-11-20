@@ -1,5 +1,5 @@
 // Comprehensive MFA Enforcement Tests
-// CANARY: REQ=REQ-MFA-TEST-COMPREHENSIVE; FEATURE="MFA Enforcement Verification"; ASPECT=SECURITY; STATUS=TESTED; OWNER=security; UPDATED=2026-01-29
+// CANARY: REQ=REQ-MFA-TEST-COMPREHENSIVE; FEATURE="MFA Enforcement Verification"; ASPECT=SECURITY; STATUS=IMPL; OWNER=security; UPDATED=2026-11-14
 //
 // This test suite verifies that MFA is PROPERLY ENFORCED everywhere when enabled,
 // and that admins/users can enroll themselves and their MFA systems correctly.
@@ -344,20 +344,6 @@ test "Recovery codes are stored correctly after MFA enablement" {
     // Check recovery code count
     const count = try sm.getRecoveryCodeCount(user_id);
     try testing.expectEqual(@as(usize, 8), count);
-}
-
-test "Recovery code verification is constant-time" {
-    // Verify the constant-time comparison works correctly
-    const codes = [_][]const u8{ "AAAAAAAA", "BBBBBBBB", "CCCCCCCC" };
-
-    // Exact match
-    try testing.expectEqual(@as(?usize, 0), mfa.verifyRecoveryCode("AAAAAAAA", &codes));
-    try testing.expectEqual(@as(?usize, 1), mfa.verifyRecoveryCode("BBBBBBBB", &codes));
-    try testing.expectEqual(@as(?usize, 2), mfa.verifyRecoveryCode("CCCCCCCC", &codes));
-
-    // Non-match
-    try testing.expectEqual(@as(?usize, null), mfa.verifyRecoveryCode("DDDDDDDD", &codes));
-    try testing.expectEqual(@as(?usize, null), mfa.verifyRecoveryCode("AAAAAAA", &codes)); // Wrong length
 }
 
 // ============================================================================

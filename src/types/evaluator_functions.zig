@@ -158,45 +158,6 @@ pub fn Hash(allocator: std.mem.Allocator, alg: []const u8, hex: []const u8) Eval
     return Value{ .Hash = .{ .alg = alg_enum, .digest = digest } };
 }
 
-// Special constructor for Argon2id with salt and parameters
-pub fn Argon2idHash(allocator: std.mem.Allocator, password: []const u8, salt: []const u8, iterations: ?u32, memory_kb: ?u32, parallelism: ?u8) EvaluatorError!Value {
-    const hash_module = @import("hash.zig");
-
-    const params = heap.Argon2Params{
-        .iterations = iterations orelse 3,
-        .memory_kb = memory_kb orelse 4096,
-        .parallelism = parallelism orelse 1,
-    };
-
-    const h = hash_module.hash(allocator, .ARGON2ID, password, salt, params) catch return EvaluatorError.InvalidFormat;
-    return Value{ .Hash = h };
-}
-
-// Hash data using specified algorithm
-pub fn HashData(allocator: std.mem.Allocator, alg: []const u8, data: []const u8) EvaluatorError!Value {
-    const hash_module = @import("hash.zig");
-
-    const alg_enum = hash_module.parseAlg(alg) catch return EvaluatorError.InvalidFormat;
-    const h = hash_module.hash(allocator, alg_enum, data, null, null) catch return EvaluatorError.InvalidFormat;
-    return Value{ .Hash = h };
-}
-
-// Create Blake2b KDF
-pub fn Blake2bKdf(allocator: std.mem.Allocator, out_len: u64, context: []const u8, key: []const u8) EvaluatorError!Value {
-    const hash_module = @import("hash.zig");
-
-    const kdf_output = hash_module.blake2bKdf(allocator, @intCast(out_len), context, key) catch return EvaluatorError.InvalidFormat;
-    return Value{ .Bytea = kdf_output };
-}
-
-// Create Blake2s KDF
-pub fn Blake2sKdf(allocator: std.mem.Allocator, out_len: u64, context: []const u8, key: []const u8) EvaluatorError!Value {
-    const hash_module = @import("hash.zig");
-
-    const kdf_output = hash_module.blake2sKdf(allocator, @intCast(out_len), context, key) catch return EvaluatorError.InvalidFormat;
-    return Value{ .Bytea = kdf_output };
-}
-
 pub fn Currency(text: []const u8) EvaluatorError!Value {
     if (text.len != 3) return EvaluatorError.InvalidFormat;
     var code: [3]u8 = undefined;
@@ -454,17 +415,24 @@ pub fn TimestampTZ(ts_str: []const u8) EvaluatorError!Value {
     return Value{ .TimestampTZ = tsz };
 }
 
+// CANARY: REQ=REQ-SONNY-6730-TYPE-FUNCTIONS; FEATURE="BuiltinFunctions"; ASPECT=ByteaHexForms; STATUS=TESTED; TEST=tests/test_sonny6730_type_function_constructors.zig; OWNER=eval; UPDATED=2026-11-17
+/// `Bytea(hex_string)` / `from_hex(str)` (docs/TYPES_AND_FUNCTIONS.md): the
+/// hex digits of the value, in either case, with or without the `\x` of the
+/// bytea I/O form (`\xDEADBEEF`). SONNY-6730: only the prefixed form was read,
+/// so `Bytea('deadbeef')` and `from_hex('de')` were 22018. Anything else (an
+/// odd digit count, a non-hex character, `0x12`) is still HexFormatError.
 pub fn Bytea(allocator: std.mem.Allocator, hex_str: []const u8) EvaluatorError!Value {
-    if (!std.mem.startsWith(u8, hex_str, "\\x")) return EvaluatorError.HexFormatError;
-    const hex_data = hex_str[2..];
+    const hex_data = if (std.mem.startsWith(u8, hex_str, "\\x")) hex_str[2..] else hex_str;
 
     if (hex_data.len % 2 != 0) return EvaluatorError.HexFormatError;
 
     const bytes = try allocator.alloc(u8, hex_data.len / 2);
+    errdefer allocator.free(bytes);
 
     for (0..bytes.len) |i| {
-        const hex_pair = hex_data[i * 2 .. i * 2 + 2];
-        bytes[i] = std.fmt.parseInt(u8, hex_pair, 16) catch return EvaluatorError.HexFormatError;
+        const hi = std.fmt.charToDigit(hex_data[i * 2], 16) catch return EvaluatorError.HexFormatError;
+        const lo = std.fmt.charToDigit(hex_data[i * 2 + 1], 16) catch return EvaluatorError.HexFormatError;
+        bytes[i] = (hi << 4) | lo;
     }
 
     return Value{ .Bytea = bytes };
@@ -730,23 +698,63 @@ pub fn from_hex(allocator: std.mem.Allocator, val: Value) EvaluatorError!Value {
     return Bytea(allocator, text);
 }
 
-pub fn jsonb_get(val: Value, path: []const u8) EvaluatorError!Value {
+// CANARY: REQ=REQ-SONNY-6730-TYPE-FUNCTIONS; FEATURE="BuiltinFunctions"; ASPECT=JsonbGetTypeof; STATUS=TESTED; TEST=tests/test_sonny6730_type_function_constructors.zig; OWNER=eval; UPDATED=2026-11-17
+/// `jsonb_get(obj, path)`: the value at `path` (`$.a.b.0`): a number is a
+/// DOUBLE, a string TEXT, a boolean BOOL, an object or array a JSONB, and
+/// JSON null or no such value NULL. SONNY-6733: a string was returned as a
+/// slice of the parse `JsonbDocument.get` frees, and an object or array was
+/// NULL.
+pub fn jsonb_get(allocator: std.mem.Allocator, val: Value, path: []const u8) EvaluatorError!Value {
     const doc = switch (val) {
         .Jsonb => |j| j,
         else => return EvaluatorError.TypeMismatch,
     };
 
-    if (doc.get(path)) |result| {
-        return switch (result) {
-            .number => |n| Value{ .Double = n },
-            .string => |s| Value{ .Text = s },
-            .bool => |b| Value{ .Bool = b },
-            .null => Value{ .Null = {} },
-            else => Value{ .Null = {} },
-        };
-    }
+    const text = doc.getText(allocator, path) orelse return Value{ .Null = {} };
+    defer allocator.free(text);
 
-    return Value{ .Null = {} };
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, text, .{}) catch return EvaluatorError.InvalidInput;
+    defer parsed.deinit();
+    return switch (parsed.value) {
+        .null => Value{ .Null = {} },
+        .bool => |b| Value{ .Bool = b },
+        .integer => |i| Value{ .Double = @floatFromInt(i) },
+        .float => |f| Value{ .Double = f },
+        .number_string => |ns| Value{ .Double = std.fmt.parseFloat(f64, ns) catch return EvaluatorError.InvalidInput },
+        .string => |str| Value{ .Text = try allocator.dupe(u8, str) },
+        .array, .object => Value{ .Jsonb = jsonb.JsonbDocument.fromString(allocator, text) catch return EvaluatorError.JsonInvalid },
+    };
+}
+
+/// `jsonb_typeof(x)`: the JSON type name of a JSONB value (`object`, `array`,
+/// `string`, `number`, `boolean`, `null`; docs/TYPES_AND_FUNCTIONS.md). A
+/// JSON value `jsonb_get` extracted as a SQL value (a number, text, boolean)
+/// is typed by what it is. The name is a new allocation.
+pub fn jsonb_typeof(allocator: std.mem.Allocator, val: Value) EvaluatorError!Value {
+    const name: []const u8 = switch (val) {
+        .Jsonb => |j| jsonTextTypeName(j.data),
+        .Json => |j| jsonTextTypeName(j),
+        .Int, .SmallInt, .BigInt, .Real, .Double, .Decimal128 => "number",
+        .Str, .Text => "string",
+        .Bool => "boolean",
+        else => return EvaluatorError.TypeMismatch,
+    };
+    return Value{ .Text = try allocator.dupe(u8, name) };
+}
+
+/// The type of the JSON text (valid, as a JSONB document is canonical): by
+/// its first character.
+fn jsonTextTypeName(text: []const u8) []const u8 {
+    const t = std.mem.trimStart(u8, text, " \t\r\n");
+    if (t.len == 0) return "null";
+    return switch (t[0]) {
+        '{' => "object",
+        '[' => "array",
+        '"' => "string",
+        't', 'f' => "boolean",
+        'n' => "null",
+        else => "number",
+    };
 }
 
 pub fn jsonb_exists(val: Value, key: []const u8) EvaluatorError!Value {

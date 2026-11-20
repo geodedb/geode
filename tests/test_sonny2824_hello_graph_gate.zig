@@ -20,12 +20,13 @@
 // CANARY: REQ=REQ-SONNY-2824-HELLO-GRAPH-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2824_hello_graph_gate.zig; OWNER=security; UPDATED=2026-09-27
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
 const rw_user = "rw2824";
-const rw_pass = "ReadWrite2824!";
+const rw_pass = "ReadWrite 2824 Hello Passphrase";
 
 fn expectOk(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query: []const u8) !void {
     var r = try client.executeAndCollect(allocator, query, util.emptyParams(), 1000);
@@ -73,7 +74,7 @@ const Server = struct {
         errdefer allocator.free(self.grpc_addr);
         self.handle = try util.spawnServer(
             allocator,
-            &.{ "./zig-out/bin/geode", "serve", "--listen", self.quic_addr, "--listen-grpc", self.grpc_addr, "--data-dir", self.data_dir },
+            &.{ geode_test_bin.geode_exe, "serve", "--listen", self.quic_addr, "--listen-grpc", self.grpc_addr, "--data-dir", self.data_dir },
             // The plaintext gRPC client (Debug builds of the server only).
             util.TestEnv.grpcPlaintext(),
         );

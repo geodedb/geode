@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const proto = @import("proto_test_util.zig");
 const schema = @import("schema");
@@ -14,6 +16,8 @@ fn runQuery(allocator: std.mem.Allocator, addr: []const u8, query: []const u8) !
 }
 
 test "ORDER policy: expr forbidden by default" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     proto.testStart("ORDER policy: expr forbidden by default");
     errdefer proto.testFail();
 
@@ -32,7 +36,7 @@ test "ORDER policy: expr forbidden by default" {
 
     var server = try proto.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr },
         proto.TestEnv.standard(),
     );
     defer server.deinit();
@@ -56,6 +60,8 @@ test "ORDER policy: expr forbidden by default" {
 }
 
 test "ORDER policy: expr allowed with --order-keys expr" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     proto.testStart("ORDER policy: expr allowed with --order-keys expr");
     errdefer proto.testFail();
 
@@ -74,7 +80,7 @@ test "ORDER policy: expr allowed with --order-keys expr" {
 
     var server = try proto.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--order-keys", "expr" },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--order-keys", "expr" },
         proto.TestEnv.standard(),
     );
     defer server.deinit();

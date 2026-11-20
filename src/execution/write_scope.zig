@@ -71,12 +71,12 @@ pub const WriteScope = struct {
 
     /// The environment to evaluate in: the bound variables, then the
     /// parameters.
-    pub fn env(self: *const WriteScope, allocator: std.mem.Allocator) Env {
+    pub fn env(self: *const WriteScope, allocator: std.mem.Allocator) !Env {
         // SONNY-3322: each relationship copy as the store holds it now (a
         // copy shares the edge's property storage, which a later edge insert
         // may have moved).
         if (self.edge_store) |store| for (self.edge_boxes.items) |box| {
-            if (store.getEdgePtrHydrated(box.id)) |fresh| box.* = fresh.*;
+            if ((try store.getEdgePtrHydratedChecked(box.id))) |fresh| box.* = fresh.*;
         };
         return .{
             .allocator = allocator,
@@ -109,7 +109,7 @@ pub const WriteScope = struct {
     /// Bind `name` to node `id` as it is now (a detached box, stable across
     /// later writes; `refresh` reads it again).
     pub fn bindNode(self: *WriteScope, store: *graph_store.GraphStore, name: []const u8, id: u64) !void {
-        const box = store.getNodePtrForScan(id) orelse return error.NodeNotFound;
+        const box = (try store.getNodePtrForScan(id)) orelse return error.NodeNotFound;
         try self.bind(name, .{ .Node = box });
     }
 
@@ -123,7 +123,7 @@ pub const WriteScope = struct {
     /// the graph's grace boundary, not on a move; `refresh` copies the edge
     /// again after a write.
     pub fn bindEdge(self: *WriteScope, store: *graph_store.GraphStore, name: []const u8, id: u64) !void {
-        const edge = store.getEdgePtrHydrated(id) orelse return error.EdgeBodyUnresolvable;
+        const edge = (try store.getEdgePtrHydratedChecked(id)) orelse return error.EdgeBodyUnresolvable;
         self.edge_store = store;
         try self.bind(name, .{ .Edge = try self.boxEdge(edge) });
     }
@@ -148,11 +148,13 @@ pub const WriteScope = struct {
     /// by the store's edge, for a value that outlives the scope (a RETURN).
     /// Round 4b-1 review m-4: a copy inside a map (`RETURN {rel: r}`) or a
     /// path was left in place, and the value held the copy `deinit` frees. A
-    /// path's edge list is replaced by one `allocator` owns (the result's).
+    /// path's edge list is replaced by one allocated on `allocator`, which
+    /// must be where the value's own arrays live (SONNY-6637: a borrowed
+    /// RETURN row's cell is lent, so its caller passes the lent allocator).
     pub fn residentEdges(self: *const WriteScope, allocator: std.mem.Allocator, store: *graph_store.GraphStore, v: *Value) !void {
         switch (v.*) {
             .Edge => |edge| if (self.ownsBox(edge) != null) {
-                v.* = .{ .Edge = store.getEdgePtrHydrated(edge.id) orelse return error.EdgeBodyUnresolvable };
+                v.* = .{ .Edge = (try store.getEdgePtrHydratedChecked(edge.id)) orelse return error.EdgeBodyUnresolvable };
             },
             .List => |items| for (items) |*item| try self.residentEdges(allocator, store, item),
             .Map => |*map| {
@@ -166,7 +168,7 @@ pub const WriteScope = struct {
                 if (!owned) return;
                 const edges = try allocator.alloc(*const graph_store.Edge, path.edges.len);
                 for (path.edges, edges) |edge, *out| {
-                    out.* = if (self.ownsBox(edge) != null) store.getEdgePtrHydrated(edge.id) orelse {
+                    out.* = if (self.ownsBox(edge) != null) (try store.getEdgePtrHydratedChecked(edge.id)) orelse {
                         allocator.free(edges);
                         return error.EdgeBodyUnresolvable;
                     } else edge;
@@ -183,9 +185,9 @@ pub const WriteScope = struct {
     /// is copied too.
     pub fn refresh(self: *WriteScope, store: *graph_store.GraphStore) !void {
         for (self.values.items) |*v| switch (v.*) {
-            .Node => |node| v.* = .{ .Node = store.getNodePtrForScan(node.id) orelse return error.NodeNotFound },
+            .Node => |node| v.* = .{ .Node = (try store.getNodePtrForScan(node.id)) orelse return error.NodeNotFound },
             .Edge => |edge| {
-                const fresh = store.getEdgePtrHydrated(edge.id) orelse return error.EdgeBodyUnresolvable;
+                const fresh = (try store.getEdgePtrHydratedChecked(edge.id)) orelse return error.EdgeBodyUnresolvable;
                 if (self.ownsBox(edge)) |box| {
                     box.* = fresh.*;
                 } else {
@@ -236,8 +238,11 @@ pub fn labelsAfterSet(allocator: std.mem.Allocator, current: []const []const u8,
 /// of its assignments (SONNY-3242), so two assignments to one (element,
 /// property) have no order to settle them, and the second silently won
 /// (`SET q.a = 1, q.a = 2`; `SET a.c = 1, b.c = 2` with a and b the same
-/// node). Geode refuses it (error.RepeatedSetTarget, 22G03, its invalid-value
-/// code) before anything is written; one variable assigned twice is refused
+/// node). Geode refuses it (error.RepeatedSetTarget) before anything is
+/// written, with 22G0M, multiple assignments to a graph element property:
+/// ISO/IEC 39075:2024 13.3 General Rule 7 lets an implementation raise it or
+/// pick one value (IA017), and Geode raises it (SONNY-6368; it answered
+/// 22G03, invalid value type); one variable assigned twice is refused
 /// from the statement already (`param_check.setListRepeatsTarget`). `SET n = {map}` assigns every property of n, so it
 /// shares its element with no other assignment of the clause. `elements[i]`
 /// is what `group[i]` targets on this row (null: nothing, or not applied).
@@ -286,7 +291,7 @@ fn precheckNodeTargets(allocator: std.mem.Allocator, clauses: []const ast.SetCla
         }
         try refuseRepeatedTargets(group, elements.items);
     }
-    const env = scope.env(allocator);
+    const env = (try scope.env(allocator));
     for (clauses, 0..) |sc, i| {
         const name = setTarget(sc);
         const seen = for (clauses[0..i]) |prev| {
@@ -334,7 +339,7 @@ pub fn applySetGroups(
     defer values.deinit(allocator);
     var groups = ast.SetClauseGroups.init(clauses, ends);
     while (groups.next()) |group| {
-        const env = scope.env(allocator);
+        const env = (try scope.env(allocator));
         // Every value first, against the bindings before the clause.
         values.clearRetainingCapacity();
         for (group) |sc| {
@@ -355,9 +360,9 @@ pub fn applySetGroups(
             switch (scope.get(name) orelse continue) {
                 .Node => |node| switch (sc) {
                     .Property => |p| try property_mutation.setNodePropertyFromValue(allocator, store, node.labels, node.id, p.target.property, value),
-                    .Labels => |l| for (l.labels) |label| try store.addNodeLabel(node.id, label),
+                    .Labels => |l| for (l.labels) |label| try property_mutation.addNodeLabel(allocator, store, node.id, label),
                     .AllProperties => {
-                        const node_ptr = (store.nodes.getOrHydratePtr(node.id) catch null) orelse return error.NodeNotFound;
+                        const node_ptr = (try store.nodes.getOrHydratePtr(node.id)) orelse return error.NodeNotFound;
                         try property_mutation.replaceNodeProperties(allocator, store, node_ptr, value);
                     },
                 },
@@ -366,7 +371,7 @@ pub fn applySetGroups(
                     // A relationship has a type, not labels (the validator refuses it).
                     .Labels => continue,
                     .AllProperties => {
-                        const edge_ptr = store.getEdgePtrHydrated(edge.id) orelse return error.EdgeBodyUnresolvable;
+                        const edge_ptr = (try store.getEdgePtrHydratedChecked(edge.id)) orelse return error.EdgeBodyUnresolvable;
                         try property_mutation.replaceEdgeProperties(allocator, store, edge_ptr, value);
                     },
                 },

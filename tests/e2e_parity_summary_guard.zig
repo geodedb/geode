@@ -2,7 +2,7 @@ const std = @import("std");
 
 // Guard test: ensure each transport parity test file has an entry in parity-summary.jsonl
 // when the summary file is present (nightly workflow). Skips locally if file missing.
-// CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity Summary Guard"; ASPECT=GovernanceTest; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_018_ParitySummaryGuard; OWNER=tooling; UPDATED=2025-09-24
+// CANARY: REQ=REQ-GQL-018; FEATURE="Transport Parity Summary Guard"; ASPECT=GovernanceTest; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_018_ParitySummaryGuard; OWNER=tooling; UPDATED=2026-11-14
 test "governance: parity summary guard (optional)" {
     const allocator = std.testing.allocator;
     // If summary file not present, skip (developer local context)

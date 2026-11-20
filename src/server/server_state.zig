@@ -238,20 +238,19 @@ pub const UnionMetrics = struct {
 // Additional imports needed for ServerState (use relative imports since this file is part of geode module)
 const execution = @import("../execution.zig");
 const node_scan_stream = @import("node_scan_stream.zig");
-const mvcc = @import("txn/mvcc.zig");
 const query_plan_cache = @import("query_plan_cache.zig");
 // Note: query_ast_cache type reference is opaque to avoid circular dependency with lib.zig
 // The actual type is query_ast_cache.SharedAstCache but we use *anyopaque here
-const txn_mgr = @import("txn");
-// CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerIntegration; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerIntegration; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
 // GAP-0165: Wire ABAC enforcement into server execution paths
 const geode_auth = @import("geode_auth");
 
 /// Main server state structure managing all server-side state
 /// Extracted from main.zig in Phase 3 M3.2 to enable better modularization
 pub const ServerState = struct {
-    // Soft per-query memory limit: bytes threshold to trigger spills (0 = disabled)
-    query_mem_limit_bytes: usize = 0,
+    // SONNY-6596: no per-query memory limit or spill threshold. The
+    // executor never spills; the spill-threshold environment variables were
+    // read into a field nothing read.
     // Whether to return results inline in RUN_GQL response (vs separate PULL)
     inline_results_enabled: bool = false,
     // Maximum rows to return inline (0 disables the cap; default keeps
@@ -313,27 +312,18 @@ pub const ServerState = struct {
     allocator: std.mem.Allocator,
     // Storage corruption state flags captured at startup (e.g. checksum mismatch on persisted page load).
     storage_checksum_error: bool = false,
-    // Original GQL text (used heuristically for NodeIndexScan selection in PROFILE).
+    // Original GQL text of the current request.
     query_text: ?[]const u8 = null,
-    txn_manager: txn_mgr.Manager = undefined,
-    active_txn: ?txn_mgr.Txn = null,
     // MVCC-aware heap of inserted values. commit_ts null => uncommitted.
     inserted_values: std.ArrayList(ServerStateInsertedValue) = undefined,
     global_commit_ts: u64 = 0, // monotonically increasing commit timestamp
     session_snapshot_ts: u64 = 0, // snapshot timestamp captured at BEGIN
-    // MVCC manager for conflict detection
-    mvcc_manager: ?*mvcc.MVCCManager = null,
-    current_mvcc_txn: ?*mvcc.Transaction = null,
     // Aggregation memory metrics (non-PROFILE path instrumentation)
     agg_build_bytes_last: usize = 0,
     agg_emit_bytes_last: usize = 0,
 
     // Telemetry toggles (env-driven). When enabled, server emits JSON log lines on paging events.
     telemetry_paging: bool = false,
-
-    // Optional CDC engine pointer for diagnostics protocol frame
-    // NOTE: relative import because build.zig does not register a module alias for streaming/cdc_enhanced
-    cdc_engine: ?*@import("../streaming/cdc_enhanced.zig").CDCEngine = null,
 
     // Session management state
     session_config: ?SessionConfiguration = null,
@@ -358,9 +348,6 @@ pub const ServerState = struct {
         edge_count: u64,
     } = null,
 
-    // Distributed query planner for federation-aware optimization
-    distributed_query_planner: ?*anyopaque = null,
-
     // Query plan cache and optimizer for performance optimization
     // Issue #460: Changed from per-connection QueryOptimizer to shared cross-connection optimizer
     query_optimizer: ?*query_plan_cache.SharedQueryOptimizer = null,
@@ -370,11 +357,6 @@ pub const ServerState = struct {
     // Type is query_ast_cache.SharedAstCache but we use opaque pointer to avoid circular dependency
     query_ast_cache: ?*anyopaque = null,
 
-    // Distributed query planner for federation-aware optimization
-    // Types are DistributedQueryPlanner/FederationManager but we use opaque to avoid circular dep
-    distributed_planner: ?*anyopaque = null,
-    federation_manager: ?*anyopaque = null,
-
     // Catalog management for schemas and graphs
     catalog_schemas: std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,
     catalog_graphs: std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,
@@ -383,7 +365,7 @@ pub const ServerState = struct {
     // Graph type registry for CREATE/DROP GRAPH TYPE persistence
     graph_types: std.HashMap([]const u8, GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage) = undefined,
 
-    // CANARY: REQ=REQ-ABAC-WIRE-002; FEATURE="ABAC Enforcement"; ASPECT=SecurityManager; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
+    // CANARY: REQ=REQ-ABAC-WIRE-002; FEATURE="ABAC Enforcement"; ASPECT=SecurityManager; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
     // GAP-0165: Security management for RBAC/ABAC - wired into server execution paths
     security_manager: ?*geode_auth.SecurityManager = null,
     current_user_id: ?geode_auth.UserId = null,
@@ -569,13 +551,20 @@ pub const ServerState = struct {
                 defer graph_store_mod.releaseGraphLock(lock);
                 const scope = self.enterSessionTxn();
                 defer self.leaveSessionTxn(scope);
-                gsa.abortThreadSessionTxn();
                 txn_undo_log.getGlobalUndoLog(self.allocator).rollback(graph_store_mod.getWritableGlobalStore(self.allocator)) catch |err| {
                     // SONNY-3348 (round 19, m3): reported to the client at
                     // its ROLLBACK or COMMIT (`txn_rollback_incomplete`).
                     @import("logging").scoped("server_state").err("transaction rollback could not undo every change", &.{@import("logging").Attr.string("error", @errorName(err))});
                     self.txn_rollback_incomplete = true;
                 };
+                // SONNY-6529: the session's engine transaction (open when a
+                // teardown ends the session mid-request) is ended AFTER the
+                // undo, under the lock: the undo's changes joined it and
+                // commit with the writes they undo. SONNY-2823 aborted it
+                // first; graph-storage 0.4.16's abort undoes the writes,
+                // which the store's in-memory copy keeps, and the undo then
+                // undid them a second time.
+                gsa.endThreadSessionTxn();
             } else {
                 txn_undo_log.getGlobalUndoLog(self.allocator).discardTxn(self.txn_id);
                 self.session_engine_txn.open = false;
@@ -586,6 +575,101 @@ pub const ServerState = struct {
 
     /// SONNY-2776: the session's graph: the executor session's, or
     /// `current_graph` (the copy QUIC syncs; gRPC never sets it).
+    // CANARY: REQ=REQ-SONNY-6334-FLE-REQUEST-CONTEXT; FEATURE="FieldLevelEncryption"; ASPECT=OneRequestContextForQuicAndGrpc; STATUS=TESTED; TEST=tests/test_sonny6334_fle_authorization.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-6334: the session's request context on this thread, for the
+    /// FLE reads made outside the executor's active context (the result
+    /// encoding) and for audit events: the tenant (GAP-0281/0282), the FLE
+    /// role its HELLO named, and the GPS decrypt_field gate for its
+    /// authenticated principal, asked live (policy changes and USE GRAPH
+    /// count). QUIC and gRPC both install it at the start of every request
+    /// that runs or encodes a statement, and `clearRequestThreadState` on
+    /// every exit, so a pooled thread never carries one request's role into
+    /// the next. `self` must outlive the request (both keep the session's
+    /// state for its lifetime).
+    pub fn installRequestThreadState(self: *const ServerState) void {
+        const fle_integration = @import("../fle_integration.zig");
+        const audit_mod = @import("../security/audit.zig");
+        const tenant = if (self.session_config) |cfg| cfg.tenant_id else null;
+        fle_integration.setCurrentTenantId(tenant);
+        audit_mod.setCurrentAuditTenantId(tenant);
+        fle_integration.setCurrentUserRole(self.effectiveFleRole());
+        fle_integration.setCurrentPlaintextGate(.{ .ctx = self, .allows = sessionAllowsDecrypt });
+    }
+
+    // CANARY: REQ=REQ-SONNY-6341-FLE-ROLE-BINDING; FEATURE="FieldLevelEncryption"; ASPECT=FleRoleBoundToPrincipal; STATUS=TESTED; TEST=tests/test_sonny6341_fle_role_binding.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6341: the FLE role this session's requests act under: the one
+    /// its HELLO named, when the authenticated user holds it (an Admin's
+    /// `CALL geode.fle.grantRole`, `security/fle_role_grants.zig`); else
+    /// none, and encrypted fields read as for a role not in their list.
+    /// Asked for every request, so a grant or revoke counts from the next
+    /// one. With authentication off every session is an implicit admin and
+    /// keeps the role it named; `--insecure-allow-all` bypasses this as it
+    /// bypasses all authorization. The Admin builtin role holds no FLE role
+    /// implicitly: an Admin grants one to itself, audited, like to anyone.
+    pub fn effectiveFleRole(self: *const ServerState) ?[]const u8 {
+        const role = self.fle_user_role orelse return null;
+        const user_mgmt = @import("../security/user_management.zig");
+        const gps = @import("../security/gps.zig");
+        const fle_role_grants = @import("../security/fle_role_grants.zig");
+        if (!user_mgmt.isAuthEnabled() or gps.isInsecureAllowAll()) return role;
+        const user = self.authenticated_user orelse return null;
+        if (fle_role_grants.holds(user, role)) return role;
+        return null;
+    }
+
+    /// SONNY-6341: at HELLO, a named FLE role the user does not hold is an
+    /// `access_denied` audit event (user, requested role); the session goes
+    /// on with no FLE role, so a client that always sends one still
+    /// connects. Called once per HELLO by both transports.
+    pub fn auditUnheldFleRole(self: *const ServerState) void {
+        const requested = self.fle_user_role orelse return;
+        if (self.effectiveFleRole() != null) return;
+        const audit_mod = @import("../security/audit.zig");
+        var buf: [192]u8 = undefined;
+        const details = std.fmt.bufPrint(&buf, "fle role not held: {s}", .{requested}) catch "fle role not held";
+        audit_mod.logSecurityGraphEvent(self.allocator, .{
+            .event_type = .access_denied,
+            .action = "fle_role",
+            .username = self.authenticated_user orelse "",
+            .details = details,
+            .result_failure = true,
+        });
+        @import("logging").scoped("server_state").warn("HELLO named an FLE role the user does not hold; the session has no FLE role", &.{@import("logging").Attr.string("user", self.authenticated_user orelse "")});
+    }
+
+    /// SONNY-6334: undoes `installRequestThreadState`.
+    pub fn clearRequestThreadState() void {
+        const fle_integration = @import("../fle_integration.zig");
+        const audit_mod = @import("../security/audit.zig");
+        fle_integration.clearCurrentThreadState();
+        audit_mod.setCurrentAuditTenantId(null);
+    }
+
+    /// GPS decrypt_field for the session's authenticated principal on its
+    /// graph. With authentication off every session is an implicit admin;
+    /// with it on, an unauthenticated session is refused.
+    fn sessionAllowsDecrypt(ctx: ?*const anyopaque) bool {
+        const fle_integration = @import("../fle_integration.zig");
+        const user_mgmt = @import("../security/user_management.zig");
+        const principal_derive = @import("../security/principal_derive.zig");
+        const self: *const ServerState = @ptrCast(@alignCast(ctx orelse return false));
+        if (!user_mgmt.isAuthEnabled()) return true;
+        const username = self.authenticated_user orelse return false;
+        const role_raw = self.authenticated_role orelse return false;
+        const role_names = [_][]const u8{@tagName(@as(user_mgmt.Role, @enumFromInt(role_raw)))};
+        const graph = self.sessionGraph();
+        const principal = principal_derive.derivePrincipal(.{
+            .username = username,
+            .role_names = &role_names,
+            .tenant_id = if (self.session_config) |cfg| cfg.tenant_id else null,
+            .active_graph = graph,
+            .auth_version = self.authenticated_auth_version,
+            .auth_method = .password,
+            .source = .internal_service,
+        });
+        return fle_integration.decryptAllowedFor(&principal, graph);
+    }
+
     pub fn sessionGraph(self: *const ServerState) []const u8 {
         const graph_store_mod = @import("../graph_store.zig");
         if (self.exec_session) |*sess| return sess.graph orelse graph_store_mod.DEFAULT_GRAPH_NAME;

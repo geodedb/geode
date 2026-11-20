@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 // Integration test for Enhanced Full-Text Search with BM25 scoring and IndexOptimizer
-// CANARY: REQ=REQ-GQL-204; FEATURE="FullTextBM25Integration"; ASPECT=IndexIntegration; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_204_FullTextBM25Integration; OWNER=index; UPDATED=2025-10-04
+// CANARY: REQ=REQ-GQL-204; FEATURE="FullTextBM25Integration"; ASPECT=IndexIntegration; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_204_FullTextBM25Integration; OWNER=index; UPDATED=2026-11-14
 
 // Simplified structures for testing full-text search integration
 const BM25Score = struct {

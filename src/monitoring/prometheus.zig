@@ -76,6 +76,9 @@ pub const PrometheusExporter = struct {
             if (entry.value_ptr.labels) |*labels| {
                 labels.deinit();
             }
+            // SONNY-6511: registerMetric dupes both; they were never freed.
+            self.allocator.free(entry.value_ptr.name);
+            self.allocator.free(entry.value_ptr.help);
         }
         self.metrics.deinit();
         self.labels.deinit();
@@ -88,9 +91,13 @@ pub const PrometheusExporter = struct {
         help: []const u8,
         metric_type: MetricType,
     ) !void {
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+        const owned_help = try self.allocator.dupe(u8, help);
+        errdefer self.allocator.free(owned_help);
         const metric = Metric{
-            .name = try self.allocator.dupe(u8, name),
-            .help = try self.allocator.dupe(u8, help),
+            .name = owned_name,
+            .help = owned_help,
             .type = metric_type,
             .value = switch (metric_type) {
                 .counter => .{ .counter = 0 },
@@ -110,7 +117,14 @@ pub const PrometheusExporter = struct {
             .timestamp = null,
         };
 
-        try self.metrics.put(name, metric);
+        const gop = try self.metrics.getOrPut(name);
+        if (gop.found_existing) {
+            // Registering a name again replaces it; free what it held.
+            if (gop.value_ptr.labels) |*labels| labels.deinit();
+            self.allocator.free(gop.value_ptr.name);
+            self.allocator.free(gop.value_ptr.help);
+        }
+        gop.value_ptr.* = metric;
     }
 
     // Increment counter
@@ -118,7 +132,7 @@ pub const PrometheusExporter = struct {
         if (self.metrics.getPtr(name)) |metric| {
             switch (metric.value) {
                 .counter => |*c| c.* += value,
-                else => return error.TypeMismatch,
+                else => return error.MetricKindMismatch,
             }
         }
     }
@@ -128,7 +142,7 @@ pub const PrometheusExporter = struct {
         if (self.metrics.getPtr(name)) |metric| {
             switch (metric.value) {
                 .gauge => |*g| g.* = value,
-                else => return error.TypeMismatch,
+                else => return error.MetricKindMismatch,
             }
         }
     }
@@ -148,7 +162,7 @@ pub const PrometheusExporter = struct {
                         }
                     }
                 },
-                else => return error.TypeMismatch,
+                else => return error.MetricKindMismatch,
             }
         }
     }

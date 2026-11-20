@@ -56,6 +56,7 @@
 // wedges on abandoned handlers the process never exits inside the deadline.
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const util = @import("proto_test_util.zig");
 const schema = @import("schema");
@@ -120,7 +121,7 @@ fn spawnServeOn(
     drain_timeout_ms: u64,
 ) !ServeChild {
     const args = try aa.alloc([]const u8, 7);
-    args[0] = "./zig-out/bin/geode";
+    args[0] = geode_test_bin.geode_exe;
     args[1] = "serve";
     args[2] = "--listen";
     args[3] = addr;
@@ -261,7 +262,7 @@ pub fn main() !void {
         return;
     }
     const io_fs = std.Io.Threaded.global_single_threaded.io();
-    std.Io.Dir.cwd().access(io_fs, "./zig-out/bin/geode", .{}) catch {
+    std.Io.Dir.cwd().access(io_fs, geode_test_bin.geode_exe, .{}) catch {
         std.debug.print("SKIP: geode binary missing; run `zig build` first\n", .{});
         return;
     };

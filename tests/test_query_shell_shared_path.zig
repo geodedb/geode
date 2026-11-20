@@ -1,15 +1,17 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const cli_test_util = @import("cli_test_util.zig");
 const proto_test_util = @import("proto_test_util.zig");
 
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-001; FEATURE="ShellQuerySharedPath"; ASPECT=ParityTesting; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/gap_0200_shell_test_verification.yml; OWNER=cli; UPDATED=2026-04-02
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-002; FEATURE="ShellQuerySharedPath"; ASPECT=GraphScopingParity; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/dsn_graph_binding.yml; OWNER=cli; UPDATED=2026-04-02
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-003; FEATURE="ShellQuerySharedPath"; ASPECT=LargeOrderedStreamingParity; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/gap_0257_orderby_large_resultset.yml; OWNER=cli; UPDATED=2026-04-02
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-004; FEATURE="ShellQuerySharedPath"; ASPECT=ExplainProfileParity; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/explain_profile_unit_tests.yml; OWNER=cli; UPDATED=2026-04-02
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-005; FEATURE="ShellQuerySharedPath"; ASPECT=ErrorPayloadParity; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/query_output_formats.yml; OWNER=cli; UPDATED=2026-04-02
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-006; FEATURE="ShellQuerySharedPath"; ASPECT=BatchFileSourceParity; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-04-02
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-007; FEATURE="ShellQuerySharedPath"; ASPECT=QueryFileParity; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/query_file_flag_comprehensive.yml; OWNER=cli; UPDATED=2026-04-02
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-001; FEATURE="ShellQuerySharedPath"; ASPECT=ParityTesting; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/gap_0200_shell_test_verification.yml; OWNER=cli; UPDATED=2026-11-14
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-002; FEATURE="ShellQuerySharedPath"; ASPECT=GraphScopingParity; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/dsn_graph_binding.yml; OWNER=cli; UPDATED=2026-11-14
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-003; FEATURE="ShellQuerySharedPath"; ASPECT=LargeOrderedStreamingParity; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/gap_0257_orderby_large_resultset.yml; OWNER=cli; UPDATED=2026-11-14
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-004; FEATURE="ShellQuerySharedPath"; ASPECT=ExplainProfileParity; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/explain_profile_unit_tests.yml; OWNER=cli; UPDATED=2026-11-14
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-005; FEATURE="ShellQuerySharedPath"; ASPECT=ErrorPayloadParity; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/query_output_formats.yml; OWNER=cli; UPDATED=2026-11-14
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-006; FEATURE="ShellQuerySharedPath"; ASPECT=BatchFileSourceParity; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/shell_source_batch.yml; OWNER=cli; UPDATED=2026-11-14
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-007; FEATURE="ShellQuerySharedPath"; ASPECT=QueryFileParity; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/query_file_flag_comprehensive.yml; OWNER=cli; UPDATED=2026-11-14
 
 const CliResult = cli_test_util.CliResult;
 
@@ -29,7 +31,7 @@ fn runJsonQueryAgainstServer(
     return runQueryAgainstServer(
         allocator,
         addr,
-        &.{ "./zig-out/bin/geode", "query", "--format", "json", query_text },
+        &.{ geode_test_bin.geode_exe, "query", "--format", "json", query_text },
     );
 }
 
@@ -42,8 +44,8 @@ fn runShellAgainstServer(
 
     const command = try std.fmt.allocPrint(
         allocator,
-        "./zig-out/bin/geode shell --server {s} --insecure-tls-skip-verify -U {s} -P {s} --format json --no-history",
-        .{ addr, proto_test_util.defaultUsername(), proto_test_util.defaultPassword() },
+        "{s} shell --server {s} --insecure-tls-skip-verify -U {s} -P {s} --format json --no-history",
+        .{ geode_test_bin.geode_exe, addr, proto_test_util.defaultUsername(), proto_test_util.defaultPassword() },
     );
     defer allocator.free(command);
 
@@ -178,7 +180,7 @@ fn execOkQuery(allocator: std.mem.Allocator, addr: []const u8, query_text: []con
 }
 
 fn execOkGraphQuery(allocator: std.mem.Allocator, addr: []const u8, graph: []const u8, query_text: []const u8) !void {
-    const result = try runQueryAgainstServer(allocator, addr, &.{ "./zig-out/bin/geode", "query", "--format", "json", "--graph", graph, query_text });
+    const result = try runQueryAgainstServer(allocator, addr, &.{ geode_test_bin.geode_exe, "query", "--format", "json", "--graph", graph, query_text });
     defer allocator.free(result.out);
     defer allocator.free(result.err);
     try assertCommandSucceeded(result);
@@ -231,6 +233,8 @@ fn writeQueryFile(tmp: *std.testing.TmpDir, allocator: std.mem.Allocator, file_n
 }
 
 test "query and shell share result semantics for gap_0200 chained WITH query" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try proto_test_util.spawnServerRandom(allocator, proto_test_util.TestEnv.standard());
@@ -239,7 +243,7 @@ test "query and shell share result semantics for gap_0200 chained WITH query" {
 
     const query_text = "WITH 1 AS x WITH x + 1 AS y RETURN y AS result";
 
-    const query_result = try runQueryAgainstServer(allocator, addr, &.{ "./zig-out/bin/geode", "query", "--format", "json", query_text });
+    const query_result = try runQueryAgainstServer(allocator, addr, &.{ geode_test_bin.geode_exe, "query", "--format", "json", query_text });
     defer allocator.free(query_result.out);
     defer allocator.free(query_result.err);
     try assertCommandSucceeded(query_result);
@@ -256,6 +260,8 @@ test "query and shell share result semantics for gap_0200 chained WITH query" {
 }
 
 test "query graph flag and shell use command share graph-scoped execution semantics" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try proto_test_util.spawnServerRandom(allocator, proto_test_util.TestEnv.standard());
@@ -269,7 +275,7 @@ test "query graph flag and shell use command share graph-scoped execution semant
     const query_result = try runQueryAgainstServer(
         allocator,
         addr,
-        &.{ "./zig-out/bin/geode", "query", "--format", "json", "--graph", graph_name, "MATCH (n:ParityNode) RETURN n.name AS name" },
+        &.{ geode_test_bin.geode_exe, "query", "--format", "json", "--graph", graph_name, "MATCH (n:ParityNode) RETURN n.name AS name" },
     );
     defer allocator.free(query_result.out);
     defer allocator.free(query_result.err);
@@ -287,6 +293,8 @@ test "query graph flag and shell use command share graph-scoped execution semant
 }
 
 test "query and shell stay aligned for gap_0257 ordered and unordered large result sets" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try proto_test_util.spawnServerRandom(allocator, proto_test_util.TestEnv.standard());
@@ -302,7 +310,7 @@ test "query and shell stay aligned for gap_0257 ordered and unordered large resu
     }
 
     const ordered_query = "MATCH (n:GAP0257) RETURN n.id AS id, n.value AS value ORDER BY n.id";
-    const ordered_query_result = try runQueryAgainstServer(allocator, addr, &.{ "./zig-out/bin/geode", "query", "--format", "json", ordered_query });
+    const ordered_query_result = try runQueryAgainstServer(allocator, addr, &.{ geode_test_bin.geode_exe, "query", "--format", "json", ordered_query });
     defer allocator.free(ordered_query_result.out);
     defer allocator.free(ordered_query_result.err);
     try assertCommandSucceeded(ordered_query_result);
@@ -317,7 +325,7 @@ test "query and shell stay aligned for gap_0257 ordered and unordered large resu
     try assertResultJsonEqual(ordered_query_result.out, ordered_shell_json);
 
     const unordered_query = "MATCH (n:GAP0257) RETURN n.id AS id";
-    const unordered_query_result = try runQueryAgainstServer(allocator, addr, &.{ "./zig-out/bin/geode", "query", "--format", "json", unordered_query });
+    const unordered_query_result = try runQueryAgainstServer(allocator, addr, &.{ geode_test_bin.geode_exe, "query", "--format", "json", unordered_query });
     defer allocator.free(unordered_query_result.out);
     defer allocator.free(unordered_query_result.err);
     try assertCommandSucceeded(unordered_query_result);
@@ -344,6 +352,8 @@ test "query and shell stay aligned for gap_0257 ordered and unordered large resu
 }
 
 test "query and shell share explain and profile payload semantics" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try proto_test_util.spawnServerRandom(allocator, proto_test_util.TestEnv.standard());
@@ -388,6 +398,8 @@ test "query and shell share explain and profile payload semantics" {
 }
 
 test "query and shell share server error payload semantics" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try proto_test_util.spawnServerRandom(allocator, proto_test_util.TestEnv.standard());
@@ -412,6 +424,8 @@ test "query and shell share server error payload semantics" {
 }
 
 test "query file mode and shell source mode apply the same batch semantics" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try proto_test_util.spawnServerRandom(allocator, proto_test_util.TestEnv.standard());
@@ -443,7 +457,7 @@ test "query file mode and shell source mode apply the same batch semantics" {
     const file_result = try runQueryAgainstServer(
         allocator,
         addr,
-        &.{ "./zig-out/bin/geode", "query", "--format", "json", "--file", query_file_path },
+        &.{ geode_test_bin.geode_exe, "query", "--format", "json", "--file", query_file_path },
     );
     defer allocator.free(file_result.out);
     defer allocator.free(file_result.err);
@@ -459,7 +473,7 @@ test "query file mode and shell source mode apply the same batch semantics" {
     const verify_query_graph = try runQueryAgainstServer(
         allocator,
         addr,
-        &.{ "./zig-out/bin/geode", "query", "--format", "json", "--graph", "test_query_file_ctx", "MATCH (n:BatchParity) OPTIONAL MATCH ()-[r:LINKED_TO]->() RETURN count(DISTINCT n) AS nodes, count(r) AS rels" },
+        &.{ geode_test_bin.geode_exe, "query", "--format", "json", "--graph", "test_query_file_ctx", "MATCH (n:BatchParity) OPTIONAL MATCH ()-[r:LINKED_TO]->() RETURN count(DISTINCT n) AS nodes, count(r) AS rels" },
     );
     defer allocator.free(verify_query_graph.out);
     defer allocator.free(verify_query_graph.err);
@@ -468,7 +482,7 @@ test "query file mode and shell source mode apply the same batch semantics" {
     const verify_shell_graph = try runQueryAgainstServer(
         allocator,
         addr,
-        &.{ "./zig-out/bin/geode", "query", "--format", "json", "--graph", "test_shell_source_ctx", "MATCH (n:BatchParity) OPTIONAL MATCH ()-[r:LINKED_TO]->() RETURN count(DISTINCT n) AS nodes, count(r) AS rels" },
+        &.{ geode_test_bin.geode_exe, "query", "--format", "json", "--graph", "test_shell_source_ctx", "MATCH (n:BatchParity) OPTIONAL MATCH ()-[r:LINKED_TO]->() RETURN count(DISTINCT n) AS nodes, count(r) AS rels" },
     );
     defer allocator.free(verify_shell_graph.out);
     defer allocator.free(verify_shell_graph.err);

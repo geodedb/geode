@@ -1,9 +1,9 @@
 const std = @import("std");
 const unicode = @import("../src/unicode/geode_unicode.zig");
 // NOTE: Real FTS index integration is heavy; we simulate the normalization pipeline used by fulltext/advanced.
-// CANARY: REQ=REQ-GQL-UNICODE-007; FEATURE="UnicodeFtsIntegration"; ASPECT=IndexerNormalize; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_007_FtsNormalize; OWNER=unicode; UPDATED=2025-09-27
+// CANARY: REQ=REQ-GQL-UNICODE-007; FEATURE="UnicodeFtsIntegration"; ASPECT=IndexerNormalize; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_UNICODE_007_FtsNormalize; OWNER=unicode; UPDATED=2026-11-14
 // Source index fulltext.zig updated to match this test name
-// CANARY: REQ=REQ-GQL-UNICODE-008; FEATURE="UnicodeFtsAdvanced"; ASPECT=AnalyzerLower; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_008_AnalyzerLower; OWNER=unicode; UPDATED=2025-09-27
+// CANARY: REQ=REQ-GQL-UNICODE-008; FEATURE="UnicodeFtsAdvanced"; ASPECT=AnalyzerLower; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_UNICODE_008_AnalyzerLower; OWNER=unicode; UPDATED=2026-11-14
 
 fn ftsNormalize(alloc: std.mem.Allocator, s: []const u8) ![]u8 {
     // Emulate: NFC then foldCase then lowercase ascii (foldCase already lowers for our subset)

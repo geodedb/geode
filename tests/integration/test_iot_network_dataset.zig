@@ -545,7 +545,7 @@ test "IoT network - security alerts and incidents" {
 
     // Group high-severity alerts into incidents
     for (alerts.items) |alert| {
-        const severity_val = data.graph.getNodeProperty(alert, "severity");
+        const severity_val = (try data.graph.getNodePropertyOrError(alert, "severity"));
         if (severity_val) |sev| switch (sev) {
             .String => |sev_str| {
                 const severity = std.fmt.parseInt(u32, sev_str, 10) catch continue;
@@ -577,7 +577,7 @@ test "IoT network - security alerts and incidents" {
     // Count critical alerts
     var critical_count: u64 = 0;
     for (alerts.items) |alert| {
-        const severity_val = data.graph.getNodeProperty(alert, "severity");
+        const severity_val = (try data.graph.getNodePropertyOrError(alert, "severity"));
         if (severity_val) |sev| switch (sev) {
             .String => |sev_str| {
                 const severity = std.fmt.parseInt(u32, sev_str, 10) catch continue;
@@ -597,7 +597,7 @@ test "IoT network - security alerts and incidents" {
 }
 
 test "CANARY: REQ=REQ-GQL-IOT-NETWORK" {
-    // CANARY: REQ=REQ-GQL-IOT-NETWORK; FEATURE="IoTNetwork"; ASPECT=Domain; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_IOT_NETWORK; OWNER=team; UPDATED=2025-10-02
+    // CANARY: REQ=REQ-GQL-IOT-NETWORK; FEATURE="IoTNetwork"; ASPECT=Domain; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_IOT_NETWORK; OWNER=team; UPDATED=2026-11-14
     const allocator = std.testing.allocator;
 
     var data = try NetworkData.init(allocator);

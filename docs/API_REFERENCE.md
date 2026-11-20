@@ -8,17 +8,28 @@ Creates an index on node properties for improved query performance.
 
 #### Syntax
 
-```gql
-CREATE [UNIQUE] INDEX [IF NOT EXISTS] index_name
+```text
+CREATE INDEX [IF NOT EXISTS] index_name
 ON label(property[, ...])
 [USING {btree | hash | fulltext | spatial | vector}]
 ```
 
 #### Parameters
 
-- `UNIQUE`: Optional. Creates a unique constraint on the indexed property
+- `CREATE UNIQUE INDEX` is refused with `0A000` (`UniqueIndexNotSupported`,
+  SONNY-6281): it used to build a plain index and ignore `UNIQUE`. Declare
+  uniqueness with `CREATE CONSTRAINT ... IS UNIQUE` (enforced; see
+  Constraint Operations below)
 - `IF NOT EXISTS`: Optional. Prevents error if index already exists
-- `index_name`: Name of the index to create
+- `index_name`: Name of the index to create. A name is one index of a
+  graph (SONNY-6294): a second `CREATE INDEX` with a name the graph already
+  uses, on any label, is refused with 42P07 (`DuplicateIndex`), and with
+  `IF NOT EXISTS` does nothing. Another graph may use the name, including for
+  a vector (HNSW) index, which is the graph's own (SONNY-6703): its metric,
+  dimension and rows are that graph's. The other advanced index types
+  (spatial, network, signature, interval, JSONB, domain) are still one
+  structure per name, so a second graph's same-named one is refused
+  (`IndexNameInUseByOtherGraph`, 42P07).
 - `label`: Node label to index
 - `property`: Property or properties to index
 - `USING`: Optional. Specifies index type (default: btree)
@@ -71,7 +82,7 @@ Removes an existing index.
 
 #### Syntax
 
-```gql
+```text
 DROP INDEX [IF EXISTS] index_name
 ```
 
@@ -80,10 +91,171 @@ DROP INDEX [IF EXISTS] index_name
 - `IF EXISTS`: Optional. Prevents error if index doesn't exist
 - `index_name`: Name of the index to drop
 
+#### Behaviour
+
+- **Resolution:** the session graph's index of that name, else an
+  engine-wide one (written by an older, engine-global catalog), else a
+  fulltext index of the default graph. Another graph's index is not found.
+- **Missing name:** refused with 42002 (`IndexNotFound`); with `IF EXISTS`
+  the statement does nothing and succeeds.
+- **One name on several labels** (only in a catalog written before index
+  names were unique per graph): every row of the name in the resolved scope
+  is dropped, and the result carries a note saying so (SONNY-6294).
+- **Locking:** the server takes the session graph's write lock (SONNY-6294;
+  it took the default graph's). A fulltext index lives in the default
+  graph: from a session on another graph its DROP is refused (0A000); run
+  `USE GRAPH default; DROP INDEX <name>`.
+
 #### Example
 
 ```gql
 DROP INDEX IF EXISTS person_age_idx;
+```
+
+## Constraint Operations
+
+### CREATE CONSTRAINT
+
+Records a constraint in the session graph's catalog. A name is one
+constraint of a graph (SONNY-6294): a second `CREATE CONSTRAINT` with a
+name the graph already uses, on any label, is refused with 42710
+(`ConstraintAlreadyExists`), and with `IF NOT EXISTS` does nothing.
+
+#### Syntax
+
+```text
+CREATE CONSTRAINT [IF NOT EXISTS] name FOR (n:Label) REQUIRE n.prop IS UNIQUE
+CREATE CONSTRAINT [IF NOT EXISTS] name FOR (n:Label) REQUIRE (n.a, n.b) IS NODE KEY
+CREATE CONSTRAINT [IF NOT EXISTS] name ON :Label ASSERT prop IS UNIQUE
+CREATE CONSTRAINT [IF NOT EXISTS] name ON :Label ASSERT (a, b) IS UNIQUE
+CREATE CONSTRAINT [IF NOT EXISTS] name FOR (n:Label) REQUIRE n.prop IS NOT NULL
+CREATE CONSTRAINT [IF NOT EXISTS] name ON :Label ASSERT EXISTS (prop)
+```
+
+#### UNIQUE enforcement
+
+A `UNIQUE` constraint, and the uniqueness half of `NODE KEY`, is enforced
+on every write (SONNY-2846):
+
+- **When:** at the end of each statement, before its changes are kept (the
+  SQL rule for a constraint that is not deferred). A statement that would
+  leave two nodes with one key fails with SQLSTATE `23505`
+  (`unique_violation`) and none of its changes are kept, also for a
+  multi-element `CREATE`. A swap (`SET a.id = b.id, b.id = a.id`) is
+  allowed. `CREATE`, `MERGE` (when it creates), `MERGE ... ON CREATE SET` /
+  `ON MATCH SET`, `SET n.prop = ...`, `SET n:Label` and procedures are all
+  checked; so are the server's bulk write fast paths, which hand such a
+  write to the executor.
+- **Scope:** per graph (the constraint's own; a row written by an older,
+  engine-global catalog applies in every graph, each graph checked on its
+  own) and per tenant tag: nodes of two tenants may hold the same value, so
+  a refusal never tells one tenant what another holds. In a single-tenant
+  deployment this is graph-wide.
+- **NULL:** a missing or `NULL` property is never a conflict. A composite
+  key conflicts only when every property is present and equal.
+- **Equality:** the rule MERGE and inline property maps match by: numbers
+  by exact value (`1` = `1.0`, `1.5` = `1.50`; a DOUBLE `0.1` is not the
+  decimal `0.1`), strings by their Unicode NFC form (an NFC and an NFD
+  spelling are one value, as the `=` operator compares them; SONNY-3055),
+  `'1'` is not `1`.
+- **Existing data:** `CREATE CONSTRAINT ... IS UNIQUE` (or `NODE KEY`) over
+  nodes that already share a value is refused with `23505`, naming how many
+  groups of nodes share one; remove the duplicates first.
+- **Cost:** the other holder is found through the exact node-property index
+  (one lookup per checked node) when it can answer: full index mode, the
+  index built, and a number, string or boolean value. Otherwise (lean mode,
+  `GEODE_INDEX_MERGE_KEYS_ONLY=1`; the index still rebuilding after a
+  restart; an in-memory session; a list, temporal or other value) by a scan
+  of the label's nodes, for each node the statement wrote under a
+  constrained label.
+- **Fast paths:** the server's simple-CREATE, bulk MERGE, `/*+BATCH*/` and
+  `USE GRAPH g; MERGE` fast paths do not serve a graph that has a UNIQUE
+  constraint; those writes run through the executor (slower). A fast-path
+  write already past that check when the constraint is created is refused
+  with `40001`; retry it.
+- **Cluster mode:** constraint DDL is refused in cluster mode. A leader
+  refuses (`40001`, `ClusterWriteNotReplicable`) a replicated write, other
+  than a delete, on a graph a UNIQUE constraint applies in.
+
+#### NOT NULL, EXISTS and NODE KEY enforcement
+
+`REQUIRE n.prop IS NOT NULL`, the legacy `ASSERT EXISTS (prop)` and the
+existence half of `NODE KEY` are enforced on every write (SONNY-6281):
+
+- **Rule:** every node of the label in the constraint's graph holds each
+  named property with a value that is not `NULL`. GQL treats a property
+  whose value is null as absent, so a missing and a `NULL` property are the
+  same violation.
+- **When:** at the end of each statement, like UNIQUE. A statement that
+  would leave such a node without the property fails with SQLSTATE `23502`
+  (`not_null_violation`, `NotNullConstraintViolation`; the message names
+  the constraint, never a value) and none of its changes are kept.
+  `CREATE`, `MERGE` when it creates (unless `ON CREATE SET` supplies the
+  property), `SET n.prop = NULL`, `SET n = {...}` without it, `REMOVE
+  n.prop` and `SET n:Label` on a node without it are refused. A statement
+  may create a node and set the property later in the same statement.
+  `REMOVE n:Label` frees the node from the constraint.
+- **Existing data:** `CREATE CONSTRAINT` of these kinds over nodes that
+  lack the property is refused with `23502`, naming how many nodes lack
+  it; set the property or remove those nodes first.
+- **Fast paths and cluster mode:** as for UNIQUE: every enforced
+  constraint, of any kind, sends the server's node-writing fast paths to
+  the executor (`40001` for a write already past that check), and a leader
+  refuses a replicated non-delete write on a graph a constraint applies in.
+- **NODE KEY:** both halves: a missing key property is `23502`, a duplicate
+  key `23505`.
+- **Standard:** ISO/IEC 39075:2024 defines no `CREATE CONSTRAINT` (these
+  statements are Geode extensions in the openCypher form); the rule follows
+  its `NOT NULL` property value types.
+
+#### Example
+
+```gql
+CREATE CONSTRAINT person_email FOR (p:Person) REQUIRE p.email IS UNIQUE;
+CREATE (:Person {email: 'a@example.com'});
+CREATE (:Person {email: 'a@example.com'});  -- 23505, nothing written
+```
+
+### DROP CONSTRAINT
+
+Removes a constraint from the session graph's catalog (SONNY-6270).
+
+#### Syntax
+
+```text
+DROP CONSTRAINT [IF EXISTS] name
+```
+
+#### Behaviour
+
+- **Resolution:** the session graph's constraint of that name, else an
+  engine-wide one (written by an older, engine-global catalog). A
+  constraint of another graph is not found. Constraints of one name on
+  several labels of the graph (only in a catalog written before constraint
+  names were unique per graph, SONNY-6294) are all dropped.
+- **Missing name:** refused with 42002 (`ConstraintNotFound`), as DROP
+  INDEX refuses a missing index (`IndexNotFound`); with `IF EXISTS` the
+  statement does nothing and succeeds.
+- **Engine-wide row:** dropped from any graph, it is gone for every graph.
+- **Enforcement:** a UNIQUE or NODE KEY constraint stops being enforced as
+  soon as the statement succeeds. When no UNIQUE constraint applies in the
+  graph any more, the server's bulk write fast paths serve it again.
+- **Durability:** the catalog is saved before the statement succeeds; a
+  dropped constraint stays dropped after a restart. If the save fails the
+  statement fails and the constraint stays, enforced.
+- **Permissions:** as CREATE CONSTRAINT: schema on the session's graph and
+  on the database; an engine-wide constraint also needs schema on
+  `default`. Checked before the name is looked up.
+- **Transactions:** DDL is not transactional. A ROLLBACK does not bring
+  back a constraint dropped in the transaction; DROP CONSTRAINT is refused
+  inside a `START TRANSACTION { ... }` body.
+- **Cluster mode:** refused, as all constraint DDL is.
+
+#### Example
+
+```gql
+DROP CONSTRAINT person_email;
+DROP CONSTRAINT IF EXISTS person_email;  -- no error
 ```
 
 ## Backup and Restore
@@ -98,14 +270,74 @@ DROP INDEX IF EXISTS person_age_idx;
 > ```bash
 > geode backup create --output ./full.backup [--compress]   # full backup from the server (--server)
 > geode backup create --output ./full.backup --local --data-dir /var/lib/geode  # from a local data directory
-> geode restore ./full.backup --yes                          # restore from a backup file
+> geode restore ./full.backup --data-dir /var/lib/geode-restored --yes  # restore a backup file, offline
 > geode backup list [--dir ./backups]                        # list local backups
+> geode backup info ./full.backup                            # decode a backup's header
+> geode backup cleanup --dir ./backups --older-than 30d [--yes]  # delete old backups (dry run without --yes)
 > ```
+>
+> `geode backup info` decodes the header through the same range-checked
+> function as restore and exits 1 with `error: <Name>` for a file that is
+> not a geode backup or whose header is damaged or truncated (it does not
+> verify the payload; restore does). `geode backup cleanup` (SONNY-6289)
+> needs `--dir` and `--older-than <n>s|m|h|d|w`; without `--yes` it only
+> lists what it would delete. It considers only regular files directly in
+> `--dir` whose header decodes as a geode backup (never symlinks or
+> subdirectories), ages them by the header's timestamp, never deletes the
+> newest one, removes deleted backups from the directory's `metadata.json`,
+> reports every file, and exits 1 if a deletion fails. (Until SONNY-6289
+> cleanup printed "Backup cleanup completed" and deleted nothing, and
+> `backup info` crashed on every header.)
+>
+> `geode restore <file>` writes the backup into `--data-dir` (or
+> `GEODE_DATA_DIR`), which must not exist or be empty; no server is
+> contacted. It verifies the whole backup first, writes into a staging
+> directory beside the target, compares every restored file with the
+> backup, opens the restored store, and only then moves it onto the target
+> and prints `Restore completed successfully` with each graph's node and
+> edge counts. Any failure exits non-zero with `error: <Name>` and leaves
+> nothing at the target. Restoring from an `s3://` or `http(s)://` URI is
+> not supported (geode has no object-storage path; a `backup create
+> --output` URI is refused too); download the file first. (From 2026-03-28
+> until SONNY-6280 this command wrote nothing and still reported success.)
+> The checks that open the restored store (graph counts, the auth-chain
+> check) run on a throwaway copy beside the target, so the committed
+> directory holds exactly the backup's files plus the HMAC key file
+> (SONNY-6348); the restore needs the backup's size again in free disk while
+> it runs. `geode backup create` and `geode restore` refuse options they do
+> not know (SONNY-6290).
+>
+> **Server restore (QUIC `restore`, gRPC `/geode.GeodeService/Restore`,
+> `geode restore --server <addr>` with no file; SONNY-6288):** Admin only,
+> audited (`SERVER_RESTORE`), refused in cluster mode, and needs
+> `confirm`. The server restores its newest backup in its backup directory
+> (and, for one release, the legacy `./server_backups/`; see below)
+> taken at or before `target_time` (epoch milliseconds; empty means now;
+> anything else is refused) into a **new** directory beside the data
+> directory its storage engine has open, named
+> `<data dir>.restored-<backup id>-<ms>`. It never writes into its data
+> directory: a running server cannot swap its store under its open
+> engines. The restore is written into a staging directory, compared file
+> by file with the backup, opened as a store and counted per graph, and
+> only then renamed into place. The response (`success`, `message`,
+> `restore_dir`) names the directory and each graph's node and edge
+> counts; the server keeps serving its current data until it is stopped
+> and started with `--data-dir <restore_dir>`. A failed restore reports
+> `Restore failed: <Name>` and leaves no new directory. (Until SONNY-6288
+> the server restored into `GEODE_DATA_DIR` or `./data`, never its
+> `--data-dir`, in place and without staging, and answered "Restore
+> completed" while serving its old data.)
 >
 > If the server backup fails (unreachable, timeout, stalled transfer, server
 > error), `backup create` exits 1, leaves no output file and does not fall
 > back to a local backup. A local data-directory backup runs only with
-> `--local`, which needs `--data-dir` or `GEODE_DATA_DIR`.
+> `--local`, which needs `--data-dir` or `GEODE_DATA_DIR`; it is written
+> once, at `--output` (until SONNY-6323 it also left `full_<id>.backup` and
+> `metadata.json` beside it). The CLI waits up to 300 s for the server's
+> answer to a backup or a server restore; `--timeout <seconds>` changes
+> that (SONNY-6300; it was a fixed 30 s), and the QUIC handshake counts
+> against it, up to an hour (SONNY-6606). A server restore cannot replace a
+> running server's live store: there is no in-place restore.
 >
 > The CLI is engine-backed by `BackupManager` (`src/storage/backup.zig`):
 > full backup of the per-graph storage tree with CRC32 integrity verification
@@ -126,9 +358,54 @@ DROP INDEX IF EXISTS person_age_idx;
 > plus declared `size_bytes` and the hex CRC32 `checksum` from the original
 > `BackupResponse`. The server verifies size, checksum, and the artifact
 > header (magic/version/payload-length/CRC32) BEFORE writing, persists the
-> exact bytes into `./server_backups/`, and durably registers the backup in
+> exact bytes into the server's backup directory, and durably registers the backup in
 > the metadata log so it is restorable. Metadata-only uploads (no payload)
 > are rejected — there is no "upload slot" placeholder path.
+>
+> **What a backup holds, and where server backups live (SONNY-6299;
+> BREAKING, 2026-11):** a backup archives the data directory's graph data
+> (`graph_registry.dat`, every per-graph directory, `timeseries/`) and
+> never `.geode.lock` (the running process's lock), `.geode_hmac_key` (the
+> key that seals the `__geode_security` auth chain), `.geode_admin_password`
+> (the generated first-boot password), `server.key` or `server.crt` (the
+> auto-generated TLS identity; a server regenerates the pair on first
+> start), or the server's own backup directory. Backup files and
+> `metadata.json` are mode 0600. A server writes its backups to
+> `<data dir>/backups/` (created 0700) of the data directory its storage
+> engine has open, whatever its working directory, or to `GEODE_BACKUP_DIR`
+> (an absolute path outside the data directory; anything else refuses the
+> backup with `InvalidBackupDir`). A server restore still reads the legacy
+> `./server_backups/` of its working directory for one release and picks
+> the newest backup in either; new backups are never written there, so move
+> old ones into `<data dir>/backups/` before that release ends.
+>
+> **Restoring auth state needs the HMAC key.** Because the key is no longer
+> in the backup, `geode restore <file>` of a backup holding
+> `__geode_security` records needs the key it was sealed with:
+> `--hmac-key-file <source data dir>/.geode_hmac_key` (written into the
+> restored directory, mode 0600), or `GEODE_AUTH_HMAC_KEY` / `GEODE_TDE_KEY`
+> set as the source server had it. The restore verifies the chain with that
+> key before it moves the directory into place; without a key it fails with
+> `error: HmacKeyRequired`, with the wrong one `error:
+> AuthChainVerificationFailed`, and nothing is restored.
+> `--hmac-key-file` cannot be combined with `GEODE_TDE_KEY` or
+> `GEODE_AUTH_HMAC_KEY` (`error: HmacKeySourceConflict`, SONNY-6386): a
+> server with `GEODE_TDE_KEY` set derives its HMAC key from it
+> (`GEODE_AUTH_HMAC_KEY` takes precedence) and never reads `.geode_hmac_key`,
+> so a key file would be ignored. An encrypted backup (taken with
+> `GEODE_TDE_KEY` set) needs that key to decrypt, so it is always restored
+> with the source server's `GEODE_TDE_KEY` (and its `GEODE_AUTH_HMAC_KEY`, if
+> it set one), never `--hmac-key-file`. If the key is lost,
+> `--unverified-auth` restores the records unverified: no server starts on
+> them (`AuthChainTampered`) until an operator who has checked them accepts
+> them with `geode auth reseal --data-dir <dir>`, which re-seals them under a
+> new key. Keep the HMAC key with your other key material (as for
+> `GEODE_TDE_KEY`), separate from the backups. A server restore copies the
+> server's own `.geode_hmac_key` into the restored directory, so its own
+> backups verify when a server starts there; a backup sealed under another
+> key does not. A backup written by an older geode (keys inside) still
+> restores: the key files are written mode 0600 with a warning, and its
+> `.geode.lock` is never written.
 
 ### BACKUP TO
 
@@ -136,7 +413,7 @@ Creates a backup of the database.
 
 #### Syntax
 
-```gql
+```text
 BACKUP TO 'file_path' [OPTIONS]
 ```
 
@@ -153,7 +430,11 @@ BACKUP TO 'file_path' [OPTIONS]
 
 #### Examples
 
-```gql
+Not executed (see the status note above): these statements answer 0A000,
+and the `INCREMENTAL`, `TIMESTAMP` and `VERIFY ONLY` forms do not parse. Use
+the `geode backup` / `geode restore` CLI.
+
+```text
 -- Full backup
 BACKUP TO '/backups/full_backup.bak';
 
@@ -170,7 +451,7 @@ Restores database from a backup file.
 
 #### Syntax
 
-```gql
+```text
 RESTORE FROM 'file_path' [TIMESTAMP timestamp] [VERIFY ONLY]
 ```
 
@@ -182,7 +463,11 @@ RESTORE FROM 'file_path' [TIMESTAMP timestamp] [VERIFY ONLY]
 
 #### Examples
 
-```gql
+Not executed (see the status note above): these statements answer 0A000,
+and the `INCREMENTAL`, `TIMESTAMP` and `VERIFY ONLY` forms do not parse. Use
+the `geode backup` / `geode restore` CLI.
+
+```text
 -- Basic restore
 RESTORE FROM '/backups/full_backup.bak';
 
@@ -197,7 +482,7 @@ RESTORE FROM '/backups/full_backup.bak' VERIFY ONLY;
 
 ### Syntax
 
-```gql
+```text
 (start)-[relationship*min..max]->(end)
 ```
 
@@ -346,11 +631,19 @@ RETURN knn('embedding', [0.1, 0.2, 0.3], 10, 'cosine') AS neighbor_ids;
 
 ### Spatial Functions
 
+> **Not supported under these names.** Geode has no `point()`, `within()`,
+> `bbox()`, `polygon()` or `intersects()` function, and `distance()` is the
+> vector distance (`distance(v1, v2, 'l2')`), not a point distance. The
+> spatial functions Geode evaluates are `st_point(x, y)`, `st_x`, `st_y`,
+> `st_distance`, `st_contains`, `st_within`, `st_intersects`, `st_buffer`,
+> `st_area`, `st_centroid`, `st_astext`, `st_asgeojson` and
+> `distance_haversine`. The examples below show the intended shapes only.
+
 #### point(x, y)
 
 Creates a 2D point.
 
-```gql
+```text
 CREATE (l:Location {coordinates: point(40.7128, -74.0060)});
 ```
 
@@ -358,7 +651,7 @@ CREATE (l:Location {coordinates: point(40.7128, -74.0060)});
 
 Calculates distance between two points.
 
-```gql
+```text
 MATCH (l:Location)
 WHERE distance(l.coordinates, point(40.0, -74.0)) < 100
 RETURN l;
@@ -368,7 +661,7 @@ RETURN l;
 
 Tests if geometry is within boundary.
 
-```gql
+```text
 MATCH (l:Location)
 WHERE within(l.coordinates, polygon(...))
 RETURN l;
@@ -378,7 +671,7 @@ RETURN l;
 
 Creates a bounding box for spatial queries.
 
-```gql
+```text
 MATCH (l:Location)
 WHERE intersects(l.area, bbox(40.0, -75.0, 41.0, -73.0))
 RETURN l;
@@ -430,9 +723,11 @@ RETURN p;
 
 #### score()
 
-Returns relevance score for full-text search results.
+Not supported: Geode has no `score()` function (calling it is an unknown
+function). A relevance score comes from the BM25 procedure below, which
+yields `node` and `score` rows.
 
-```gql
+```text
 MATCH (a:Article)
 WHERE a.content CONTAINS 'machine learning'
 RETURN a, score() AS relevance
@@ -490,17 +785,18 @@ Returns:
 
 ### ANALYZE INDEX
 
-Updates index statistics for query optimization.
+Not supported: Geode has no `ANALYZE INDEX` statement (a syntax error).
 
-```gql
+```text
 ANALYZE INDEX index_name;
 ```
 
 ### REBUILD INDEX
 
-Rebuilds an index from scratch.
+Not supported as a statement (a syntax error). A fulltext index is rebuilt
+with `CALL geode.fts.rebuild('<index>')`.
 
-```gql
+```text
 REBUILD INDEX index_name;
 ```
 
@@ -532,17 +828,18 @@ ROLLBACK;
 
 ### SAVEPOINT
 
-Creates a savepoint within a transaction.
+Not supported as a GQL statement (a syntax error). The gRPC transport has
+savepoint messages; the statement text below is not accepted.
 
-```gql
+```text
 SAVEPOINT my_savepoint;
 ```
 
 ### ROLLBACK TO
 
-Rolls back to a specific savepoint.
+Not supported as a GQL statement (see SAVEPOINT).
 
-```gql
+```text
 ROLLBACK TO my_savepoint;
 ```
 
@@ -550,34 +847,35 @@ ROLLBACK TO my_savepoint;
 
 ### db.info()
 
-Returns database information.
+Not supported: there is no `db.info` function or procedure.
 
-```gql
+```text
 RETURN db.info();
 ```
 
-### db.indexes()
+### db.indexes
 
-Returns index information.
+Returns index information. It is a procedure: call it, do not use it as an
+expression.
 
 ```gql
-RETURN db.indexes();
+CALL db.indexes();
 ```
 
 ### db.stats()
 
-Returns database statistics.
+Not supported: there is no `db.stats` function or procedure.
 
-```gql
+```text
 RETURN db.stats();
 ```
 
-### db.constraints()
+### db.constraints
 
-Returns constraint information.
+Returns constraint information (a procedure, as `db.indexes`).
 
 ```gql
-RETURN db.constraints();
+CALL db.constraints();
 ```
 
 ## Error Codes
@@ -588,6 +886,7 @@ Geode follows ISO/IEC SQL error code standards:
 - `0A000`: Feature not supported
 - `22000`: Data exception
 - `23000`: Integrity constraint violation
+- `23505`: Unique violation (a UNIQUE constraint, see Constraint Operations)
 - `42000`: Syntax error or access rule violation
 - `42P01`: Undefined table
 - `42P07`: Duplicate table/index
@@ -600,7 +899,7 @@ Geode follows ISO/IEC SQL error code standards:
 ### Index Usage
 
 1. Create indexes on frequently queried properties
-2. Use unique indexes for properties with high cardinality
+2. Use a UNIQUE constraint (not an index) for a property that must not repeat
 3. Use hash indexes for exact match queries only
 4. Use btree indexes for range queries and sorting
 5. Use vector indexes for similarity search

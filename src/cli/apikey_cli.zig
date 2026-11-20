@@ -1,63 +1,18 @@
 const std = @import("std");
-
-// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
-fn compat_milliTimestamp() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime @import("builtin").os.tag == .linux) {
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-        if (rc != 0) return 0;
-    } else {
-        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-        if (rc != 0) return 0;
-    }
-    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
-}
-fn compat_timestamp() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime @import("builtin").os.tag == .linux) {
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-        if (rc != 0) return 0;
-    } else {
-        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-        if (rc != 0) return 0;
-    }
-    return @as(i64, ts.sec);
-}
-fn compat_microTimestamp() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime @import("builtin").os.tag == .linux) {
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-        if (rc != 0) return 0;
-    } else {
-        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-        if (rc != 0) return 0;
-    }
-    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
-}
 const api_keys = @import("auth_lib").api_keys;
-const cli_auth = @import("cli_auth_helpers.zig");
 
-// CANARY: REQ=REQ-AUTH-APIKEYS-CLI-001; FEATURE="ApiKeyCLI"; ASPECT=CLI; STATUS=IMPL; TEST=geodetestlab/specs/api_key_auth.yml; OWNER=cli; UPDATED=2026-02-04
-// API Key CLI commands for managing API keys from the command line
+// CANARY: REQ=REQ-AUTH-APIKEYS-CLI-001; FEATURE="ApiKeyCLI"; ASPECT=RefusedAsUnsupported; STATUS=TESTED; TEST=tests/test_sonny6554_cli_honesty.zig; OWNER=cli; UPDATED=2026-11-15
+//
+// SONNY-6554: `geode apikey create|list|revoke|revoke-all|check-scope` kept
+// keys in geode_apikey_state.db in the CLI state directory and reported
+// "API key created", "revoked", "granted"; no server reads that file, and
+// no server authenticates an API key (the QUIC and gRPC handshakes take a
+// user name and password, or mTLS; SONNY-6291, docs/USER_AUTH.md). A key
+// printed by `create` opened nothing, and `revoke` closed nothing. Those
+// subcommands are refused as not supported by this server. `validate`
+// checks the format of a key string locally and says so.
 
-/// Persistent file path for API keys (uses cli_auth helpers for state dir resolution)
-const APIKEY_STATE_FILE = "geode_apikey_state.db";
 const API_KEY_VERSION = "gk1";
-const geode_api_key_config = api_keys.Config{
-    .key_prefix = API_KEY_VERSION,
-};
-
-fn apiKeyStatePath(allocator: std.mem.Allocator) ![]u8 {
-    return cli_auth.resolveStatePath(allocator, APIKEY_STATE_FILE);
-}
-
-fn parseGeodeApiKey(key_string: []const u8) !api_keys.ParsedApiKey {
-    const parsed = try api_keys.parseApiKey(key_string);
-    if (!std.mem.eql(u8, parsed.prefix, API_KEY_VERSION)) {
-        return error.UnsupportedApiKeyVersion;
-    }
-    return parsed;
-}
 
 const ExitCode = enum(u8) {
     success = 0,
@@ -65,169 +20,39 @@ const ExitCode = enum(u8) {
     usage_error = 2,
 };
 
-fn printOut(comptime fmt: []const u8, args: anytype) void {
-    std.debug.print(fmt, args);
-}
+const unsupported_why = "API key authentication (no geode server accepts API keys or reads the CLI's key file; nothing was created, listed, revoked or checked). Use a service-account user with a password, or mTLS";
 
-/// Persistent API key entry stored in the state file
-const StoredApiKey = struct {
-    username: []const u8,
-    name: []const u8,
-    scopes: []const u8, // comma-separated
-    created_at: i64,
-    expires_at: ?i64,
-    is_active: bool,
-    key_string: []const u8, // full key string (gk1.xxx.xxx)
-};
-
-/// Load API keys from persistent storage
-fn loadApiKeyState(allocator: std.mem.Allocator) !std.StringHashMap(StoredApiKey) {
-    var keys = std.StringHashMap(StoredApiKey).init(allocator);
-    errdefer {
-        var it = keys.iterator();
-        while (it.next()) |entry| {
-            allocator.free(entry.key_ptr.*);
-            allocator.free(entry.value_ptr.username);
-            allocator.free(entry.value_ptr.name);
-            allocator.free(entry.value_ptr.scopes);
-            allocator.free(entry.value_ptr.key_string);
-        }
-        keys.deinit();
-    }
-
-    const state_path = try apiKeyStatePath(allocator);
-    defer allocator.free(state_path);
-
-    const io_ak = std.Io.Threaded.global_single_threaded.io();
-    const file = std.Io.Dir.openFileAbsolute(io_ak, state_path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return keys,
-        else => return err,
-    };
-    defer file.close(io_ak);
-
-    // Read entire file (simpler for small state files)
-    const stat = try file.stat(io_ak);
-    const size: usize = @intCast(stat.size);
-    const content = try allocator.alloc(u8, size);
-    defer allocator.free(content);
-    _ = try file.readPositionalAll(io_ak, content, 0);
-
-    var lines = std.mem.splitScalar(u8, content, '\n');
-    while (lines.next()) |line| {
-        if (line.len == 0) continue;
-        // Format: username|name|scopes|created_at|expires_at|is_active|key_string
-        var parts = std.mem.splitScalar(u8, line, '|');
-        const username = parts.next() orelse continue;
-        const name = parts.next() orelse continue;
-        const scopes = parts.next() orelse continue;
-        const created_str = parts.next() orelse continue;
-        const expires_str = parts.next() orelse continue;
-        const active_str = parts.next() orelse continue;
-        const key_string = parts.next() orelse continue;
-
-        const created_at = std.fmt.parseInt(i64, created_str, 10) catch continue;
-        const expires_at: ?i64 = if (std.mem.eql(u8, expires_str, "null"))
-            null
-        else
-            std.fmt.parseInt(i64, expires_str, 10) catch continue;
-        const is_active = std.mem.eql(u8, active_str, "true");
-
-        // Key is username:name
-        const key = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ username, name });
-        errdefer allocator.free(key);
-
-        try keys.put(key, .{
-            .username = try allocator.dupe(u8, username),
-            .name = try allocator.dupe(u8, name),
-            .scopes = try allocator.dupe(u8, scopes),
-            .created_at = created_at,
-            .expires_at = expires_at,
-            .is_active = is_active,
-            .key_string = try allocator.dupe(u8, key_string),
-        });
-    }
-
-    return keys;
-}
-
-/// Save API keys to persistent storage
-fn saveApiKeyState(keys: *std.StringHashMap(StoredApiKey)) !void {
-    const state_path = try apiKeyStatePath(keys.allocator);
-    defer keys.allocator.free(state_path);
-
-    const io_sk = std.Io.Threaded.global_single_threaded.io();
-    const file = try std.Io.Dir.createFileAbsolute(io_sk, state_path, .{
-        .truncate = true,
-        .read = true,
-        .permissions = std.Io.File.Permissions.fromMode(0o600),
-    });
-    defer file.close(io_sk);
-
-    var it = keys.iterator();
-    while (it.next()) |entry| {
-        const v = entry.value_ptr.*;
-        var expires_buf: [20]u8 = undefined;
-        const expires_str = if (v.expires_at) |e|
-            std.fmt.bufPrint(&expires_buf, "{d}", .{e}) catch "null"
-        else
-            "null";
-
-        var line_buf: [2048]u8 = undefined;
-        const line = std.fmt.bufPrint(&line_buf, "{s}|{s}|{s}|{d}|{s}|{s}|{s}\n", .{
-            v.username,
-            v.name,
-            v.scopes,
-            v.created_at,
-            expires_str,
-            if (v.is_active) "true" else "false",
-            v.key_string,
-        }) catch continue;
-        file.writeStreamingAll(io_sk, line) catch continue;
-    }
-}
-
-/// Free API key state map
-fn freeApiKeyState(allocator: std.mem.Allocator, keys: *std.StringHashMap(StoredApiKey)) void {
-    var it = keys.iterator();
-    while (it.next()) |entry| {
-        allocator.free(entry.key_ptr.*);
-        allocator.free(entry.value_ptr.username);
-        allocator.free(entry.value_ptr.name);
-        allocator.free(entry.value_ptr.scopes);
-        allocator.free(entry.value_ptr.key_string);
-    }
-    keys.deinit();
-}
+const unsupported = [_][]const u8{ "create", "list", "revoke", "revoke-all", "check-scope" };
 
 fn printUsage() void {
-    printOut("geode apikey - API Key management commands\n", .{});
-    printOut("Usage: geode apikey <command> [options]\n", .{});
-    printOut("Commands:\n", .{});
-    printOut("  create --user <username> --name <keyname> --scope <scopes> [--expires-in <seconds>]\n", .{});
-    printOut("  list --user <username>\n", .{});
-    printOut("  revoke --user <username> --name <keyname>\n", .{});
-    printOut("  revoke-all --user <username> [--yes]\n", .{});
-    printOut("  validate <api_key>\n", .{});
-    printOut("  check-scope --user <username> --name <keyname> --scope <scope>\n", .{});
-    printOut("\nScopes can be comma-separated: metrics:read,health:read,query:execute\n", .{});
-    printOut("Use '*' for wildcard scope (grants all scopes)\n", .{});
+    std.debug.print(
+        \\geode apikey - API keys
+        \\
+        \\Usage: geode apikey validate <api_key>
+        \\
+        \\  validate <api_key>   Check that a string has the gk1.<id>.<secret> format
+        \\                       (local only; no server is asked)
+        \\
+        \\create, list, revoke, revoke-all and check-scope are not supported by
+        \\this server (each exits 1): no geode server accepts API keys
+        \\(docs/USER_AUTH.md, "API Key Authentication").
+        \\
+    , .{});
 }
 
 fn hasHelpFlag(argv: [][:0]u8, start_idx: usize) bool {
-    var i = start_idx;
-    while (i < argv.len) : (i += 1) {
-        if (std.mem.eql(u8, argv[i], "--help") or std.mem.eql(u8, argv[i], "-h")) return true;
+    for (argv[@min(start_idx, argv.len)..]) |a| {
+        if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) return true;
     }
     return false;
 }
 
+/// The first argument after `apikey` that is not a global option.
 fn findSubcommandStart(argv: [][:0]u8, start_idx: usize) usize {
     var idx = start_idx + 1;
     while (idx < argv.len) : (idx += 1) {
         const arg = argv[idx];
-        if (std.mem.eql(u8, arg, "--audit")) {
-            continue;
-        }
+        if (std.mem.eql(u8, arg, "--audit")) continue;
         if (std.mem.eql(u8, arg, "--server") or
             std.mem.eql(u8, arg, "--audit-file") or
             std.mem.eql(u8, arg, "--audit-syslog"))
@@ -240,499 +65,54 @@ fn findSubcommandStart(argv: [][:0]u8, start_idx: usize) usize {
     return idx;
 }
 
-/// Parse a comma-separated scope string into individual scopes
-fn parseScopes(allocator: std.mem.Allocator, scope_str: []const u8) ![][]const u8 {
-    var scopes: std.ArrayListUnmanaged([]const u8) = .empty;
-    errdefer {
-        for (scopes.items) |s| allocator.free(s);
-        scopes.deinit(allocator);
-    }
-
-    var it = std.mem.splitScalar(u8, scope_str, ',');
-    while (it.next()) |scope| {
-        const trimmed = std.mem.trim(u8, scope, " \t");
-        if (trimmed.len > 0) {
-            try scopes.append(allocator, try allocator.dupe(u8, trimmed));
-        }
-    }
-
-    return scopes.toOwnedSlice(allocator);
-}
-
-/// Extract --data-dir from argv (returns null if not found)
-fn extractDataDir(argv: [][:0]u8) ?[]const u8 {
-    var i: usize = 0;
-    while (i < argv.len) : (i += 1) {
-        if (std.mem.eql(u8, argv[i], "--data-dir") and i + 1 < argv.len) {
-            return argv[i + 1];
-        }
-    }
-    return null;
-}
-
-/// API Key management command handler
-/// Handle the validate subcommand without requiring storage initialization.
-/// This is a pure format check that only parses the key string.
+/// `validate`: a format check of the key string, nothing more.
 fn handleValidateSubcommand(argv: [][:0]u8, subcmd_idx: usize) void {
     if (hasHelpFlag(argv, subcmd_idx + 1)) {
-        printOut("Usage: geode apikey validate <api_key>\nValidates an API key format\n", .{});
+        std.debug.print("Usage: geode apikey validate <api_key>\nChecks the key's format locally; no geode server accepts API keys.\n", .{});
         return;
     }
-
     if (subcmd_idx + 1 >= argv.len) {
         std.debug.print("Error: API key is required\n", .{});
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
-
-    const key_string = argv[subcmd_idx + 1];
-
-    // Parse and validate format
-    _ = parseGeodeApiKey(key_string) catch |err| {
-        switch (err) {
-            error.UnsupportedApiKeyVersion => {
-                std.debug.print("Error: unsupported API key version\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            },
-            error.InvalidApiKeyFormat => {
-                std.debug.print("Error: invalid API key format\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.general_error));
-            },
-        }
+    const parsed = api_keys.parseApiKey(argv[subcmd_idx + 1]) catch {
+        std.debug.print("Error: invalid API key format (format check only; no geode server accepts API keys)\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-
-    printOut("API key format is valid\n", .{});
+    if (!std.mem.eql(u8, parsed.prefix, API_KEY_VERSION)) {
+        std.debug.print("Error: unsupported API key version (format check only; no geode server accepts API keys)\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+    std.debug.print("API key format is valid (format check only: no geode server accepts API keys, so it authenticates nothing)\n", .{});
 }
 
 pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Check for --help and validate before initializing storage (these don't need disk I/O)
+    _ = allocator;
     const subcmd_idx = findSubcommandStart(argv, start_idx);
     if (subcmd_idx >= argv.len) {
         std.debug.print("Error: missing apikey subcommand\n", .{});
         printUsage();
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
-
     const subcommand = argv[subcmd_idx];
 
     if (std.mem.eql(u8, subcommand, "--help") or std.mem.eql(u8, subcommand, "-h")) {
         printUsage();
         return;
     }
-
-    // Handle validate subcommand without storage (pure format check)
     if (std.mem.eql(u8, subcommand, "validate")) {
         handleValidateSubcommand(argv, subcmd_idx);
         return;
     }
-
-    // Open graph store for user lookup (after help/validate check)
-    const data_dir = extractDataDir(argv);
-    var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
-        std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
-        std.process.exit(@intFromEnum(ExitCode.usage_error));
-    };
-    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
-    // SONNY-2798: a key is minted or revoked for a user of this store; the
-    // store must verify first.
-    if (std.mem.eql(u8, subcommand, "create") or std.mem.eql(u8, subcommand, "revoke") or std.mem.eql(u8, subcommand, "revoke-all")) {
-        cli_auth.requireIntactChain(allocator, &mgr, "apikey", subcommand);
-    }
-
-    // Initialize API key manager
-    var manager = api_keys.ApiKeyManager.init(allocator, geode_api_key_config);
-    defer manager.deinit();
-
-    if (std.mem.eql(u8, subcommand, "create")) {
+    for (unsupported) |name| {
+        if (!std.mem.eql(u8, name, subcommand)) continue;
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
-            printUsage();
+            std.debug.print("geode apikey {s} - not supported by this server: {s}. The command exits 1.\n", .{ name, unsupported_why });
             return;
         }
-
-        var username: ?[]const u8 = null;
-        var keyname: ?[]const u8 = null;
-        var scope_str: ?[]const u8 = null;
-        var expires_in: ?i64 = null;
-
-        var i = subcmd_idx + 1;
-        while (i < argv.len) : (i += 1) {
-            if (std.mem.eql(u8, argv[i], "--user")) {
-                if (i + 1 >= argv.len) {
-                    std.debug.print("Error: --user requires a value\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.usage_error));
-                }
-                username = argv[i + 1];
-                i += 1;
-            } else if (std.mem.eql(u8, argv[i], "--name")) {
-                if (i + 1 >= argv.len) {
-                    std.debug.print("Error: --name requires a value\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.usage_error));
-                }
-                keyname = argv[i + 1];
-                i += 1;
-            } else if (std.mem.eql(u8, argv[i], "--scope")) {
-                if (i + 1 >= argv.len) {
-                    std.debug.print("Error: --scope requires a value\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.usage_error));
-                }
-                scope_str = argv[i + 1];
-                i += 1;
-            } else if (std.mem.eql(u8, argv[i], "--expires-in")) {
-                if (i + 1 >= argv.len) {
-                    std.debug.print("Error: --expires-in requires a value\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.usage_error));
-                }
-                expires_in = std.fmt.parseInt(i64, argv[i + 1], 10) catch {
-                    std.debug.print("Error: invalid expires-in value\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.usage_error));
-                };
-                i += 1;
-            }
-        }
-
-        if (username == null) {
-            std.debug.print("Error: --user is required\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.usage_error));
-        }
-        if (keyname == null) {
-            std.debug.print("Error: --name is required\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.usage_error));
-        }
-        if (scope_str == null or scope_str.?.len == 0) {
-            std.debug.print("Error: --scope is required and cannot be empty\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.usage_error));
-        }
-
-        // Validate key name length
-        if (keyname.?.len > 64) {
-            std.debug.print("Error: key name too long (max 64 characters)\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        }
-
-        // Lookup user to get user_id
-        const user_record = mgr.storage.getUserByUsername(username.?) orelse {
-            std.debug.print("Error: user '{s}' does not exist\n", .{username.?});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
-
-        // Parse scopes
-        const scopes = try parseScopes(allocator, scope_str.?);
-        defer {
-            for (scopes) |s| allocator.free(s);
-            allocator.free(scopes);
-        }
-
-        // Load existing API keys
-        var api_key_state = try loadApiKeyState(allocator);
-        defer freeApiKeyState(allocator, &api_key_state);
-
-        // Check for duplicate name
-        const lookup_key = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ username.?, keyname.? });
-        defer allocator.free(lookup_key);
-
-        if (api_key_state.contains(lookup_key)) {
-            std.debug.print("Error: key '{s}' already exists for user '{s}'\n", .{ keyname.?, username.? });
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        }
-
-        // Create the key using the manager
-        const key_string = try manager.createKey(
-            @intCast(user_record.id),
-            keyname.?,
-            scopes,
-            expires_in,
-        );
-        defer allocator.free(key_string);
-
-        // Calculate expiration
-        const now = compat_timestamp();
-        const expires_at: ?i64 = if (expires_in) |exp| now + exp else null;
-
-        // Save to persistent storage
-        const state_key = try allocator.dupe(u8, lookup_key);
-        errdefer allocator.free(state_key);
-
-        try api_key_state.put(state_key, .{
-            .username = try allocator.dupe(u8, username.?),
-            .name = try allocator.dupe(u8, keyname.?),
-            .scopes = try allocator.dupe(u8, scope_str.?),
-            .created_at = now,
-            .expires_at = expires_at,
-            .is_active = true,
-            .key_string = try allocator.dupe(u8, key_string),
-        });
-
-        try saveApiKeyState(&api_key_state);
-
-        // Output the key (use printOut to match other CLI commands)
-        printOut("{s}\n", .{key_string});
-
-        if (expires_in) |exp| {
-            printOut("API key created (expires in {d} seconds)\n", .{exp});
-        } else {
-            printOut("API key created (no expiration)\n", .{});
-        }
-
-        return;
-    }
-
-    if (std.mem.eql(u8, subcommand, "list")) {
-        if (hasHelpFlag(argv, subcmd_idx + 1)) {
-            printOut("Usage: geode apikey list --user <username>\nLists all API keys for a user\n", .{});
-            return;
-        }
-
-        var username: ?[]const u8 = null;
-        var i = subcmd_idx + 1;
-        while (i < argv.len) : (i += 1) {
-            if (std.mem.eql(u8, argv[i], "--user")) {
-                if (i + 1 >= argv.len) {
-                    std.debug.print("Error: --user requires a value\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.usage_error));
-                }
-                username = argv[i + 1];
-                i += 1;
-            }
-        }
-
-        if (username == null) {
-            std.debug.print("Error: --user is required\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.usage_error));
-        }
-
-        // Lookup user
-        _ = mgr.storage.getUserByUsername(username.?) orelse {
-            std.debug.print("Error: user '{s}' does not exist\n", .{username.?});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
-
-        // Load from persistent storage
-        var api_key_state = try loadApiKeyState(allocator);
-        defer freeApiKeyState(allocator, &api_key_state);
-
-        // Find keys for this user
-        var found_keys = false;
-        printOut("API keys for user '{s}':\n", .{username.?});
-        var it = api_key_state.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.value_ptr.username, username.?)) {
-                found_keys = true;
-                printOut("  - {s}", .{entry.value_ptr.name});
-                if (entry.value_ptr.is_active) {
-                    printOut(" (active)", .{});
-                } else {
-                    printOut(" (revoked)", .{});
-                }
-                printOut("\n", .{});
-            }
-        }
-
-        if (!found_keys) {
-            printOut("  (no keys found)\n", .{});
-        }
-
-        return;
-    }
-
-    if (std.mem.eql(u8, subcommand, "revoke")) {
-        if (hasHelpFlag(argv, subcmd_idx + 1)) {
-            printOut("Usage: geode apikey revoke --user <username> --name <keyname>\nRevokes an API key\n", .{});
-            return;
-        }
-
-        var username: ?[]const u8 = null;
-        var keyname: ?[]const u8 = null;
-        var i = subcmd_idx + 1;
-        while (i < argv.len) : (i += 1) {
-            if (std.mem.eql(u8, argv[i], "--user")) {
-                if (i + 1 >= argv.len) {
-                    std.debug.print("Error: --user requires a value\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.usage_error));
-                }
-                username = argv[i + 1];
-                i += 1;
-            } else if (std.mem.eql(u8, argv[i], "--name")) {
-                if (i + 1 >= argv.len) {
-                    std.debug.print("Error: --name requires a value\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.usage_error));
-                }
-                keyname = argv[i + 1];
-                i += 1;
-            }
-        }
-
-        if (username == null) {
-            std.debug.print("Error: --user is required\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.usage_error));
-        }
-        if (keyname == null) {
-            std.debug.print("Error: --name is required\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.usage_error));
-        }
-
-        // Lookup user
-        _ = mgr.storage.getUserByUsername(username.?) orelse {
-            std.debug.print("Error: user '{s}' does not exist\n", .{username.?});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
-
-        // Load from persistent storage
-        var api_key_state = try loadApiKeyState(allocator);
-        defer freeApiKeyState(allocator, &api_key_state);
-
-        // Find and revoke the key
-        const lookup_key = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ username.?, keyname.? });
-        defer allocator.free(lookup_key);
-
-        if (api_key_state.getPtr(lookup_key)) |entry| {
-            entry.is_active = false;
-            try saveApiKeyState(&api_key_state);
-            printOut("API key '{s}' revoked\n", .{keyname.?});
-            return;
-        }
-
-        std.debug.print("Error: key '{s}' not found for user '{s}'\n", .{ keyname.?, username.? });
+        std.debug.print("Error: geode apikey {s} is not supported by this server: {s}\n", .{ name, unsupported_why });
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
-
-    if (std.mem.eql(u8, subcommand, "revoke-all")) {
-        if (hasHelpFlag(argv, subcmd_idx + 1)) {
-            printOut("Usage: geode apikey revoke-all --user <username> [--yes]\nRevokes all API keys for a user\n", .{});
-            return;
-        }
-
-        var username: ?[]const u8 = null;
-        var yes_flag = false;
-        var i = subcmd_idx + 1;
-        while (i < argv.len) : (i += 1) {
-            if (std.mem.eql(u8, argv[i], "--user")) {
-                if (i + 1 >= argv.len) {
-                    std.debug.print("Error: --user requires a value\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.usage_error));
-                }
-                username = argv[i + 1];
-                i += 1;
-            } else if (std.mem.eql(u8, argv[i], "--yes") or std.mem.eql(u8, argv[i], "-y")) {
-                yes_flag = true;
-            }
-        }
-
-        if (username == null) {
-            std.debug.print("Error: --user is required\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.usage_error));
-        }
-
-        if (!yes_flag) {
-            std.debug.print("Error: --yes flag required to confirm revocation\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.usage_error));
-        }
-
-        // Lookup user
-        _ = mgr.storage.getUserByUsername(username.?) orelse {
-            std.debug.print("Error: user '{s}' does not exist\n", .{username.?});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
-
-        // Load from persistent storage
-        var api_key_state = try loadApiKeyState(allocator);
-        defer freeApiKeyState(allocator, &api_key_state);
-
-        // Revoke all keys for the user
-        var count: usize = 0;
-        var it = api_key_state.iterator();
-        while (it.next()) |entry| {
-            if (std.mem.eql(u8, entry.value_ptr.username, username.?) and entry.value_ptr.is_active) {
-                entry.value_ptr.is_active = false;
-                count += 1;
-            }
-        }
-
-        try saveApiKeyState(&api_key_state);
-        printOut("Revoked {d} API key(s) for user '{s}'\n", .{ count, username.? });
-
-        return;
-    }
-
-    if (std.mem.eql(u8, subcommand, "check-scope")) {
-        if (hasHelpFlag(argv, subcmd_idx + 1)) {
-            printOut("Usage: geode apikey check-scope --user <username> --name <keyname> --scope <scope>\nChecks if a key has a specific scope\n", .{});
-            return;
-        }
-
-        var username: ?[]const u8 = null;
-        var keyname: ?[]const u8 = null;
-        var scope: ?[]const u8 = null;
-        var i = subcmd_idx + 1;
-        while (i < argv.len) : (i += 1) {
-            if (std.mem.eql(u8, argv[i], "--user")) {
-                if (i + 1 >= argv.len) {
-                    std.debug.print("Error: --user requires a value\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.usage_error));
-                }
-                username = argv[i + 1];
-                i += 1;
-            } else if (std.mem.eql(u8, argv[i], "--name")) {
-                if (i + 1 >= argv.len) {
-                    std.debug.print("Error: --name requires a value\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.usage_error));
-                }
-                keyname = argv[i + 1];
-                i += 1;
-            } else if (std.mem.eql(u8, argv[i], "--scope")) {
-                if (i + 1 >= argv.len) {
-                    std.debug.print("Error: --scope requires a value\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.usage_error));
-                }
-                scope = argv[i + 1];
-                i += 1;
-            }
-        }
-
-        if (username == null) {
-            std.debug.print("Error: --user is required\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.usage_error));
-        }
-        if (keyname == null) {
-            std.debug.print("Error: --name is required\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.usage_error));
-        }
-        if (scope == null) {
-            std.debug.print("Error: --scope is required\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.usage_error));
-        }
-
-        // Lookup user
-        _ = mgr.storage.getUserByUsername(username.?) orelse {
-            std.debug.print("Error: user '{s}' does not exist\n", .{username.?});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
-
-        // Load from persistent storage
-        var api_key_state = try loadApiKeyState(allocator);
-        defer freeApiKeyState(allocator, &api_key_state);
-
-        // Find the key
-        const lookup_key = try std.fmt.allocPrint(allocator, "{s}:{s}", .{ username.?, keyname.? });
-        defer allocator.free(lookup_key);
-
-        const entry = api_key_state.get(lookup_key) orelse {
-            std.debug.print("Error: key '{s}' not found for user '{s}'\n", .{ keyname.?, username.? });
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        };
-
-        // Check if scope is granted (comma-separated scopes or wildcard)
-        var scope_it = std.mem.splitScalar(u8, entry.scopes, ',');
-        while (scope_it.next()) |s| {
-            const trimmed = std.mem.trim(u8, s, " \t");
-            if (std.mem.eql(u8, trimmed, scope.?) or std.mem.eql(u8, trimmed, "*")) {
-                printOut("scope granted for key '{s}': {s}\n", .{ keyname.?, scope.? });
-                return;
-            }
-        }
-
-        printOut("scope denied for key '{s}': {s}\n", .{ keyname.?, scope.? });
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    }
-
     std.debug.print("Error: unknown apikey subcommand '{s}'\n", .{subcommand});
     printUsage();
     std.process.exit(@intFromEnum(ExitCode.usage_error));

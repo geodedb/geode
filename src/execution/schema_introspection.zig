@@ -34,6 +34,14 @@ const user_management = geode.user_management;
 // `db.labels` correctly refused it — the same silent-widening footgun
 // GAP-0840 closed for the executor.
 const tenancy = geode.tenancy;
+// SONNY-6344: the listings see what the session's MATCH sees (a parent tenant
+// also its descendants' rows).
+const tenant_visibility = geode.execution.tenant_visibility;
+// SONNY-6589 (3): an authenticated LSP session sees a graph's schema only
+// when its principal may bind the graph and read it (the HELLO's checks).
+const session_graph = geode.execution.session_graph;
+const gps = geode.security.gps;
+const principal_derive = geode.security.principal_derive;
 
 /// Per-call introspection context bound to the LSP session.
 ///
@@ -58,6 +66,12 @@ pub const IntrospectionContext = struct {
     /// Optional injection point for the auth manager; null skips per-graph
     /// gating (permissive default for tests; the LSP wires in the global).
     auth_mgr: ?*auth_graph.AuthGraphManager = null,
+    /// SONNY-6589 (3): `user` / `role` / `tenant_id` are an authenticated
+    /// principal (an LSP session that logged in): the graph is visible only
+    /// when that principal may bind it and read it, as for the HELLO
+    /// (`session_graph.mayBind`, `gps.graphReadPermitted`). False (tests,
+    /// the `--no-auth` developer path) keeps the `auth_mgr` rule.
+    authenticated: bool = false,
 };
 
 /// Free a slice of allocator-owned strings produced by one of the
@@ -73,10 +87,31 @@ pub fn freeStringList(allocator: std.mem.Allocator, list: [][]const u8) void {
 /// - `Role.Admin` short-circuits to `true` (admin sees every graph).
 /// - `auth_mgr == null` is the permissive fallback for tests / no-auth.
 /// - Otherwise the per-graph grant check decides.
-fn graphVisible(ctx: IntrospectionContext) bool {
+fn graphVisible(ctx: IntrospectionContext) !bool {
     if (ctx.role == .Admin) return true;
+    if (ctx.authenticated) return principalReadsGraph(ctx);
     const mgr = ctx.auth_mgr orelse return true;
     return mgr.canUserAccessGraph(ctx.user, ctx.graph_name);
+}
+
+/// SONNY-6589 (3): may the session's principal bind `ctx.graph_name` and
+/// read its data? The checks a HELLO naming the graph and a MATCH on it pass
+/// (`session_graph.mayBind`, `gps.graphReadPermitted`, live grants and
+/// policies).
+fn principalReadsGraph(ctx: IntrospectionContext) bool {
+    const role_names = [_][]const u8{@tagName(ctx.role)};
+    const principal = principal_derive.derivePrincipal(.{
+        .username = ctx.user,
+        .role_names = &role_names,
+        .tenant_id = ctx.tenant_id,
+        .active_graph = ctx.graph_name,
+        .auth_version = 0,
+        .auth_method = .password,
+        .source = .internal_service,
+    });
+    if (!session_graph.mayBind(&principal, ctx.graph_name)) return false;
+    // smp_allocator: the governance-approved global allocator in src/.
+    return gps.graphReadPermitted(std.heap.smp_allocator, &principal, ctx.graph_name);
 }
 
 /// Issue #817: per-label permission gate.  Returns `true` when the caller
@@ -151,9 +186,10 @@ pub fn listLabelsForUser(
     store: *graph_store.GraphStore,
     ctx: IntrospectionContext,
 ) ![][]const u8 {
-    if (!graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
+    if (!try graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
-    const all = try store.listNodeLabels(allocator, filter_tenant);
+    // SONNY-6589 (3): the session's graph only (it was every graph's).
+    const all = try tenant_visibility.listNodeLabelsVisibleInGraph(allocator, store, ctx.graph_name, filter_tenant);
     return filterLabelsByPermission(allocator, ctx, all);
 }
 
@@ -171,9 +207,9 @@ pub fn listEdgeTypesForUser(
     store: *graph_store.GraphStore,
     ctx: IntrospectionContext,
 ) ![][]const u8 {
-    if (!graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
+    if (!try graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
-    const all = try store.listEdgeTypes(allocator, filter_tenant);
+    const all = try tenant_visibility.listEdgeTypesVisibleInGraph(allocator, store, ctx.graph_name, filter_tenant);
     return filterLabelsByPermission(allocator, ctx, all);
 }
 
@@ -194,10 +230,10 @@ pub fn listPropertiesForLabelForUser(
     ctx: IntrospectionContext,
     label: []const u8,
 ) ![][]const u8 {
-    if (!graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
+    if (!try graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
     if (!labelVisible(ctx, label)) return try allocator.alloc([]const u8, 0);
     const filter_tenant = try tenancy.resolveTenantFilter(ctx.tenant_id);
-    return store.listPropertiesForLabel(allocator, filter_tenant, label);
+    return tenant_visibility.listPropertiesForLabelVisibleInGraph(allocator, store, ctx.graph_name, filter_tenant, label);
 }
 
 /// Returns the graph-name list the caller can see.
@@ -231,7 +267,7 @@ pub fn listGraphsForUser(
     errdefer keep.deinit(allocator);
     var i: usize = 0;
     while (i < all.len) : (i += 1) {
-        if (ctx.auth_mgr.?.canUserAccessGraph(ctx.user, all[i])) {
+        if (try ctx.auth_mgr.?.canUserAccessGraph(ctx.user, all[i])) {
             try keep.append(allocator, all[i]);
         } else {
             allocator.free(all[i]);

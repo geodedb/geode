@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 
 // Zig 0.16 compat: std.time.milliTimestamp removed; use clock_gettime(REALTIME).
@@ -119,6 +120,8 @@ const BackupCrypto = struct {
 };
 
 test "E2E: TDE with AES-256-GCM" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     // Create encryption key
@@ -211,6 +214,8 @@ test "E2E: Key rotation without data exposure" {
 }
 
 test "E2E: Backup encryption and recovery" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     const backup_key = EncryptionKey{

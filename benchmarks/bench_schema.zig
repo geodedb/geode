@@ -49,8 +49,7 @@ pub fn readDocument(
 }
 
 /// Serialise `doc` as indented JSON and write it to `path`, truncating
-/// any existing file. The trailing newline mirrors the convention used
-/// by benchmark_tde_overhead's stdout emitter.
+/// any existing file, with a trailing newline.
 pub fn writeDocument(
     allocator: std.mem.Allocator,
     io: std.Io,

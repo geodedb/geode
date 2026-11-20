@@ -34,29 +34,11 @@ const rls_dispatch = execution.rls_dispatch;
 const proc_name = "geode.rls.add_attribute_policy";
 const query = "CALL geode.rls.add_attribute_policy('default', 'Doc', 'dept', 'department')";
 
-/// Free what the handler gave the engine (every installed policy's strings
-/// and compiled expression, all in the engine's allocator), then the engine.
-/// `RLSEngine.deinit` leaves a policy's contents to their owner.
+/// Free the engine, and with it what the handler gave it (every installed
+/// policy's strings and compiled expression, in the engine's allocator).
 fn freeEngine(engine: *rls.RLSEngine) void {
-    const a = engine.allocator;
-    var it = engine.policies.iterator();
-    while (it.next()) |entry| {
-        for (entry.value_ptr.items) |policy| {
-            a.free(policy.name);
-            a.free(policy.description);
-            a.free(policy.graph);
-            a.free(policy.table);
-            if (policy.using_expr) |e| {
-                a.free(e.raw);
-                if (e.compiled) |c| {
-                    a.free(c.bytecode);
-                    a.free(c.constants);
-                    a.free(c.jump_table);
-                    a.destroy(c);
-                }
-            }
-        }
-    }
+    // SONNY-2773: the engine owns the policy's strings (`owns_strings`) and
+    // the code it compiled, and frees them; this freed them by hand.
     engine.deinit();
 }
 

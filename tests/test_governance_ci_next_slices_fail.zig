@@ -1,7 +1,7 @@
 const std = @import("std");
 
 // Negative test: remove ACCEPTANCE token from first slice to trigger next_slices failure.
-// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=GovernanceNextSlicesNegative; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceNextSlicesNegative; OWNER=tooling; UPDATED=2025-09-22
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=GovernanceNextSlicesNegative; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_GovernanceNextSlicesNegative; OWNER=tooling; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_GQL_010_GovernanceNextSlicesNegative" {
     var gpa = std.heap.DebugAllocator(.{}){};

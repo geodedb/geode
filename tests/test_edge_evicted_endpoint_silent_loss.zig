@@ -137,9 +137,9 @@ fn existenceIndexHasEdge(env: *Env, src: u64, dst: u64) bool {
 // here regardless of node/adj/edge cache residency. This isolates creation-loss
 // (edge never made) from a spurious edge-body-eviction artifact.
 fn readPathObservesEdge(env: *Env, src: u64, dst: u64) bool {
-    const outgoing = env.store.getOutgoingEdgeIds(src) orelse return false;
+    const outgoing = (env.store.getOutgoingEdgeIdsOrError(src) catch @panic("SONNY-6621: unexpected read failure")) orelse return false;
     for (outgoing) |eid| {
-        const e = env.store.getEdgePtrHydrated(eid) orelse continue;
+        const e = (env.store.getEdgePtrHydratedChecked(eid) catch @panic("SONNY-6621: unexpected read failure")) orelse continue;
         if (e.to_id != dst) continue;
         if (!std.mem.eql(u8, e.graph_name, GRAPH)) continue;
         if (!std.mem.eql(u8, e.label, REL)) continue;

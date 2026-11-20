@@ -534,24 +534,49 @@ test "quic ack and pto recovery mutate under connection mutex" {
     const maybe_endpoint = try readFile(allocator, endpoint_path);
     const endpoint = maybe_endpoint orelse return error.FileNotFound;
     defer allocator.free(endpoint);
+    const conn_path = try std.fmt.allocPrint(allocator, "{s}/src/quic/conn.zig", .{quic_dir});
+    defer allocator.free(conn_path);
+    const maybe_conn = try readFile(allocator, conn_path);
+    const conn = maybe_conn orelse return error.FileNotFound;
+    defer allocator.free(conn);
+
+    // quic v0.1.55 (SONNY-6673): endpoint threads take Connection.mu with
+    // lockForEndpoint(), which is mu.lockUncancelable() that application
+    // writers (lockForSend) briefly defer to. It must still lock `mu`.
+    const lock_fn = try sliceBetween(conn, "pub fn lockForEndpoint(", "pub fn lockForSend(");
+    try testing.expect(std.mem.indexOf(u8, lock_fn, "if (self.mu.tryLock()) return;") != null);
+    try testing.expect(std.mem.indexOf(u8, lock_fn, "self.mu.lockUncancelable(io);") != null);
 
     try testing.expect(std.mem.indexOf(u8, frame_handler, "REQ=REQ-QUIC-HC-069") != null);
     try testing.expect(std.mem.indexOf(u8, frame_handler, "AckRecoveryMutex") != null);
-    try testing.expect(std.mem.indexOf(u8, frame_handler, "ctx.conn.mu.lockUncancelable") != null);
+    try testing.expect(std.mem.indexOf(u8, frame_handler, "ctx.conn.lockForEndpoint()") != null);
     try testing.expect(std.mem.indexOf(u8, frame_handler, "ctx.conn.onAckReceivedSpace") != null);
 
     const ack_fn = std.mem.indexOf(u8, frame_handler, "pub fn handleAck") orelse return error.MissingHandleAck;
     const ack_body = frame_handler[ack_fn..];
-    const ack_lock = std.mem.indexOf(u8, ack_body, "ctx.conn.mu.lockUncancelable") orelse return error.MissingAckMutexLock;
+    const ack_lock = std.mem.indexOf(u8, ack_body, "ctx.conn.lockForEndpoint()") orelse return error.MissingAckMutexLock;
+    const ack_unlock = std.mem.indexOf(u8, ack_body, "defer if (locked) ctx.conn.mu.unlock(") orelse return error.MissingAckMutexUnlock;
     const ack_process = std.mem.indexOf(u8, ack_body, "ctx.conn.onAckReceivedSpace") orelse return error.MissingAckRecoveryProcess;
     try testing.expect(ack_lock < ack_process);
+    try testing.expect(ack_unlock < ack_process);
+    // The server's busy-connection shedding (REQ-QUIC-HC-143) either takes
+    // the same mutex or returns before touching recovery.
+    try testing.expect(std.mem.indexOf(u8, ack_body[0..ack_process], "if (!ctx.conn.mu.tryLock()) return .{};") != null);
 
     try testing.expect(std.mem.indexOf(u8, endpoint, "REQ=REQ-QUIC-HC-070") != null);
     try testing.expect(std.mem.indexOf(u8, endpoint, "PtoRecoveryMutex") != null);
-    try testing.expect(countOccurrences(endpoint, "c.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());") >= 3);
-    try testing.expect(std.mem.indexOf(u8, endpoint, "c.setPtoExpiredInitial();") != null);
-    try testing.expect(std.mem.indexOf(u8, endpoint, "c.setPtoExpiredHandshake();") != null);
-    try testing.expect(std.mem.indexOf(u8, endpoint, "c.setPtoExpiredApp();") != null);
+    try testing.expect(countOccurrences(endpoint, "c.lockForEndpoint();\n                    defer c.mu.unlock(std.Io.Threaded.global_single_threaded.io());") >= 3);
+    // Each PTO arm takes the mutex before it marks the PTO expired.
+    const arms = [_][2][]const u8{
+        .{ ".PtoInitial => if (t.conn) |c| {", "c.setPtoExpiredInitial();" },
+        .{ ".PtoHandshake => if (t.conn) |c| {", "c.setPtoExpiredHandshake();" },
+        .{ ".PtoApp => if (t.conn) |c| {", "c.setPtoExpiredApp();" },
+    };
+    for (arms) |arm| {
+        const arm_body = try sliceBetween(endpoint, arm[0], arm[1]);
+        try testing.expect(arm_body.len < endpoint.len - (std.mem.indexOf(u8, endpoint, arm[0]) orelse 0));
+        try testing.expect(std.mem.indexOf(u8, arm_body, "c.lockForEndpoint();") != null);
+    }
 }
 
 test "quic udp transport drains larger high fanout batches" {
@@ -1923,10 +1948,15 @@ test "quic app ack path sends normal ack packet once" {
 
     try testing.expect(std.mem.indexOf(u8, module_content, "REQ=REQ-QUIC-HC-086") != null);
     try testing.expect(std.mem.indexOf(u8, module_content, "normal ACK send failed") == null);
-    const helper_idx = std.mem.indexOf(u8, module_content, "const sent_ok = sendAppPacketAndTrack(ack_ctx, pkt, false, \"normal ACK\")") orelse return error.MissingNormalAckHelperSend;
+    // quic v0.1.54/v0.1.55: the helper's ack-eliciting flag is whether the
+    // packet carries control frames (MAX_*, NEW_CONNECTION_ID; SONNY-6486,
+    // SONNY-6655), not a literal false; still one send per ACK packet.
+    const helper_idx = std.mem.indexOf(u8, module_content, "const sent_ok = sendAppPacketAndTrack(ack_ctx, pkt, carries_control, \"normal ACK\")") orelse return error.MissingNormalAckHelperSend;
     const send_end_idx = std.mem.indexOf(u8, module_content[helper_idx..], "const send_end_ns") orelse return error.MissingNormalAckTimingEnd;
     try testing.expect(send_end_idx > 0);
-    try testing.expectEqual(@as(usize, 1), countOccurrences(module_content, "sendAppPacketAndTrack(ack_ctx, pkt, false, \"normal ACK\")"));
+    try testing.expect(std.mem.indexOf(u8, module_content[0..helper_idx], "const carries_control = fc_frames_sent > 0") != null);
+    // Exactly one send of the normal ACK, whatever its arguments.
+    try testing.expectEqual(@as(usize, 1), countOccurrences(module_content, ", \"normal ACK\")"));
 }
 
 test "quic server writers wait on per-connection tx credit" {
@@ -2290,16 +2320,77 @@ test "quic app pto retransmit state advances only after full sends" {
     try testing.expect(std.mem.indexOf(u8, methods_b, "tracked.retransmit_count >= 8") == null);
     try testing.expect(std.mem.indexOf(u8, methods_b, "recordAppStreamRetransmitAttempt") != null);
     try testing.expect(std.mem.indexOf(u8, methods_b, "const sent = self.send(pkt) catch") != null);
-    try testing.expect(std.mem.indexOf(u8, methods_b, "if (sent != pkt.len)") != null);
-    try testing.expect(std.mem.indexOf(u8, methods_b, "self.app_stream_retx.put(lost_pn, tracked)") != null);
     try testing.expect(std.mem.indexOf(u8, methods_b, "if (sent == pkt.len)") != null);
-    try testing.expect(std.mem.indexOf(u8, methods_b, "self.app_stream_retx.put(probe_pn, tracked)") != null);
+    // A failed PTO send restores the probe entry under its original PN
+    // (quic v0.1.53: through retrackAppStreamRetx, which wraps
+    // putAppStreamRetx and releases the stream's count if tracking fails).
+    try testing.expect(std.mem.indexOf(u8, methods_b, "retrackAppStreamRetx(self, probe_pn, tracked)") != null);
+    const retrack_fn = try sliceBetween(methods_b, "fn retrackAppStreamRetx(", "fn RetxEntry(");
+    try testing.expect(std.mem.indexOf(u8, retrack_fn, "putAppStreamRetx(self, pn, entry)") != null);
 
-    const pto_canary = std.mem.indexOf(u8, methods_b, "REQ=REQ-QUIC-HC-079") orelse return error.MissingAppPtoAccountingCanary;
-    const pto_block = methods_b[pto_canary..@min(methods_b.len, pto_canary + 8000)];
+    // ACK-path loss retransmit (quic v0.1.49, SONNY-6434): the lost entry
+    // stays tracked while it is sent and is removed and re-keyed only after
+    // the whole datagram went out; a failed or short send ends the pass with
+    // the entry still tracked under its original PN.
+    const send_retx = try sliceBetween(methods_b, "fn sendStreamRetransmission(", "fn maxStreamPayload(");
+    try testing.expect(std.mem.indexOf(u8, send_retx, "const sent = self.send(pkt) catch return null;") != null);
+    try testing.expect(std.mem.indexOf(u8, send_retx, "if (sent != pkt.len) return null;") != null);
+    // quic v0.1.53 (SONNY-6649): the send keys are read per packet, with the
+    // key phase, so a key update started by the previous retransmission
+    // cannot pair old keys with the new phase bit.
+    try testing.expect(std.mem.indexOf(u8, send_retx, "const tx = self.app_tx_keys orelse return null;") != null);
+    const ack_retx = try sliceBetween(methods_b, "fn retransmitLostStreamPackets(", "pruneAppStreamRetxOrder(self);\n");
+    const send_idx = std.mem.indexOf(u8, ack_retx, "sendStreamRetransmission(self, tracked_ptr.*) orelse break;") orelse
+        return error.MissingAckRetxSendBeforeRemove;
+    const remove_idx = std.mem.indexOf(u8, ack_retx, "self.app_stream_retx.fetchRemove(lost_pn)") orelse
+        return error.MissingAckRetxRemove;
+    const sent_idx = std.mem.indexOf(u8, ack_retx, "self.onShortHeaderPacketSent(pkt_len, true)") orelse
+        return error.MissingAckRetxSentAccounting;
+    const rekey_idx = std.mem.indexOf(u8, ack_retx, "retrackAppStreamRetx(self, next_pn, tracked)") orelse
+        return error.MissingAckRetxRekey;
+    try testing.expect(send_idx < remove_idx);
+    try testing.expect(remove_idx < sent_idx);
+    try testing.expect(sent_idx < rekey_idx);
+    try testing.expect(std.mem.indexOf(u8, ack_retx[0..send_idx], "fetchRemove") == null);
+    // A failed merged-run send ends the pass, like a failed single send.
+    try testing.expect(std.mem.indexOf(u8, ack_retx[0..send_idx], ".send_failed => break,") != null);
+
+    // quic v0.1.53 (SONNY-6649) sends a run of lost packets continuing one
+    // stream in one packet. Same rule: the run's entries are removed only
+    // after the whole datagram went out, then the merged entry is tracked
+    // under the new PN; on failure nothing was sent and all stay tracked.
+    const run_retx = try sliceBetween(methods_b, "fn retransmitLostRun(", "fn retransmitLostStreamPackets(");
+    const run_send_idx = std.mem.indexOf(u8, run_retx, "sendStreamRetransmission(self, merged) orelse {") orelse
+        return error.MissingRunRetxSendBeforeRemove;
+    const run_fail_idx = std.mem.indexOf(u8, run_retx, "return .send_failed;") orelse
+        return error.MissingRunRetxSendFailed;
+    const run_remove_idx = std.mem.indexOf(u8, run_retx, "self.app_stream_retx.fetchRemove(pn)") orelse
+        return error.MissingRunRetxRemove;
+    const run_sent_idx = std.mem.indexOf(u8, run_retx, "self.onShortHeaderPacketSent(pkt_len, true)") orelse
+        return error.MissingRunRetxSentAccounting;
+    const run_rekey_idx = std.mem.indexOf(u8, run_retx, "retrackAppStreamRetx(self, next_pn, merged)") orelse
+        return error.MissingRunRetxRekey;
+    try testing.expect(run_send_idx < run_fail_idx);
+    try testing.expect(run_fail_idx < run_remove_idx);
+    try testing.expect(run_remove_idx < run_sent_idx);
+    try testing.expect(run_sent_idx < run_rekey_idx);
+    try testing.expect(std.mem.indexOf(u8, run_retx[0..run_send_idx], "fetchRemove") == null);
+
+    _ = std.mem.indexOf(u8, methods_b, "REQ=REQ-QUIC-HC-079") orelse return error.MissingAppPtoAccountingCanary;
+    const pto_block = try sliceBetween(methods_b, "pub fn sendPtoProbeApp(", "pub fn sendConnectionClose(");
+    try testing.expect(std.mem.indexOf(u8, pto_block, "REQ=REQ-QUIC-HC-079") != null);
     try testing.expect(std.mem.indexOf(u8, pto_block, "if (sent == pkt.len)") != null);
     try testing.expect(std.mem.indexOf(u8, pto_block, "self.onShortHeaderPacketSent(pkt.len, true)") != null);
     try testing.expect(std.mem.indexOf(u8, pto_block, "logger.warn(\"PTO App send failed") != null);
+    // The STREAM probe: PN accounting and the re-key under the new PN only
+    // after a full send; otherwise the entry goes back under its PN and the
+    // PTO is re-armed.
+    const pto_full_idx = std.mem.indexOf(u8, pto_block, "if (sent == pkt.len) {") orelse return error.MissingPtoFullSendCheck;
+    const pto_sent_idx = std.mem.indexOf(u8, pto_block[pto_full_idx..], "self.onShortHeaderPacketSent(pkt.len, true)") orelse return error.MissingPtoSentAccounting;
+    const pto_rekey_idx = std.mem.indexOf(u8, pto_block[pto_full_idx..], "retrackAppStreamRetx(self, next_pn, tracked)") orelse return error.MissingPtoRekey;
+    try testing.expect(pto_sent_idx < pto_rekey_idx);
+    try testing.expect(std.mem.indexOf(u8, pto_block[0..pto_full_idx], "onShortHeaderPacketSent") == null);
+    try testing.expect(std.mem.indexOf(u8, pto_block, "retrackAppStreamRetx(self, probe_pn, tracked);\n                        self.markPtoDirty();") != null);
 }
 
 test "quic initial and handshake state advances only after full sends" {
@@ -2421,7 +2512,12 @@ test "quic non-transactional simple mutations use default fast paths" {
     // the SONNY-2724 regression pins the behaviour over QUIC.
     try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .match_create_edge and key_resolved_writes_ok") != null);
     try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .match_merge_edge and key_resolved_writes_ok") != null);
-    try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .simple_node_merge and key_resolved_writes_ok") != null);
+    // SONNY-2724 (3c812b52): the node MERGE shape has its own gate,
+    // nodeMergeFastPathServes, which also serves a tenant-scoped session
+    // since the bulk MERGE matches only within the session's tenant
+    // (SONNY-2976). It must not fall back to the key-resolved gate.
+    try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .simple_node_merge and node_merge_writes_ok") != null);
+    try testing.expect(std.mem.indexOf(u8, block, "bulk_shape == .simple_node_merge and key_resolved_writes_ok") == null);
 }
 
 test "quic session auth validation uses epoch fast path" {
@@ -2881,7 +2977,7 @@ test "quic group commit keeps bulk create properties in shard transaction" {
     try testing.expect(std.mem.indexOf(u8, store_content, "REQ=REQ-QUIC-HC-022") != null);
     try testing.expect(std.mem.indexOf(u8, store_content, "pub fn setNodePropertiesBatchInMemoryOnly") != null);
     try testing.expect(std.mem.indexOf(u8, store_content, "REQ=REQ-QUIC-HC-171") != null);
-    try testing.expect(std.mem.indexOf(u8, store_content, "adapter.checkpointAll() catch |err|") != null);
+    try testing.expect(std.mem.indexOf(u8, store_content, "global_adapter.?.checkpointAll() catch |err|") != null);
     try testing.expect(std.mem.indexOf(u8, store_content, "checkpoint failed during adapter shutdown") != null);
 
     const maybe_adapter = try readFile(allocator, "src/storage/graph_storage_adapter.zig");
@@ -2893,10 +2989,17 @@ test "quic group commit keeps bulk create properties in shard transaction" {
     try testing.expect(std.mem.indexOf(u8, adapter_content, "REQ=REQ-QUIC-HC-022") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "node_shard.putPropertyTxn(rec.prop_head, kv.key, storage_val, local_txn)") != null);
     // GAP-0900 throughput: bulk insert reserves a FRESH slot_id that was never
-    // indexed, so the call now skips the O(N) de-dup scan via the `Ex` variant
-    // (trailing `true` = assume_new); it still indexes the property.
-    try testing.expect(std.mem.indexOf(u8, adapter_content, "addIndexedNodePropertyEx(mg, label_id, slot_id, kv.key, storage_val, true)") != null);
-    try testing.expect(std.mem.indexOf(u8, adapter_content, "setNodePropertiesBatchInMemoryOnly") != null);
+    // indexed, so the call skips the O(N) de-dup scan (trailing `true` =
+    // assume_new); it still indexes the property. SONNY-6601 indexes by the
+    // value's hash so an aborted insert can take the entry back.
+    const fast_path_canary = std.mem.indexOf(u8, adapter_content, "REQ=REQ-QUIC-HC-022") orelse return error.MissingShardTxnFastPathCanary;
+    const fast_path = try sliceBetween(adapter_content[fast_path_canary..], "REQ=REQ-QUIC-HC-022", "node_shard.commitTxn(local_txn)");
+    const put_idx = std.mem.indexOf(u8, fast_path, "node_shard.putPropertyTxn(rec.prop_head, kv.key, storage_val, local_txn)") orelse return error.MissingShardTxnPropertyWrite;
+    const index_idx = std.mem.indexOf(u8, fast_path, "addIndexedNodePropertyHash(mg, label_id, slot_id, kv.key, value_hashes[i], true)") orelse return error.MissingAssumeNewIndexWrite;
+    const in_memory_idx = std.mem.indexOf(u8, fast_path, "store.setNodePropertiesBatchInMemoryOnly(reserved_id, entries)") orelse return error.MissingInMemoryOnlyCopy;
+    try testing.expect(put_idx < index_idx);
+    try testing.expect(index_idx < in_memory_idx);
+    try testing.expect(std.mem.indexOf(u8, fast_path, "mg.exact_node_property_index.remove(label_id, kv.key, h, slot_id)") != null);
     try testing.expect(std.mem.indexOf(u8, adapter_content, "store.setNodePropertiesBatch(reserved_id, entries)") == null);
 
     const maybe_group_commit_test = try readFile(allocator, "tests/perf/test_group_commit_coordinator.zig");

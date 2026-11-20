@@ -12,6 +12,11 @@
 // from any session they take `default`'s lock, and a request that also
 // changes another graph is refused (SONNY-2749).
 //
+// SONNY-6294: DROP INDEX is a statement on the session's graph (it drops
+// that graph's index); a fulltext index is dropped from the default graph
+// (`USE GRAPH default; DROP INDEX i`, under default's lock), and from a
+// session on another graph its DROP is refused (0A000).
+//
 // CANARY: REQ=REQ-SONNY-2790-FTS-DEFAULT-GRAPH; FEATURE="FullText"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2790_fts_graph_lock.zig; OWNER=index; UPDATED=2026-09-26
 
 const std = @import("std");
@@ -37,7 +42,9 @@ test "SONNY-2790: the fulltext statements count as statements on the default gra
     const cases = [_]Case{
         .{ .query = "CREATE INDEX doc_idx FOR (d:Doc) ON (d.body) USING fulltext", .session = "g2", .lock = default_graph },
         .{ .query = "USE GRAPH g2; CREATE INDEX doc_idx FOR (d:Doc) ON (d.body) USING fulltext", .session = default_graph, .lock = default_graph },
-        .{ .query = "DROP INDEX doc_idx", .session = "g2", .lock = default_graph },
+        .{ .query = "USE GRAPH default; DROP INDEX doc_idx", .session = "g2", .lock = default_graph },
+        // SONNY-6294: a bare DROP INDEX is on the session's graph.
+        .{ .query = "DROP INDEX doc_idx", .session = "g2", .lock = "g2" },
         .{ .query = "CALL geode.fts.rebuild('doc_idx')", .session = "g2", .lock = default_graph },
         .{ .query = "CALL geode.fts.search('doc_idx', 'fox')", .session = "g2", .lock = default_graph },
         .{ .query = "USE GRAPH g2; CALL geode.fts.rebuild('idx')", .session = default_graph, .lock = default_graph },
@@ -154,8 +161,15 @@ test "SONNY-2790: over gRPC a session on another graph takes the default graph's
     try testing.expect(adapter.getFulltextIndexNamed(default_graph, "doc_idx") != null);
     try testing.expect(try waitsForDefault(ga, s, "CALL geode.fts.rebuild('doc_idx')"));
     try expectRuns(ga, s, "CALL geode.fts.search('doc_idx', 'fox')");
-    try testing.expect(try waitsForDefault(ga, s, "DROP INDEX doc_idx"));
+    // SONNY-6294: from g2 the fulltext index's DROP is refused, and it stays.
+    switch ((try execute(ga, s, "DROP INDEX doc_idx")).payload orelse return error.MissingPayload) {
+        .@"error" => |e| try testing.expectEqualStrings("0A000", e.code),
+        else => return error.ExpectedRefusal,
+    }
+    try testing.expect(adapter.getFulltextIndexNamed(default_graph, "doc_idx") != null);
+    try testing.expect(try waitsForDefault(ga, s, "USE GRAPH default; DROP INDEX doc_idx"));
     try testing.expect(adapter.getFulltextIndexNamed(default_graph, "doc_idx") == null);
+    try expectRuns(ga, s, "USE GRAPH g2");
 
     // A request that changes g2 and rebuilds the default graph's index
     // changes two graphs.

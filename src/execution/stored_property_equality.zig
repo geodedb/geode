@@ -23,6 +23,7 @@ const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const value_order = @import("value_order.zig");
 const value_equality = @import("value_equality.zig");
+const canonical_string = @import("../unicode/canonical_string.zig");
 
 const Value = value_types.Value;
 
@@ -43,11 +44,12 @@ pub fn matches(allocator: std.mem.Allocator, expected: Value, actual: gs.Propert
         .int => |n| numberEquals(expected, .{ .exact = .{ .coeff = n, .scale = 0 } }),
         .float => |f| numberEquals(expected, .{ .float = f }),
         .decimal => |d| numberEquals(expected, .{ .exact = .{ .coeff = d.coeff, .scale = d.scale } }),
+        // SONNY-3055: by their NFC forms, as `=` compares them.
         .string => |text| switch (expected) {
-            .Str => |t| std.mem.eql(u8, t, text),
-            .Text => |t| std.mem.eql(u8, t, text),
-            .Varchar => |t| std.mem.eql(u8, t.data, text),
-            .Char => |t| std.mem.eql(u8, t.data, text),
+            .Str => |t| try canonical_string.eql(allocator, t, text),
+            .Text => |t| try canonical_string.eql(allocator, t, text),
+            .Varchar => |t| try canonical_string.eql(allocator, t.data, text),
+            .Char => |t| try canonical_string.eql(allocator, t.data, text),
             else => false,
         },
         .bool => |b| expected == .Bool and expected.Bool == b,

@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const time = std.time;
 
-// CANARY: REQ=REQ-PERF-COLLECTION-001; FEATURE="CollectionPerformanceValidation"; ASPECT=Testing; STATUS=TESTED; TEST=TestCANARY_CollectionPerfValidation; OWNER=performance; UPDATED=2025-10-04
+// CANARY: REQ=REQ-PERF-COLLECTION-001; FEATURE="CollectionPerformanceValidation"; ASPECT=Testing; STATUS=IMPL; TEST=TestCANARY_CollectionPerfValidation; OWNER=performance; UPDATED=2026-11-14
 
 // Simple growth strategy for optimized collections
 const GrowthStrategy = enum {
@@ -337,7 +337,7 @@ test "String building optimization" {
 
 // CANARY integration test
 test "CANARY: REQ=REQ-PERF-COLLECTION-001 - Collection optimization integration" {
-    // CANARY: REQ=REQ-PERF-COLLECTION-001; FEATURE="CollectionOptimization"; ASPECT=Integration; STATUS=TESTED; TEST=TestCANARY_REQ_PERF_COLLECTION_001; OWNER=performance; UPDATED=2025-10-04
+    // CANARY: REQ=REQ-PERF-COLLECTION-001; FEATURE="CollectionOptimization"; ASPECT=Integration; STATUS=IMPL; TEST=TestCANARY_REQ_PERF_COLLECTION_001; OWNER=performance; UPDATED=2026-11-14
 
     const allocator = testing.allocator;
 

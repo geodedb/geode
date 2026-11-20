@@ -24,7 +24,7 @@
 //     (`RETURN n.i AS amt ... HAVING sum(amt) > 100`); it was NULL for every
 //     row, so every group was dropped;
 //   * a HAVING name that is no column, binding or parameter is refused with
-//     42703; it was NULL.
+//     42002 (SONNY-6543; 42703 before); it was NULL.
 // Every check runs in the three legacy sessions and on a persisted deployment
 // with no policy or tenant scope (the planned read and the GROUP BY fast
 // paths), with the node cache bounded (the default: the fast paths read the
@@ -469,15 +469,19 @@ test "SONNY-2675: an alias inside a HAVING aggregate names the item's expression
 
 fn checkUnknownNames(s: *Session, f: *Failures) !void {
     const lim: []const Param = &.{.{ .name = "lim", .value = .{ .Int = 7 } }};
-    // A parameter, named with or without its `$`.
-    try expectRows(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING count(*) > lim", lim, &.{ "'a', 10", "'b', 10" });
+    // A parameter is named with its `$`. SONNY-6525 item 2: a bare name is a
+    // variable reference (ISO/IEC 39075:2024 20.12 SR 8), refused with 42000
+    // when nothing binds it; it read the parameter of that name.
+    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING count(*) > lim", lim, error.VariableNotInScope);
     try expectRows(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING count(*) > $lim", lim, &.{ "'a', 10", "'b', 10" });
-    // Anything else is refused: over groups, inside an aggregate, per row.
-    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING nosuchalias > 2", &.{}, error.UnknownHavingReference);
-    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING nosuchalias IS NULL", &.{}, error.UnknownHavingReference);
-    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g GROUP BY n.g HAVING sum(nosuch) > 1", &.{}, error.UnknownHavingReference);
-    try expectFail(s, f, "MATCH (n:G) RETURN n.i AS i WHERE nosuch > 1", &.{}, error.UnknownHavingReference);
-    try expectFail(s, f, "MATCH (n:G) RETURN n.i AS i WHERE nosuch.x > 1", &.{}, error.UnknownHavingReference);
+    // Anything else is refused: over groups, inside an aggregate, per row
+    // (SONNY-6525 item 2: by the statement's scope check, 42000, before the
+    // HAVING's own 42002).
+    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING nosuchalias > 2", &.{}, error.VariableNotInScope);
+    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g, count(*) AS c GROUP BY n.g HAVING nosuchalias IS NULL", &.{}, error.VariableNotInScope);
+    try expectFail(s, f, "MATCH (n:G) RETURN n.g AS g GROUP BY n.g HAVING sum(nosuch) > 1", &.{}, error.VariableNotInScope);
+    try expectFail(s, f, "MATCH (n:G) RETURN n.i AS i WHERE nosuch > 1", &.{}, error.VariableNotInScope);
+    try expectFail(s, f, "MATCH (n:G) RETURN n.i AS i WHERE nosuch.x > 1", &.{}, error.VariableNotInScope);
 }
 
 test "SONNY-2675: a HAVING name that is no column, binding or parameter is refused" {
@@ -675,9 +679,10 @@ fn checkSumTypes(s: *Session, f: *Failures) !void {
     // A SmallInt and a BigInt are integers to sum (they were skipped).
     try expectRows(s, f, "MATCH (n:O) WHERE n.g = 's' RETURN n.g AS g, sum(n.x) AS t GROUP BY n.g HAVING count(*) > 0", &.{}, &.{"'s', 13"});
     try expectRows(s, f, "MATCH (n:O) WHERE n.g = 's' RETURN n.g AS g, avg(n.x) AS t GROUP BY n.g HAVING count(*) > 0", &.{}, &.{"'s', 4.333333333333333d"});
-    // An integer sum past i64 continues as a double (`+=` aborted).
-    try expectRows(s, f, "MATCH (n:O) WHERE n.g = 'o' RETURN n.g AS g, sum(n.x) AS t GROUP BY n.g HAVING count(*) > 0", &.{}, &.{"'o', 9223372036854776000d"});
-    try expectRows(s, f, "MATCH (n:O) WHERE n.g = 'o' RETURN n.g AS g, sum(n.x) AS t GROUP BY n.g", &.{}, &.{"'o', 9223372036854776000d"});
+    // An integer sum past i64 (`+=` aborted). SONNY-2774: it is 22003
+    // (IntegerOverflow), not a double continuation: ISO/IEC 39075:2024 20.9.
+    try expectFail(s, f, "MATCH (n:O) WHERE n.g = 'o' RETURN n.g AS g, sum(n.x) AS t GROUP BY n.g HAVING count(*) > 0", &.{}, error.IntegerOverflow);
+    try expectFail(s, f, "MATCH (n:O) WHERE n.g = 'o' RETURN n.g AS g, sum(n.x) AS t GROUP BY n.g", &.{}, error.IntegerOverflow);
 }
 
 test "SONNY-2675: sum and avg refuse every non-numeric input" {
@@ -748,9 +753,12 @@ fn checkInIsEquality(s: *Session, f: *Failures) !void {
     try expectRows(s, f, "RETURN NULL IN $l AS x", &.{l15}, &.{"null"});
     try expectRows(s, f, "RETURN NULL IN $l AS x", &.{empty}, &.{"false"});
     try expectRows(s, f, "RETURN 2 NOT IN $l AS x", &.{empty}, &.{"true"});
-    // An item `=` cannot compare with the value raises what `=` raises.
-    try expectFail(s, f, "RETURN 'a' = 1.5 AS x", &.{}, error.TypeMismatch);
-    try expectFail(s, f, "RETURN 'a' IN [1.5] AS x", &.{}, error.TypeMismatch);
+    // An item of a type not comparable with the value answers what `=`
+    // answers: False (SONNY-738: ISO/IEC 39075:2024 19.3 GR 1, NOTE 307; it
+    // was a type mismatch). An ordering between them is still refused.
+    try expectRows(s, f, "RETURN 'a' = 1.5 AS x", &.{}, &.{"false"});
+    try expectRows(s, f, "RETURN 'a' IN [1.5] AS x", &.{}, &.{"false"});
+    try expectFail(s, f, "RETURN 'a' < 1.5 AS x", &.{}, error.TypeMismatch);
     // `=` compares exact numbers at any scale and across INT, SMALLINT,
     // BIGINT and DECIMAL (a scale-40 decimal was 0A000, a SMALLINT against an
     // INT a type mismatch).

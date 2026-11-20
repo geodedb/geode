@@ -66,6 +66,8 @@ pub const RegistryError = error{
     InvalidTenantId,
     TenantHasChildren,
     TenantReserved,
+    /// SONNY-6567 (4): the parent is being dropped (`markDropping`).
+    TenantDropping,
 };
 
 /// One persisted tenant record. `quota` is optional: a null quota means the
@@ -101,22 +103,26 @@ pub const TenantRegistry = struct {
         };
     }
 
+    // CANARY: REQ=REQ-SONNY-6346-NO-SILENT-DEGRADE; FEATURE="TenantRegistry"; ASPECT=DurableOrError; STATUS=TESTED; TEST=tests/test_sonny6346_silent_degrade_audit_housekeeping.zig; OWNER=security; UPDATED=2026-11-12
     /// Initialize a durable registry rooted at `{data_dir}/tenants`. Creates the
     /// directory if missing and hydrates any previously persisted tenants. A
     /// null `data_dir` yields the in-memory (non-durable) variant.
+    /// SONNY-6346: a directory that cannot be created, or a registry file that
+    /// cannot be read, is an error. It fell back to an in-memory registry with
+    /// a warning (an unreadable file hydrated nothing), so the tenants created
+    /// afterwards, or all of them, were gone at the next restart.
     pub fn initWithDataDir(allocator: std.mem.Allocator, data_dir: ?[]const u8) !TenantRegistry {
         var self = TenantRegistry.init(allocator);
+        errdefer self.deinit();
         if (data_dir) |dd| {
             const dir_path = try std.fmt.allocPrint(allocator, "{s}/tenants", .{dd});
-            errdefer allocator.free(dir_path);
             std.Io.Dir.cwd().createDirPath(registryIo(), dir_path) catch |err| {
-                log.warn("tenant_registry.makepath_failed", &.{
+                log.err("tenant_registry.makepath_failed", &.{
                     Attr.string("dir", dir_path),
                     Attr.string("error", @errorName(err)),
                 });
-                // Fall back to in-memory rather than failing server startup.
                 allocator.free(dir_path);
-                return self;
+                return error.TenantRegistryUnavailable;
             };
             self.dir_path = dir_path;
             try self.hydrate();
@@ -165,7 +171,12 @@ pub const TenantRegistry = struct {
         defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.tenants.contains(tenant_id)) return RegistryError.TenantAlreadyExists;
-        if (parent) |p| if (!self.tenants.contains(p)) return RegistryError.TenantNotFound;
+        if (parent) |p| {
+            const prec = self.tenants.get(p) orelse return RegistryError.TenantNotFound;
+            // SONNY-6567 (4): no child under a tenant being dropped (its
+            // cascade has snapshotted its children already).
+            if (!prec.active) return RegistryError.TenantDropping;
+        }
 
         const owned_id = try self.allocator.dupe(u8, tenant_id);
         errdefer self.allocator.free(owned_id);
@@ -183,12 +194,42 @@ pub const TenantRegistry = struct {
             .has_quota = false,
         });
 
+        // CANARY: REQ=REQ-SONNY-6567-TENANT-DROP-FAILURES; FEATURE="TenantRegistry"; ASPECT=PersistOrRestore; STATUS=TESTED; TEST=tests/test_sonny6567_tenant_drop_failures.zig; OWNER=security; UPDATED=2026-11-15
+        // SONNY-6567 (4): a write of the file that fails fails the create and
+        // takes the record back out. It was logged and the create reported
+        // success: the tenant was gone at the next restart.
         self.persist() catch |err| {
-            log.warn("tenant_registry.persist_failed", &.{
-                Attr.string("op", "create"),
-                Attr.string("tenant", tenant_id),
-                Attr.string("error", @errorName(err)),
-            });
+            self.logPersistFailed("create", tenant_id, err);
+            _ = self.tenants.remove(owned_id);
+            return err;
+        };
+    }
+
+    fn logPersistFailed(_: *TenantRegistry, op: []const u8, tenant_id: []const u8, err: anyerror) void {
+        log.err("tenant_registry.persist_failed: the change was not made", &.{
+            Attr.string("op", op),
+            Attr.string("tenant", tenant_id),
+            Attr.string("error", @errorName(err)),
+        });
+    }
+
+    /// SONNY-6567 (4): mark `tenant_id` as being dropped (`active = false`),
+    /// written to the file before it returns, or not marked and an error. A
+    /// tenant DROP marks the tenant before it removes anything, so a drop
+    /// that fails part-way leaves it registered and visibly inactive
+    /// (`geode.tenant.list` / `show`), across a restart, until a retry
+    /// finishes; no child tenant can be created under it meanwhile.
+    pub fn markDropping(self: *TenantRegistry, tenant_id: []const u8) !void {
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+        if (std.mem.eql(u8, tenant_id, DEFAULT_TENANT_ID)) return RegistryError.TenantReserved;
+        const rec = self.tenants.getPtr(tenant_id) orelse return RegistryError.TenantNotFound;
+        if (!rec.active) return;
+        rec.active = false;
+        self.persist() catch |err| {
+            self.logPersistFailed("mark_dropping", tenant_id, err);
+            rec.active = true;
+            return err;
         };
     }
 
@@ -221,16 +262,18 @@ pub const TenantRegistry = struct {
         }
 
         const entry = self.tenants.fetchRemove(tenant_id) orelse return RegistryError.TenantNotFound;
+        // SONNY-6567 (4): the record is freed only once the file no longer
+        // has it. A write that fails puts it back (the slot `fetchRemove`
+        // freed is still there) and fails the drop; it was logged and the
+        // drop reported success, and the tenant came back at the next
+        // restart.
+        self.persist() catch |err| {
+            self.logPersistFailed("drop", tenant_id, err);
+            self.tenants.putAssumeCapacity(entry.key, entry.value);
+            return err;
+        };
         var rec = entry.value;
         self.freeRecord(&rec);
-
-        self.persist() catch |err| {
-            log.warn("tenant_registry.persist_failed", &.{
-                Attr.string("op", "drop"),
-                Attr.string("tenant", tenant_id),
-                Attr.string("error", @errorName(err)),
-            });
-        };
     }
 
     /// Set (or replace) a tenant's quota override. Returns TenantNotFound if the
@@ -247,22 +290,33 @@ pub const TenantRegistry = struct {
         defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const rec = self.tenants.getPtr(tenant_id) orelse return RegistryError.TenantNotFound;
+        const before = rec.*;
         rec.has_quota = true;
         rec.max_connections = max_connections;
         rec.max_concurrent_queries = max_concurrent_queries;
         rec.max_graphs = max_graphs;
         rec.max_nodes_per_graph = max_nodes_per_graph;
 
+        // SONNY-6567 (4): as `create` (it reported success and the quota
+        // was gone at the next restart).
         self.persist() catch |err| {
-            log.warn("tenant_registry.persist_failed", &.{
-                Attr.string("op", "set_quota"),
-                Attr.string("tenant", tenant_id),
-                Attr.string("error", @errorName(err)),
-            });
+            self.logPersistFailed("set_quota", tenant_id, err);
+            rec.* = before;
+            return err;
         };
     }
 
     // ── Reads ─────────────────────────────────────────────────────────────
+
+    /// SONNY-6607 (4): is `tenant_id` registered and marked as being dropped
+    /// (a drop that failed part-way, `markDropping`)? Its sessions are
+    /// refused (`tenancy.refuseDroppingTenant`).
+    pub fn isDropping(self: *TenantRegistry, tenant_id: []const u8) bool {
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+        const rec = self.tenants.get(tenant_id) orelse return false;
+        return !rec.active;
+    }
 
     pub fn contains(self: *TenantRegistry, tenant_id: []const u8) bool {
         self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -412,33 +466,46 @@ pub const TenantRegistry = struct {
         ) catch |err| switch (err) {
             error.FileNotFound => return,
             else => {
-                log.warn("tenant_registry.hydrate_read_failed", &.{Attr.string("error", @errorName(err))});
-                return;
+                // SONNY-6346: an unreadable registry is an error, not an
+                // empty one.
+                log.err("tenant_registry.hydrate_read_failed", &.{Attr.string("error", @errorName(err))});
+                return error.TenantRegistryUnavailable;
             },
         };
         defer self.allocator.free(data);
 
+        // CANARY: REQ=REQ-SONNY-6348-TENANT-REGISTRY-CORRUPT; FEATURE="TenantRegistry"; ASPECT=CorruptLineRefused; STATUS=TESTED; TEST=tests/test_sonny6348_readonly_restore_checks_registry.zig; OWNER=security; UPDATED=2026-11-12
+        // SONNY-6348: a line that cannot become a tenant (not JSON, not an
+        // object, no valid string tenant_id, a parent that is not a string,
+        // a repeated id) is an error. It was skipped with a warning, so that
+        // tenant was silently gone. The file is rewritten whole on every
+        // change (temp file + rename), so a bad line is corruption.
         var hydrated: usize = 0;
-        var line_it = std.mem.tokenizeScalar(u8, data, '\n');
+        var line_no: usize = 0;
+        var line_it = std.mem.splitScalar(u8, data, '\n');
         while (line_it.next()) |line| {
+            line_no += 1;
             const trimmed = std.mem.trim(u8, line, " \t\r");
             if (trimmed.len == 0) continue;
             const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, trimmed, .{}) catch |err| {
-                log.warn("tenant_registry.hydrate_parse_failed", &.{Attr.string("error", @errorName(err))});
-                continue;
+                return corruptLine(line_no, @errorName(err));
             };
             defer parsed.deinit();
             const obj = switch (parsed.value) {
                 .object => |o| o,
-                else => continue,
+                else => return corruptLine(line_no, "not a JSON object"),
             };
-            const id_v = obj.get("tenant_id") orelse continue;
+            const id_v = obj.get("tenant_id") orelse return corruptLine(line_no, "no tenant_id");
             const id_str = switch (id_v) {
                 .string => |s| s,
-                else => continue,
+                else => return corruptLine(line_no, "tenant_id is not a string"),
             };
-            if (!validId(id_str)) continue;
-            if (self.tenants.contains(id_str)) continue;
+            if (!validId(id_str)) return corruptLine(line_no, "tenant_id is not a valid tenant id");
+            if (self.tenants.contains(id_str)) return corruptLine(line_no, "tenant_id repeats an earlier line");
+            if (obj.get("parent")) |pv| switch (pv) {
+                .string, .null => {},
+                else => return corruptLine(line_no, "parent is not a string"),
+            };
 
             const owned_id = try self.allocator.dupe(u8, id_str);
             errdefer self.allocator.free(owned_id);
@@ -481,6 +548,14 @@ pub const TenantRegistry = struct {
         if (hydrated > 0) {
             log.info("tenant_registry.hydrated", &.{Attr.int("count", @intCast(hydrated))});
         }
+    }
+
+    fn corruptLine(line_no: usize, why: []const u8) error{TenantRegistryCorrupt} {
+        log.err("tenant_registry.hydrate_corrupt_line", &.{
+            Attr.uint("line", @intCast(line_no)),
+            Attr.string("reason", why),
+        });
+        return error.TenantRegistryCorrupt;
     }
 
     fn jsonU32(obj: std.json.ObjectMap, key: []const u8) u32 {

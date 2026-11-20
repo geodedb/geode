@@ -97,11 +97,14 @@ fn darwinMemory() !ResidentMemory {
         return error.MemoryMeasurementFailed;
     }
     const required = (@offsetOf(std.c.task_vm_info_data_t, "resident_size_peak") + @sizeOf(u64)) / @sizeOf(std.c.natural_t);
-    if (count < required or info.resident_size == 0 or info.resident_size_peak < info.resident_size) {
+    if (count < required or info.resident_size == 0) {
         std.debug.print("Darwin memory measurement: count={d} required={d} resident={d} peak={d}\n", .{ count, required, info.resident_size, info.resident_size_peak });
         return error.MemoryMeasurementFailed;
     }
-    return .{ .resident = @intCast(info.resident_size), .peak = @intCast(info.resident_size_peak) };
+    // SONNY-6830: the kernel's recorded peak can lag the live resident size
+    // (resident 33865728, peak 33849344 in CI); the true peak is never below
+    // the current resident size, so that is the peak until the record catches up.
+    return .{ .resident = @intCast(info.resident_size), .peak = @intCast(@max(info.resident_size_peak, info.resident_size)) };
 }
 
 /// Keep runaway regressions inside the forked child's memory allowance.

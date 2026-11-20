@@ -13,13 +13,15 @@
 //   2. the actual generated password NEVER appears in stdout/stderr.
 //
 // It runs with a CLEAN environment (no GEODE_ADMIN_PASSWORD / GEODE_DEFAULT_PASSWORD)
-// so the server takes the generate-and-persist path. Depends on a pre-built
-// ./zig-out/bin/geode (SKIPs if missing); Linux-only (non-blocking pipe reads).
+// so the server takes the generate-and-persist path. Spawns the
+// geode this build emitted (SONNY-2697); Linux-only (non-blocking pipe reads).
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
+const test_ports = @import("test_ports.zig");
 
-const BINARY_PATH = "./zig-out/bin/geode";
+const BINARY_PATH = geode_test_bin.geode_exe;
 
 fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
     return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
@@ -84,8 +86,10 @@ test "first boot prints a secret-free admin-password breadcrumb (never the secre
     std.Io.Dir.cwd().createDirPath(io, data_dir) catch {};
     defer std.Io.Dir.cwd().deleteTree(io, data_dir) catch {};
 
+    // SONNY-6301: free ports, not constants: another run on the host held them.
+    const listen = try std.fmt.allocPrint(aa, "127.0.0.1:{d}", .{try test_ports.freeUdpPort()});
     const args = [_][]const u8{
-        BINARY_PATH,  "serve",  "--listen",    "127.0.0.1:31599",
+        BINARY_PATH,  "serve",  "--listen",    listen,
         "--data-dir", data_dir, "--log-level", "error",
     };
     const env_ptr = try buildCleanChildEnv(aa);
@@ -199,9 +203,14 @@ test "reset-password reports failure honestly when the target user cannot be loa
     std.Io.Dir.cwd().createDirPath(io, data_dir) catch {};
     defer std.Io.Dir.cwd().deleteTree(io, data_dir) catch {};
 
+    // A password the documented policy accepts (docs/USER_AUTH.md: 20+
+    // characters, upper and lower case, 3+ words), so the command gets past
+    // the policy check to the user lookup under test. SONNY-6271: it used
+    // `resetpass12345`, valid under the CLI's old 8-character rule and
+    // refused since the CLI adopted the passphrase policy (d8709a2a).
     const args = [_][]const u8{
-        BINARY_PATH,      "user",           "reset-password", "geode",
-        "--new-password", "resetpass12345", "--data-dir",     data_dir,
+        BINARY_PATH,      "user",                             "reset-password", "geode",
+        "--new-password", "Reset Breadcrumb Test Passphrase", "--data-dir",     data_dir,
     };
     const env_ptr = try buildCleanChildEnv(aa);
 

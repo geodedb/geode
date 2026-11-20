@@ -2,7 +2,7 @@
 
 ## 🏆 Enterprise Graph Database Platform
 
-Geode is a feature-complete **single-tenant** graph database with enterprise-grade features, passing 96/96 cases of its ISO/IEC 39075:2024 GQL conformance suite (parse-only scope) (`tests/gql_iso_conformance.zig` — scoped to that suite; see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md) for residual limits). **DEVELOPMENT READY (single-tenant);** multi-tenant, distributed, and backup deployments require additional operator review — see Known Limitations in [CLAUDE.md](../CLAUDE.md) before production deployment.
+Geode is a feature-complete **single-tenant** graph database with enterprise-grade features, passing 106/106 cases of its ISO/IEC 39075:2024 GQL conformance suite (parse-only scope) (`tests/gql_iso_conformance.zig` — scoped to that suite; see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md) for residual limits). **DEVELOPMENT READY (single-tenant);** multi-tenant, distributed, and backup deployments require additional operator review — see Known Limitations in [CLAUDE.md](../CLAUDE.md) before production deployment.
 
 ### ✅ **All Planned Features Complete** (October 16, 2025)
 
@@ -10,10 +10,10 @@ All 7 development phases from the TODO list have been successfully implemented:
 
 - ✅ **Phase 2**: Parser Extensions (Map literals, deep nesting)
 - ✅ **Phase 3**: Set Operations (UNION/INTERSECT/EXCEPT)
-- ✅ **Phase 4**: Transaction Isolation (Phantom read prevention, SSI)
-- ✅ **Phase 5**: Distributed Coordination (10,451 lines)
+- ❌ **Phase 4**: Transaction Isolation — not implemented in the server (no isolation levels, SSI or phantom-read prevention; the code was never compiled and was removed 2026-11-11, SONNY-6298). See [ENHANCED_TRANSACTION_ISOLATION.md](ENHANCED_TRANSACTION_ISOLATION.md)
+- ✅ **Phase 5**: Distributed Coordination — Raft consensus and cluster management, replicating the documented write slice; no two-phase commit and no replicated DDL (nothing proposes a `txn_prepare`/`txn_decide` or `schema_change` entry; DDL is refused in cluster mode, SONNY-6547) (`src/distributed/`: 14,052 lines in 13 `.zig` files after SONNY-6563 deleted the modules the server never reached). Federated / scatter-gather query coordination is not implemented (that code was never compiled and was removed 2026-11-11, SONNY-6279)
 - ✅ **Phase 6**: Materialized Views (3 refresh strategies; query rewrite is exact-match only, API level — GAP-0876)
-- ✅ **Phase 7**: Graph Algorithms (20-90% performance gains)
+- ✅ **Phase 7**: Graph Algorithms — the `CALL algo.*` procedures (`src/execution/centrality_algorithms.zig`). The "20-90% performance gains" came from `src/graph/centrality_optimized.zig` and its sibling `src/graph/` modules, which no build compiled or ran; they were removed 2026-11-13 (SONNY-6511) and no gain was ever measured on the server path
 
 **Total**: ~13,554+ lines of production code | See [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) for current test status
 **Details**: See [completion_reports/](./completion_reports/) for comprehensive phase documentation
@@ -22,7 +22,7 @@ All 7 development phases from the TODO list have been successfully implemented:
 
 ### **Graph Query Language (GQL)**
 
-- **ISO Conformance Suite**: 96/96 cases pass in the named conformance suite (`zig build test-iso-conformance`; parse-only scope) (scoped to that suite — see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md))
+- **ISO Conformance Suite**: 106/106 cases pass in the named conformance suite (`zig build test-iso-conformance`; parse-only scope) (scoped to that suite — see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md))
 - **Advanced Pattern Matching**: Complex graph traversal patterns
 - **Aggregation & Analytics**: Built-in statistical functions
 - **Transaction Support**: ACID compliance with MVCC
@@ -68,33 +68,46 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 ### **Authentication & Authorization**
 
 - **RBAC/ABAC**: Role and attribute-based access control
-- **Enhanced RLS**: Row-level security with policy evaluation
-- **MFA Support**: Multi-factor authentication integration
+- **Row-level security**: policy evaluation and bytecode-compiled expression policies (`src/security/rls_core.zig`)
+- **MFA**: TOTP enrollment and on-request verification procedures; not enforced at login yet (SONNY-6604)
 - **Session Management**: Secure session handling
 
 ### **Data Protection**
 
-- **TDE**: Transparent data encryption with <1% overhead
-- **KMS Integration**: HashiCorp Vault key management
+- **TDE**: Transparent data encryption (AES-256-GCM pages and WAL); measured overhead +1.0% with the default per-commit fsync, about +29% on the commit path without fsync, +57% to +62% on reads that miss the buffer pool ([TDE_FILE_LEVEL_ENCRYPTION.md](TDE_FILE_LEVEL_ENCRYPTION.md#measured-overhead))
+- **KMS Integration**: KMS provider clients, including HashiCorp Vault; the TDE master key is not KMS-backed (see [KMS_PROVIDER_SYSTEM.md](KMS_PROVIDER_SYSTEM.md))
 - **Audit Logging**: Comprehensive compliance tracking
 - **Data Classification**: 5-level security classification
 
 ### **Field-Level Encryption (FLE)** ✅ January 2026
 
-- **Searchable Encryption**: Blind index for encrypted field queries
-- **Predicate Rewriting**: Automatic WHERE clause transformation
+- **Searchable Encryption**: not available. Blind indexes are designed but
+  no field can be made searchable and no query uses them (see
+  `docs/FIELD_LEVEL_ENCRYPTION.md`, "Searchable fields today")
+- **Predicate Rewriting**: not available (the planner rewrite was removed;
+  it never compiled)
 - **RBAC Integration**: Role-based decryption permissions
-- **Implementation**: `src/planner/rewrite.zig`, `src/fle_integration.zig`
+- **Implementation**: `src/fle_integration.zig`
 
 ## 📦 Data Integrity & Recovery
 
 ### **Constraint Enforcement** ✅ January 2026
 
-- **UNIQUE Constraints**: Prevent duplicate property values
-- **NOT NULL Constraints**: Require non-null property values
-- **NODE KEY Constraints**: Combined uniqueness + existence
-- **Catalog Persistence**: Constraints stored across restarts
-- **Implementation**: `src/schema/catalog.zig`, `src/execution/crud_operations.zig`
+- **UNIQUE Constraints**: Enforced at the end of every statement on CREATE,
+  MERGE, SET and the server's write fast paths, per graph and tenant, with
+  SQLSTATE 23505 (SONNY-2846; see docs/API_REFERENCE.md, Constraint
+  Operations). CREATE CONSTRAINT over existing duplicates is refused.
+- **NOT NULL / EXISTS Constraints**: Enforced at the end of every
+  statement on CREATE, MERGE, SET and REMOVE, with SQLSTATE 23502
+  (SONNY-6281). CREATE CONSTRAINT over nodes lacking the property is refused.
+- **NODE KEY Constraints**: Both halves enforced (existence 23502,
+  uniqueness 23505)
+- **CREATE UNIQUE INDEX**: Refused (0A000); use CREATE CONSTRAINT ... IS
+  UNIQUE
+- **Catalog Persistence**: Constraints stored across restarts; `DROP
+  CONSTRAINT [IF EXISTS]` removes one from the session graph's catalog,
+  durably (SONNY-6270)
+- **Implementation**: `src/schema/catalog.zig`, `src/execution/unique_constraints.zig`
 
 ### **Point-in-Time Recovery** ✅ January 2026
 
@@ -128,7 +141,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 - **Index Persistence**: R-tree, HNSW, Patricia, Domain, JSONB, Interval indexes
 - **Schema Catalogs**: Main catalog and FLE catalog encrypted
-- **Distributed State**: Raft consensus state, snapshots, and logs encrypted
+- **Distributed State**: the Raft log's entry data and snapshots are encrypted (SONNY-6571, `src/distributed/raft_tde_storage.zig`); the hard state (term, vote) is not
 - **Magic Header**: `GEOTDEFL` identifies encrypted files
 - **Key Management**: 256-bit key via `GEODE_TDE_KEY` environment variable
 - **Documentation**: [TDE_FILE_LEVEL_ENCRYPTION.md](TDE_FILE_LEVEL_ENCRYPTION.md)
@@ -138,23 +151,21 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 ### **Query Optimization**
 
-- **Cost-Based Planner**: Statistics-driven query optimization
-- **IndexOptimizer**: Automatic index selection
-- **Distributed Queries**: Federation-aware optimization
+- **Planner**: rule-based index use (UNIQUE-indexed literal-equality seek through the merge index, otherwise a label scan); EXPLAIN shows fixed per-operator costs. The cost-based IndexOptimizer was never compiled and was removed 2026-11-11 (SONNY-6298)
+- **Distributed Queries**: not implemented; a query runs on the node that receives it (federation code removed 2026-11-11, SONNY-6279)
 - **Materialized Views**: Auto-refresh strategies; exact-match query rewrite (API level — not yet consulted by the executor; cost-based partial rewrite future, GAP-0876)
 
 ### **Storage Engine**
 
 - **MVCC**: Multi-version concurrency control
-- **Memory-Mapped I/O**: 13.18x I/O performance improvement
-- **Cloud Backup**: S3-compatible backup/restore CLI (payload compression currently `.none`; see Known Limitations)
+- **Memory-Mapped I/O**: the id map and hydration snapshot are memory-mapped (`src/storage/id_map.zig`, `hydration_snapshot.zig`); the "13.18x" figure came from `src/performance/memory_mapped_io.zig`, which no server path uses (despite its name it reads a file into a heap buffer; only a benchmark test runs it), and no measurement backs it for the server (SONNY-6511)
+- **Backup files**: `geode backup create` / `geode restore` write and read local files (`none` or `gzip` payloads); there is no S3-compatible object-storage path: copy backup files with your own tool (SONNY-6290)
 - **WAL Optimization**: Write-ahead logging
 
 ### **Distributed Architecture**
 
-- **Multi-Shard Support**: Up to 32 shards with load balancing
-- **Query Coordination**: Cross-shard join optimization
-- **Fault Tolerance**: Automatic failover and recovery
+- **Raft Cluster Mode**: Raft consensus with leader election and failover; writes replicated within the documented slice, unreplicated write surfaces fail closed (`GEODE_CLUSTER_TOKEN`)
+- **Query Coordination**: not implemented; no cross-shard or federated query execution (see [DISTRIBUTED_QUERY_COORDINATION.md](DISTRIBUTED_QUERY_COORDINATION.md))
 
 ## 🌐 Integration & Connectivity
 
@@ -166,7 +177,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 ### **Cloud Integration**
 
-- **S3 Backup**: Digital Ocean Spaces integration (CLI; GQL `BACKUP`/`RESTORE` statements not implemented)
+- **Object storage**: no S3 / Digital Ocean Spaces integration in the binary (backups are local files; GQL `BACKUP`/`RESTORE` statements not implemented)
 - **Compression**: backup payload currently stored uncompressed (`.none`; no encoder wired — see Known Limitations)
 - **Point-in-Time Recovery**: Granular backup restoration
 
@@ -183,7 +194,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 - **Stream Analytics**: Pattern detection in real-time
 - **Anomaly Detection**: ML-powered outlier identification
-- **CDC Integration**: Change data capture with backpressure
+- **CDC Integration**: not implemented — the CDC engine starts and reports its state, but no write is captured (SONNY-6570; capture is SONNY-6572)
 - **Performance Monitoring**: Real-time metrics collection
 
 ## 🛠️ Development Tools
@@ -214,7 +225,7 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 ### **Standards Compliance**
 
-- **ISO/IEC 39075:2024**: Graph Query Language standard (96/96 named conformance-suite cases pass, parse-only scope; scoped to that suite — see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md))
+- **ISO/IEC 39075:2024**: Graph Query Language standard (106/106 named conformance-suite cases pass, parse-only scope; scoped to that suite — see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md))
 - **GDPR**: Audit logging and encryption at rest support GDPR compliance workflows (customer-side controls required for full compliance)
 - **SOX**: Tamper-protected audit trails and retention policies support SOX audit requirements (customer-side controls required for full compliance)
 - **HIPAA**: Encryption at rest (TDE) and audit logging support HIPAA technical safeguards (customer-side BAA and access controls required)
@@ -256,9 +267,9 @@ See [TIMESERIES.md](TIMESERIES.md) for the full reference.
 
 ```gql
 -- Create nodes and relationships
-CREATE (alice:Person {name: 'Alice', age: 30})
-CREATE (bob:Person {name: 'Bob', age: 25})
-CREATE (alice)-[:KNOWS]->(bob)
+CREATE (alice:Person {name: 'Alice', age: 30});
+CREATE (bob:Person {name: 'Bob', age: 25});
+CREATE (alice)-[:KNOWS]->(bob);
 
 -- Vector similarity search
 MATCH (doc:Document)
@@ -267,7 +278,7 @@ RETURN doc.title ORDER BY similarity DESC
 
 -- Real-time analytics
 MATCH (user:User)-[:PERFORMED]->(action:Action)
-WHERE action.timestamp > now() - duration('PT1H')
+WHERE action.timestamp > current_timestamp() - duration('PT1H')
 RETURN user.id, count(action) AS recent_actions
 ```
 

@@ -19,6 +19,8 @@
 // CANARY: REQ=REQ-SONNY-2791-INTERNAL-GRAPHS; FEATURE="GraphRBACEnforcement"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2791_internal_graphs_reseal.zig; OWNER=security; UPDATED=2026-09-26
 
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const schema = @import("schema");
@@ -313,7 +315,7 @@ test "SONNY-2791: no seal signs a planted record without a kind: probe R7-K2's s
     defer agm.deinit();
     // Probe R7-K2's step, sealChain: it refuses and signs nothing.
     try testing.expectError(error.UnsignedLegacyPolicyRecord, agm.sealChain(&HMAC_KEY));
-    try testing.expect(store.getNodeProperty(plant, "hmac") == null);
+    try testing.expect((try store.getNodePropertyOrError(plant, "hmac")) == null);
     if (agm.verifyChain(&HMAC_KEY)) |_| return error.SealSignedThePlant else |_| {}
 
     // Every auth change seals after it. CREATE POLICY, and a new user (as
@@ -324,7 +326,7 @@ test "SONNY-2791: no seal signs a planted record without a kind: probe R7-K2's s
     spec.name = "hr-readers-2";
     try testing.expectError(error.UnsignedLegacyPolicyRecord, policy_persistence.persistPolicy(&agm, &HMAC_KEY, spec));
     try testing.expectError(error.UnsignedLegacyPolicyRecord, agm.createUser(&HMAC_KEY, "carol", "carol@example.com", "$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA", false));
-    try testing.expect(store.getNodeProperty(plant, "hmac") == null);
+    try testing.expect((try store.getNodePropertyOrError(plant, "hmac")) == null);
     if (agm.verifyChain(&HMAC_KEY)) |_| return error.SealSignedThePlant else |_| {}
 }
 
@@ -409,6 +411,8 @@ test "SONNY-2791: without a plant, the recovery reseal signs what verifies, as b
 }
 
 test "SONNY-2791: over QUIC no HELLO binds an internal graph, and an Admin cannot USE one" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const port = try util.getRandomPort();
     const io_fs = std.Io.Threaded.global_single_threaded.io();
@@ -418,7 +422,7 @@ test "SONNY-2791: over QUIC no HELLO binds an internal graph, and an Admin canno
     defer std.Io.Dir.cwd().deleteTree(io_fs, data_dir) catch {};
     const addr = try util.formatAddr(allocator, port);
     defer allocator.free(addr);
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, util.TestEnv.standard());
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir }, util.TestEnv.standard());
     defer server.deinit();
     try util.waitForServerReady(allocator, addr, 30000);
 

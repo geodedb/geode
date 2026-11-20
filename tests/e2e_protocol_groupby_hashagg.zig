@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -11,6 +13,8 @@ fn findColumnIndex(columns: [][]const u8, name: []const u8) ?usize {
 
 // Test GROUP BY execution and aggregation results.
 test "e2e: GROUP BY execution with aggregation" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("GROUP BY execution with aggregation");
     errdefer util.testFail();
 
@@ -55,6 +59,8 @@ test "e2e: GROUP BY execution with aggregation" {
 
 // Test HashAgg with memory pressure still succeeds.
 test "e2e: HashAgg with memory pressure" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("HashAgg with memory pressure");
     errdefer util.testFail();
 
@@ -75,7 +81,7 @@ test "e2e: HashAgg with memory pressure" {
         "GEODE_QUERY_MEM_LIMIT_BYTES=1024",
     };
 
-    var server = util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, env) catch |err| {
+    var server = util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr }, env) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
         util.testSkip();
         return;

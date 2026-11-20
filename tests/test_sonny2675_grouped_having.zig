@@ -262,6 +262,9 @@ fn checkMode(mode: Mode) !void {
     try expectSet(&s, &f, .planned, "MATCH (n:G) RETURN n.g GROUP BY n.g HAVING max(n.i) >= 20", &.{"c"});
     try expectSet(&s, &f, .planned, "MATCH (n:G) RETURN n.g GROUP BY n.g HAVING min(n.i) = 10", &.{"b"});
     try expectSet(&s, &f, .planned, "MATCH (n:G) RETURN n.g GROUP BY n.g HAVING size(collect(n.i)) = 5", &.{"c"});
+    // CANARY: REQ=REQ-GQL-012; FEATURE="GROUP BY/Aggregation"; ASPECT=HavingCountDistinctFilter; STATUS=TESTED; TEST=tests/test_sonny2675_grouped_having.zig; OWNER=engine; UPDATED=2026-11-13
+    // (SONNY-6459: this marker's old test, tests/test_groupby_having_count_distinct.zig,
+    // was built by no step and could not compile.)
     try expectSet(&s, &f, .planned, "MATCH (n:G) RETURN n.g GROUP BY n.g HAVING count(DISTINCT n.i) = 10", &.{ "a", "b" });
     // With the grouping key, and inside a CASE.
     try expectSet(&s, &f, .planned, "MATCH (n:G) RETURN n.g GROUP BY n.g HAVING n.g <> 'a' AND count(*) > 5", &.{"b"});
@@ -293,9 +296,10 @@ fn checkMode(mode: Mode) !void {
     try expectSet(&s, &f, .planned, "MATCH (n:G) RETURN count(*) AS c GROUP BY n HAVING n.i >= 22", &.{ "1", "1", "1" });
 
     // A name that is neither a column nor a binding is refused (it was NULL,
-    // GAP-0926's silent-accept, which dropped every group).
-    try expectFail(&s, &f, "MATCH (n:G) RETURN n.g, count(*) AS c GROUP BY n.g HAVING nosuchalias IS NULL", error.UnknownHavingReference);
-    try expectFail(&s, &f, "MATCH (n:G) RETURN n.g, count(*) AS c GROUP BY n.g HAVING nosuchalias > 2", error.UnknownHavingReference);
+    // GAP-0926's silent-accept, which dropped every group); SONNY-6525 item
+    // 2: by the statement's scope check (42000), before the HAVING's 42002.
+    try expectFail(&s, &f, "MATCH (n:G) RETURN n.g, count(*) AS c GROUP BY n.g HAVING nosuchalias IS NULL", error.VariableNotInScope);
+    try expectFail(&s, &f, "MATCH (n:G) RETURN n.g, count(*) AS c GROUP BY n.g HAVING nosuchalias > 2", error.VariableNotInScope);
 
     // Refused: an input column that is neither grouped, projected nor
     // aggregated (42803), also through a WITH and over the one aggregate
@@ -336,6 +340,6 @@ test "SONNY-2675: a refused HAVING reaches the client as SQLSTATE 42803 (0A000 f
     try testing.expectEqualStrings("42803", geode.proto_util.mapError(error.UngroupedHavingReference).code);
     try testing.expectEqualStrings("42803", geode.proto_util.mapError(error.AggregateInRowFilter).code);
     try testing.expectEqualStrings("0A000", geode.proto_util.mapError(error.UnsupportedGroupedHavingPredicate).code);
-    try testing.expectEqualStrings("42703", geode.proto_util.mapError(error.UnknownHavingReference).code);
+    try testing.expectEqualStrings("42002", geode.proto_util.mapError(error.UnknownHavingReference).code);
     try testing.expectEqualStrings("42803", geode.proto_util.mapError(error.NestedAggregate).code);
 }

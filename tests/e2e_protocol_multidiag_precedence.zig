@@ -1,8 +1,9 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 
 fn runCli(alloc: std.mem.Allocator, query: []const u8) !struct { code: u8, err: []u8 } {
-    var argv = [_][]const u8{ "./zig-out/bin/geode", query };
+    var argv = [_][]const u8{ geode_test_bin.geode_exe, query };
     var child = std.process.Child.init(&argv, alloc);
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Pipe;

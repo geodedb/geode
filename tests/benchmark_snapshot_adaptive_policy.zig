@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Adaptive Policy"; ASPECT=Storage; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotAdaptivePolicy; OWNER=storage; UPDATED=2026-02-04
+// CANARY: REQ=REQ-GQL-028; FEATURE="Snapshot Adaptive Policy"; ASPECT=Storage; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_028_SnapshotAdaptivePolicy; OWNER=storage; UPDATED=2026-11-14
 
 const SegmentMeta = struct {
     id: u32,

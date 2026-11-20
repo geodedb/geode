@@ -4,6 +4,15 @@
 **Status**: Living Document
 **Purpose**: Document the modularized architecture of the Geode graph database codebase
 
+> **Status note (2026-11-11, SONNY-6298):** `src/schema/schema_manager.zig`,
+> `src/transactions/transaction_manager.zig` and
+> `src/transactions/two_phase_commit.zig`, described below as unified
+> interfaces, were reachable from no executable or test and were removed.
+> The executor uses `src/schema/catalog.zig` and `src/schema/fle_catalog.zig`
+> directly. `src/schema/constraint_manager.zig` and
+> `src/transactions/manager.zig` are compiled only by their tests (and, for
+> `manager.zig`, a fuzz target); no server code path calls them.
+
 ---
 
 ## Executive Summary
@@ -304,6 +313,11 @@ This document describes the modularized architecture resulting from the systemat
   - Type metadata and field annotations
   - TypeMetadata, FieldMetadata, EncryptionAlgorithm
   - **Boundary**: Type annotations and metadata
+
+> **Removed (SONNY-6354, 2026-11):** `constraint_manager.zig` and
+> `schema_manager.zig` were never wired into a write path and were deleted.
+> Constraints live in the catalog (`schema/catalog.zig`) and are enforced by
+> `execution/unique_constraints.zig`. The two entries below are historical.
 
 - **`constraint_manager.zig`** (12,371 bytes - already exists)
   - Constraint management and validation

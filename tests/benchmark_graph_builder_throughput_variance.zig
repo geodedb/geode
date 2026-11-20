@@ -1,7 +1,7 @@
 const std = @import("std");
 const geode = @import("geode");
 
-// CANARY: REQ=REQ-GQL-060; FEATURE="Core Graph Builders"; ASPECT=GraphBuilderThroughputVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_060_GraphBuilderThroughputVarianceEnvelope; OWNER=graph; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-060; FEATURE="Core Graph Builders"; ASPECT=GraphBuilderThroughputVarianceEnvelope; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_060_GraphBuilderThroughputVarianceEnvelope; OWNER=graph; UPDATED=2026-11-14
 
 // This benchmark simulates building adjacency lists for a batch ingest.
 // We randomize edge distributions (power-law-ish) to emulate skew; measure variance stability.

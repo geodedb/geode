@@ -8,10 +8,18 @@ Generated catalog of all BENCHED variance / jitter / performance guard aspects (
 
 - Total variance envelopes (BENCHED): 70+ (see exact count in `status.csv`)
 - Global policy: CV ≤ 0.22, p95/mean ≤ 2.55 (standard)
-- Tightened envelopes (custom thresholds):
-  - `AdvancedCostModelCalibrationVarianceEnvelope`: CV ≤ 0.20, p95/mean ≤ 2.50
-  - `PlanCostModelCalibrationVarianceEnvelope`: CV ≤ 0.20, p95/mean ≤ 2.50
-- Future candidates for tightening: Path cache lookup, WAL flush batch, redo optimized latency.
+- Tightened envelopes (custom thresholds): none. (SONNY-6540 item 10: this
+  listed `AdvancedCostModelCalibrationVarianceEnvelope` and
+  `PlanCostModelCalibrationVarianceEnvelope` at CV ≤ 0.20, p95/mean ≤ 2.50.
+  `PlanCostModelCalibrationVarianceEnvelope`, an inline test of
+  `src/planner/cost_calibration.zig` run by `test-sonny6511-lib-inline`,
+  checked CV > 0.22 only and only reported it unless
+  `GEODE_PERF_GATES=enforce`; it timed `Calibration.compute` over the
+  module's synthetic samples, and no query path called the module, which
+  SONNY-6555 removed with it.
+  `tests/benchmark_advanced_cost_model_calibration_variance.zig` uses the
+  global 0.22 / 2.55 and no build step compiles it.)
+- Future candidates for tightening: WAL flush batch, redo optimized latency.
 
 ## 2. Envelope Listing (Grouped)
 
@@ -60,17 +68,25 @@ Generated catalog of all BENCHED variance / jitter / performance guard aspects (
 
 ### PathCache
 
-- PathCacheEntropyVarianceEnvelope
-- PathCacheHitMissVarianceEnvelope
-- PathCacheLookupVarianceEnvelope
-- PathCacheDegreeBucketUtilizationVarianceEnvelope
-- PathCachePlannerPipelineVarianceEnvelope (alias: PlannerPipelineVarianceEnvelope) _if present in scan_
-- PathCacheStructuralKeyCollisionVarianceEnvelope (legacy, if still present)
+- PathCacheDegreeBucketUtilizationVarianceEnvelope (structural key
+  derivation, `src/planner/structural_key.zig`; the
+  `bench_pathcache_degree_util` executable, run by `test-e2e`; no query
+  path derives a structural key)
+- PathCacheStructuralKeyCollisionVarianceEnvelope:
+  `tests/benchmark_path_cache_structural_collision.zig` is present, but no
+  build step compiles it
+
+The entropy, hit/miss, lookup and planner-pipeline envelopes measured
+`src/planner/path_cache.zig` and the synthetic `pipeline.runPipeline`, which
+no build compiled; they were removed with that code (SONNY-6511).
 
 ### Query Planner (Cost Model & Enumeration)
 
-- PlanCostModelCalibrationVarianceEnvelope
-- AdvancedCostModelCalibrationVarianceEnvelope
+- PlanCostModelCalibrationVarianceEnvelope (removed with
+  `src/planner/cost_calibration.zig`, SONNY-6555)
+- AdvancedCostModelCalibrationVarianceEnvelope (its CANARY row removed,
+  SONNY-6555: the benchmark measures a local stand-in model and does not
+  compile)
 - PlanCostModelVarianceEnvelope
 - PlanEnumerationVarianceEnvelope
 - PlanEnumerationCostPruneVarianceEnvelope
@@ -129,22 +145,14 @@ Generated catalog of all BENCHED variance / jitter / performance guard aspects (
 - GreyCardinalVarianceEnvelope
 - PageRankVarianceEnvelope
 
-### Conformance / Flagger
-
-- FlaggerGenerationVarianceEnvelope
-
 ### Optimizer Extensions / Misc
 
 - PlanEnumerationEngineVarianceEnvelope (alias of PlanEnumerationVarianceEnvelope if duplicated)
 
 ## 3. Threshold Exception Table
 
-| Envelope                                     | CV Threshold | p95/mean Threshold | Rationale                                     |
-| -------------------------------------------- | ------------ | ------------------ | --------------------------------------------- |
-| AdvancedCostModelCalibrationVarianceEnvelope | 0.20         | 2.50               | Calibration determinism for optimizer factors |
-| PlanCostModelCalibrationVarianceEnvelope     | 0.20         | 2.50               | Base calibration reproducibility              |
-
-(Empty cells imply default global policy.)
+No envelope has a custom threshold (see Summary; the two calibration
+envelopes listed here as 0.20 / 2.50 never had one).
 
 ## 4. Maintenance Rules
 

@@ -13,14 +13,14 @@
 
         // URI/URL parsing - RFC 3986 compliant
         .uri = .{
-            .url = "git+https://gitlab.com/devnw/zig/uri.git?ref=v0.1.16#e5e784ca6defa4cf897e6b18d9f08ef7336b588d",
-            .hash = "uri-0.1.16-zVvOseGkAgDNDu5FLweN4VsghRQxNEDVC539D0_Dpgdi",
+            .url = "git+https://gitlab.com/devnw/zig/uri.git?ref=v0.1.17#5dcd7d203ad3b81de01a31c28e8c396f45c6b50e",
+            .hash = "uri-0.1.17-zVvOseOkAgC_LhhYsTrPtJvjRDPzhvL4hJLoEDA2XwdW",
         },
 
         // YAML 1.2.2 parser/emitter
         .yaml = .{
-            .url = "git+https://gitlab.com/devnw/zig/yaml.git?ref=v0.1.10#d2455fdbc2676858988c94b4116ff11df65565a4",
-            .hash = "yaml-0.1.10-lcW-hJ0sCAC3Ic7RLgYMLTI5r3HDCUT48ThG46wKCbGN",
+            .url = "git+https://gitlab.com/devnw/zig/yaml.git?ref=v0.1.11#080ce41549f85714e50c297676dcd5bdb276c188",
+            .hash = "yaml-0.1.11-lcW-hJ8sCABoerFNWFrCnSXOfs4QuKgOmp064Qu7yfsv",
         },
 
         // TOML v1.1.0 parser
@@ -29,26 +29,32 @@
             // changed Value.array to a raw ArrayList (dropped .items.len indirection).
             // config was bumped simultaneously (402bc274) to track the new API.
             // If reverting, revert both toml and config together.
-            .url = "git+https://gitlab.com/devnw/zig/toml.git?ref=v0.1.15#db5571d99e7beefbaf596f438dfc32df4082237e",
-            .hash = "toml-0.1.15-MHnSh2d3GQCA3jxCr0CnZGCAC-RpEx1ykQqfxLrJO3ST",
+            .url = "git+https://gitlab.com/devnw/zig/toml.git?ref=v0.1.16#204bdeec0e88caaeb23876ab9746b31a6f633711",
+            .hash = "toml-0.1.16-MHnShwN5GQBYxI1w_gSsmUnNFOSD01kD32H2auSV9yM0",
         },
 
         // Unicode string library with SIMD acceleration
         .strings = .{
-            .url = "git+https://gitlab.com/devnw/zig/strings.git?ref=v0.1.6#a0de39afeaa103a49b4458882f42457077eeaede",
-            .hash = "strings-0.1.6-adMOtbUoYwCleEij9NYkFEnisu2MZULZlL4tb1excHFe",
+            // 2026-11-18: v0.1.7 (c43105f, SONNY-6630) — re-released on otel v0.1.30
+            // / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/strings.git?ref=v0.1.7#c43105f1b847aeecc081279675482599f17bd3a9",
+            .hash = "strings-0.1.7-adMOtbcoYwAaTh4bv0HI7C53-uDwzrQQBQyJmpCNLltw",
         },
 
         // REPL library with Emacs/Vi keybindings
         .repl = .{
-            .url = "git+https://gitlab.com/devnw/zig/repl.git?ref=v0.1.22#1f4db816d3524895a0ab24b4f7319ea34a28e00b",
-            .hash = "repl-0.1.22-gwF1T1whCABQdVsXpucrPDH0OV71vbtG9K_uKmp3cYx7",
+            // 2026-11-18: v0.1.23 (653c909, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/repl.git?ref=v0.1.23#653c909b226529322966ef60ca84d190d8cd99a5",
+            .hash = "repl-0.1.23-gwF1T1whCAABOf0oN0iLrRORxNMcxxmPqcdPtgmIfBKn",
         },
 
         // Vulkan compute library
         .vulkan = .{
-            .url = "git+https://gitlab.com/devnw/zig/vulkan.git?ref=v0.1.20#e4aed09dd22c1d078aa0e72efa314cf773e382da",
-            .hash = "vulkan-0.1.20-zh1htbIPEgCHYSE8Zz9vsYcgjpPMFJqDBUgi7m0YDxSp",
+            // 2026-11-18: v0.1.21 (e66fdf2, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/vulkan.git?ref=v0.1.21#e66fdf2713d86ef521931bcc823bab051a4978af",
+            .hash = "vulkan-0.1.21-zh1htbQPEgDeCI0DerJkJR5-ZRLXQXEEHGxATENCvk8D",
         },
 
         // =======================================================================
@@ -57,8 +63,8 @@
 
         // JSON parser/encoder - RFC 8259 compliant with JSON Schema 2020-12
         .json = .{
-            .url = "git+https://gitlab.com/devnw/zig/json.git?ref=v0.1.20#22154db734abf5264a716086fc0669eb9d6c082a",
-            .hash = "json-0.1.20-tOue4YSW6ACsmrKTooK2625fgWaZHPTZbu2R_EWVY4aU",
+            .url = "git+https://gitlab.com/devnw/zig/json.git?ref=v0.1.21#a73791a1fe2365949db02ba7eb5a4fb91fdd7f69",
+            .hash = "json-0.1.21-tOue4YaW6ACrNXeY2rLSDiON1ZH5jRpB_riq5dqzbKyP",
         },
 
         // QUIC v1/v2 protocol implementation
@@ -202,8 +208,45 @@
             // Native macOS transport and current-main paired UDP gate passed.
             // 2026-10-26: serialize FIN, RESET_STREAM and STOP_SENDING with
             // stream mutations. QUIC !51 and its main pipeline passed all checks.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.48#274109bd5a0a268b7e64cd00a406d00a61bd1de2",
-            .hash = "quic-0.1.48-gBIqUR_-QACpHwpcYcn4npRszy-RS-cTq-y3rH8KkknM",
+            // 2026-11-13: v0.1.49 (f4ea768, SONNY-6434) — ACK processing and
+            // STREAM loss recovery do bounded work per packet: retransmit
+            // entries are kept in packet-number order, an ACK frame's ranges
+            // reach recovery whole (no 256-PN enumeration cap), at most two
+            // lost packets are retransmitted per ACK oldest first, and a failed
+            // send leaves the entry tracked. Fixes the remote-backup stall at
+            // 11-14 MB (SONNY-6430 item 1, test-sonny6430-remote-backup-large).
+            // Lockstep with geode-client-zig v0.3.14 (one quic module).
+            // 2026-11-13: v0.1.50 (b2f1bf1, SONNY-6457) — adds
+            // `QuicConfig.inline_client_ca_der`, passed to the server TLS
+            // context as `trusted_ca_der`, so a server completes a client
+            // chain from the configured client CAs (a CA-issued leaf sent
+            // alone is accepted). Pins tls v0.1.27 (RFC 8446 exporter, client
+            // chain completion, HKDF-Expand-Label fix). Lockstep with
+            // geode-client-zig v0.3.15 (one quic module).
+            // 2026-11-13: v0.1.51 (79cb495, SONNY-6478) — finished streams are
+            // retired (RFC 9000 section 3) and acknowledged STREAM data is no
+            // longer resent, so a long-lived connection stays flat instead of
+            // slowing down per request and sending when idle; also the
+            // large-transfer reassembly, final-size and control-frame
+            // retransmission fixes, and the failed-connect use-after-free.
+            // Same tls v0.1.27. Lockstep with geode-client-zig v0.3.16 (one
+            // quic module).
+            // 2026-11-17: v0.1.55 (0f52e64, SONNY-6522, 6649, 6654, 6655, 6673) —
+            // key-update desync, handshake RTT sample and exclusive UDP binds
+            // (0.1.52); packet-number length, coalesced STREAM retransmission and
+            // no reused packet numbers (0.1.53/0.1.54); ACK ranges read from the
+            // decoded frame and writer/ACK lock fairness (0.1.55). tls v0.1.28,
+            // thread-pool v0.2.11; its lazy otel is still v0.1.28. Lockstep with
+            // geode-client-zig v0.3.20 (one quic module).
+            // 2026-11-18: v0.1.56 (54491db, SONNY-6630) — otel v0.1.30 (lazy), so
+            // one otel/thread-pool tree; no transport change (test-only fixes since
+            // v0.1.55). Lockstep with geode-client-zig v0.3.21 (one quic module).
+            // 2026-11-18: v0.1.57 (7bdc807, SONNY-6737) — after a partial sendBatch
+            // every paced datagram is sent exactly once (none freed unsent, none
+            // sent twice). Same otel v0.1.30 tree. Lockstep with geode-client-zig
+            // v0.3.21 (one quic module).
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.57#7bdc8073bde250d6371d1fdc3808cd1363647f7e",
+            .hash = "quic-0.1.57-gBIqUQ2LRwBumm60rOnTJEjPv06fMFO2EwpPw0MrnufD",
         },
 
         // =======================================================================
@@ -212,8 +255,8 @@
 
         // Structured logging - slog-style logging with multiple handlers
         .slog = .{
-            .url = "git+https://gitlab.com/devnw/zig/slog.git?ref=cc52d6604e3662eb189afe7b31a40af819656732#cc52d6604e3662eb189afe7b31a40af819656732",
-            .hash = "slog-0.1.15-SamED0_5BwDjEO-i_tcG2pY86JOX7NZ-IR6_KGYw4fay",
+            .url = "git+https://gitlab.com/devnw/zig/slog.git?ref=v0.1.16#b525a9e1784be2bc9d1c61da724deae84b514310",
+            .hash = "slog-0.1.16-SamED1H5BwCeK8xauLkBgS6gCBEgN6wWnhSLWW2tbPZy",
         },
 
         // OpenTelemetry client library - metrics, tracing, logs surface.
@@ -236,14 +279,19 @@
         // Pin to 9fa2e97 (or descendant) at the next ecosystem-wide otel
         // convergence. See docs/superpowers/plans/2026-05-29-otel-full-instrumentation-program.md.
         .otel = .{
-            .url = "git+https://gitlab.com/devnw/zig/otel.git?ref=v0.1.28#e56f1c1fe9385c8cc0d93ec118eb5538a23d2966",
-            .hash = "otel-0.1.28-B0v3lj-uNQAmn4BzC6lmEzihawdobgIFviswkb2hpfFN",
+            // 2026-11-17: v0.1.29 (3cdcb91, SONNY-6630) — slog, json, config, yaml,
+            // metrics and tls pins carry thread-pool v0.2.11; raft v0.2.6 and wal
+            // v0.1.26 pin it.
+            // 2026-11-18: v0.1.30 (dbf58ba, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/otel.git?ref=v0.1.30#dbf58bae612ef3f5f78c62c130b4c6d63f5aa297",
+            .hash = "otel-0.1.30-B0v3lrGuNQDL0D3_KAb6qK6MaYmz2QeutCp0Sg3SL1H7",
         },
 
         // Configuration management - XDG compliant, multi-format support
         .config = .{
-            .url = "git+https://gitlab.com/devnw/zig/config.git?ref=v0.1.18#cf328f6f9c9d115fcafb573d2fec82f0c51fc0e8",
-            .hash = "config-0.1.18-TiLumviyDABHAt1Am31WtoSYVORg1fPL0XagLW_YeNjK",
+            .url = "git+https://gitlab.com/devnw/zig/config.git?ref=v0.1.19#25a1eba6d04340ec2b9a6f8efd22bec9d488c6ef",
+            .hash = "config-0.1.19-TiLumvqyDABNujdbGvFqsIj3aAt7LdDphgGhqdU31Y3q",
         },
 
         // =======================================================================
@@ -252,14 +300,24 @@
 
         // CLI framework - Cobra/Viper-class command-line interface
         .cli = .{
-            .url = "git+https://gitlab.com/devnw/zig/cli.git?ref=v0.1.14#75b181d1afcb4a3f246a4c08c3adf5f9895d6723",
-            .hash = "cli-0.1.14-0aso9I9HCwDxOBxILQV8gOiOROxsEotN9GE0ILMZhD5h",
+            // 2026-11-18: v0.1.15 (a0ca22c, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/cli.git?ref=v0.1.15#a0ca22c4ac03918ded371a3c3ce9a66b2f22100d",
+            .hash = "cli-0.1.15-0aso9JFHCwDTP9dzHsBA9zlowbJN0aPugKesm_vjjOMP",
         },
 
         // DNS resolution - RFC 1035 compliant with caching and DoT/DoH/DoQ support
+        // 2026-11-13: v0.1.28 (3c0a560, SONNY-6447) — Address.eql no longer
+        // panics: it sized both addresses by family (getOsSockLen) and a
+        // receive's source address left unwritten (undefined) had none. It now
+        // compares by family, and the receive paths zero the source address.
+        // Lockstep with audit v0.1.24, which pins the same dns, and with
+        // geode-client-zig v0.3.18 (2026-11-15; v0.3.17 pinned dns v0.1.27).
         .dns = .{
-            .url = "git+https://gitlab.com/devnw/zig/dns.git?ref=5b71169ae2763020482a7672b7f0b16d3b577f75#5b71169ae2763020482a7672b7f0b16d3b577f75",
-            .hash = "dns-0.1.27-x4U-zfVqGACo8cYBKhXmcD9V8CTwM-E7064GPc7L6Du_",
+            // 2026-11-18: v0.1.29 (3c184d3, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/dns.git?ref=v0.1.29#3c184d3678ee8709f47a7f5ec58cba17376dc5d7",
+            .hash = "dns-0.1.29-x4U-zSeCGACiftNR0oJoHugYo1ElseP7po9H8LkiXyNO",
         },
 
         // Thread Pool - Bounded, lock-free thread pool with work-stealing
@@ -279,8 +337,20 @@
             // thread_pool v0.2.7 + quic v0.1.38 + timeseries-storage v0.2.10
             // (each pin-aligned to the same thread_pool hash). A partial bump
             // fails with "expected '*pool.ThreadPool', found '*pool.ThreadPool'".
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git?ref=v0.2.9#1d7275da020a43588c4f1885f7f725d5e8ce079e",
-            .hash = "thread_pool-0.2.9-11B1Bqf7eQDfHhrQAkHk0e2ABigRBFNkFEAmc8t9raZe",
+            // 2026-11-12 (SONNY-6375): thread-pool v0.2.10 fixes the LocalQueue
+            // dispatch, finalizeTask and scratch-counter data races. The
+            // lockstep partner is timeseries-storage only (v0.2.19); quic no
+            // longer type-shares the pool (build.zig passes `.thread_pool =
+            // false` to quic). graph-storage v0.4.11 moves with it because it
+            // runs its own pools from its own thread_pool copy.
+            // 2026-11-13: v0.2.11 (666b7ac, SONNY-6479) — a submit wakes a
+            // parked worker whenever one is parked (no longer only every
+            // `wake_coalesce_batch`-th submit), default-lane work wakes the
+            // parked blocking-lane helper, and the lane helper takes one task
+            // at a time. Fixes SONNY-2440 in the library; geode's
+            // `wake_coalesce_batch = 1` workaround is dropped.
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git?ref=v0.2.11#666b7ac0cc8b92d5773df5e79ea4fd421bd77e99",
+            .hash = "thread_pool-0.2.11-11B1Bk2GegC5mn18xNrkmF0lMrgrWqijO7PXmftrkuSe",
         },
 
         // =======================================================================
@@ -288,14 +358,33 @@
         // =======================================================================
 
         // Model Context Protocol (MCP) - AI/LLM integration
-        // Updated 2026-08-29 (Task 6): v0.1.11 hardcoded owned=false for tools/call
-        // results while the dispatch free-site only frees owned results, leaking
-        // every dynamically-allocated tool response for the life of `geode mcp`.
-        // v0.1.12 marks tools/call owned=true (server frees it); see
-        // docs/MCP_SERVER.md. Upstream fix: gitlab.com/devnw/zig/mcp@956b07d.
+        // 2026-11-14: v0.1.22 (eb9da27, SONNY-6531) frees the result of EVERY
+        // handler callback with the allocator given to Server.init (v0.1.12 to
+        // v0.1.21 freed only tools/call, so every resources/read response
+        // leaked for the life of `geode mcp`), and the JSON it stringifies for
+        // prompts/get arguments and completion/complete params. Every geode
+        // handler (src/mcp/server.zig) therefore returns allocator-owned bytes,
+        // never a literal. Same json/thread_pool/otel pins as v0.1.21. See
+        // docs/MCP_SERVER.md.
+        // 2026-11-15: v0.1.23 (472a64bb, SONNY-6585): ToolNotFound and
+        // PromptNotFound answer -32602 (were -32002, the resource code);
+        // a notification or a peer-cancelled request gets no reply; error
+        // messages and string ids are JSON-escaped; mcp.setErrorDetail lets
+        // a handler give the error message and data; a handler result that
+        // is not exactly one JSON value is answered -32603; the built-in
+        // "barrier" tool is gone. Same json/thread_pool/otel/fips pins.
+        // 2026-11-16: v0.1.26 (c0c0178c, SONNY-6644): Streamable HTTP
+        // sessions (initialize answers an Mcp-Session-Id every later request
+        // must carry: 400 without, 404 unknown; per-client streams), a
+        // thread per HTTP connection, full-body reads; v0.1.24/25: a client's
+        // reply resolves a server request, duplicate in-flight ids are
+        // -32600. createTask/getTask return copies (geode uses neither).
+        // Same json/thread_pool/otel/fips pins.
         .mcp = .{
-            .url = "git+https://gitlab.com/devnw/zig/mcp.git?ref=ddb3d0a125ece885a42e99e53a7d8ffbba2f8a0c#ddb3d0a125ece885a42e99e53a7d8ffbba2f8a0c",
-            .hash = "mcp-0.1.21-exAeBBAUCACOUX7iMou6kvpH1s_Oy9bykx-LzwmqQF0v",
+            // 2026-11-18: v0.1.27 (6fabfce, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/mcp.git?ref=v0.1.27#6fabfceabe325133c0afc2778238ba3089ad068a",
+            .hash = "mcp-0.1.27-exAeBIkrCwC8T0H43m6k1EG4YjIqbS0i_gl494j_lrAm",
         },
 
         // Protocol Buffers - Zig 0.15.2 compatible
@@ -311,8 +400,10 @@
             // 2026-09-15: the whole telemetry stack WAS repinned together by
             // the zig-tool sync-diamond cascade onto grpc-zig v0.1.10
             // (SONNY-1568 per-connection reader threads); otel is now v0.1.20.
-            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git?ref=fe88ba8dd81911a784b55118b24c9d8508596578#fe88ba8dd81911a784b55118b24c9d8508596578",
-            .hash = "grpc_zig-0.1.15-7FnvpLMcCQB93y-UXU0IyaKVxjIUIElCi8OiCtl859lp",
+            // 2026-11-18: v0.1.16 (1e73a20, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git?ref=v0.1.16#1e73a20c1796c3b5ea122f784c70bbe0518a479d",
+            .hash = "grpc_zig-0.1.16-7FnvpLMcCQBudY4wp5FufefXiFQYeJ_THNcjiSaUcP1g",
         },
         .geode_client_zig = .{
             // 2026-05-01: bumped to d1af792 — picks up the matching
@@ -400,8 +491,53 @@
             // geode's quic v0.1.46 bump (client Finished retransmit until
             // HANDSHAKE_DONE). Still no client tag on this quic, hence ref=main.
             // Includes main's be724ae transport/entropy pins, plus portable deadlines.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.13#9966a5a91600fc84176139662b22cb63d4b8b19b",
-            .hash = "geode_client_zig-0.3.13-8ysbV6mQCwBgwep5P2LawnvZYDYxjvam-f789sjPAM69",
+            // 2026-11-13: v0.3.14 (98aae06) — lockstep with geode's quic v0.1.49
+            // bump (SONNY-6434), so the graph has one quic module; no client
+            // code change. It still pins dns v0.1.27 (see .dns).
+            // 2026-11-13: v0.3.15 (6706227, SONNY-6457) — a configured client
+            // certificate is presented as a client (it no longer turns the
+            // endpoint into a server), so `geode query --client-cert` works
+            // against an mTLS-required server. Lockstep with quic v0.1.50
+            // and tls v0.1.27.
+            // 2026-11-13: v0.3.16 (d56dd52, SONNY-6494) — strict DSN host:port
+            // grammar (unbracketed IPv6, '[::1]3141' and bad ports are
+            // refused), the client dials IPv6 servers (binds [::]:0, brackets
+            // the address, names prefer IPv4 then fall back to IPv6), distinct
+            // client-identity errors and zeroed key copies. Lockstep with quic
+            // v0.1.51 (one quic module).
+            // 2026-11-14: v0.3.17 (c33cf73, SONNY-6550) — DSN userinfo ends at
+            // the last '@' of the authority (RFC 3986 3.2), an '@' after it is
+            // UnencodedCredentialDelimiter, strict %XX decoding of credentials,
+            // query values and the graph path ('+' literal), port 0 refused by
+            // parseDSN and GeodeClient.connect, fragments refused, toDSN
+            // encodes credentials, and the config.redact module geode's
+            // dsn_credentials now delegates to. Same quic v0.1.51.
+            // 2026-11-15: v0.3.18 (33623cc, SONNY-6589) — initFromConfig applies
+            // timeout_ms, page_size, tls and hello_name/hello_ver/conformance;
+            // the QUIC handshake and the HELLO wait honour timeout_ms (connect
+            // refuses one outside 1..3600000 with InvalidTimeout); gRPC honours
+            // Config.tls. Moves dns to v0.1.28 and thread_pool to v0.2.11,
+            // geode's own pins (its dns and thread_pool diamonds are gone).
+            // Same quic v0.1.51.
+            // 2026-11-15: v0.3.19 (3fe8dfc, SONNY-6617) — query, begin,
+            // commit, rollback, ping and blocked writes wait timeout_ms (a
+            // fixed 30 s before); the gRPC connect, reads and writes honour it
+            // (portable non-blocking socket); the lenient parser falls back to
+            // the default for an out-of-range timeout or page_size; the HELLO
+            // defaults send the library version and conformance "min". Same
+            // dependencies as v0.3.18.
+            // 2026-11-17: v0.3.20 (210e154, SONNY-6630) — quic v0.1.55 and the
+            // cascade pins (tls v0.1.28, json v0.1.21, config v0.1.19, slog
+            // v0.1.16, uri v0.1.17, uuid v0.1.10, gql v0.1.22, metrics v0.1.10,
+            // otel v0.1.29). No API change.
+            // Pinned to the release commit on MR !51 until v0.3.20 is tagged.
+            // 2026-11-18: v0.3.21 (805e2eb, SONNY-6630) — quic v0.1.56 and the
+            // cascade tags (dns v0.1.29, strings v0.1.7, auth v0.1.23, gql v0.1.23,
+            // otel v0.1.30); no API change. Pinned to the release commit on MR !53
+            // until v0.3.21 is tagged.
+            // 2026-11-18: v0.3.21 tagged (976673c, SONNY-6630) — quic v0.1.57.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.3.21#976673c9e8e30166e89d3e120eb1548ecabf193c",
+            .hash = "geode_client_zig-0.3.21-8ysbV7jxDQDtk1WZ50pR2wQJIfKHKMsP5ij4xxMKZmgL",
         },
 
         // =======================================================================
@@ -410,14 +546,30 @@
 
         // UUID - RFC 9562 compliant (V1-V8), k-sortable V7, injectable generator
         .uuid = .{
-            .url = "git+https://gitlab.com/devnw/zig/uuid.git?ref=c8206cbf2f3abc756b62b9e099715c81a452a2aa#c8206cbf2f3abc756b62b9e099715c81a452a2aa",
-            .hash = "uuid-0.1.9-tL1iruPmHAAJ2ebApUBKroge9t-yDmrcPJ-2A2FEduNj",
+            .url = "git+https://gitlab.com/devnw/zig/uuid.git?ref=v0.1.10#5547a8a0d86c67315d292f81411f6237ee61cf5c",
+            .hash = "uuid-0.1.10-tL1iroznHACRKPV4rc3sSf8tJtvHw8VfF-Btd4F1giHh",
         },
 
         // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
+        // 2026-11-15: v0.1.24 (acd8f68, SONNY-6622) — recovery and compaction
+        // fail closed (WalEncryptionMismatch / WalAuthFailed / WalCorrupted)
+        // on data they cannot read; only a genuine torn tail is truncated on
+        // open.
+        // 2026-11-15: v0.1.25 (eca478c, SONNY-6628, SONNY-738) — truncateAfter fails
+        // closed too. graph-storage v0.4.20 pins it; raft v0.2.3 and
+        // timeseries-storage v0.2.22 still pin v0.1.24. build.zig points
+        // all three libraries' "wal" import at this module, so exactly one
+        // wal (v0.1.25) is compiled; the v0.1.24 entries in their manifests
+        // are a known diamond (detect-diamond-deps) until they re-pin.
         .wal = .{
-            .url = "git+https://gitlab.com/devnw/zig/wal.git?ref=8a17e4080f77f45c6c9169682105dc31fef7ec8d#8a17e4080f77f45c6c9169682105dc31fef7ec8d",
-            .hash = "wal-0.1.22-EqPqppQ5BwBoP4VyV5UqOInJ4UWxA3xfjxdRTfixr7j-",
+            // 2026-11-17: v0.1.26 (0c94adb, SONNY-6630) — only otel v0.1.29 (same
+            // source as v0.1.25). raft v0.2.6 and timeseries-storage v0.2.24 pin it;
+            // graph-storage v0.4.28 still pins v0.1.25. build.zig still points all
+            // three libraries' "wal" import at this module: one wal is compiled.
+            // 2026-11-18: v0.1.27 (e8d1c51, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/wal.git?ref=v0.1.27#e8d1c51ea00e7788fe950e6f3251c48e8852d2bc",
+            .hash = "wal-0.1.27-EqPqpqU_CAB-RfhJaHAM2nOpRpSxl6sykpzcdKXPuKpd",
         },
 
         // Page-based graph storage engine
@@ -524,8 +676,152 @@
             // no overflowed values stay byte-compatible (no manifest bump; the
             // stub tag is the versioning). Same transitive deps as v0.3.2 (no
             // diamond).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=5fe21929aa851e7df97dc3bbdff5d48ca64e77b5#5fe21929aa851e7df97dc3bbdff5d48ca64e77b5",
-            .hash = "graph_storage-0.4.10-9UyJS7TBLAC90y84DCss2l2n9_gx_6jbUYU2Zawpxten",
+            // v0.4.13 (2026-11-13, SONNY-6461): `GraphEngine.repairAdjTailEntries`
+            // restores the adjacency-entry fields that stores written by <= 0.4.11
+            // with TDE lost to the page-tail tag (the last entry of a full v3
+            // block at 4 KiB, a full v1 block at 8 KiB) from the opposite-direction
+            // mirror, and reports what it cannot restore; `edge.legacyTailLoss`
+            // owns the loss table. Page checksums use hardware CRC32C (SSE4.2 /
+            // ARMv8 CRC, software fallback): an 8 KiB page ~15.6 us -> ~0.75 us on
+            // every buffer-pool miss and flush. Adds an offline `free_space.FreeStore`
+            // reader (`FreeSpaceManager.buffer_pool` is now `?*BufferPool`) and
+            // fixes the compare-bench zero-baseline PASS. No geode dependency
+            // other than geode itself consumes graph-storage (no diamond on it).
+            // v0.4.14 (2026-11-13, SONNY-6473, SONNY-6491, SONNY-6470): crash
+            // recovery applies only the newest committed image of each page (by
+            // LSN), so overlapping batched transactions no longer lose committed
+            // writes after a crash, including WALs already on disk. Checkpoint
+            // side files are ordered for crash safety (free.store durable before
+            // the manifest; the manifest rename dir-fsynced before the WAL
+            // truncate; a stale free.store from an older release is detected and
+            // rebuilt). Label names are made durable when first assigned
+            // (`getOrAssignLabel` does tmp+fsync+rename+dir-fsync of the shard's
+            // labels.dict per NEW name; checkpoints no longer write labels.dict;
+            // `create` writes an empty one): labels are not in the WAL, so a
+            // crash used to lose names assigned since the last checkpoint. WAL
+            // record checksums use streaming hardware CRC32C; free.store refuses
+            // a host layout it would misread. API additions only
+            // (`crc32c.Hasher`, `free_space.checkHostLayout`,
+            // `free_space.host_layout_supported`). Same transitive deps as
+            // v0.4.13 (no diamond).
+            // v0.4.15 (2026-11-13, SONNY-6524): a new label name is made
+            // durable on shard 0, then on shards 1..15 in parallel with shard
+            // 0's id (was 16 shards one after another); a failed durable write
+            // is undone in memory; a shard that holds the name or the id
+            // differently fails with `error.LabelDictionaryDiverged`.
+            // `ShardedGraphEngine.open` compares every shard's labels.dict with
+            // shard 0's: it repairs a shard when no record there uses a
+            // disputed id and otherwise refuses with
+            // `error.LabelDictionaryDiverged` (opt-in
+            // `GraphConfig.label_dict_divergence = .adopt_shard0` rewrites
+            // from shard 0). API additions only; no store format change. Same
+            // transitive deps as v0.4.14 (no diamond).
+            // v0.4.16 (2026-11-14, SONNY-6529, SONNY-6527): `abortTxn` UNDOES
+            // the transaction's writes (per-write journal; the undo is logged
+            // in the aborting transaction and ended with COMMIT, so it is
+            // crash-safe). A transaction it cannot undo exactly (a page the
+            // caller imaged with `logPagePublic`/`zeroPageLogged`, a property
+            // change on a legacy chain or one freeing an overflow value, a
+            // `putNodeTxn` moving a chain pointer of an existing node, more
+            // than 1,048,576 writes) fails with `error.AbortNotUndone`, after
+            // which every write, commit and checkpoint of that engine fails
+            // until it is reopened (`abort_undo = .fail_closed`, the default;
+            // geode never sets `.keep_writes`). `setEdgePropertyTxn` joins the
+            // caller's transaction; the tail reconcile re-derives `.adj_out`
+            // page owners, so a relationship-property SET no longer needs the
+            // source node-page image. `persistence_dirty` is atomic;
+            // `error.LabelIdSpaceExhausted`; `GraphConfig.label_dict_report`;
+            // `Metrics.txn_aborts_undone`/`txn_aborts_not_undone`. No store
+            // format change. Same transitive deps as v0.4.15 (no diamond).
+            // v0.4.17 (2026-11-15, SONNY-6590): ON-DISK FORMAT CHANGE under
+            // `GraphConfig.encryption_key`. `labels.dict`, `props.idx`,
+            // `ordered_propidx.snap`, `props.catalog` and `propidx_*.btree`
+            // are sealed (AES-256-GCM, HKDF-SHA256 side-file key, random
+            // 96-bit nonce, AD = header + graph uuid + file name; envelope
+            // in `side_file_crypto`). Manifest format_version 5 marks a
+            // sealed store; a <= 0.4.16 store under a key is upgraded in
+            // place at open (crash-safe; 5 written by the next checkpoint or
+            // close). New open errors: `error.SideFileEncrypted` (sealed, no
+            // key), `error.SideFileAuthFailed` (wrong key, modified or foreign
+            // file), `error.SideFileNotSealed` (plaintext in a sealed store).
+            // `LabelDictionary.loadFromFile` refuses a sealed file (use
+            // `loadFromFileWith`). graph_storage <= 0.4.16 cannot open a
+            // store once it is sealed (no downgrade). Same transitive deps as
+            // v0.4.16 (no diamond).
+            // v0.4.18 (SONNY-6605): `BufferPool.pageNewerThanDisk` /
+            // `PageFrame.newerThanDisk` (dirty, or a flush's write of the
+            // page still in flight). geode's hydration scan reads every
+            // resident frame through the pool (SONNY-6597), a superset.
+            // v0.4.20 (2026-11-15, SONNY-6616, SONNY-6622): a wrong key is
+            // `error.EncryptionKeyMismatch` (was `NoManifest`); the graph
+            // registry (`GraphRegistry.saveToFileWith` / `loadFromFileWith`)
+            // and the topology snapshots `edges.idx` / `edges_exist.idx` are
+            // sealed under the key; `side_file_crypto.Kind` 128..255 are the
+            // consumer's (`Kind.consumer(n)`); `WalManager.init` maps wal's
+            // WalAuthFailed / WalEncryptionMismatch to EncryptionKeyMismatch
+            // and keeps WalCorrupted; a refused WAL compaction no longer
+            // fails the checkpoint; `VerifyTool` reads the WAL from a copy
+            // under the key. Pins wal v0.1.25 and thread_pool v0.2.11
+            // (geode's); its otel chain's thread_pool v0.2.9 is the
+            // pre-existing diamond (SONNY-6630). The tag is on the MR merge
+            // commit cacb325, whose tree is the release commit 845b454's.
+            // v0.4.21 (2026-11-15, SONNY-6632): writes of one frame land in
+            // copy order (a flush waits for the frame's write in flight
+            // before copying it), and flushAll / flushDirty wait for every
+            // write in flight, so a checkpoint no longer truncates the WAL
+            // before a page's new image is on disk. No API change; same
+            // dependencies as v0.4.20. Tagged on the MR merge 160046c, same
+            // tree as the release commit 3ffeba7.
+            // v0.4.22 (2026-11-16, SONNY-6599, SONNY-6595 item 5): recovery
+            // fsyncs the directory and truncates the WAL it replayed, and an
+            // open drains a WAL whose contents the pages already cover (a
+            // shard not written after a crash restart kept its tail); a
+            // double delete no longer under-counts; `removeEdgeTxn` also
+            // removes legacy `adj_in` entries; edge-property slab slots are
+            // attributed (GSRVIX2); an overflow replacement is freed at commit
+            // (undoable); iterator wrappers release on OOM. Tagged on
+            // 8271e65. Same dependencies as v0.4.21 (wal v0.1.25,
+            // thread_pool v0.2.11, otel v0.1.28); same wal routing (build.zig
+            // points its "wal" import at geode's v0.1.25).
+            // v0.4.25 (2026-11-16, SONNY-6659): a page has one open writer: a
+            // second open transaction's write to a page another open one
+            // wrote fails with `error.WriteConflict` (it cannot commit; its
+            // abort undoes it in memory). Each open transaction fills slab
+            // pages of its own, and `allocNodeTxn` (GraphEngine,
+            // ShardedGraphEngine) gives it node ids from a node page of its
+            // own; plain `allocNode` while another transaction is open
+            // shares a node page and conflicts. Same dependencies as v0.4.24.
+            // Tagged on f92e685, same tree as the release commit 9d84132.
+            // v0.4.26 (2026-11-16, SONNY-6635): a data directory's registry
+            // is sealed under its own identity (`registry.DataDirIdentity`,
+            // `data_dir.identity`, sealed; a random uuid and a "registry
+            // bound" flag), not the shared `SEAL_UUID`, so a registry copied
+            // from another data directory under the same key fails
+            // authentication; `side_file_crypto.Kind.data_dir_identity` (9).
+            // `VerifyTool` copies the WAL into `.verify-wal-<random>` inside
+            // the graph's directory (0700), not $TMPDIR. Additive API, same
+            // dependencies as v0.4.25. Tagged on 4ba18a0 (MR !35,
+            // fix/sonny-6635-registry-identity).
+            // v0.4.27 (2026-11-17, SONNY-6692): `GraphEngine` /
+            // `ShardedGraphEngine.scrubDeadSpace` overwrite dead space (free
+            // property and var-store pages, tombstoned slab blobs) in one
+            // logged transaction; the next checkpoint writes the cleared
+            // pages and truncates the WAL. Additive API, same dependencies as
+            // v0.4.26. Tagged on 2c2c560 (MR !36,
+            // fix/sonny-6692-scrub-dead-space).
+            // v0.4.28 (2026-11-17, SONNY-6700): `scrubDeadSpace` proves
+            // ownership first (a walk of every live node's properties and
+            // labels and every out-edge's properties, following overflowed
+            // values) and also clears freed var-store slab runs and zeroes
+            // and frees allocated pages no live record owns; `ScrubReport`
+            // gains `var_slab_blocks_scrubbed`, `var_slab_bytes_zeroed`,
+            // `orphan_pages_freed`. Same dependencies as v0.4.27. Pinned to
+            // the v0.4.28 tag on 024e7be (MR !37,
+            // fix/sonny-6700-scrub-var-slab-orphans).
+            // 2026-11-18: v0.4.30 (ccd73b5, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.30#ccd73b5118c266b0f4cb08afae4e4a81a2144545",
+            .hash = "graph_storage-0.4.30-9UyJS9AOOAAWdZCcHhGeN5jLrUYwnZeT0XxuNCc19SsG",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -540,9 +836,54 @@
         // forms no rejection quorum and stayed a candidate forever (v0.6.27-30
         // residual). After N consecutive failed elections the candidate now steps
         // down + backs off (Config.candidate_demote_threshold, default 4).
+        // 2026-11-15: v0.2.0 (d736de4, SONNY-6592, breaking) — votes, a
+        // candidate's RequestVote and every vote / append / snapshot reply are
+        // queued in Ready.messages ([]const Outbound{to, msg}) for the consumer
+        // to send after advancePersist(), no longer sent from step()/tick();
+        // leader AppendEntries, heartbeats and InstallSnapshot still go to the
+        // Transport at once (the node frees their data when send returns).
+        // Storage.entries and RaftLog.slice return owned entry data
+        // (freeEntries); committed_entries data lives until advanceApply(). A
+        // node outside its voter set no longer campaigns. Same wal and
+        // thread_pool pins as geode (its thread_pool 0.2.9 diamond is gone).
+        // 2026-11-15: v0.2.2 (25614ee, SONNY-6622, SONNY-6611) — wal v0.1.24;
+        // FileStorage refuses a damaged log (StorageError.LogCorrupted /
+        // LogAuthFailed / LogEncryptionMismatch) instead of truncating it; the
+        // leader counts only persisted entries toward commit (a commit shows
+        // one Ready cycle later); a second ready() before advanceApply() is
+        // ReadyNotAdvanced; a snapshot installed between ready() and advance()
+        // is delivered in Ready.snapshot (owned by the Ready until
+        // advanceApply()); fast backtracking (AppendEntriesResponse
+        // conflict_index / conflict_term, match_index = the rejected
+        // prev_log_index); saving a snapshot trims the log.
+        // 2026-11-15: v0.2.3 (27b2b22, SONNY-6636, breaking) — still wal
+        // v0.1.24; InProcessTransport copies an InstallSnapshot's data and
+        // configuration (it read the freed chunk); a refused snapshot is
+        // re-sent after 16, 32, 64 ... rounds (at most 256,
+        // SNAPSHOT_RESEND_MAX_TICKS), not at the next round, and a
+        // successful install resets the backoff.
+        // 2026-11-16: v0.2.5 (SONNY-6652, SONNY-6653; v0.2.4 only moved wal to
+        // v0.1.26 and otel to v0.1.29, routed to geode's wal in build.zig) --
+        // InstallSnapshotResponse gains last_index / next_offset: a follower
+        // acknowledges a snapshot it already holds, and reports the offset to
+        // resume at after a lost chunk instead of refusing the rest; staged
+        // snapshot save (snapshotPoint / Storage.stageSnapshot off the lock,
+        // commitSnapshot under it); Config.stream_snapshots hands sends to
+        // the consumer (Ready.snapshot_sends, streamSnapshot); FileStorage
+        // commits a snapshot's data before its metadata.
+        // 2026-11-16: v0.2.6 (SONNY-6666) -- Config.stage_received_snapshots:
+        // a follower writes each InstallSnapshot chunk to a staged file
+        // (Ready.staged_snapshot; Storage.syncStagedSnapshot off the lock,
+        // advancePersist() commits it with renames; with FileStorage
+        // Ready.snapshot then carries metadata only); stepping the node
+        // between ready() and advancePersist() is safe (every Ready owns
+        // copies of its committed entries); RaftNode.init reads only the
+        // snapshot's metadata.
         .raft = .{
-            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=b80fd49f7bb445636b4c23d63e6f171b9ecc28dc#b80fd49f7bb445636b4c23d63e6f171b9ecc28dc",
-            .hash = "raft-0.1.21-PqJyvpinCADH3w-cgzAwsvA0eSk703D7J5yFyKr6TjJ0",
+            // 2026-11-18: v0.2.7 (59fe60a, SONNY-6630) — re-released on otel v0.1.30
+            // / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/raft.git?ref=v0.2.7#59fe60ad298c17ab544a38053cb8ff31c33922d9",
+            .hash = "raft-0.2.7-PqJyvlfYCwBeWqfg8yCK_Uy5dOI56sxT1V3jpWSpaCBa",
         },
 
         // =======================================================================
@@ -550,21 +891,29 @@
         // =======================================================================
 
         // Audit - Event modeling, filtering, CEF formatting, syslog/file sinks
+        // 2026-11-13: v0.1.24 (55335ac) — tagged release; pins dns v0.1.28
+        // (SONNY-6447) in lockstep with geode's dns pin.
         .audit = .{
-            .url = "git+https://gitlab.com/devnw/zig/audit.git?ref=c0e2abfdb024026816688354dbb56427ce79448a#c0e2abfdb024026816688354dbb56427ce79448a",
-            .hash = "audit-0.1.23-J9TtCGHMBgBjgmCtq1yJLc8XfvORDEdWOSF_SnY_NWtT",
+            // 2026-11-18: v0.1.25 (ec8d224, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/audit.git?ref=v0.1.25#ec8d2249283916e1dc8053a4e20f8e41303e8424",
+            .hash = "audit-0.1.25-J9TtCEDMBgCpXS-Ug4bnr_NC0rqf0RcjhVhxGHV0awHw",
         },
 
         // HNSW - Approximate nearest-neighbor index with configurable distance metrics
         .hnsw = .{
-            .url = "git+https://gitlab.com/devnw/zig/hnsw.git?ref=v0.1.17#0ffbb2d6494ae4e205dc7be0013cb2471999f3d7",
-            .hash = "hnsw-0.1.17-wYzBy4pyAgBgcdWPAWWeB_wD2H83jS0zUYQVYjqdKnO1",
+            // 2026-11-18: v0.1.18 (73c081b, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/hnsw.git?ref=v0.1.18#73c081b0463bd8d5995c1faa5ec584573ef0b488",
+            .hash = "hnsw-0.1.18-wYzBy4xyAgAgH2xWVIaoHP36C9MMRb6l7jEv81AfUt6i",
         },
 
         // R-tree - Spatial index with bounding-box search
         .rtree = .{
-            .url = "git+https://gitlab.com/devnw/zig/rtree.git?ref=v0.1.17#a8d4995bc50cbf41a84e4b9fbd68d27eedd43a41",
-            .hash = "rtree-0.1.17-kIpcH9FZAgBcI-Q9hnRz56fOyiGa4NWqJqz609uz1qsL",
+            // 2026-11-18: v0.1.18 (d63760c, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/rtree.git?ref=v0.1.18#d63760c452442a56b4184a238368df58a562efa7",
+            .hash = "rtree-0.1.18-kIpcH9NZAgCSIKx-O2jZbJSrm-wKgDVV86rrd-i6Hlc8",
         },
 
         // Advanced Types - Network, vector, geographic, URL, range value types
@@ -575,27 +924,50 @@
 
         // FLE - Field-level encryption with AEAD, HKDF, blind indices
         .fle = .{
-            .url = "git+https://gitlab.com/devnw/zig/fle.git?ref=e36aab23ea10f196181fdc6ff400463514978e2f#e36aab23ea10f196181fdc6ff400463514978e2f",
-            .hash = "fle-0.1.20-1CfwlRJ7AwB8_xJq8Ip-fI6ho1Svbg-BTblTjrSuRJE6",
+            // 2026-11-18: v0.1.21 (e55d6fd, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/fle.git?ref=v0.1.21#e55d6fd17e5df079b37991889c8242412f673c44",
+            .hash = "fle-0.1.21-1CfwlRR7AwDa_s1omEm4qpW9NEQVvGU1U7PyoHKVN-e6",
         },
 
         // GQL - ISO/IEC 39075:2024 Graph Query Language front-end (lexer, parser, AST)
         .gql = .{
-            .url = "git+https://gitlab.com/devnw/zig/gql.git?ref=v0.1.21#a65956014c391e69a9451c14f5c01d354b0946a3",
-            .hash = "gql-0.1.21-T1ANDaRJDABmb-hJIGWLWeEgrA0pvBaYzC8cDJb7zY5N",
+            // 2026-11-18: v0.1.23 (b56fcb3, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/gql.git?ref=v0.1.23#b56fcb3076d9a5f36322ce6c72abf118404b9cdc",
+            .hash = "gql-0.1.23-T1ANDcpWDACFyCqIAKvNtH4Jfb8aelISperbi7WP6Dcc",
         },
 
         // Timeseries - Pattern matching, DTW, matrix profile, PELT change-point detection
         .timeseries = .{
-            .url = "git+https://gitlab.com/devnw/zig/timeseries.git?ref=v0.1.19#3ef621add8b956631b03a17f7e4d2a371e56a23f",
-            .hash = "timeseries-0.1.19-iAEwOt7rBgAfiHIzZ9HxM8BIOu9Ob6nz66d4lg2Idwy7",
+            // 2026-11-18: v0.1.20 (1ef2dc5, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/timeseries.git?ref=v0.1.20#1ef2dc5bd6d6c7ab452b84526c52974369cc5625",
+            .hash = "timeseries-0.1.20-iAEwOuDrBgDcTwcL4fmFJrFfsHhX44UT1djmObKjT7XC",
         },
 
         .timeseries_storage = .{
             // 2026-07-13: v0.2.10 — carries the thread_pool v0.2.7 lockstep pin
             // (popMany stalled-producer livelock fix) plus accumulated main.
-            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=c56a3346a2852b221dadf02f69bc1b29d1554826#c56a3346a2852b221dadf02f69bc1b29d1554826",
-            .hash = "timeseries_storage-0.2.18-5wzBJP5QFADY0rToFMMPnYb4-TjJJbipGQF-zzSWuzue",
+            // v0.2.21 (SONNY-6615): Engine.init refuses, and leaves
+            // untouched, a ts.wal it cannot decode instead of truncating it
+            // (WalEncryptionMismatch for a key-mode mismatch, WalAuthFailed
+            // for a wrong key, WalCorrupted for mid-log damage; salvage is
+            // opt-in). A torn tail is still truncated, from the first bad
+            // record only. geode's thread_pool override in build.zig wins.
+            // 2026-11-15: v0.2.22 (e44380b, SONNY-6623) — Engine.deinit
+            // closes the WAL directory Engine.init opened (and init's
+            // errdefer does); the WAL refusals are returned as
+            // WalEncryptionMismatch / WalAuthFailed / WalCorrupted with no
+            // separate precheck. geode no longer closes it (SONNY-6615).
+            // 2026-11-17: v0.2.24 (3c6d625, SONNY-6630) — wal v0.1.26 and uuid
+            // v0.1.10, geode's pins; v0.2.23 (SONNY-6634): the batch-mode WAL
+            // syncer skips the fdatasync when nothing was appended
+            // (WalManager.syncCount() added).
+            // 2026-11-18: v0.2.25 (84f9ac8, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/timeseries-storage.git?ref=v0.2.25#84f9ac8ca2008e6c4410faa97f6bdfd1c889e048",
+            .hash = "timeseries_storage-0.2.25-5wzBJOnzFAC0y6DNbeuevz1ZgWEy2eJe3Xgec7_5yI0w",
         },
         // Full-text-search storage engine (inverted index + BM25, LSM, zero deps)
         .fts_storage = .{
@@ -609,8 +981,10 @@
 
         // Auth - HMAC chain, API keys, TOTP/MFA primitives
         .auth = .{
-            .url = "git+https://gitlab.com/devnw/zig/auth.git?ref=4620287e7e99107d87f26f5cf5e8e07c046397e5#4620287e7e99107d87f26f5cf5e8e07c046397e5",
-            .hash = "auth-0.1.22-W76ZZzjwAgC00Xx0xfUNK7N8nMYJOfCeqq43H7gn5LWR",
+            // 2026-11-18: v0.1.23 (c66e50e, SONNY-6630) — re-released on otel
+            // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
+            .url = "git+https://gitlab.com/devnw/zig/auth.git?ref=v0.1.23#c66e50e05f14a714d839c63e16598e8f02c77cd1",
+            .hash = "auth-0.1.23-W76ZZzjwAgAqBGyY2To8qNdvJff2taUcJCaM35M5TAsh",
         },
 
         // FIPS crypto seam — OpenSSL FIPS 140-3 backend (used when -Dfips=true).

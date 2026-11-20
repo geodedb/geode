@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=FreshnessGuardTest; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_FreshnessGuardTest; OWNER=tooling; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=FreshnessGuardTest; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_FreshnessGuardTest; OWNER=tooling; UPDATED=2026-11-14
 // This test simulates detection of a stale BENCHED aspect (>60d). It does not invoke external scanner binary to remain hermetic.
 
 const AspectRecord = struct { updated: []const u8, status: []const u8 };

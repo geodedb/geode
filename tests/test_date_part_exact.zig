@@ -342,7 +342,7 @@ test "EXTVALUE-BRIDGE: duration_add / duration_sub are reachable and exact" {
     try testing.expectEqual(@as(i64, -2) * one_hour, try intervalMicros(negative));
 
     // Days are exactly 24h in this engine's Interval (see
-    // src/eval/temporal_arithmetic.zig micros_per_day), so a day-bearing
+    // `micros_per_day` in src/eval.zig), so a day-bearing
     // interval crosses the bridge losslessly and comes back with the same
     // total length.
     const days = try h.scalar("RETURN duration_add(duration('P1D'), duration('P2D'))");

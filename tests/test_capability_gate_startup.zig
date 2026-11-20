@@ -1,8 +1,10 @@
 // CANARY: REQ=REQ-SONNY-CAPABILITY-PROFILE-002; FEATURE="SonnyCapabilityProfile"; ASPECT=ProcessRefusal; STATUS=IMPL; TEST=tests/test_capability_gate_startup.zig; OWNER=server; UPDATED=2026-09-08
-// Linux process acceptance uses real installed geode and native syscall tracing.
+// Linux process acceptance uses the real geode this build emitted (argv[2],
+// SONNY-2697) and native syscall tracing.
 // Python orchestrates bounded children/fixtures; it never supplies engine rows.
 const std = @import("std");
 const build_options = @import("build_options");
+const geode_test_bin = @import("geode_test_bin");
 
 // The live refusal reason for a canonical profile is version-relative: below the
 // engine floor the gate stops at the version check, at or above it the still-false
@@ -10,18 +12,24 @@ const build_options = @import("build_options");
 // from the build version and hands it over as argv[1].
 fn expectedCanonicalReason() ![]const u8 {
     const label = build_options.version;
-    const running = try std.SemanticVersion.parse(if (std.mem.startsWith(u8, label, "v")) label[1..] else label);
+    // SONNY-6841: a shallow clone with no tag builds a bare commit hash as the
+    // label; the gate refuses an engine version it cannot read.
+    const running = std.SemanticVersion.parse(if (std.mem.startsWith(u8, label, "v")) label[1..] else label) catch
+        return "InvalidEngineVersion";
     const floor: std.SemanticVersion = .{ .major = 0, .minor = 8, .patch = 14 };
     return if (running.order(floor) == .lt) "IncompatibleEngineVersion" else "MandatoryCapabilityUnsupported";
 }
 
 test "real startup gate refuses before every listener and releases its lock" {
-    if (@import("builtin").os.tag != .linux) return error.NativeObservationPlatformUnavailable;
+    // The native observation (process-tree and listener scan) is Linux-only.
+    // SONNY-6770: the step runs in the aggregate on every OS (SONNY-2772),
+    // so off Linux it skips; failing there broke test-macos-unit.
+    if (@import("builtin").os.tag != .linux) return error.SkipZigTest;
     var threaded = std.Io.Threaded.init(std.testing.allocator, .{});
     defer threaded.deinit();
     const expected_reason = try expectedCanonicalReason();
     const result = try std.process.run(std.testing.allocator, threaded.io(), .{
-        .argv = &.{ "/usr/bin/python3", "-c", process_test ++ "\n" ++ growth_test, expected_reason },
+        .argv = &.{ "/usr/bin/python3", "-c", process_test ++ "\n" ++ growth_test, expected_reason, geode_test_bin.geode_exe },
         .stdout_limit = .limited(1 << 20),
         .stderr_limit = .limited(1 << 20),
     });
@@ -36,7 +44,7 @@ const process_test =
     \\canonical_reason = sys.argv[1]
     \\assert ctypes.CDLL(None).prctl(36, 1, 0, 0, 0) == 0, 'subreaper unavailable'
     \\work = pathlib.Path.cwd()
-    \\binary = work / 'zig-out/bin/geode'
+    \\binary = pathlib.Path(sys.argv[2])
     \\manifest = work / 'release/sonny_capability_profile.json'
     \\(work/'.superpowers'/'sdd').mkdir(parents=True, exist_ok=True)
     \\root = pathlib.Path(tempfile.mkdtemp(prefix='geode-capability-startup-', dir=str(work/'.superpowers'/'sdd')))
@@ -171,7 +179,10 @@ const process_test =
     \\    for mode in ('quic','grpc','combined','metrics','lsp','cluster','env','file','discovery'):
     \\        case(mode)
     \\        case(mode,'canonical')
-    \\    for kind in ('missing','directory','fifo','oversize','exact-size','symlink','unreadable','malformed'): case('quic',kind)
+    \\    # SONNY-6853: root reads a mode-000 file, so 'unreadable' exists only for a non-root uid (CI runs as root).
+    \\    for kind in ('missing','directory','fifo','oversize','exact-size','symlink','unreadable','malformed'):
+    \\        if kind == 'unreadable' and os.geteuid() == 0: continue
+    \\        case('quic',kind)
     \\    case('file','bad-config')
     \\    case('discovery','bad-config')
     \\    case('env','empty-path')

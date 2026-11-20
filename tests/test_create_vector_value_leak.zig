@@ -177,7 +177,7 @@ const Harness = struct {
         const ids = store.getNodesByLabel(graph_name, label) orelse return false;
         if (ids.len == 0) return false;
         for (ids) |id| {
-            const node = store.getNodePtrHydrated(id) orelse return false;
+            const node = (store.getNodePtrHydratedChecked(id) catch @panic("SONNY-6621: unexpected read failure")) orelse return false;
             _ = node.properties.get(property) orelse return false;
         }
         return true;

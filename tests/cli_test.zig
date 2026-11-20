@@ -1,10 +1,11 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const builtin = @import("builtin");
 
 // Test CLI components by spawning the actual geode binary
 
-const geode_binary = "./zig-out/bin/geode";
+const geode_binary = geode_test_bin.geode_exe;
 
 // Zig 0.16 compat: std.fs.cwd()/std.process.Child.init were retired in favor
 // of std.Io.Dir + the free function std.process.spawn(io, SpawnOptions).
@@ -124,7 +125,7 @@ test "exit codes are defined correctly" {
 test "unified CLI binary name detection" {
     // Test basename extraction for unified CLI
     try testing.expectEqualStrings("geode", std.fs.path.basename("/usr/local/bin/geode"));
-    try testing.expectEqualStrings("geode", std.fs.path.basename("./zig-out/bin/geode"));
+    try testing.expectEqualStrings("geode", std.fs.path.basename("./zig-out/bin/geode")); // not spawned (SONNY-6535)
     try testing.expectEqualStrings("geode-auth", std.fs.path.basename("geode-auth"));
     try testing.expectEqualStrings("geode", std.fs.path.basename("/path/to/geode"));
 

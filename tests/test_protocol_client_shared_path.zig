@@ -1,12 +1,14 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const schema = @import("schema");
 const proto = @import("proto_test_util.zig");
 
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-008; FEATURE="ClientTransportSharedPath"; ASPECT=ParameterBindingParity; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/gql_parameter_binding.yml; OWNER=cli; UPDATED=2026-04-02
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-009; FEATURE="ClientTransportSharedPath"; ASPECT=LargeOrderedParity; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/gap_0257_orderby_large_resultset.yml; OWNER=cli; UPDATED=2026-04-02
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-010; FEATURE="ClientTransportSharedPath"; ASPECT=TransportExecutionParity; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/geode_quic_transport.yml; OWNER=cli; UPDATED=2026-04-02
-// CANARY: REQ=REQ-CLI-SHARED-QUERY-011; FEATURE="ClientTransportSharedPath"; ASPECT=ErrorPayloadParity; STATUS=TESTED; TEST=../geode-test-harness/geodetestlab-cli/specs/query_output_formats.yml; OWNER=cli; UPDATED=2026-04-02
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-008; FEATURE="ClientTransportSharedPath"; ASPECT=ParameterBindingParity; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/gql_parameter_binding.yml; OWNER=cli; UPDATED=2026-11-14
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-009; FEATURE="ClientTransportSharedPath"; ASPECT=LargeOrderedParity; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/gap_0257_orderby_large_resultset.yml; OWNER=cli; UPDATED=2026-11-14
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-010; FEATURE="ClientTransportSharedPath"; ASPECT=TransportExecutionParity; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/geode_quic_transport.yml; OWNER=cli; UPDATED=2026-11-14
+// CANARY: REQ=REQ-CLI-SHARED-QUERY-011; FEATURE="ClientTransportSharedPath"; ASPECT=ErrorPayloadParity; STATUS=IMPL; TEST=../geode-test-harness/geodetestlab-cli/specs/query_output_formats.yml; OWNER=cli; UPDATED=2026-11-14
 
 const ProtocolPair = struct {
     allocator: std.mem.Allocator,
@@ -36,7 +38,7 @@ fn startProtocolPair(allocator: std.mem.Allocator) !ProtocolPair {
 
     var server = try proto.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr },
         null,
     );
     errdefer server.deinit();
@@ -79,6 +81,8 @@ fn buildCreateBatchQuery(allocator: std.mem.Allocator, label: []const u8, count:
 }
 
 test "protocol clients share parameter binding query path over QUIC and gRPC" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var pair = try startProtocolPair(allocator);
@@ -114,6 +118,8 @@ test "protocol clients share parameter binding query path over QUIC and gRPC" {
 }
 
 test "protocol clients share ordered large-result query path over QUIC and gRPC" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var pair = try startProtocolPair(allocator);
@@ -148,6 +154,8 @@ test "protocol clients share ordered large-result query path over QUIC and gRPC"
 }
 
 test "protocol clients share error query path over QUIC and gRPC" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var pair = try startProtocolPair(allocator);

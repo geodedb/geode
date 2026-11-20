@@ -27,7 +27,10 @@
 # Execute from file (max 16 MiB / 16777216 bytes; split larger files, or
 # stream them with `--batch`, one statement per line).  Files over ~16 KB are
 # executed in chunks: a statement the server rejects is retried on its own so
-# only that statement is lost, and the process exits non-zero.
+# only that statement is lost, and the process exits non-zero.  A chunk that
+# was sent and got no answer (a `--timeout` expiry, a dropped connection) is
+# never sent again: the run stops there and exits non-zero (4 for a timeout),
+# since the server may still be applying it.
 ./geode query -f queries.gql
 
 # JSON output (default)
@@ -39,76 +42,73 @@
 
 ## Feature Overview (Current State)
 
-### Distributed Query Federation (Always On)
+### Single node, or a Raft cluster
 
-Federated query execution across shards is always enabled:
+`geode serve` runs a single node. Setting `GEODE_CLUSTER_TOKEN` turns on
+cluster mode (Raft replication between the nodes that share the token; see
+[DISTRIBUTED_QUERY_COORDINATION.md](DISTRIBUTED_QUERY_COORDINATION.md)).
+There is no shard federation configured from a config file, and no
+federation status procedure (SONNY-6593).
 
 ```bash
-# Queries automatically consider federation
-./geode query "MATCH (n:Person) RETURN n ORDER BY n.name LIMIT 100"
-
-# View distributed plan
+# The plan of a query
 ./geode query "EXPLAIN MATCH (n) RETURN n ORDER BY n.id"
 ```
 
-### S3 Cloud Backups
+### Backups and object storage
 
-Perform backups to S3-compatible storage:
+Backups are local files. geode has no object-storage (S3, Spaces, MinIO)
+path: `geode backup create` writes a local file (an `s3://` or `http(s)://`
+`--output` is refused) and `geode restore` reads one (an `s3://` or
+`http(s)://` source is refused). Only full backups exist (no incremental
+chains). To keep backups in object storage, copy the files there with your
+own tool, and download one before restoring it (SONNY-6290: these docs used
+to show a `geode backup --dest s3://... --mode ...` form the binary never had):
 
 ```bash
-# Configure S3 credentials
-export AWS_ACCESS_KEY_ID=your-key
-export AWS_SECRET_ACCESS_KEY=your-secret
-export AWS_REGION=us-east-1
+# Full backup from a running server into a local file
+geode backup create --output ./full.backup --compress
 
-# Full backup
-geode backup --dest s3://my-bucket/backups --mode full
+# Copy it to object storage with your own tool, e.g.
+aws s3 cp ./full.backup s3://my-bucket/backups/full.backup
 
-# Incremental backup
-geode backup --dest s3://my-bucket/backups --mode incremental --parent 12345
-
-# List backups
-geode backup --dest s3://my-bucket/backups --list
-
-# Restore from backup
-geode restore --source s3://my-bucket/backups --backup-id 12345 --target /data
+# Restore: download the file, then restore it offline into a new or empty
+# data directory. Backups do not hold the auth-chain HMAC key: give the source
+# server's key file (or set GEODE_AUTH_HMAC_KEY / GEODE_TDE_KEY as it had it).
+# --hmac-key-file cannot be combined with GEODE_TDE_KEY: a backup taken with
+# GEODE_TDE_KEY set is restored with that key alone (it decrypts the backup and
+# the HMAC key is derived from it)
+aws s3 cp s3://my-bucket/backups/full.backup ./full.backup
+geode restore ./full.backup --data-dir /data --yes --hmac-key-file /secure/geode_hmac_key
 ```
 
-### CDC Webhook Configuration
+A server restore (`geode restore --server <addr>`) writes into a new
+directory beside the server's data directory and the server is restarted on
+it; geode cannot restore into a running server's live store. The CLI waits
+up to 300 s for the server's answer to a backup or a server restore; set
+`--timeout <seconds>` for larger stores. The QUIC handshake waits at most
+30 s, or `--timeout` when that is shorter (SONNY-6606, SONNY-6769), so a
+server that does not answer is reported after 30 s, not after the whole
+`--timeout`.
 
-Configure webhooks with enhanced reliability:
+### CDC
 
-```yaml
-# cdc-config.yaml
-webhooks:
-  - name: primary
-    endpoint: https://api.example.com/webhook
-    headers:
-      Authorization: 'Bearer ${WEBHOOK_TOKEN}'
-      X-Tenant-ID: 'tenant-123'
-      X-Environment: 'production'
-    retry:
-      max_attempts: 5
-      base_delay_ms: 100
-      max_delay_ms: 30000
-    dlq:
-      enabled: true
-      max_size: 10000
-      retention_hours: 168
-    idempotency:
-      enabled: true
-      header: 'X-Idempotency-Key'
-```
+Change capture is not implemented (SONNY-6570; the capture feature is
+SONNY-6572): no write is captured, so nothing reaches a webhook or any other
+sink. The server reads no `cdc-config.yaml`. `CALL cdc.enable()` (Admin only)
+starts the CDC engine and `CALL cdc.status()` reports its state; see
+[SERVER_FEATURES.md](SERVER_FEATURES.md#51-change-data-capture-cdc-engine) for
+which `cdc.*` procedures answer and which are refused with 0A000.
 
 ### Cost-Based Optimizer (Always On)
 
-The optimizer runs by default; enable tracing for diagnostics:
+The optimizer runs by default; `EXPLAIN <statement>` shows its plan and
+`PROFILE <statement>` runs it and reports what each operator did (`EXPLAIN`
+takes no options):
 
 ```bash
-# Optional: trace decisions
-export GEODE_TRACE_OPTIMIZER=1
-
-./geode query "EXPLAIN (VERBOSE) MATCH (n) RETURN n"
+./geode query "EXPLAIN MATCH (n) RETURN n"
+./geode query "PROFILE MATCH (n) RETURN n"
 ```
 
 ## Query Language (GQL)
@@ -145,15 +145,14 @@ MATCH (p1:Person)-[:KNOWS*1..3]->(p2:Person)
 WHERE p1.name = 'Alice'
 RETURN p2.name
 
--- Graph algorithms
-MATCH (start:City {name: 'Seattle'})
-MATCH (end:City {name: 'Boston'})
-RETURN shortestPath(start, end) AS route
+-- Shortest path
+MATCH route = shortestPath((s:City {name: 'Seattle'})-[*]-(t:City {name: 'Boston'}))
+RETURN route
 
--- PageRank
-MATCH (n:Page)
-RETURN n.url, pageRank(n) AS rank
-ORDER BY rank DESC
+-- PageRank (a procedure; there is no pageRank() function)
+CALL algo.pageRank.stream({iterations: 20}) YIELD nodeId, score
+RETURN nodeId, score
+ORDER BY score DESC
 LIMIT 10
 ```
 
@@ -163,10 +162,11 @@ LIMIT 10
 -- Insert node
 INSERT (p:Person {name: 'Alice', age: 30})
 
--- Insert edge
+-- Insert edge (MATCH ... INSERT, ISO/IEC 39075 13.2, is not supported yet:
+-- after a MATCH, write the edge with Geode's CREATE)
 MATCH (p1:Person {name: 'Alice'})
 MATCH (p2:Person {name: 'Bob'})
-INSERT (p1)-[:KNOWS {since: 2024}]->(p2)
+CREATE (p1)-[:KNOWS {since: 2024}]->(p2)
 
 -- Update properties
 MATCH (p:Person {name: 'Alice'})
@@ -186,168 +186,104 @@ DELETE p
 
 ### Server Configuration
 
+`geode serve --config <path>` reads these top-level keys (YAML, TOML or
+JSON); a command-line option overrides the file. No other key is read: the
+`server:`, `tls:`, `storage:`, `federation:` and `optimizer:` sections this
+page used to show were never read (SONNY-6593).
+
 ```yaml
 # geode.yaml
-server:
-  listen: '0.0.0.0:3141'
-  data_dir: '/var/lib/geode'
-
-tls:
-  cert: '/etc/geode/cert.pem'
-  key: '/etc/geode/key.pem'
-  auto_generate: true
-
-storage:
-  page_size: 8192
-  cache_size: '1GB'
-  wal_dir: '/var/lib/geode/wal'
-
-federation:
-  # (Always active) Configuration focuses on shard endpoints
-  coordinator: true
-  shards:
-    - id: 'shard1'
-      endpoint: 'node1.cluster:3141'
-    - id: 'shard2'
-      endpoint: 'node2.cluster:3141'
-
-optimizer:
-  # Enable/disable removed; only tuning parameters remain
-  small_n_threshold: 100
-  trace: false
-
-backup:
-  s3:
-    bucket: 'geode-backups'
-    prefix: 'prod'
-    retention_days: 30
+listen_quic: '0.0.0.0:3141'
+listen_grpc: '0.0.0.0:50051'
+data_dir: '/var/lib/geode'
+cert_path: '/etc/geode/cert.pem'
+key_path: '/etc/geode/key.pem'
+log_level: 'info'
 ```
 
+The others are `idle_timeout`, `persist_interval`,
+`idle_in_transaction_timeout`, `grpc_session_idle_timeout`,
+`grpc_max_sessions_per_principal` and `require_capability_profile`
+(`src/server/cli_args.zig` `mergeFileConfig`).
+
 ### Environment Variables (Updated Set)
+
+The log level is the `geode serve --log-level` option (there is no log
+level or log format variable, SONNY-6448).
 
 ```bash
 # Core settings
 GEODE_DATA_DIR=/var/lib/geode
-GEODE_LOG_LEVEL=info
-GEODE_LOG_FORMAT=json
-
-# Optimizer tracing (functional without flag)
-GEODE_TRACE_OPTIMIZER=1   # Optional
 
 # Transparent Data Encryption
-GEODE_DISK_KEY_HEX=<64 hex chars>   # Provide to ensure encrypted pages/WAL on new data
-
-# S3 Backup
-AWS_ACCESS_KEY_ID=xxx
-AWS_SECRET_ACCESS_KEY=yyy
-AWS_REGION=us-east-1
-
-# CDC
-CDC_KAFKA_BROKERS=kafka1:9092,kafka2:9092
-CDC_WEBHOOK_ENDPOINT=https://api.example.com/webhook
+GEODE_TDE_KEY=<64 hex chars>   # Encrypts pages and the WAL of new data
 ```
 
 ## Monitoring
 
 ### Metrics Endpoints
 
+The metrics listener runs only when `GEODE_METRICS_PORT` is set, on that
+port, bound to `GEODE_METRICS_BIND` (default `127.0.0.1`). It serves two
+paths; there is no `/ready`:
+
 ```bash
 # Prometheus metrics
-curl http://localhost:9090/metrics
+curl http://localhost:$GEODE_METRICS_PORT/metrics
 
-# Health check
-curl http://localhost:8080/health
-
-# Ready check
-curl http://localhost:8080/ready
+# Liveness ({"status":"ok"}, answered off the query path)
+curl http://localhost:$GEODE_METRICS_PORT/health
 ```
 
 ### Key Metrics
 
+`/metrics` carries geode's OpenTelemetry metrics
+([OBSERVABILITY_ARCHITECTURE.md](OBSERVABILITY_ARCHITECTURE.md)) and these
+counters and gauges (`src/monitoring/prometheus.zig`):
+
 ```
-# Query metrics
-geode_query_total{status="success|error"}
-geode_query_duration_ms{percentile="50|95|99"}
-
-# Federation metrics
-geode_federation_queries_total
-geode_federation_shard_errors_total
-geode_federation_merge_duration_ms
-
-# Storage metrics
-geode_storage_pages_total
-geode_storage_wal_segments_total
-geode_storage_cache_hit_ratio
-
-# CDC metrics
-geode_cdc_events_sent_total
-geode_cdc_webhook_retries_total
-geode_cdc_dlq_size
-
-# Backup metrics
-geode_backup_last_success_timestamp
-geode_backup_size_bytes
-geode_backup_duration_ms
+geode_queries_total
+geode_queries_failed_total
+geode_query_duration_seconds
+geode_connections_active
+geode_connections_total
+geode_transactions_total
+geode_transactions_failed_total
+geode_nodes_total
+geode_edges_total
+geode_memory_bytes
 ```
+
+The `geode_federation_*`, `geode_storage_*` and `geode_backup_*` names this
+page used to list do not exist (SONNY-6593).
 
 ## Troubleshooting
 
 ### Common Issues
 
-#### Federation Troubleshooting
+#### Cluster Troubleshooting
 
-```bash
-# Verify shard connectivity
-geode query "CALL system.federation.status()"
-
-# Check logs for errors
-grep "federation" /var/log/geode/geode.log
-```
-
-#### S3 Backup Failures
-
-```bash
-# Test S3 connectivity
-aws s3 ls s3://my-bucket/backups/
-
-# Check credentials
-aws sts get-caller-identity
-
-# Verify permissions (need s3:PutObject, s3:GetObject)
-aws s3api put-object --bucket my-bucket --key test.txt --body test.txt
-```
-
-#### CDC Webhook Issues
-
-```bash
-# Check webhook endpoint
-curl -X POST https://api.example.com/webhook -H "Authorization: Bearer token"
-
-# View DLQ contents
-geode query "SELECT * FROM system.cdc.dlq"
-
-# Check retry metrics
-geode query "CALL system.cdc.metrics()"
-```
+There is no cluster or federation status procedure (`system.federation.status()`
+does not exist). A write refused on a follower answers `ClusterNotLeader`.
 
 #### Performance Problems
 
 ```bash
-# View query plan for insight
-geode query "EXPLAIN (ANALYZE) <your-query>"
+# The plan, and what each operator did
+geode query "PROFILE <your-query>"
 
-# Check system resources
-geode query "CALL system.resources()"
+# Node, edge and label counts, page size and WAL position
+geode query "CALL geode.storage.stats()"
 ```
+
+There is no `system.resources()` procedure; process memory is the
+`geode_memory_bytes` metric.
 
 ### Log Locations
 
-```
-/var/log/geode/geode.log        # Main server log
-/var/log/geode/query.log        # Query audit log
-/var/log/geode/cdc.log          # CDC specific log
-/var/log/geode/federation.log   # Federation operations
-```
+`geode serve` writes no log file of its own and has no log-file option:
+read its output with `journalctl -u geode` (systemd) or `docker logs`. The
+audit log is `<data-dir>/audit.jsonl`, or `GEODE_AUDIT_LOG_PATH`.
 
 ## Best Practices
 
@@ -358,26 +294,21 @@ geode query "CALL system.resources()"
 3. **Use EXPLAIN to understand query plans** - Identify bottlenecks
 4. **Limit path expansion depth** - Prevents combinatorial explosion
 
-### Federation
+### Cluster mode
 
-1. **Start with read-only workloads** - Writes not yet distributed
-2. **Monitor shard balance** - Ensure even distribution
-3. **Use appropriate timeouts** - Prevent hanging queries
-4. **Test failover scenarios** - Ensure resilience
+1. **Test failover** - stop the leader and check a follower takes over
+2. **Use appropriate timeouts** - `--timeout` on clients, so a query
+   waiting on an election does not hang
 
 ### Backups
 
 1. **Schedule regular full backups** - Weekly recommended
-2. **Keep incremental chains short** - Max 7 incrementals
-3. **Test restore procedures** - Verify backup integrity
-4. **Monitor S3 costs** - Use lifecycle policies
-
-### CDC
-
-1. **Configure appropriate batch sizes** - Balance latency vs throughput
-2. **Monitor DLQ size** - Alert on growth
-3. **Use idempotency keys** - Prevent duplicates
-4. **Set reasonable retry limits** - Avoid infinite loops
+2. **Test restore procedures** - Verify backup integrity
+3. **Keep the HMAC key apart from the backups** - Backups never hold
+   `.geode_hmac_key`, `server.key` or `.geode_admin_password`; restoring
+   auth records needs the HMAC key, so store it with your other key material
+4. **Copy backups off the host** - geode writes local files only; copy them
+   to object storage or another machine with your own tool
 
 ## Migration Guide
 
@@ -385,7 +316,7 @@ geode query "CALL system.resources()"
 
 ```bash
 # 1. Backup existing data
-geode backup --dest /backup/previous --mode full
+geode backup create --output /backup/previous/full.backup
 
 # 2. Stop old server
 systemctl stop geode serve
@@ -403,9 +334,7 @@ geode query "MATCH (n) RETURN COUNT(*)"
 
 ### Breaking Changes
 
-- Federation must be explicitly enabled
-- CBO remains off by default
-- No other breaking changes
+See [CHANGELOG.md](CHANGELOG.md) for the breaking changes of each release.
 
 ## Support
 

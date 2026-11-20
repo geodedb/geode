@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-010; FEATURE="Diagnostics Large Fold"; ASPECT=Engine; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_010_DiagnosticsFoldLarge; OWNER=engine; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-010; FEATURE="Diagnostics Large Fold"; ASPECT=Engine; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_010_DiagnosticsFoldLarge; OWNER=engine; UPDATED=2026-11-14
 
 fn foldDiagnostics(allocator: std.mem.Allocator, n: usize) !struct { total_bytes: usize, allocs: usize } {
     var list = std.ArrayList([]u8).init(allocator);

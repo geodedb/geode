@@ -137,7 +137,7 @@ fn freeLabels(allocator: std.mem.Allocator, labels: [][]const u8) void {
 test "GAP-0426: 10+ sequential queries do not crash" {
     const allocator = testing.allocator;
     const store = graph_store.getGlobalStore(allocator);
-    store.clearNodes();
+    try store.clearNodes();
 
     // Create some test data
     const labels = try makeLabels(allocator, &.{"TestNode"});
@@ -154,7 +154,7 @@ test "GAP-0426: 10+ sequential queries do not crash" {
         "RETURN 'hello' AS greeting",
         "RETURN true AS flag",
         "RETURN 42 AS answer",
-        "RETURN 1 + 2 AS sum",
+        "RETURN 1 + 2 AS `sum`",
         "RETURN 'world' AS word",
         "RETURN 100 AS century",
         "RETURN false AS done",
@@ -179,7 +179,7 @@ test "GAP-0426: 10+ sequential queries do not crash" {
 test "GAP-0426: sequential MATCH queries with graph data" {
     const allocator = testing.allocator;
     const store = graph_store.getGlobalStore(allocator);
-    store.clearNodes();
+    try store.clearNodes();
 
     // Create a small graph
     const labels = try makeLabels(allocator, &.{"Person"});
@@ -227,7 +227,7 @@ test "GAP-0426: sequential MATCH queries with graph data" {
 test "GAP-0426: interleaved RETURN and MATCH queries" {
     const allocator = testing.allocator;
     const store = graph_store.getGlobalStore(allocator);
-    store.clearNodes();
+    try store.clearNodes();
 
     const labels = try makeLabels(allocator, &.{"Item"});
     defer freeLabels(allocator, labels);
@@ -271,7 +271,7 @@ test "GAP-0426: interleaved RETURN and MATCH queries" {
 test "GAP-0426: multi-hop query after many simple queries" {
     const allocator = testing.allocator;
     const store = graph_store.getGlobalStore(allocator);
-    store.clearNodes();
+    try store.clearNodes();
 
     // Create a chain: A -> B -> C
     const labels = try makeLabels(allocator, &.{"Chain"});

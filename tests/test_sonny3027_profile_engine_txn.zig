@@ -20,6 +20,7 @@
 // CANARY: REQ=REQ-SONNY-3027-PROFILE-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny3027_profile_engine_txn.zig; OWNER=storage; UPDATED=2026-09-27
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const harness = @import("node_scan_stream_harness.zig");
@@ -65,7 +66,7 @@ test "SONNY-3027: a PROFILE'd MATCH..MERGE in a transaction commits its session 
     // Clean up whatever was left, without tripping the backstop.
     gsa.commitThreadSessionTxn() catch {};
     _ = gsa.leaveSessionEngineTxn(&slot, scope);
-    undo.commit(graph_store.getGlobalStore(testing.allocator));
+    try undo.commit(graph_store.getGlobalStore(testing.allocator));
 
     try testing.expect(!left_open);
     try testing.expect(!on_thread);
@@ -180,7 +181,7 @@ test "SONNY-3027: over QUIC a PROFILE'd MERGE belongs to its transaction: ROLLBA
     defer allocator.free(addr);
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir },
         util.TestEnv.standard(),
     );
     defer server.deinit();

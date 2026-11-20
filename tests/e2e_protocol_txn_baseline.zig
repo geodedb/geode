@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
@@ -28,6 +29,8 @@ fn startServerAndClient(allocator: std.mem.Allocator) !TestContext {
 
 // Test baseline transaction functionality: BEGIN/COMMIT/ROLLBACK
 test "e2e: transaction baseline BEGIN/COMMIT/ROLLBACK" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("transaction baseline BEGIN/COMMIT/ROLLBACK");
     errdefer util.testFail();
 
@@ -56,10 +59,22 @@ test "e2e: transaction baseline BEGIN/COMMIT/ROLLBACK" {
     const commit_ok = try ctx.client.commit(allocator);
     try testing.expect(commit_ok);
 
-    util.progress("Testing nested BEGIN (should be rejected)...", .{});
+    // SONNY-6548: this asserted that a BEGIN after the COMMIT is refused.
+    // COMMIT ends the transaction (ISO/IEC 39075:2024 8.4 GR: the current
+    // transaction is set to "not set"), so a new BEGIN starts one; only a
+    // BEGIN inside an active transaction is refused (25G01, 4.10.4).
+    util.progress("Testing BEGIN after COMMIT (starts a new transaction)...", .{});
     var begin_again = try ctx.client.begin(allocator);
     defer begin_again.deinit(allocator);
-    try testing.expect(begin_again.tx_id.len == 0);
+    try testing.expect(begin_again.tx_id.len > 0);
+
+    util.progress("Testing nested BEGIN (should be rejected)...", .{});
+    var begin_nested = try ctx.client.begin(allocator);
+    defer begin_nested.deinit(allocator);
+    try testing.expect(begin_nested.tx_id.len == 0);
+
+    util.progress("Testing ROLLBACK of the open transaction...", .{});
+    try testing.expect(try ctx.client.rollback(allocator));
 
     util.progress("Testing ROLLBACK with no active transaction...", .{});
     const rollback_ok = try ctx.client.rollback(allocator);
@@ -70,6 +85,8 @@ test "e2e: transaction baseline BEGIN/COMMIT/ROLLBACK" {
 
 // Test transaction rollback functionality
 test "e2e: transaction rollback" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("transaction rollback");
     errdefer util.testFail();
 
@@ -103,6 +120,8 @@ test "e2e: transaction rollback" {
 
 // Test transaction state management
 test "e2e: transaction state management" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("transaction state management");
     errdefer util.testFail();
 

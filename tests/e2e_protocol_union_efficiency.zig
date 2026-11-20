@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const testing = std.testing;
 
@@ -9,21 +11,15 @@ fn run(args: []const []const u8) !struct { out: []u8 } {
     return .{ .out = res.out };
 }
 
-test "protocol: PROFILE UNION DISTINCT efficiency metric" {
-    const exe = "./zig-out/bin/geode";
-    // Duplicate rows ensure dedup difference; two identical branches.
+// SONNY-6596: the version-1 payload counts a UNION's output rows only. The
+// fill percentage was output / (part count x output rows), an invented
+// input; with no measured input it is absent and the dedup size 0.
+test "protocol: PROFILE UNION DISTINCT reports its output rows, no invented fill" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const exe = geode_test_bin.geode_exe;
     const res = try run(&.{ exe, "PROFILE RETURN 1 AS x UNION RETURN 1 AS x" });
     defer testing.allocator.free(res.out);
-    // Look for distinct_fill_pct and ensure within 0-100 and >0 for this case (1 distinct / 2 input -> 50%)
-    try testing.expect(std.mem.indexOf(u8, res.out, "\"distinct_fill_pct\"") != null);
-    const tag = "\"distinct_fill_pct\":";
-    const pos = std.mem.indexOf(u8, res.out, tag) orelse return error.MissingFillPct;
-    var i: usize = pos + tag.len;
-    while (i < res.out.len and (res.out[i] == ' ')) i += 1;
-    const start = i;
-    while (i < res.out.len and res.out[i] >= '0' and res.out[i] <= '9') i += 1;
-    if (i == start) return error.BadNumber;
-    const pct = try std.fmt.parseInt(usize, res.out[start..i], 10);
-    try testing.expect(pct <= 100);
-    try testing.expect(pct >= 1);
+    try testing.expect(std.mem.indexOf(u8, res.out, "\"setop\":{\"type\":\"UNION\",\"mode\":\"DISTINCT\",\"input_rows\":0,\"output_rows\":1,\"hash_dedup_size\":0}") != null);
+    try testing.expect(std.mem.indexOf(u8, res.out, "\"distinct_fill_pct\"") == null);
 }

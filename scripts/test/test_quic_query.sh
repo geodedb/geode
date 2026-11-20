@@ -3,7 +3,7 @@ set -e
 
 echo "Starting QUIC server..."
 ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
-ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-Geode Test Admin Passphrase}"
 GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
     ./zig-out/bin/geode serve --listen 127.0.0.1:8443 > server.log 2>&1 &
 SERVER_PID=$!

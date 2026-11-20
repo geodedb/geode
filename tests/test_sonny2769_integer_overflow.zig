@@ -314,8 +314,11 @@ fn checkArithmetic(s: *Session, f: *Failures) !void {
     try expectFail(s, f, "RETURN 1000000000000000000000000000000000.0 / 3 AS x", &.{}, error.DecimalOverflow);
     try expectValue(s, f, "RETURN 1.0 / 4 AS x", "0.2500000m");
     // Decimal + and -.
-    try expectFail(s, f, "RETURN 1.5e38 + 1.5e38 AS x", &.{}, error.DecimalOverflow);
-    try expectFail(s, f, "RETURN -1.5e38 - 1.5e38 AS x", &.{}, error.DecimalOverflow);
+    // SONNY-6596: `1.5e38` is an approximate literal (a DOUBLE, ISO/IEC
+    // 39075 21.2), so the exact operands are parameters: DECIMAL 1.5 x 10^38.
+    const big = [_]Param{.{ .name = "a", .value = .{ .Decimal = .{ .coeff = 150_000_000_000_000_000_000_000_000_000_000_000_000, .scale = 0 } } }};
+    try expectFail(s, f, "RETURN $a + $a AS x", &big, error.DecimalOverflow);
+    try expectFail(s, f, "RETURN -$a - $a AS x", &big, error.DecimalOverflow);
     try expectValue(s, f, "RETURN 1.5 + 2.25 AS x", "3.75m");
     try expectValue(s, f, "RETURN 1.5 - 2.25 AS x", "-0.75m");
     // Integer /, % and unary minus at minInt.
@@ -342,12 +345,13 @@ test "SONNY-2769: arithmetic past i64 or the decimal is 22003" {
 // ---------------------------------------------------------------------------
 
 fn checkTemporal(s: *Session, f: *Failures) !void {
-    // Date +/- interval past the day range.
-    try expectFail(s, f, "RETURN DATE '2026-01-01' + duration('P2147483647D') AS x", &.{}, error.IntegerOverflow);
-    try expectFail(s, f, "RETURN DATE '2026-01-01' + duration('P2147483647M') AS x", &.{}, error.IntegerOverflow);
-    try expectFail(s, f, "RETURN DATE '2026-01-01' + duration('P100000000Y') AS x", &.{}, error.IntegerOverflow);
-    try expectFail(s, f, "RETURN DATE '1000-01-01' - duration('P2147483647D') AS x", &.{}, error.IntegerOverflow);
-    try expectFail(s, f, "RETURN DATE '2026-01-01' - duration('P2147483647M') AS x", &.{}, error.IntegerOverflow);
+    // Date +/- interval past the day range: 22008 datetime field overflow
+    // since SONNY-6489 (it was 22003).
+    try expectFail(s, f, "RETURN DATE '2026-01-01' + duration('P2147483647D') AS x", &.{}, error.DatetimeFieldOverflow);
+    try expectFail(s, f, "RETURN DATE '2026-01-01' + duration('P2147483647M') AS x", &.{}, error.DatetimeFieldOverflow);
+    try expectFail(s, f, "RETURN DATE '2026-01-01' + duration('P100000000Y') AS x", &.{}, error.DatetimeFieldOverflow);
+    try expectFail(s, f, "RETURN DATE '1000-01-01' - duration('P2147483647D') AS x", &.{}, error.DatetimeFieldOverflow);
+    try expectFail(s, f, "RETURN DATE '2026-01-01' - duration('P2147483647M') AS x", &.{}, error.DatetimeFieldOverflow);
     // In range, and unchanged: the day clamps to the target month.
     try expectValue(s, f, "RETURN DATE '2026-01-31' + duration('P1M') AS x", "2026-02-28");
     try expectValue(s, f, "RETURN duration('P1M') + DATE '2026-01-31' AS x", "2026-02-28");
@@ -504,10 +508,11 @@ fn checkProcedures(s: *Session, f: *Failures) !void {
     // An integer argument outside its type is InvalidArgs; the casts aborted
     // the server. (A negative literal is not an integer literal here, so only
     // the large ones reach the casts.)
-    try expectFail(s, f, "CALL tde.configure_mock_kms(70000)", &.{}, error.InvalidArgs);
-    try expectFail(s, f, "CALL tde.configure_mock_kms(9999, false, false, 5000000000)", &.{}, error.InvalidArgs);
-    try expectFail(s, f, "CALL tde.configure_rotation('x', 5000000000)", &.{}, error.InvalidArgs);
-    try expectFail(s, f, "CALL audit.configure('info', 'json', 4611686018427387904)", &.{}, error.InvalidArgs);
+    // SONNY-6340 / SONNY-6342: audit.configure, tde.configure_mock_kms and
+    // tde.configure_rotation are refused (0A000) before they read their
+    // arguments; tde.simulate_oltp_workload still casts its integers.
+    try expectFail(s, f, "CALL tde.simulate_oltp_workload(5000000000)", &.{}, error.InvalidArgs);
+    try expectFail(s, f, "CALL tde.simulate_oltp_workload(10, 5000000000)", &.{}, error.InvalidArgs);
     // A BFS depth past u32 is clamped (it aborted the server).
     try expectOk(s, f, "CALL algo.bfs.stream(1, {maxDepth: 5000000000})");
     // knn() through a vector index with a k past u32 (the index takes a u32).

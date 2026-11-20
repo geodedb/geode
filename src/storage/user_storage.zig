@@ -36,6 +36,8 @@ fn compat_microTimestamp() i64 {
 }
 const Allocator = std.mem.Allocator;
 const graph_store = @import("geode").graph_store;
+/// SONNY-6329: the io `user_cache_lock` is taken with (as PolicyCatalog's).
+const cache_lock_io = std.Io.Threaded.global_single_threaded.io();
 const auth_hmac = @import("auth_lib").hmac;
 
 // CANARY: REQ=REQ-GQL-202; FEATURE="UserStorage"; ASPECT=PersistentStorage; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_202_UserStorage; OWNER=security; UPDATED=2026-02-24
@@ -55,6 +57,12 @@ const POLICY_LABEL = "Policy";
 const AUTH_CHAIN_ROOT_LABEL = "AuthChainRoot";
 const HAS_ROLE_EDGE = "HAS_ROLE";
 pub const GRAPH_GRANT_LABEL = "GraphGrant";
+/// SONNY-6341: a user's permission to act under one FLE role.
+pub const FLE_ROLE_GRANT_LABEL = "FleRoleGrant";
+/// SONNY-6608: a user's MFA recovery codes, as SHA-256 digests.
+pub const MFA_RECOVERY_CODES_LABEL = "MfaRecoveryCodes";
+/// SONNY-6614: a user's offline MFA verification attempts.
+pub const MFA_ATTEMPTS_LABEL = "MfaAttempts";
 
 fn computeRecordHmacChecked(hmac_key: *const [32]u8, props: []const auth_hmac.KeyValue) [32]u8 {
     // error-policy: D — computeRecordHmac's only error is TooManyProperties
@@ -62,12 +70,79 @@ fn computeRecordHmacChecked(hmac_key: *const [32]u8, props: []const auth_hmac.Ke
     return auth_hmac.computeRecordHmac(hmac_key, props) catch unreachable;
 }
 
+/// The `__geode_security` HMAC of a user record: HMAC-SHA256 under
+/// `hmac_key` over every persisted field, sorted by key name. A pure
+/// function of (key, record) -- equal input gives an equal HMAC, which the
+/// chain verification (`AuthGraphManager.verifyChain`) depends on. Used by
+/// both `persistUserWithHmac` (writer) and the verifier.
+pub fn userRecordHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.UserRecord) [32]u8 {
+    var id_buf: [20]u8 = undefined;
+    const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{record.id}) catch "0";
+    var created_buf: [20]u8 = undefined;
+    const created_str = std.fmt.bufPrint(&created_buf, "{d}", .{record.created_at}) catch "0";
+    var updated_buf: [20]u8 = undefined;
+    const updated_str = std.fmt.bufPrint(&updated_buf, "{d}", .{record.updated_at}) catch "0";
+    var pwd_changed_buf: [20]u8 = undefined;
+    const pwd_changed_str = std.fmt.bufPrint(&pwd_changed_buf, "{d}", .{record.password_changed_at}) catch "0";
+    var lockout_buf: [20]u8 = undefined;
+    const lockout_str = std.fmt.bufPrint(&lockout_buf, "{d}", .{record.lockout_until}) catch "0";
+    var last_login_buf: [20]u8 = undefined;
+    const last_login_str = std.fmt.bufPrint(&last_login_buf, "{d}", .{record.last_login}) catch "0";
+    var failed_buf: [10]u8 = undefined;
+    const failed_str = std.fmt.bufPrint(&failed_buf, "{d}", .{record.failed_login_attempts}) catch "0";
+    var auth_version_buf: [20]u8 = undefined;
+    const auth_version_str = std.fmt.bufPrint(&auth_version_buf, "{d}", .{record.auth_version}) catch "0";
+
+    const mfa_secret = record.getMFASecret() orelse "";
+    const attributes_json = record.getAttributesJson() orelse "";
+
+    const props = [_]auth_hmac.KeyValue{
+        .{ .key = "attributes_json", .value = attributes_json },
+        .{ .key = "auth_version", .value = auth_version_str },
+        .{ .key = "created_at", .value = created_str },
+        .{ .key = "email", .value = record.getEmail() },
+        .{ .key = "failed_login_attempts", .value = failed_str },
+        .{ .key = "hash_algorithm", .value = record.getHashAlgorithm() },
+        .{ .key = "id", .value = id_str },
+        .{ .key = "is_active", .value = if (record.is_active) "true" else "false" },
+        .{ .key = "is_default_user", .value = if (record.is_default_user) "true" else "false" },
+        .{ .key = "is_superuser", .value = if (record.is_superuser) "true" else "false" },
+        .{ .key = "last_login", .value = last_login_str },
+        .{ .key = "lockout_until", .value = lockout_str },
+        .{ .key = "mfa_enabled", .value = if (record.mfa_enabled) "true" else "false" },
+        .{ .key = "mfa_secret", .value = mfa_secret },
+        .{ .key = "password_changed_at", .value = pwd_changed_str },
+        .{ .key = "password_hash", .value = record.getPasswordHash() },
+        .{ .key = "password_reset_required", .value = if (record.password_reset_required) "true" else "false" },
+        .{ .key = "salt", .value = std.mem.sliceTo(&record.salt, 0) },
+        .{ .key = "updated_at", .value = updated_str },
+        .{ .key = "username", .value = record.getUsername() },
+    };
+    return computeRecordHmacChecked(hmac_key, &props);
+}
+
 pub const UserStorageBackend = struct {
     allocator: Allocator,
     store: *graph_store.GraphStore,
 
     // In-memory cache for fast lookups
+    /// SONNY-6329: guarded by `user_cache_lock`; reach it through the
+    /// methods below (`getUser`, `getUserByUsername`, `findUserIdByUsername`,
+    /// `putCachedUser`, `removeCachedUser`, `cachedUserIds`, ...).
     user_cache: std.AutoHashMap(u64, UserRecord),
+    // CANARY: REQ=REQ-SONNY-6329-USER-CACHE-LOCK; FEATURE="GQL Auth DDL Persistence"; ASPECT=UserCacheRwLock; STATUS=TESTED; TEST=tests/test_sonny6329_user_cache_and_ddl_serialization.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6329: guards `user_cache`. Lookups (`graphGrantCheck` resolving
+    /// a user on every policy decision the decision cache misses, the grant
+    /// procedures, LSP visibility) hold it shared and copy what they return;
+    /// the user writers hold it exclusively for the map change alone. A leaf:
+    /// held for the map operation only, never across a graph-store call,
+    /// I/O, an allocation of anything but the map, or any other lock, so it
+    /// may be taken under any lock (a graph lock, `user_store_mutex`,
+    /// `PolicyCatalog.rwlock` shared inside `gps.decide`). Nothing is ever
+    /// acquired while it is held, and no thread takes it twice. The map had
+    /// no lock: a decision on one connection walked it while CREATE / DROP /
+    /// ALTER USER on another rehashed it.
+    user_cache_lock: std.Io.RwLock = .init,
     role_cache: std.AutoHashMap(u64, RoleRecord),
     permission_cache: std.AutoHashMap(u64, PermissionRecord),
     policy_cache: std.AutoHashMap(u64, PolicyRecord),
@@ -78,6 +153,12 @@ pub const UserStorageBackend = struct {
     permission_nodes: std.AutoHashMap(u64, u64),
     policy_nodes: std.AutoHashMap(u64, u64),
     graph_grant_nodes: std.AutoHashMap(u64, u64),
+    /// SONNY-6341: FLE role grant id (`fleRoleGrantId`) -> node id.
+    fle_role_grant_nodes: std.AutoHashMap(u64, u64),
+    /// SONNY-6608: user id -> its MfaRecoveryCodes node id.
+    mfa_recovery_nodes: std.AutoHashMap(u64, u64),
+    /// SONNY-6614: user id -> its MfaAttempts node id.
+    mfa_attempt_nodes: std.AutoHashMap(u64, u64),
 
     // AuthChainRoot singleton node ID (null if not yet created)
     chain_root_node: ?u64,
@@ -85,6 +166,10 @@ pub const UserStorageBackend = struct {
     const Self = @This();
 
     // Persistent record structures
+    /// SONNY-6609: room for a sealed TOTP secret (it was 64, a plaintext
+    /// base32 secret).
+    pub const mfa_secret_field_len = 128;
+
     pub const UserRecord = extern struct {
         id: u64,
         username: [64]u8,
@@ -97,7 +182,10 @@ pub const UserStorageBackend = struct {
         is_active: bool,
         is_superuser: bool,
         mfa_enabled: bool,
-        mfa_secret: [64]u8,
+        /// SONNY-6609: the TOTP secret sealed (`AuthGraphManager.sealMfaSecret`,
+        /// "aesgcm1$" + base64url(nonce || ciphertext || tag)); a store
+        /// written before holds it in plaintext until the server loads it.
+        mfa_secret: [mfa_secret_field_len]u8,
         mfa_secret_len: u16,
         failed_login_attempts: u16,
         lockout_until: i64,
@@ -207,6 +295,16 @@ pub const UserStorageBackend = struct {
         /// A `kind` property that is neither "gps" nor "rls". No loader
         /// accepts it.
         invalid = 3,
+        // CANARY: REQ=REQ-SONNY-3034-RLS-RESTRICTIONS-DURABLE; FEATURE="RLS deny-policy procedure"; ASPECT=RecordKinds; STATUS=TESTED; TEST=tests/test_sonny3034_rls_restrictions_durable.zig; OWNER=security; UPDATED=2026-11-12
+        /// SONNY-3034: a `geode.rls.add_deny_policy` label deny: `graph`,
+        /// `table` (the label), and the user in the USING text (none: every
+        /// user). Loaded at startup into both label engines.
+        rls_deny = 4,
+        /// SONNY-3034: a `geode.rls.add_attribute_policy` restriction:
+        /// `graph`, `table` (the label), the row property in the USING text
+        /// and the ABAC attribute key in the CHECK text. Loaded at startup
+        /// into the expression engine.
+        rls_attribute = 5,
 
         /// Strict decoding of a stored `kind` property: exactly "gps" or
         /// "rls"; any other value, or another type, is `.invalid`; a missing
@@ -216,6 +314,8 @@ pub const UserStorageBackend = struct {
             if (v != .String) return .invalid;
             if (std.mem.eql(u8, v.String, "gps")) return .gps;
             if (std.mem.eql(u8, v.String, "rls")) return .rls;
+            if (std.mem.eql(u8, v.String, "rls_deny")) return .rls_deny;
+            if (std.mem.eql(u8, v.String, "rls_attribute")) return .rls_attribute;
             return .invalid;
         }
 
@@ -224,6 +324,8 @@ pub const UserStorageBackend = struct {
             return switch (self) {
                 .gps => "gps",
                 .rls => "rls",
+                .rls_deny => "rls_deny",
+                .rls_attribute => "rls_attribute",
                 .legacy, .invalid => null,
             };
         }
@@ -326,6 +428,9 @@ pub const UserStorageBackend = struct {
             .permission_nodes = std.AutoHashMap(u64, u64).init(allocator),
             .policy_nodes = std.AutoHashMap(u64, u64).init(allocator),
             .graph_grant_nodes = std.AutoHashMap(u64, u64).init(allocator),
+            .fle_role_grant_nodes = std.AutoHashMap(u64, u64).init(allocator),
+            .mfa_recovery_nodes = std.AutoHashMap(u64, u64).init(allocator),
+            .mfa_attempt_nodes = std.AutoHashMap(u64, u64).init(allocator),
             .chain_root_node = null,
         };
 
@@ -343,6 +448,9 @@ pub const UserStorageBackend = struct {
         self.permission_nodes.deinit();
         self.policy_nodes.deinit();
         self.graph_grant_nodes.deinit();
+        self.fle_role_grant_nodes.deinit();
+        self.mfa_recovery_nodes.deinit();
+        self.mfa_attempt_nodes.deinit();
     }
 
     fn ensureSecurityGraph(store: *graph_store.GraphStore) !void {
@@ -358,6 +466,9 @@ pub const UserStorageBackend = struct {
         try self.loadPermissionsFromGraph();
         try self.loadPoliciesFromGraph();
         try self.loadGraphGrantsFromGraph();
+        try self.loadFleRoleGrantsFromGraph();
+        try self.loadMfaRecoveryCodesFromGraph();
+        try self.loadMfaAttemptsFromGraph();
         // Hydrate `chain_root_node` from the persisted AuthChainRoot node so
         // a subsequent `persistChainRoot` call (e.g. during offline
         // reset-password rewriting the seal) updates the existing node
@@ -365,7 +476,7 @@ pub const UserStorageBackend = struct {
         // invocations against the same data dir leave multiple
         // AuthChainRoot nodes, and `verifyChain` on reload picks the
         // stale one and reports `ChainHashMismatch`.
-        _ = self.loadChainRoot();
+        _ = try self.loadChainRoot();
     }
 
     fn loadUsersFromGraph(self: *Self) !void {
@@ -373,13 +484,13 @@ pub const UserStorageBackend = struct {
         if (nodes_opt == null) return;
 
         for (nodes_opt.?) |node_id| {
-            const record = loadUserRecordFromNode(self.store, node_id) orelse continue;
-            try self.user_cache.put(record.id, record);
+            const record = (try loadUserRecordFromNode(self.store, node_id)) orelse continue;
+            try self.putCachedUser(record.id, record);
             try self.user_nodes.put(record.id, node_id);
         }
     }
 
-    fn loadUserRecordFromNode(store: *graph_store.GraphStore, node_id: u64) ?UserRecord {
+    fn loadUserRecordFromNode(store: *graph_store.GraphStore, node_id: u64) !?UserRecord {
         // Gap 0034 discipline, extended (merge interaction with the loop2
         // warm-hydration path): a snapshot-served reopen restores the label
         // postings WITHOUT materializing resident node bodies (engine scan
@@ -388,35 +499,37 @@ pub const UserStorageBackend = struct {
         // security record became invisible after a clean-shutdown reopen
         // (admin login failed, bootstrap refused fail-closed). Read the body
         // HYDRATE-ON-MISS like loadChainRoot: null now really means the node
-        // is absent from cache AND engine.
-        const node = store.getNodePtrHydrated(node_id) orelse return null;
+        // is absent from cache AND engine. SONNY-6594 (5): and a body that
+        // cannot be read is the read's error: the user was left out of the
+        // store loaded at start (and did not exist for the rest of the run).
+        const node = (try store.getNodePtrHydratedChecked(node_id)) orelse return null;
         if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) return null;
 
-        const id_val = getIntProp(store, node_id, "id", -1);
+        const id_val = (try getIntProp(store, node_id, "id", -1));
         if (id_val < 0) return null;
         const user_id: u64 = @intCast(id_val);
 
         var record = blankUserRecord(user_id);
-        record.username_len = copyIntoField(&record.username, getStringProp(store, node_id, "username", ""));
-        record.email_len = copyIntoField(&record.email, getStringProp(store, node_id, "email", ""));
-        record.password_hash_len = copyIntoField(&record.password_hash, getStringProp(store, node_id, "password_hash", ""));
-        _ = copyIntoField(&record.salt, getStringProp(store, node_id, "salt", ""));
-        record.is_active = getBoolProp(store, node_id, "is_active", true);
-        record.is_superuser = getBoolProp(store, node_id, "is_superuser", false);
-        record.mfa_enabled = getBoolProp(store, node_id, "mfa_enabled", false);
-        record.mfa_secret_len = copyIntoField(&record.mfa_secret, getStringProp(store, node_id, "mfa_secret", ""));
+        record.username_len = copyIntoField(&record.username, (try getStringProp(store, node_id, "username", "")));
+        record.email_len = copyIntoField(&record.email, (try getStringProp(store, node_id, "email", "")));
+        record.password_hash_len = copyIntoField(&record.password_hash, (try getStringProp(store, node_id, "password_hash", "")));
+        _ = copyIntoField(&record.salt, (try getStringProp(store, node_id, "salt", "")));
+        record.is_active = (try getBoolProp(store, node_id, "is_active", true));
+        record.is_superuser = (try getBoolProp(store, node_id, "is_superuser", false));
+        record.mfa_enabled = (try getBoolProp(store, node_id, "mfa_enabled", false));
+        record.mfa_secret_len = copyIntoField(&record.mfa_secret, (try getStringProp(store, node_id, "mfa_secret", "")));
         // SONNY-2757 (P29): out of range, the record is tampered: not loaded.
-        record.failed_login_attempts = storedInt(u16, getIntProp(store, node_id, "failed_login_attempts", 0), "failed_login_attempts", user_id) orelse return null;
-        record.lockout_until = getIntProp(store, node_id, "lockout_until", 0);
-        record.last_login = getIntProp(store, node_id, "last_login", 0);
-        record.created_at = getIntProp(store, node_id, "created_at", compat_milliTimestamp());
-        record.updated_at = getIntProp(store, node_id, "updated_at", record.created_at);
-        record.hash_algorithm_len = copyIntoField(&record.hash_algorithm, getStringProp(store, node_id, "hash_algorithm", ""));
-        record.is_default_user = getBoolProp(store, node_id, "is_default_user", false);
-        record.password_reset_required = getBoolProp(store, node_id, "password_reset_required", false);
-        record.auth_version = @intCast(@max(1, getIntProp(store, node_id, "auth_version", 1)));
-        record.attributes_json_len = copyIntoField(&record.attributes_json, getStringProp(store, node_id, "attributes_json", ""));
-        record.password_changed_at = getIntProp(store, node_id, "password_changed_at", 0);
+        record.failed_login_attempts = storedInt(u16, (try getIntProp(store, node_id, "failed_login_attempts", 0)), "failed_login_attempts", user_id) orelse return null;
+        record.lockout_until = (try getIntProp(store, node_id, "lockout_until", 0));
+        record.last_login = (try getIntProp(store, node_id, "last_login", 0));
+        record.created_at = try getIntProp(store, node_id, "created_at", compat_milliTimestamp());
+        record.updated_at = (try getIntProp(store, node_id, "updated_at", record.created_at));
+        record.hash_algorithm_len = copyIntoField(&record.hash_algorithm, (try getStringProp(store, node_id, "hash_algorithm", "")));
+        record.is_default_user = (try getBoolProp(store, node_id, "is_default_user", false));
+        record.password_reset_required = (try getBoolProp(store, node_id, "password_reset_required", false));
+        record.auth_version = @intCast(@max(1, (try getIntProp(store, node_id, "auth_version", 1))));
+        record.attributes_json_len = copyIntoField(&record.attributes_json, (try getStringProp(store, node_id, "attributes_json", "")));
+        record.password_changed_at = (try getIntProp(store, node_id, "password_changed_at", 0));
         return record;
     }
 
@@ -603,9 +716,16 @@ pub const UserStorageBackend = struct {
     /// `error.Unauthenticated` upstream, which the per-IP limiter COUNTS.
     /// CANARY: REQ=REQ-SEC-AUTH-UNAVAILABLE-002; FEATURE="AuthOutcomeClassification"; ASPECT=StorageLookup; STATUS=TESTED; TEST=tests/test_auth_unavailable_classification.zig; OWNER=security; UPDATED=2026-08-29
     pub fn findUserByUsernameInGraphChecked(store: *graph_store.GraphStore, username: []const u8) !?UserRecord {
+        // SONNY-6594 (5): a body that cannot be read is not "no such user":
+        // the engine-direct fallback below may still find the user; if it
+        // does not, the read's error is the answer.
+        var read_error: ?anyerror = null;
         if (store.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL)) |nodes| {
             for (nodes) |node_id| {
-                const record = loadUserRecordFromNode(store, node_id) orelse continue;
+                const record = (loadUserRecordFromNode(store, node_id) catch |err| {
+                    read_error = err;
+                    continue;
+                }) orelse continue;
                 if (std.mem.eql(u8, record.getUsername(), username)) {
                     return record;
                 }
@@ -619,7 +739,9 @@ pub const UserStorageBackend = struct {
         // enumeration, "no such user" is not a supportable answer. The verdict is
         // identical for every unresolvable principal, so this adds no
         // username-enumeration oracle (#829).
-        return try findUserByUsernameEngineDirect(store.allocator, username);
+        if (try findUserByUsernameEngineDirect(store.allocator, username)) |record| return record;
+        if (read_error) |err| return err;
+        return null;
     }
 
     /// Legacy option-returning lookup, kept for the non-auth callers (bootstrap,
@@ -636,7 +758,7 @@ pub const UserStorageBackend = struct {
                 var records = std.ArrayList(UserRecord).empty;
                 defer records.deinit(allocator);
                 for (nodes) |node_id| {
-                    const record = loadUserRecordFromNode(store, node_id) orelse continue;
+                    const record = (try loadUserRecordFromNode(store, node_id)) orelse continue;
                     try records.append(allocator, record);
                 }
                 return records.toOwnedSlice(allocator);
@@ -651,6 +773,10 @@ pub const UserStorageBackend = struct {
         return @max(@as(u64, 1), record.auth_version);
     }
 
+    // SONNY-6567 (2): the security-graph loaders and listings below read
+    // each record's body with the CHECKED getter: a body that cannot be read
+    // fails the load / listing, instead of the record being skipped as if
+    // absent (a role, permission, policy or grant silently missing).
     fn loadRolesFromGraph(self: *Self) !void {
         const nodes_opt = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, ROLE_LABEL);
         if (nodes_opt == null) return;
@@ -658,22 +784,22 @@ pub const UserStorageBackend = struct {
         for (nodes_opt.?) |node_id| {
             // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
             // so a snapshot-served/evicted body still resolves from the engine.
-            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
-            const id_val = getIntProp(self.store, node_id, "id", -1);
+            const id_val = (try getIntProp(self.store, node_id, "id", -1));
             if (id_val < 0) continue;
             const role_id: u64 = @intCast(id_val);
 
             var record = blankRoleRecord(role_id);
-            record.name_len = copyIntoField(&record.name, getStringProp(self.store, node_id, "name", ""));
-            record.description_len = copyIntoField(&record.description, getStringProp(self.store, node_id, "description", ""));
-            record.parent_role = @intCast(@max(0, getIntProp(self.store, node_id, "parent_role", 0)));
+            record.name_len = copyIntoField(&record.name, (try getStringProp(self.store, node_id, "name", "")));
+            record.description_len = copyIntoField(&record.description, (try getStringProp(self.store, node_id, "description", "")));
+            record.parent_role = @intCast(@max(0, (try getIntProp(self.store, node_id, "parent_role", 0))));
             // SONNY-2757 (P29): out of range, the record is tampered: not loaded.
-            record.priority = storedInt(u32, getIntProp(self.store, node_id, "priority", 0), "priority", role_id) orelse continue;
-            record.is_system = getBoolProp(self.store, node_id, "is_system", false);
-            record.created_at = getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
-            record.updated_at = getIntProp(self.store, node_id, "updated_at", record.created_at);
+            record.priority = storedInt(u32, (try getIntProp(self.store, node_id, "priority", 0)), "priority", role_id) orelse continue;
+            record.is_system = (try getBoolProp(self.store, node_id, "is_system", false));
+            record.created_at = try getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
+            record.updated_at = (try getIntProp(self.store, node_id, "updated_at", record.created_at));
 
             try self.role_cache.put(role_id, record);
             try self.role_nodes.put(role_id, node_id);
@@ -687,20 +813,20 @@ pub const UserStorageBackend = struct {
         for (nodes_opt.?) |node_id| {
             // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
             // so a snapshot-served/evicted body still resolves from the engine.
-            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
-            const id_val = getIntProp(self.store, node_id, "id", -1);
+            const id_val = (try getIntProp(self.store, node_id, "id", -1));
             if (id_val < 0) continue;
             const perm_id: u64 = @intCast(id_val);
 
             var record = blankPermissionRecord(perm_id);
-            record.name_len = copyIntoField(&record.name, getStringProp(self.store, node_id, "name", ""));
-            record.resource_len = copyIntoField(&record.resource, getStringProp(self.store, node_id, "resource", ""));
+            record.name_len = copyIntoField(&record.name, (try getStringProp(self.store, node_id, "name", "")));
+            record.resource_len = copyIntoField(&record.resource, (try getStringProp(self.store, node_id, "resource", "")));
             // SONNY-2757 (P29): out of range, the record is tampered: not loaded.
-            record.action = storedInt(u8, getIntProp(self.store, node_id, "action", 0), "action", perm_id) orelse continue;
-            record.conditions_len = copyIntoField(&record.conditions, getStringProp(self.store, node_id, "conditions", ""));
-            record.created_at = getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
+            record.action = storedInt(u8, (try getIntProp(self.store, node_id, "action", 0)), "action", perm_id) orelse continue;
+            record.conditions_len = copyIntoField(&record.conditions, (try getStringProp(self.store, node_id, "conditions", "")));
+            record.created_at = try getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
 
             try self.permission_cache.put(perm_id, record);
             try self.permission_nodes.put(perm_id, node_id);
@@ -714,44 +840,44 @@ pub const UserStorageBackend = struct {
         for (nodes_opt.?) |node_id| {
             // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
             // so a snapshot-served/evicted body still resolves from the engine.
-            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
-            const id_val = getIntProp(self.store, node_id, "id", -1);
+            const id_val = (try getIntProp(self.store, node_id, "id", -1));
             if (id_val < 0) continue;
             const policy_id: u64 = @intCast(id_val);
 
             var record = blankPolicyRecord(policy_id);
-            const stored_name = getStringProp(self.store, node_id, "name", "");
-            const stored_graph = getStringProp(self.store, node_id, "graph", "");
-            const stored_using = getStringProp(self.store, node_id, "using_clause", "");
-            const stored_check = getStringProp(self.store, node_id, "check_clause", "");
+            const stored_name = (try getStringProp(self.store, node_id, "name", ""));
+            const stored_graph = (try getStringProp(self.store, node_id, "graph", ""));
+            const stored_using = (try getStringProp(self.store, node_id, "using_clause", ""));
+            const stored_check = (try getStringProp(self.store, node_id, "check_clause", ""));
             record.name_len = copyIntoField(&record.name, stored_name);
-            record.description_len = copyIntoField(&record.description, getStringProp(self.store, node_id, "description", ""));
+            record.description_len = copyIntoField(&record.description, (try getStringProp(self.store, node_id, "description", "")));
             record.graph_len = copyIntoField(&record.graph, stored_graph);
-            record.table_len = copyIntoField(&record.table, getStringProp(self.store, node_id, "table", ""));
+            record.table_len = copyIntoField(&record.table, (try getStringProp(self.store, node_id, "table", "")));
             // SONNY-2757 (P29): an operation or audit level out of range makes
             // the record malformed (below): it loads nowhere, and its HMAC no
             // longer verifies. It used to abort a safe build here, at
             // startup, before the chain was checked.
-            const stored_operation = storedInt(u8, getIntProp(self.store, node_id, "operation", 0), "operation", policy_id);
+            const stored_operation = storedInt(u8, (try getIntProp(self.store, node_id, "operation", 0)), "operation", policy_id);
             record.operation = stored_operation orelse 0;
-            record.permissive = getBoolProp(self.store, node_id, "permissive", false);
-            record.enabled = getBoolProp(self.store, node_id, "enabled", true);
+            record.permissive = (try getBoolProp(self.store, node_id, "permissive", false));
+            record.enabled = (try getBoolProp(self.store, node_id, "enabled", true));
             // SONNY-2750: the kind, decoded strictly, and whether a property
             // the policy needs is missing: its default must not stand in for
             // it (an absent `enabled` read as true, an absent USING text as
             // "true").
-            record.kind = PolicyKind.fromProperty(self.store.getNodeProperty(node_id, "kind"));
-            if (record.kind == .legacy) record.legacy_shape = legacyPolicyShape(self.store, node_id);
-            record.malformed = !hasProp(self.store, node_id, "name", .String) or
-                !hasProp(self.store, node_id, "graph", .String) or
-                !hasProp(self.store, node_id, "operation", .Int) or
-                !hasProp(self.store, node_id, "permissive", .Bool) or
-                !hasProp(self.store, node_id, "enabled", .Bool) or
+            record.kind = PolicyKind.fromProperty((try self.store.getNodePropertyOrError(node_id, "kind")));
+            if (record.kind == .legacy) record.legacy_shape = (try legacyPolicyShape(self.store, node_id));
+            record.malformed = !(try hasProp(self.store, node_id, "name", .String)) or
+                !(try hasProp(self.store, node_id, "graph", .String)) or
+                !(try hasProp(self.store, node_id, "operation", .Int)) or
+                !(try hasProp(self.store, node_id, "permissive", .Bool)) or
+                !(try hasProp(self.store, node_id, "enabled", .Bool)) or
                 // Since SONNY-2750 a GPS record stores its USING text even
                 // when it is "true"; a legacy one omitted it for "true".
-                (record.kind == .gps and !hasProp(self.store, node_id, "using_clause", .String));
+                (record.kind == .gps and !(try hasProp(self.store, node_id, "using_clause", .String)));
             // CANARY: REQ=REQ-SONNY-2731-POLICY-TEXT-LIMITS; FEATURE="GPS Policy Persistence"; ASPECT=OverlongStoredPolicy; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-09-25
             // SONNY-2731: a stored name, graph or clause longer than its field
             // (persistPolicy never writes one; an older or foreign writer
@@ -772,12 +898,12 @@ pub const UserStorageBackend = struct {
                 record.using_clause_len = copyIntoField(&record.using_clause, stored_using);
                 record.check_clause_len = copyIntoField(&record.check_clause, stored_check);
             }
-            const stored_audit_level = storedInt(u8, getIntProp(self.store, node_id, "audit_level", 0), "audit_level", policy_id);
+            const stored_audit_level = storedInt(u8, (try getIntProp(self.store, node_id, "audit_level", 0)), "audit_level", policy_id);
             record.audit_level = stored_audit_level orelse 0;
             if (stored_operation == null or stored_audit_level == null) record.malformed = true;
-            record.created_at = getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
-            record.updated_at = getIntProp(self.store, node_id, "updated_at", record.created_at);
-            record.created_by = @intCast(@max(0, getIntProp(self.store, node_id, "created_by", 0)));
+            record.created_at = try getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
+            record.updated_at = (try getIntProp(self.store, node_id, "updated_at", record.created_at));
+            record.created_by = @intCast(@max(0, (try getIntProp(self.store, node_id, "created_by", 0))));
 
             try self.policy_cache.put(policy_id, record);
             try self.policy_nodes.put(policy_id, node_id);
@@ -806,12 +932,12 @@ pub const UserStorageBackend = struct {
     /// startup every clamped grant collapsed onto one key, and its HMAC (sealed
     /// under the real id) failed to verify. Deriving the id from the fields the
     /// HMAC already covers gives the real id for new and existing records.
-    fn graphGrantIdFromNode(store: *graph_store.GraphStore, node_id: u64) ?u64 {
-        const uid_val = getIntProp(store, node_id, "user_id", -1);
+    fn graphGrantIdFromNode(store: *graph_store.GraphStore, node_id: u64) !?u64 {
+        const uid_val = (try getIntProp(store, node_id, "user_id", -1));
         if (uid_val < 0) return null;
-        const action_val = getIntProp(store, node_id, "action", -1);
+        const action_val = (try getIntProp(store, node_id, "action", -1));
         if (action_val < 0 or action_val > std.math.maxInt(u8)) return null;
-        const graph = getStringProp(store, node_id, "graph_name", "");
+        const graph = (try getStringProp(store, node_id, "graph_name", ""));
         return graphGrantId(@intCast(uid_val), graph, @intCast(action_val));
     }
 
@@ -822,14 +948,14 @@ pub const UserStorageBackend = struct {
         for (nodes_opt.?) |node_id| {
             // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
             // so a snapshot-served/evicted body still resolves from the engine.
-            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
             // A record whose fields do not give an id (tampered: SONNY-2757) is
             // still mapped, under its stored id, so the chain verification
             // sees it and its HMAC fails rather than the record being skipped.
-            const grant_id = graphGrantIdFromNode(self.store, node_id) orelse
-                @as(u64, @bitCast(getIntProp(self.store, node_id, "id", -1)));
+            const grant_id = (try graphGrantIdFromNode(self.store, node_id)) orelse
+                @as(u64, @bitCast((try getIntProp(self.store, node_id, "id", -1))));
 
             try self.graph_grant_nodes.put(grant_id, node_id);
         }
@@ -859,27 +985,75 @@ pub const UserStorageBackend = struct {
         for (nodes_opt.?) |node_id| {
             // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
             // so a snapshot-served/evicted body still resolves from the engine.
-            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
-            const grant_id = graphGrantIdFromNode(self.store, node_id) orelse continue;
+            const grant_id = (try graphGrantIdFromNode(self.store, node_id)) orelse continue;
 
-            const uid_val = getIntProp(self.store, node_id, "user_id", -1);
+            const uid_val = (try getIntProp(self.store, node_id, "user_id", -1));
             if (uid_val < 0) continue;
             const stored_user_id: u64 = @intCast(uid_val);
             if (stored_user_id != user_id) continue;
 
             // SONNY-2757 (P29): an action out of range matches nothing.
-            const stored_action = storedInt(u8, getIntProp(self.store, node_id, "action", -1), "action", grant_id) orelse continue;
+            const stored_action = storedInt(u8, (try getIntProp(self.store, node_id, "action", -1)), "action", grant_id) orelse continue;
             if (stored_action != action) continue;
 
-            const stored_graph = getStringProp(self.store, node_id, "graph_name", "");
+            const stored_graph = (try getStringProp(self.store, node_id, "graph_name", ""));
             if (!std.mem.eql(u8, stored_graph, graph_name)) continue;
 
-            // Found the matching grant
+            // Found the matching grant. SONNY-1333: the node goes first, and
+            // the map entry only once it is gone, so a failed delete leaves
+            // the grant stored and a retry finds it.
+            try self.deleteNodeChecked(node_id);
             _ = self.graph_grant_nodes.remove(grant_id);
-            self.store.deleteNode(node_id);
             return true;
+        }
+        return false;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6359-GRANT-READERS-LOCKED; FEATURE="GQL Auth DDL Persistence"; ASPECT=HasGraphGrantLocked; STATUS=TESTED; TEST=tests/test_sonny6359_auth_residuals.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-1333: is the grant (user_id, graph_name, action) stored?
+    /// SONNY-6359: under `auth_ddl_lock` (re-entrant: the GRANT / REVOKE
+    /// write-throughs call it holding the lock), under which GRANT / REVOKE
+    /// change `graph_grant_nodes`; it read the map unlocked.
+    pub fn hasGraphGrant(self: *Self, user_id: u64, graph_name: []const u8, action: u8) bool {
+        const ddl_guard = @import("geode").security.auth_ddl_lock.acquire();
+        defer ddl_guard.release();
+        return self.graph_grant_nodes.contains(graphGrantId(user_id, graph_name, action));
+    }
+
+    // CANARY: REQ=REQ-SONNY-1333-GRANT-PERSIST-FAIL-CLOSED; FEATURE="GQL Auth DDL Persistence"; ASPECT=DiscardGraphGrant; STATUS=TESTED; TEST=tests/test_sonny1333_grant_persist_show_grants.zig; OWNER=security; UPDATED=2026-11-11
+    /// SONNY-1333: take out the record of a grant a failed GRANT stored, found
+    /// by its id, so a record whose fields were only partly written goes too.
+    pub fn discardGraphGrant(self: *Self, user_id: u64, graph_name: []const u8, action: u8) !void {
+        const grant_id = graphGrantId(user_id, graph_name, action);
+        const node_id = self.graph_grant_nodes.get(grant_id) orelse return;
+        try self.deleteNodeChecked(node_id);
+        _ = self.graph_grant_nodes.remove(grant_id);
+    }
+
+    /// SONNY-1333: delete a record's node and confirm it is gone.
+    /// `GraphStore.deleteNode` reports nothing: when it fails part way (an
+    /// allocation, the storage adapter) the node stays, and a revoked grant
+    /// would be loaded again at the next start. SONNY-6293: every record
+    /// removal (policy, role, user, permission) goes through it.
+    fn deleteNodeChecked(self: *Self, node_id: u64) !void {
+        if (!takeDeleteFault()) self.store.deleteNode(node_id);
+        if (try self.store.nodeExistsForUndo(node_id)) return error.SecurityRecordDeleteFailed;
+    }
+
+    /// SONNY-6293: a test-only fault hook. While non-zero, each checked
+    /// delete (`deleteNodeChecked`, the HAS_ROLE edge delete) consumes one
+    /// and skips the graph-store delete, as a delete that failed part way
+    /// leaves the node or edge, so the existence check that follows fails
+    /// it. Production code never sets it.
+    pub var fail_deletes_for_testing: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+
+    fn takeDeleteFault() bool {
+        var n = fail_deletes_for_testing.load(.acquire);
+        while (n > 0) {
+            n = fail_deletes_for_testing.cmpxchgWeak(n, n - 1, .acq_rel, .acquire) orelse return true;
         }
         return false;
     }
@@ -896,24 +1070,259 @@ pub const UserStorageBackend = struct {
         for (nodes_opt.?) |node_id| {
             // Gap 0034 discipline (see loadUserRecordFromNode): hydrate-on-miss
             // so a snapshot-served/evicted body still resolves from the engine.
-            const node = self.store.getNodePtrHydrated(node_id) orelse continue;
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
             if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
 
-            const grant_id = graphGrantIdFromNode(self.store, node_id) orelse continue;
+            const grant_id = (try graphGrantIdFromNode(self.store, node_id)) orelse continue;
 
             var record = blankGraphGrantRecord(grant_id);
-            const uid_val = getIntProp(self.store, node_id, "user_id", 0);
+            const uid_val = (try getIntProp(self.store, node_id, "user_id", 0));
             record.user_id = if (uid_val >= 0) @intCast(uid_val) else 0;
-            record.graph_name_len = copyIntoField(&record.graph_name, getStringProp(self.store, node_id, "graph_name", ""));
+            record.graph_name_len = copyIntoField(&record.graph_name, (try getStringProp(self.store, node_id, "graph_name", "")));
             // SONNY-2757 (P29): out of range, the record is tampered: not listed.
-            record.action = storedInt(u8, getIntProp(self.store, node_id, "action", 0), "action", grant_id) orelse continue;
-            record.granted_at = getIntProp(self.store, node_id, "granted_at", compat_timestamp());
-            const gb_val = getIntProp(self.store, node_id, "granted_by", 0);
+            record.action = storedInt(u8, (try getIntProp(self.store, node_id, "action", 0)), "action", grant_id) orelse continue;
+            record.granted_at = try getIntProp(self.store, node_id, "granted_at", compat_timestamp());
+            const gb_val = (try getIntProp(self.store, node_id, "granted_by", 0));
             record.granted_by = if (gb_val >= 0) @intCast(gb_val) else 0;
 
             try records.append(allocator, record);
         }
         return records.toOwnedSlice(allocator);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6341-FLE-ROLE-GRANT-STORE; FEATURE="FieldLevelEncryption"; ASPECT=DurableFleRoleGrants; STATUS=TESTED; TEST=tests/test_sonny6341_fle_role_binding.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6341: one FLE role a user may act under. Stored as a
+    /// (:FleRoleGrant {id, user_id, role, granted_at}) node in the security
+    /// graph, counted in and sealed by the HMAC chain like a GraphGrant.
+    pub const FleRoleGrantRecord = struct {
+        id: u64,
+        user_id: u64,
+        role: []const u8, // borrowed from the store
+    };
+
+    /// The id of an FLE role grant: a hash of who and which role, so a
+    /// repeated grant is the same record.
+    pub fn fleRoleGrantId(user_id: u64, role: []const u8) u64 {
+        var h = std.hash.Wyhash.init(0x6341);
+        h.update(std.mem.asBytes(&user_id));
+        h.update(role);
+        return h.final();
+    }
+
+    fn fleRoleGrantIdFromNode(store: *graph_store.GraphStore, node_id: u64) !?u64 {
+        const uid_val = (try getIntProp(store, node_id, "user_id", -1));
+        if (uid_val < 0) return null;
+        const role = (try getStringProp(store, node_id, "role", ""));
+        if (role.len == 0) return null;
+        return fleRoleGrantId(@intCast(uid_val), role);
+    }
+
+    fn loadFleRoleGrantsFromGraph(self: *Self) !void {
+        const nodes_opt = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, FLE_ROLE_GRANT_LABEL);
+        if (nodes_opt == null) return;
+        for (nodes_opt.?) |node_id| {
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
+            if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
+            // As for GraphGrant: a record whose fields give no id is still
+            // mapped (under its stored id) so the chain check sees it.
+            const grant_id = (try fleRoleGrantIdFromNode(self.store, node_id)) orelse
+                @as(u64, @bitCast((try getIntProp(self.store, node_id, "id", -1))));
+            try self.fle_role_grant_nodes.put(grant_id, node_id);
+        }
+    }
+
+    /// Store the grant (idempotent).
+    pub fn persistFleRoleGrant(self: *Self, user_id: u64, role: []const u8) !u64 {
+        if (role.len == 0 or role.len > 127) return error.FieldTooLong;
+        const grant_id = fleRoleGrantId(user_id, role);
+        if (self.fle_role_grant_nodes.contains(grant_id)) return grant_id;
+        const node_id = try self.createEntityNode(FLE_ROLE_GRANT_LABEL);
+        errdefer self.store.deleteNode(node_id);
+        try self.store.setNodeProperty(node_id, "id", .{ .Int = @bitCast(grant_id) });
+        try self.store.setNodeProperty(node_id, "user_id", .{ .Int = safeI64(user_id) });
+        try self.store.setNodeProperty(node_id, "role", .{ .String = role });
+        try self.store.setNodeProperty(node_id, "granted_at", .{ .Int = compat_timestamp() });
+        try self.fle_role_grant_nodes.put(grant_id, node_id);
+        return grant_id;
+    }
+
+    /// Remove the grant; false when there was none.
+    pub fn revokeFleRoleGrant(self: *Self, user_id: u64, role: []const u8) bool {
+        const kv = self.fle_role_grant_nodes.fetchRemove(fleRoleGrantId(user_id, role)) orelse return false;
+        self.store.deleteNode(kv.value);
+        return true;
+    }
+
+    /// Remove every grant of `user_id` (DROP USER); how many went.
+    pub fn revokeAllFleRoleGrants(self: *Self, user_id: u64) !usize {
+        var doomed: std.ArrayList(u64) = .empty;
+        defer doomed.deinit(self.allocator);
+        var it = self.fle_role_grant_nodes.iterator();
+        while (it.next()) |e| {
+            if ((try getIntProp(self.store, e.value_ptr.*, "user_id", -1)) == safeI64(user_id)) try doomed.append(self.allocator, e.key_ptr.*);
+        }
+        for (doomed.items) |id| {
+            if (self.fle_role_grant_nodes.fetchRemove(id)) |kv| self.store.deleteNode(kv.value);
+        }
+        return doomed.items.len;
+    }
+
+    /// Every stored grant whose fields are intact. Roles borrow from the
+    /// store; the slice is the caller's.
+    pub fn listFleRoleGrants(self: *Self, allocator: Allocator) ![]FleRoleGrantRecord {
+        var out: std.ArrayList(FleRoleGrantRecord) = .empty;
+        errdefer out.deinit(allocator);
+        var it = self.fle_role_grant_nodes.iterator();
+        while (it.next()) |e| {
+            const node_id = e.value_ptr.*;
+            const id = (try fleRoleGrantIdFromNode(self.store, node_id)) orelse continue;
+            if (id != e.key_ptr.*) continue;
+            try out.append(allocator, .{
+                .id = id,
+                .user_id = @intCast((try getIntProp(self.store, node_id, "user_id", 0))),
+                .role = (try getStringProp(self.store, node_id, "role", "")),
+            });
+        }
+        return out.toOwnedSlice(allocator);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6608-MFA-RECOVERY-STORE; FEATURE="MFA authentication"; ASPECT=DurableRecoveryDigests; STATUS=TESTED; TEST=tests/test_sonny6608_mfa_persist.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6608: a user's MFA recovery codes, held as SHA-256 digests
+    /// (`mfa.hashRecoveryCode`, SONNY-6600), never in plaintext: one
+    /// (:MfaRecoveryCodes {id, user_id, digests, created_at}) node per user
+    /// in the security graph, counted in and sealed by the HMAC chain like a
+    /// GraphGrant. `digests` is the digests in lower-case hex, comma
+    /// separated, in the order the codes were issued.
+    pub const max_mfa_recovery_codes = 32;
+
+    /// The map key of a node whose `user_id` is unusable: still mapped (so
+    /// the chain check sees it, and fails it), never equal to a user id.
+    fn mfaRecoveryKeyFromNode(store: *graph_store.GraphStore, node_id: u64) !u64 {
+        const uid = try getIntProp(store, node_id, "user_id", -1);
+        if (uid < 0) return node_id | (@as(u64, 1) << 63);
+        return @intCast(uid);
+    }
+
+    fn loadMfaRecoveryCodesFromGraph(self: *Self) !void {
+        const nodes = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, MFA_RECOVERY_CODES_LABEL) orelse return;
+        for (nodes) |node_id| {
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
+            if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
+            try self.mfa_recovery_nodes.put(try mfaRecoveryKeyFromNode(self.store, node_id), node_id);
+        }
+    }
+
+    /// Store `digests` as `user_id`'s recovery codes, replacing any it had;
+    /// none removes the record.
+    pub fn setMfaRecoveryDigests(self: *Self, user_id: u64, digests: []const [32]u8) !void {
+        if (digests.len == 0) {
+            _ = self.removeMfaRecoveryDigests(user_id);
+            return;
+        }
+        if (digests.len > max_mfa_recovery_codes) return error.FieldTooLong;
+        var buf: [max_mfa_recovery_codes * 65]u8 = undefined;
+        var n: usize = 0;
+        for (digests, 0..) |d, i| {
+            if (i > 0) {
+                buf[n] = ',';
+                n += 1;
+            }
+            const hex = std.fmt.bytesToHex(d, .lower);
+            @memcpy(buf[n..][0..64], &hex);
+            n += 64;
+        }
+        const joined = buf[0..n];
+        if (self.mfa_recovery_nodes.get(user_id)) |node_id| {
+            try self.store.setNodeProperty(node_id, "digests", .{ .String = joined });
+            try self.store.setNodeProperty(node_id, "created_at", .{ .Int = compat_timestamp() });
+            return;
+        }
+        const node_id = try self.createEntityNode(MFA_RECOVERY_CODES_LABEL);
+        errdefer self.store.deleteNode(node_id);
+        try self.store.setNodeProperty(node_id, "id", .{ .Int = safeI64(user_id) });
+        try self.store.setNodeProperty(node_id, "user_id", .{ .Int = safeI64(user_id) });
+        try self.store.setNodeProperty(node_id, "digests", .{ .String = joined });
+        try self.store.setNodeProperty(node_id, "created_at", .{ .Int = compat_timestamp() });
+        try self.mfa_recovery_nodes.put(user_id, node_id);
+    }
+
+    /// `user_id`'s stored recovery-code digests (the caller frees them), or
+    /// null when it has none. `error.CorruptMfaRecoveryRecord` for a record
+    /// that does not parse.
+    pub fn mfaRecoveryDigests(self: *Self, allocator: Allocator, user_id: u64) !?[][32]u8 {
+        const node_id = self.mfa_recovery_nodes.get(user_id) orelse return null;
+        const joined = try getStringProp(self.store, node_id, "digests", "");
+        if (joined.len == 0) return error.CorruptMfaRecoveryRecord;
+        var out: std.ArrayList([32]u8) = .empty;
+        errdefer out.deinit(allocator);
+        var it = std.mem.splitScalar(u8, joined, ',');
+        while (it.next()) |hex| {
+            if (hex.len != 64) return error.CorruptMfaRecoveryRecord;
+            var d: [32]u8 = undefined;
+            _ = std.fmt.hexToBytes(&d, hex) catch return error.CorruptMfaRecoveryRecord;
+            try out.append(allocator, d);
+        }
+        return try out.toOwnedSlice(allocator);
+    }
+
+    // CANARY: REQ=REQ-SONNY-6614-MFA-ATTEMPT-STORE; FEATURE="MFA authentication"; ASPECT=DurableAttemptRecord; STATUS=TESTED; TEST=tests/test_sonny6614_offline_verify.zig; OWNER=security; UPDATED=2026-11-15
+    /// SONNY-6614: a user's MFA verification attempts as the offline
+    /// `geode user mfa-verify` counts them (each run is a new process, so an
+    /// in-memory count, as the server's, carries nothing from one run to the
+    /// next): one (:MfaAttempts {id, user_id, fail_count, lockout_until_ms})
+    /// node per user, sealed by the HMAC chain.
+    pub const MfaAttemptState = struct {
+        fail_count: u32 = 0,
+        lockout_until_ms: i64 = 0,
+    };
+
+    fn loadMfaAttemptsFromGraph(self: *Self) !void {
+        const nodes = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, MFA_ATTEMPTS_LABEL) orelse return;
+        for (nodes) |node_id| {
+            const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse continue;
+            if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
+            try self.mfa_attempt_nodes.put(try mfaRecoveryKeyFromNode(self.store, node_id), node_id);
+        }
+    }
+
+    /// `user_id`'s stored attempts, or null when it has no record.
+    pub fn getMfaAttempts(self: *Self, user_id: u64) !?MfaAttemptState {
+        const node_id = self.mfa_attempt_nodes.get(user_id) orelse return null;
+        const count = try getIntProp(self.store, node_id, "fail_count", 0);
+        return .{
+            .fail_count = std.math.cast(u32, count) orelse std.math.maxInt(u32),
+            .lockout_until_ms = try getIntProp(self.store, node_id, "lockout_until_ms", 0),
+        };
+    }
+
+    /// Store `user_id`'s attempts (the record made if it has none).
+    pub fn setMfaAttempts(self: *Self, user_id: u64, state: MfaAttemptState) !void {
+        if (self.mfa_attempt_nodes.get(user_id)) |node_id| {
+            try self.store.setNodeProperty(node_id, "fail_count", .{ .Int = state.fail_count });
+            try self.store.setNodeProperty(node_id, "lockout_until_ms", .{ .Int = state.lockout_until_ms });
+            return;
+        }
+        const node_id = try self.createEntityNode(MFA_ATTEMPTS_LABEL);
+        errdefer self.store.deleteNode(node_id);
+        try self.store.setNodeProperty(node_id, "id", .{ .Int = safeI64(user_id) });
+        try self.store.setNodeProperty(node_id, "user_id", .{ .Int = safeI64(user_id) });
+        try self.store.setNodeProperty(node_id, "fail_count", .{ .Int = state.fail_count });
+        try self.store.setNodeProperty(node_id, "lockout_until_ms", .{ .Int = state.lockout_until_ms });
+        try self.mfa_attempt_nodes.put(user_id, node_id);
+    }
+
+    /// Remove `user_id`'s attempt record; false when it had none.
+    pub fn removeMfaAttempts(self: *Self, user_id: u64) bool {
+        const kv = self.mfa_attempt_nodes.fetchRemove(user_id) orelse return false;
+        self.store.deleteNode(kv.value);
+        return true;
+    }
+
+    /// Remove `user_id`'s recovery codes; false when it had none.
+    pub fn removeMfaRecoveryDigests(self: *Self, user_id: u64) bool {
+        const kv = self.mfa_recovery_nodes.fetchRemove(user_id) orelse return false;
+        self.store.deleteNode(kv.value);
+        return true;
     }
 
     // User operations
@@ -931,12 +1340,20 @@ pub const UserStorageBackend = struct {
         record.updated_at = record.created_at;
         record.auth_version = 1;
 
-        try self.user_cache.put(user_id, record);
+        // SONNY-1333: a new record whose node could not be written leaves the
+        // cache again. The chain counts cache entries and seals mapped nodes:
+        // a cached record with no node made the next seal panic
+        // (RecordCountMismatch).
+        const was_cached = self.hasCachedUser(user_id);
+        try self.putCachedUser(user_id, record);
+        errdefer if (!was_cached) {
+            _ = self.removeCachedUser(user_id);
+        };
         try self.upsertUserNode(record);
     }
 
     pub fn updateUser(self: *Self, user_id: u64, email: ?[]const u8, password_hash: ?[]const u8, is_active: ?bool, mfa_enabled: ?bool, mfa_secret: ?[]const u8) !void {
-        var record = self.user_cache.get(user_id) orelse return error.UserNotFound;
+        var record = self.getUser(user_id) orelse return error.UserNotFound;
         var bump_auth_version = false;
 
         if (email) |e| {
@@ -963,7 +1380,7 @@ pub const UserStorageBackend = struct {
         }
 
         if (mfa_secret) |secret| {
-            if (secret.len > 63) return error.FieldTooLong;
+            if (secret.len > mfa_secret_field_len - 1) return error.FieldTooLong;
             if (record.getMFASecret()) |existing| {
                 if (!std.mem.eql(u8, existing, secret)) bump_auth_version = true;
             } else {
@@ -977,7 +1394,7 @@ pub const UserStorageBackend = struct {
             record.auth_version += 1;
         }
 
-        try self.user_cache.put(user_id, record);
+        try self.putCachedUser(user_id, record);
         try self.upsertUserNode(record);
     }
 
@@ -1000,14 +1417,15 @@ pub const UserStorageBackend = struct {
             return error.FieldTooLong;
         }
         if (opts.mfa_secret) |secret| {
-            if (secret.len > 63) return error.FieldTooLong;
+            if (secret.len > mfa_secret_field_len - 1) return error.FieldTooLong;
         }
         if (opts.attributes_json) |attrs| {
             if (attrs.len > 2047) return error.FieldTooLong;
         }
 
-        var record = self.user_cache.get(opts.user_id) orelse blankUserRecord(opts.user_id);
-        const is_new_record = self.user_cache.get(opts.user_id) == null;
+        const cached = self.getUser(opts.user_id);
+        var record = cached orelse blankUserRecord(opts.user_id);
+        const is_new_record = cached == null;
 
         record.username_len = copyIntoField(&record.username, opts.username);
         record.email_len = copyIntoField(&record.email, opts.email);
@@ -1038,16 +1456,16 @@ pub const UserStorageBackend = struct {
         }
         record.updated_at = now;
 
-        try self.user_cache.put(opts.user_id, record);
+        try self.putCachedUser(opts.user_id, record);
         try self.upsertUserNode(record);
         return record.auth_version;
     }
 
     pub fn bumpUserAuthVersion(self: *Self, user_id: u64) !u64 {
-        var record = self.user_cache.get(user_id) orelse return error.UserNotFound;
+        var record = self.getUser(user_id) orelse return error.UserNotFound;
         record.auth_version += 1;
         record.updated_at = compat_milliTimestamp();
-        try self.user_cache.put(user_id, record);
+        try self.putCachedUser(user_id, record);
         try self.upsertUserNode(record);
         return record.auth_version;
     }
@@ -1056,9 +1474,9 @@ pub const UserStorageBackend = struct {
         const user_node_id = self.user_nodes.get(user_id) orelse return error.UserNotFound;
         const role_node_id = self.role_nodes.get(role_id) orelse return error.RoleNotFound;
 
-        if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
+        if ((try self.store.getOutgoingEdgeIdsOrError(user_node_id))) |edge_ids| {
             for (edge_ids) |edge_id| {
-                const edge = self.store.getEdgePtr(edge_id) orelse continue;
+                const edge = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                 if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
                 if (!std.mem.eql(u8, edge.label, HAS_ROLE_EDGE)) continue;
                 if (edge.to_id == role_node_id) return false;
@@ -1073,13 +1491,15 @@ pub const UserStorageBackend = struct {
         const user_node_id = self.user_nodes.get(user_id) orelse return error.UserNotFound;
         const role_node_id = self.role_nodes.get(role_id) orelse return error.RoleNotFound;
 
-        if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
+        if ((try self.store.getOutgoingEdgeIdsOrError(user_node_id))) |edge_ids| {
             for (edge_ids) |edge_id| {
-                const edge = self.store.getEdgePtr(edge_id) orelse continue;
+                const edge = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                 if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
                 if (!std.mem.eql(u8, edge.label, HAS_ROLE_EDGE)) continue;
                 if (edge.to_id == role_node_id) {
-                    self.store.deleteEdge(edge_id);
+                    // SONNY-6293: checked, as a record's node delete.
+                    if (!takeDeleteFault()) self.store.deleteEdge(edge_id);
+                    if (try self.store.edgeExistsForUndo(edge_id)) return error.SecurityRecordDeleteFailed;
                     return true;
                 }
             }
@@ -1092,9 +1512,9 @@ pub const UserStorageBackend = struct {
         var result = std.ArrayList(u64).empty;
         defer result.deinit(allocator);
 
-        if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
+        if ((try self.store.getOutgoingEdgeIdsOrError(user_node_id))) |edge_ids| {
             for (edge_ids) |edge_id| {
-                const edge = self.store.getEdgePtr(edge_id) orelse continue;
+                const edge = (try self.store.getEdgePtrHydratedChecked(edge_id)) orelse continue;
                 if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
                 if (!std.mem.eql(u8, edge.label, HAS_ROLE_EDGE)) continue;
 
@@ -1111,18 +1531,37 @@ pub const UserStorageBackend = struct {
         return result.toOwnedSlice(allocator);
     }
 
+    // CANARY: REQ=REQ-SONNY-6293-CHECKED-AUTH-DELETES; FEATURE="GQL Auth DDL Persistence"; ASPECT=CheckedRecordRemoval; STATUS=TESTED; TEST=tests/test_sonny6293_checked_auth_deletes.zig; OWNER=security; UPDATED=2026-11-12
+    /// SONNY-6293: the node goes first (checked), and the cached record and
+    /// node mapping only once it is gone. A delete that fails leaves the
+    /// record in memory and in the store, so the chain still counts and
+    /// seals it and the caller's error path runs. The record used to leave
+    /// memory first and the delete went unchecked: a node left behind was
+    /// loaded again at the next start, and the sealed count did not match.
     pub fn removeUser(self: *Self, user_id: u64) !void {
-        _ = self.user_cache.remove(user_id);
-        if (self.user_nodes.fetchRemove(user_id)) |kv| {
-            self.store.deleteNode(kv.value);
+        if (self.user_nodes.get(user_id)) |node_id| {
+            try self.deleteNodeChecked(node_id);
+            _ = self.user_nodes.remove(user_id);
         }
+        _ = self.removeCachedUser(user_id);
+        // SONNY-6608: the user's MFA recovery codes go with it, SONNY-6614:
+        // and its MFA attempt record.
+        _ = self.removeMfaRecoveryDigests(user_id);
+        _ = self.removeMfaAttempts(user_id);
     }
 
+    /// A copy of the cached record (SONNY-6329: under `user_cache_lock`).
     pub fn getUser(self: *Self, user_id: u64) ?UserRecord {
+        self.user_cache_lock.lockSharedUncancelable(cache_lock_io);
+        defer self.user_cache_lock.unlockShared(cache_lock_io);
         return self.user_cache.get(user_id);
     }
 
+    /// A copy of the cached record of `username` (SONNY-6329: under
+    /// `user_cache_lock`).
     pub fn getUserByUsername(self: *Self, username: []const u8) ?UserRecord {
+        self.user_cache_lock.lockSharedUncancelable(cache_lock_io);
+        defer self.user_cache_lock.unlockShared(cache_lock_io);
         var it = self.user_cache.valueIterator();
         while (it.next()) |record| {
             if (std.mem.eql(u8, record.getUsername(), username)) {
@@ -1132,59 +1571,70 @@ pub const UserStorageBackend = struct {
         return null;
     }
 
+    /// SONNY-6329: the id of `username`'s cached record, the authorization
+    /// hot path's lookup (`graphGrantCheck`): a shared hold for the scan, no
+    /// copy of the record, no allocation.
+    pub fn findUserIdByUsername(self: *Self, username: []const u8) ?u64 {
+        self.user_cache_lock.lockSharedUncancelable(cache_lock_io);
+        defer self.user_cache_lock.unlockShared(cache_lock_io);
+        var it = self.user_cache.valueIterator();
+        while (it.next()) |record| {
+            if (std.mem.eql(u8, record.getUsername(), username)) return record.id;
+        }
+        return null;
+    }
+
+    /// SONNY-6329: put a record in the cache (exclusive `user_cache_lock`,
+    /// for the map change alone).
+    pub fn putCachedUser(self: *Self, user_id: u64, record: UserRecord) !void {
+        self.user_cache_lock.lockUncancelable(cache_lock_io);
+        defer self.user_cache_lock.unlock(cache_lock_io);
+        try self.user_cache.put(user_id, record);
+    }
+
+    /// SONNY-6329: take a record out of the cache (exclusive
+    /// `user_cache_lock`). Returns whether it was there.
+    pub fn removeCachedUser(self: *Self, user_id: u64) bool {
+        self.user_cache_lock.lockUncancelable(cache_lock_io);
+        defer self.user_cache_lock.unlock(cache_lock_io);
+        return self.user_cache.remove(user_id);
+    }
+
+    pub fn hasCachedUser(self: *Self, user_id: u64) bool {
+        self.user_cache_lock.lockSharedUncancelable(cache_lock_io);
+        defer self.user_cache_lock.unlockShared(cache_lock_io);
+        return self.user_cache.contains(user_id);
+    }
+
+    pub fn cachedUserCount(self: *Self) usize {
+        self.user_cache_lock.lockSharedUncancelable(cache_lock_io);
+        defer self.user_cache_lock.unlockShared(cache_lock_io);
+        return self.user_cache.count();
+    }
+
+    /// SONNY-6329: the cached users' ids, copied under a shared hold (the
+    /// caller frees them), for a walk that does more than read the map (the
+    /// chain seal and verification write and read graph nodes).
+    pub fn cachedUserIds(self: *Self, allocator: Allocator) ![]u64 {
+        self.user_cache_lock.lockSharedUncancelable(cache_lock_io);
+        defer self.user_cache_lock.unlockShared(cache_lock_io);
+        const ids = try allocator.alloc(u64, self.user_cache.count());
+        var it = self.user_cache.keyIterator();
+        var i: usize = 0;
+        while (it.next()) |id| : (i += 1) ids[i] = id.*;
+        return ids;
+    }
+
     // HMAC-aware user persist
     pub fn persistUserWithHmac(self: *Self, user_id: u64, username: []const u8, email: []const u8, password_hash: []const u8, salt: []const u8, hmac_key: *const [32]u8) !void {
         // Persist the user record first (creates/updates node in graph)
         try self.persistUser(user_id, username, email, password_hash, salt);
 
-        // Compute HMAC over all user properties (sorted by key name)
-        var id_buf: [20]u8 = undefined;
-        const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{user_id}) catch "0";
-
-        const record = self.user_cache.get(user_id) orelse return error.UserNotFound;
-
-        var created_buf: [20]u8 = undefined;
-        const created_str = std.fmt.bufPrint(&created_buf, "{d}", .{record.created_at}) catch "0";
-        var updated_buf: [20]u8 = undefined;
-        const updated_str = std.fmt.bufPrint(&updated_buf, "{d}", .{record.updated_at}) catch "0";
-        var pwd_changed_buf: [20]u8 = undefined;
-        const pwd_changed_str = std.fmt.bufPrint(&pwd_changed_buf, "{d}", .{record.password_changed_at}) catch "0";
-        var lockout_buf: [20]u8 = undefined;
-        const lockout_str = std.fmt.bufPrint(&lockout_buf, "{d}", .{record.lockout_until}) catch "0";
-        var last_login_buf: [20]u8 = undefined;
-        const last_login_str = std.fmt.bufPrint(&last_login_buf, "{d}", .{record.last_login}) catch "0";
-        var failed_buf: [10]u8 = undefined;
-        const failed_str = std.fmt.bufPrint(&failed_buf, "{d}", .{record.failed_login_attempts}) catch "0";
-        var auth_version_buf: [20]u8 = undefined;
-        const auth_version_str = std.fmt.bufPrint(&auth_version_buf, "{d}", .{record.auth_version}) catch "0";
-
-        const mfa_secret = record.getMFASecret() orelse "";
-        const attributes_json = record.getAttributesJson() orelse "";
-
-        const props = [_]auth_hmac.KeyValue{
-            .{ .key = "attributes_json", .value = attributes_json },
-            .{ .key = "auth_version", .value = auth_version_str },
-            .{ .key = "created_at", .value = created_str },
-            .{ .key = "email", .value = email },
-            .{ .key = "failed_login_attempts", .value = failed_str },
-            .{ .key = "hash_algorithm", .value = record.getHashAlgorithm() },
-            .{ .key = "id", .value = id_str },
-            .{ .key = "is_active", .value = if (record.is_active) "true" else "false" },
-            .{ .key = "is_default_user", .value = if (record.is_default_user) "true" else "false" },
-            .{ .key = "is_superuser", .value = if (record.is_superuser) "true" else "false" },
-            .{ .key = "last_login", .value = last_login_str },
-            .{ .key = "lockout_until", .value = lockout_str },
-            .{ .key = "mfa_enabled", .value = if (record.mfa_enabled) "true" else "false" },
-            .{ .key = "mfa_secret", .value = mfa_secret },
-            .{ .key = "password_changed_at", .value = pwd_changed_str },
-            .{ .key = "password_hash", .value = password_hash },
-            .{ .key = "password_reset_required", .value = if (record.password_reset_required) "true" else "false" },
-            .{ .key = "salt", .value = salt },
-            .{ .key = "updated_at", .value = updated_str },
-            .{ .key = "username", .value = username },
-        };
-
-        const hmac_bytes = computeRecordHmacChecked(hmac_key, &props);
+        // SONNY-6484: the HMAC is computed from the STORED record, by the
+        // function chain verification (auth_graph_manager.verifyUserRecords)
+        // uses, so the writer and the verifier cannot disagree.
+        const record = self.getUser(user_id) orelse return error.UserNotFound;
+        const hmac_bytes = userRecordHmac(hmac_key, &record);
         const hmac_hex = auth_hmac.hmacToHex(&hmac_bytes);
 
         // Store the HMAC hex string as a node property
@@ -1203,7 +1653,7 @@ pub const UserStorageBackend = struct {
         node_id: ?u64, // graph store node ID, null if not yet created
     };
 
-    pub fn loadChainRoot(self: *Self) ?ChainRootRecord {
+    pub fn loadChainRoot(self: *Self) !?ChainRootRecord {
         const nodes_opt = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, AUTH_CHAIN_ROOT_LABEL);
         if (nodes_opt == null) return null;
         const nodes = nodes_opt.?;
@@ -1219,8 +1669,10 @@ pub const UserStorageBackend = struct {
         // perfectly healthy fresh store, every 5 minutes until restart.
         // Hydration rebuilds the body from the durable engine, so null here
         // now really means "no chain root exists" — the genuine tamper
-        // signal (root deleted/corrupted on disk) stays loud.
-        const node = self.store.getNodePtrHydrated(node_id) orelse return null;
+        // signal (root deleted/corrupted on disk) stays loud. SONNY-6594 (5):
+        // a root that cannot be READ is the read's error, not "no root" (which
+        // `verifyChain` reports as MissingChainRoot, "POSSIBLE TAMPERING").
+        const node = (try self.store.getNodePtrHydratedChecked(node_id)) orelse return null;
         if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) return null;
 
         self.chain_root_node = node_id;
@@ -1235,16 +1687,31 @@ pub const UserStorageBackend = struct {
             .node_id = node_id,
         };
 
-        record.chain_hash_len = copyIntoField(&record.chain_hash, getStringProp(self.store, node_id, "chain_hash", ""));
-        const count_val = getIntProp(self.store, node_id, "record_count", 0);
+        record.chain_hash_len = copyIntoField(&record.chain_hash, (try getStringProp(self.store, node_id, "chain_hash", "")));
+        const count_val = (try getIntProp(self.store, node_id, "record_count", 0));
         record.record_count = if (count_val >= 0) @intCast(count_val) else 0;
-        record.last_verified = getIntProp(self.store, node_id, "last_verified", 0);
-        record.hmac_key_id_len = copyIntoField(&record.hmac_key_id, getStringProp(self.store, node_id, "hmac_key_id", ""));
+        record.last_verified = (try getIntProp(self.store, node_id, "last_verified", 0));
+        record.hmac_key_id_len = copyIntoField(&record.hmac_key_id, (try getStringProp(self.store, node_id, "hmac_key_id", "")));
 
         // Only return if we actually have a chain hash stored
         if (record.chain_hash_len == 0) return null;
 
         return record;
+    }
+
+    /// SONNY-6273: a test-only fault hook. While non-zero, each
+    /// `persistChainRoot` consumes one and fails after writing the chain
+    /// hash and before the record count, as a chain-root write that failed
+    /// part way (the four properties are not written atomically). Production
+    /// code never sets it.
+    pub var fail_chain_root_writes_for_testing: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+
+    fn takeChainRootFault() bool {
+        var n = fail_chain_root_writes_for_testing.load(.acquire);
+        while (n > 0) {
+            n = fail_chain_root_writes_for_testing.cmpxchgWeak(n, n - 1, .acq_rel, .acquire) orelse return true;
+        }
+        return false;
     }
 
     pub fn persistChainRoot(self: *Self, chain_hash_hex: []const u8, record_count: u64, hmac_key_id: []const u8) !void {
@@ -1255,6 +1722,7 @@ pub const UserStorageBackend = struct {
         };
 
         try self.store.setNodeProperty(node_id, "chain_hash", .{ .String = chain_hash_hex });
+        if (takeChainRootFault()) return error.ChainRootWriteFailed;
         try self.store.setNodeProperty(node_id, "record_count", .{ .Int = safeI64(record_count) });
         try self.store.setNodeProperty(node_id, "last_verified", .{ .Int = compat_milliTimestamp() });
         try self.store.setNodeProperty(node_id, "hmac_key_id", .{ .String = hmac_key_id });
@@ -1275,15 +1743,22 @@ pub const UserStorageBackend = struct {
         record.created_at = compat_milliTimestamp();
         record.updated_at = record.created_at;
 
+        // SONNY-1333: as in persistUser.
+        const was_cached = self.role_cache.contains(role_id);
         try self.role_cache.put(role_id, record);
+        errdefer if (!was_cached) {
+            _ = self.role_cache.remove(role_id);
+        };
         try self.upsertRoleNode(record);
     }
 
+    /// SONNY-6293: as `removeUser`.
     pub fn removeRole(self: *Self, role_id: u64) !void {
-        _ = self.role_cache.remove(role_id);
-        if (self.role_nodes.fetchRemove(role_id)) |kv| {
-            self.store.deleteNode(kv.value);
+        if (self.role_nodes.get(role_id)) |node_id| {
+            try self.deleteNodeChecked(node_id);
+            _ = self.role_nodes.remove(role_id);
         }
+        _ = self.role_cache.remove(role_id);
     }
 
     pub fn getRole(self: *Self, role_id: u64) ?RoleRecord {
@@ -1345,11 +1820,13 @@ pub const UserStorageBackend = struct {
         return max_id + 1;
     }
 
+    /// SONNY-6293: as `removeUser`.
     pub fn removePermission(self: *Self, permission_id: u64) !void {
-        _ = self.permission_cache.remove(permission_id);
-        if (self.permission_nodes.fetchRemove(permission_id)) |kv| {
-            self.store.deleteNode(kv.value);
+        if (self.permission_nodes.get(permission_id)) |node_id| {
+            try self.deleteNodeChecked(node_id);
+            _ = self.permission_nodes.remove(permission_id);
         }
+        _ = self.permission_cache.remove(permission_id);
     }
 
     pub fn getPermission(self: *Self, permission_id: u64) ?PermissionRecord {
@@ -1448,17 +1925,31 @@ pub const UserStorageBackend = struct {
         try self.upsertPolicyNode(record);
     }
 
+    /// SONNY-3038: put a policy record back as it was (its cached record and
+    /// node) after a change that failed part way. The caller recomputes its
+    /// HMAC and seals the chain.
+    pub fn restorePolicyRecord(self: *Self, record: PolicyRecord) !void {
+        try self.policy_cache.put(record.id, record);
+        try self.upsertPolicyNode(record);
+    }
+
+    /// SONNY-6293: as `removeUser`. DROP POLICY (`AuthGraphManager.dropPolicy`)
+    /// then seals what is stored and fails, and the catalog keeps the policy.
     pub fn removePolicy(self: *Self, policy_id: u64) !void {
-        _ = self.policy_cache.remove(policy_id);
-        if (self.policy_nodes.fetchRemove(policy_id)) |kv| {
-            self.store.deleteNode(kv.value);
+        if (self.policy_nodes.get(policy_id)) |node_id| {
+            try self.deleteNodeChecked(node_id);
+            _ = self.policy_nodes.remove(policy_id);
         }
+        _ = self.policy_cache.remove(policy_id);
     }
 
     pub fn getPolicy(self: *Self, policy_id: u64) ?PolicyRecord {
         return self.policy_cache.get(policy_id);
     }
 
+    /// SONNY-6329: unlocked; for a single-threaded owner only (startup
+    /// hydration before the server serves, the offline CLI). A server path
+    /// uses `cachedUserIds` + `getUser`.
     pub fn userIterator(self: *Self) std.AutoHashMap(u64, UserRecord).ValueIterator {
         return self.user_cache.valueIterator();
     }
@@ -1488,7 +1979,7 @@ pub const UserStorageBackend = struct {
             .is_active = true,
             .is_superuser = false,
             .mfa_enabled = false,
-            .mfa_secret = [_]u8{0} ** 64,
+            .mfa_secret = [_]u8{0} ** mfa_secret_field_len,
             .mfa_secret_len = 0,
             .failed_login_attempts = 0,
             .lockout_until = 0,
@@ -1577,7 +2068,11 @@ pub const UserStorageBackend = struct {
     }
 
     fn upsertGraphGrantNode(self: *Self, record: GraphGrantRecord) !void {
-        const node_id = self.graph_grant_nodes.get(record.id) orelse try self.createEntityNode(GRAPH_GRANT_LABEL);
+        const existing = self.graph_grant_nodes.get(record.id);
+        const node_id = existing orelse try self.createEntityNode(GRAPH_GRANT_LABEL);
+        // SONNY-1333: a node made here and left unmapped by a failed put could
+        // not be found to undo; take it out again.
+        errdefer if (existing == null and !self.graph_grant_nodes.contains(record.id)) self.store.deleteNode(node_id);
         try self.graph_grant_nodes.put(record.id, node_id);
 
         // The id is a 64-bit hash: store its bit pattern, not a clamped value.
@@ -1609,8 +2104,8 @@ pub const UserStorageBackend = struct {
         return @intCast(len);
     }
 
-    fn getStringProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, default: []const u8) []const u8 {
-        if (store.getNodeProperty(node_id, key)) |val| {
+    fn getStringProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, default: []const u8) ![]const u8 {
+        if ((try store.getNodePropertyOrError(node_id, key))) |val| {
             if (val == .String) return val.String;
         }
         return default;
@@ -1633,16 +2128,16 @@ pub const UserStorageBackend = struct {
         };
     }
 
-    fn getIntProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, default: i64) i64 {
-        if (store.getNodeProperty(node_id, key)) |val| {
+    fn getIntProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, default: i64) !i64 {
+        if ((try store.getNodePropertyOrError(node_id, key))) |val| {
             if (val == .Int) return val.Int;
         }
         return default;
     }
 
     /// SONNY-2750: does node `node_id` have property `key`, of type `tag`?
-    fn hasProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, tag: std.meta.Tag(graph_store.PropertyValue)) bool {
-        const val = store.getNodeProperty(node_id, key) orelse return false;
+    fn hasProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, tag: std.meta.Tag(graph_store.PropertyValue)) !bool {
+        const val = (try store.getNodePropertyOrError(node_id, key)) orelse return false;
         return val == tag;
     }
 
@@ -1655,37 +2150,40 @@ pub const UserStorageBackend = struct {
     /// `geode auth policy create` a table and an empty graph. A record that
     /// lacks a property this reads, or has one of another type, is
     /// `.invalid`: a missing property is never read as the value GPS wrote.
-    fn legacyPolicyShape(store: *graph_store.GraphStore, node_id: u64) PolicyKind {
-        const description = exactStringProp(store, node_id, "description") orelse return .invalid;
-        const graph = exactStringProp(store, node_id, "graph") orelse return .invalid;
-        const table = exactStringProp(store, node_id, "table") orelse return .invalid;
-        const audit_level = exactIntProp(store, node_id, "audit_level") orelse return .invalid;
-        const created_by = exactIntProp(store, node_id, "created_by") orelse return .invalid;
-        const has_check = store.getNodeProperty(node_id, "check_clause") != null;
+    fn legacyPolicyShape(store: *graph_store.GraphStore, node_id: u64) !PolicyKind {
+        const description = (try exactStringProp(store, node_id, "description")) orelse return .invalid;
+        const graph = (try exactStringProp(store, node_id, "graph")) orelse return .invalid;
+        const table = (try exactStringProp(store, node_id, "table")) orelse return .invalid;
+        const audit_level = (try exactIntProp(store, node_id, "audit_level")) orelse return .invalid;
+        const created_by = (try exactIntProp(store, node_id, "created_by")) orelse return .invalid;
+        const has_check = (try store.getNodePropertyOrError(node_id, "check_clause")) != null;
         const gps_shape = description.len == 0 and table.len == 0 and graph.len != 0 and !has_check and
             audit_level == 0 and created_by == 0;
         return if (gps_shape) .gps else .rls;
     }
 
-    fn exactStringProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8) ?[]const u8 {
-        const val = store.getNodeProperty(node_id, key) orelse return null;
+    fn exactStringProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8) !?[]const u8 {
+        const val = (try store.getNodePropertyOrError(node_id, key)) orelse return null;
         return if (val == .String) val.String else null;
     }
 
-    fn exactIntProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8) ?i64 {
-        const val = store.getNodeProperty(node_id, key) orelse return null;
+    fn exactIntProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8) !?i64 {
+        const val = (try store.getNodePropertyOrError(node_id, key)) orelse return null;
         return if (val == .Int) val.Int else null;
     }
 
-    fn getBoolProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, default: bool) bool {
-        if (store.getNodeProperty(node_id, key)) |val| {
+    fn getBoolProp(store: *graph_store.GraphStore, node_id: u64, key: []const u8, default: bool) !bool {
+        if ((try store.getNodePropertyOrError(node_id, key))) |val| {
             if (val == .Bool) return val.Bool;
         }
         return default;
     }
 
     pub fn upsertUserNode(self: *Self, record: UserRecord) !void {
-        const node_id = self.user_nodes.get(record.id) orelse try self.createEntityNode(USER_LABEL);
+        const existing = self.user_nodes.get(record.id);
+        const node_id = existing orelse try self.createEntityNode(USER_LABEL);
+        // SONNY-1333: as in upsertGraphGrantNode.
+        errdefer if (existing == null and !self.user_nodes.contains(record.id)) self.store.deleteNode(node_id);
         try self.user_nodes.put(record.id, node_id);
 
         // Build a batch of all property mutations so the underlying
@@ -1756,7 +2254,10 @@ pub const UserStorageBackend = struct {
     }
 
     fn upsertRoleNode(self: *Self, record: RoleRecord) !void {
-        const node_id = self.role_nodes.get(record.id) orelse try self.createEntityNode(ROLE_LABEL);
+        const existing = self.role_nodes.get(record.id);
+        const node_id = existing orelse try self.createEntityNode(ROLE_LABEL);
+        // SONNY-1333: as in upsertGraphGrantNode.
+        errdefer if (existing == null and !self.role_nodes.contains(record.id)) self.store.deleteNode(node_id);
         try self.role_nodes.put(record.id, node_id);
 
         try self.store.setNodeProperty(node_id, "id", .{ .Int = safeI64(record.id) });
@@ -1877,7 +2378,7 @@ test "persistUserWithHmac stores hmac property on graph node" {
     // Verify the hmac property is stored on the graph node (64 hex chars)
     const node_id = backend.user_nodes.get(1);
     try testing.expect(node_id != null);
-    const hmac_prop = store.getNodeProperty(node_id.?, "hmac");
+    const hmac_prop = (try store.getNodePropertyOrError(node_id.?, "hmac"));
     try testing.expect(hmac_prop != null);
     try testing.expect(hmac_prop.? == .String);
     try testing.expectEqual(@as(usize, 64), hmac_prop.?.String.len);
@@ -1889,6 +2390,12 @@ test "persistUserWithHmac stores hmac property on graph node" {
 }
 
 test "persistUserWithHmac produces deterministic HMAC" {
+    // SONNY-6484: the HMAC covers created_at/updated_at (millisecond clock),
+    // so two separately created records are different input; this test used
+    // to compare two such records and passed only when both persists landed
+    // in the same millisecond. Determinism is: equal (key, record) gives an
+    // equal HMAC, and the stored HMAC is the one chain verification
+    // recomputes from the stored record.
     var store1 = try graph_store.GraphStore.init(testing.allocator);
     defer store1.deinit();
     var backend1 = try UserStorageBackend.init(testing.allocator, &store1);
@@ -1904,13 +2411,28 @@ test "persistUserWithHmac produces deterministic HMAC" {
     try backend1.persistUserWithHmac(1, "bob", "bob@example.com", "pw_hash", "saltsalt", &hmac_key);
     try backend2.persistUserWithHmac(1, "bob", "bob@example.com", "pw_hash", "saltsalt", &hmac_key);
 
-    const node_id1 = backend1.user_nodes.get(1).?;
-    const node_id2 = backend2.user_nodes.get(1).?;
+    const record1 = backend1.getUser(1).?;
+    const record2 = backend2.getUser(1).?;
+    const hmac1 = (try store1.getNodePropertyOrError(backend1.user_nodes.get(1).?, "hmac")).?.String;
+    const hmac2 = (try store2.getNodePropertyOrError(backend2.user_nodes.get(1).?, "hmac")).?.String;
 
-    const hmac1 = store1.getNodeProperty(node_id1, "hmac").?.String;
-    const hmac2 = store2.getNodeProperty(node_id2, "hmac").?.String;
+    // The stored HMAC is the verifier's recomputation over the stored record.
+    try testing.expectEqualStrings(&auth_hmac.hmacToHex(&userRecordHmac(&hmac_key, &record1)), hmac1);
+    try testing.expectEqualStrings(&auth_hmac.hmacToHex(&userRecordHmac(&hmac_key, &record2)), hmac2);
 
-    try testing.expect(std.mem.eql(u8, hmac1, hmac2));
+    // Equal input, equal HMAC: record2 with record1's timestamps is record1.
+    var record2_same_time = record2;
+    record2_same_time.created_at = record1.created_at;
+    record2_same_time.updated_at = record1.updated_at;
+    try testing.expectEqual(userRecordHmac(&hmac_key, &record1), userRecordHmac(&hmac_key, &record2_same_time));
+    try testing.expectEqualStrings(hmac1, &auth_hmac.hmacToHex(&userRecordHmac(&hmac_key, &record2_same_time)));
+
+    // Any covered field or the key changes it.
+    var tampered = record1;
+    tampered.is_superuser = !tampered.is_superuser;
+    try testing.expect(!std.mem.eql(u8, &userRecordHmac(&hmac_key, &record1), &userRecordHmac(&hmac_key, &tampered)));
+    const other_key = [_]u8{0x43} ** 32;
+    try testing.expect(!std.mem.eql(u8, &userRecordHmac(&hmac_key, &record1), &userRecordHmac(&other_key, &record1)));
 }
 
 test "loadChainRoot returns null when no chain root exists" {
@@ -1920,7 +2442,7 @@ test "loadChainRoot returns null when no chain root exists" {
     var backend = try UserStorageBackend.init(testing.allocator, &store);
     defer backend.deinit();
 
-    const root = backend.loadChainRoot();
+    const root = try backend.loadChainRoot();
     try testing.expect(root == null);
 }
 
@@ -1936,7 +2458,7 @@ test "persistChainRoot creates and loadChainRoot retrieves" {
     try backend.persistChainRoot(chain_hash_hex, 5, "key-id-001");
 
     // Load and verify
-    const root = backend.loadChainRoot();
+    const root = try backend.loadChainRoot();
     try testing.expect(root != null);
     const r = root.?;
     try testing.expectEqual(@as(u64, 5), r.record_count);
@@ -1959,7 +2481,7 @@ test "persistChainRoot updates existing chain root" {
     try backend.persistChainRoot(hash1, 3, "key-v1");
     try backend.persistChainRoot(hash2, 7, "key-v2");
 
-    const root = backend.loadChainRoot();
+    const root = try backend.loadChainRoot();
     try testing.expect(root != null);
     const r = root.?;
     try testing.expectEqual(@as(u64, 7), r.record_count);
@@ -1990,19 +2512,19 @@ test "new UserRecord fields persist and reload from graph" {
 
     // Verify values in the graph node
     const node_id = backend.user_nodes.get(10).?;
-    const algo = store.getNodeProperty(node_id, "hash_algorithm");
+    const algo = (try store.getNodePropertyOrError(node_id, "hash_algorithm"));
     try testing.expect(algo != null);
     try testing.expect(std.mem.eql(u8, algo.?.String, "argon2id"));
 
-    const default_user = store.getNodeProperty(node_id, "is_default_user");
+    const default_user = (try store.getNodePropertyOrError(node_id, "is_default_user"));
     try testing.expect(default_user != null);
     try testing.expect(default_user.?.Bool == true);
 
-    const reset_req = store.getNodeProperty(node_id, "password_reset_required");
+    const reset_req = (try store.getNodePropertyOrError(node_id, "password_reset_required"));
     try testing.expect(reset_req != null);
     try testing.expect(reset_req.?.Bool == true);
 
-    const pwd_changed = store.getNodeProperty(node_id, "password_changed_at");
+    const pwd_changed = (try store.getNodePropertyOrError(node_id, "password_changed_at"));
     try testing.expect(pwd_changed != null);
     try testing.expectEqual(@as(i64, 1700000000), pwd_changed.?.Int);
 }

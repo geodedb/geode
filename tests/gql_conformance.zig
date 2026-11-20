@@ -1,6 +1,9 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
+const test_scratch = @import("test_scratch.zig");
 const schema = @import("schema");
 
 // Zig 0.16 compat: std.Thread.sleep removed; nanosleep directly.
@@ -31,8 +34,8 @@ fn deinitExpectedValue(allocator: std.mem.Allocator, val: ExpectedValue) void {
 
 // ENG-3921 follow-up: each test spawns its own server. Give every spawn its
 // own data dir; these tests are single-server and need no cross-spawn
-// durability.
-var run_query_serial = std.atomic.Value(u32).init(0);
+// durability. SONNY-2413: each dir is removed once its server stops (it used
+// to be left behind as /tmp/geode-gqlconf-<pid>-<n>, one per query).
 
 // SONNY-2775: `SESSION SET PROPERTY GRAPH G1` used to create the test graphs G1
 // and G2 in the server itself. The tests that switch to them now create them,
@@ -56,15 +59,14 @@ fn runQuery(allocator: std.mem.Allocator, query: []const u8) !util.ExecResult {
 /// `query` on a fresh server, after the `seeds` (each a request of its own on
 /// the same connection, each required to succeed).
 fn runQuerySeeded(allocator: std.mem.Allocator, seeds: []const []const u8, query: []const u8) !util.ExecResult {
-    const addr = "127.0.0.1:3181";
-    const serial = run_query_serial.fetchAdd(1, .monotonic);
-    const pid = if (comptime @import("builtin").os.tag == .linux)
-        @as(i64, std.os.linux.getpid())
-    else
-        @as(i64, std.c.getpid());
-    var dir_buf: [96]u8 = undefined;
-    const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-gqlconf-{d}-{d}", .{ pid, serial });
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, null);
+    // SONNY-6301: a free port per server. A fixed 127.0.0.1:3181 let two
+    // runs on one host reach each other's server.
+    const addr = try util.formatAddr(allocator, try util.getRandomPort());
+    defer allocator.free(addr);
+    // Removed after the server below stops (defers run in reverse).
+    var data_dir = try test_scratch.ScratchDir.create("gqlconf");
+    defer data_dir.remove();
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir.path() }, null);
     defer server.deinit();
 
     // Wait for server to be ready with retries
@@ -106,15 +108,14 @@ fn runQuerySeeded(allocator: std.mem.Allocator, seeds: []const []const u8, query
 /// (geode#for-in-param): the FOR collection env must resolve `$param` to the
 /// bound list, not Null.
 fn runQueryParams(allocator: std.mem.Allocator, query: []const u8, params: std.ArrayList(schema.Param)) !util.ExecResult {
-    const addr = "127.0.0.1:3181";
-    const serial = run_query_serial.fetchAdd(1, .monotonic);
-    const pid = if (comptime @import("builtin").os.tag == .linux)
-        @as(i64, std.os.linux.getpid())
-    else
-        @as(i64, std.c.getpid());
-    var dir_buf: [96]u8 = undefined;
-    const data_dir = try std.fmt.bufPrint(&dir_buf, "/tmp/geode-gqlconf-{d}-{d}", .{ pid, serial });
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, null);
+    // SONNY-6301: a free port per server. A fixed 127.0.0.1:3181 let two
+    // runs on one host reach each other's server.
+    const addr = try util.formatAddr(allocator, try util.getRandomPort());
+    defer allocator.free(addr);
+    // Removed after the server below stops (defers run in reverse).
+    var data_dir = try test_scratch.ScratchDir.create("gqlconf");
+    defer data_dir.remove();
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir.path() }, null);
     defer server.deinit();
 
     var attempts: u32 = 0;
@@ -218,6 +219,8 @@ fn expectError(
 // CANARY: REQ=REQ-LIB-MIGRATION-PROTOBUF-001; FEATURE="Protobuf Wire Protocol"; ASPECT=WireProtocolCompatibility; STATUS=TESTED; OWNER=protocol; UPDATED=2026-02-03
 
 test "T1: SKIP recognized" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query = "RETURN 1 AS x UNION ALL RETURN 2 AS x UNION ALL RETURN 3 AS x SKIP 1 LIMIT 1";
     var result = try runQuery(allocator, query);
@@ -230,6 +233,8 @@ test "T1: SKIP recognized" {
 }
 
 test "T2: LIMIT without ORDER BY allowed" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query = "RETURN 3 AS x UNION ALL RETURN 1 AS x UNION ALL RETURN 2 AS x LIMIT 2";
     var result = try runQuery(allocator, query);
@@ -243,6 +248,8 @@ test "T2: LIMIT without ORDER BY allowed" {
 }
 
 test "T3: ORDER BY expression allowed" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query = "RETURN 1 AS a, 2 AS b UNION ALL RETURN 2 AS a, 3 AS b ORDER BY a + b DESC";
     var result = try runQuery(allocator, query);
@@ -256,6 +263,8 @@ test "T3: ORDER BY expression allowed" {
 }
 
 test "T4: Per-key NULLS policy - LAST" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query = "RETURN NULL AS x UNION ALL RETURN 1 AS x ORDER BY x NULLS LAST";
     var result = try runQuery(allocator, query);
@@ -269,6 +278,8 @@ test "T4: Per-key NULLS policy - LAST" {
 }
 
 test "T5: Per-key NULLS policy - mixed" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query = "RETURN NULL AS a, 1 AS b UNION ALL RETURN 1 AS a, NULL AS b ORDER BY a NULLS FIRST, b NULLS LAST";
     var result = try runQuery(allocator, query);
@@ -282,6 +293,8 @@ test "T5: Per-key NULLS policy - mixed" {
 }
 
 test "T6: Quoted identifier as alias" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query = "RETURN 1 AS \"order\"";
     var result = try runQuery(allocator, query);
@@ -294,6 +307,8 @@ test "T6: Quoted identifier as alias" {
 }
 
 test "T7: UNKNOWN keyword" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query = "RETURN NULL IS UNKNOWN AS u, 5 IS NOT UNKNOWN AS v";
     var result = try runQuery(allocator, query);
@@ -306,6 +321,8 @@ test "T7: UNKNOWN keyword" {
 }
 
 test "T8: // comment accepted + flagged" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query =
         "// head\n" ++
@@ -320,6 +337,8 @@ test "T8: // comment accepted + flagged" {
 }
 
 test "T9: ORDER BY ordinal allowed + flagged" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query = "RETURN 1 AS a, 2 AS b ORDER BY 2";
     var result = try runQuery(allocator, query);
@@ -332,6 +351,8 @@ test "T9: ORDER BY ordinal allowed + flagged" {
 }
 
 test "T10: -- disabled (clear diagnostic)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query = "RETURN 1 -- nope";
     var result = try runQuery(allocator, query);
@@ -341,6 +362,8 @@ test "T10: -- disabled (clear diagnostic)" {
 }
 
 test "T11: Session graph switch applies" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query =
         "SESSION SET PROPERTY GRAPH \"G1\";\n" ++
@@ -355,6 +378,8 @@ test "T11: Session graph switch applies" {
 }
 
 test "T12: Switch to another graph" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query =
         "SESSION SET PROPERTY GRAPH G2;\n" ++
@@ -369,6 +394,8 @@ test "T12: Switch to another graph" {
 }
 
 test "T13: Non-existent graph is refused (3F000)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // SONNY-2775: SESSION SET PROPERTY GRAPH checks that the graph exists, as
     // USE GRAPH does; it used to switch to any name (here, an empty graph).
     const allocator = testing.allocator;
@@ -382,6 +409,8 @@ test "T13: Non-existent graph is refused (3F000)" {
 }
 
 test "T14: COUNT(*) over matches" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query =
         "SESSION SET PROPERTY GRAPH G1;\n" ++
@@ -396,6 +425,8 @@ test "T14: COUNT(*) over matches" {
 }
 
 test "T15: GROUP BY property with HAVING" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query =
         "SESSION SET PROPERTY GRAPH G1;\n" ++
@@ -410,6 +441,8 @@ test "T15: GROUP BY property with HAVING" {
 }
 
 test "T16: SUM/AVG with NULLs skipped" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query =
         "SESSION SET PROPERTY GRAPH G1;\n" ++
@@ -424,6 +457,8 @@ test "T16: SUM/AVG with NULLs skipped" {
 }
 
 test "T17: COUNT(expr) vs COUNT(*)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query =
         "SESSION SET PROPERTY GRAPH G1;\n" ++
@@ -438,6 +473,8 @@ test "T17: COUNT(expr) vs COUNT(*)" {
 }
 
 test "T18: COUNT(DISTINCT …)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query =
         "SESSION SET PROPERTY GRAPH G2;\n" ++
@@ -452,6 +489,8 @@ test "T18: COUNT(DISTINCT …)" {
 }
 
 test "T19: GROUP BY legality (error)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     const query =
         "SESSION SET PROPERTY GRAPH G1;\n" ++
@@ -464,6 +503,8 @@ test "T19: GROUP BY legality (error)" {
 }
 
 test "T20: FOR over a parameter-bound list iterates every element" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // geode#for-in-param: `FOR n IN $nums RETURN n` must iterate the wire-bound
     // list. The bug collapses this to a single NULL iteration because the FOR
     // collection env (statement_handlers.zig:832-836) drops request params.

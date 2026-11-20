@@ -4,7 +4,7 @@ const graph_store = @import("geode").graph_store;
 const user_storage = @import("../src/storage/user_storage.zig");
 
 // Tests for User Management with GraphStore-backed storage
-// CANARY: REQ=REQ-GQL-202; FEATURE="UserManagement"; ASPECT=PersistentStorage; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_202_UserManagement; OWNER=security; UPDATED=2025-10-04
+// CANARY: REQ=REQ-GQL-202; FEATURE="UserManagement"; ASPECT=PersistentStorage; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_202_UserManagement; OWNER=security; UPDATED=2026-11-14
 
 test "TestCANARY_REQ_GQL_202_UserManagement" {
     const allocator = testing.allocator;

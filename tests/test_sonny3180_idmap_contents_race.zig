@@ -102,7 +102,7 @@ const Race = struct {
             if (self.st.getAllEdgesForTenant(a, null)) |ids| a.free(ids) else |e| self.noteErr("getAllEdgesForTenant", e);
             _ = self.st.getNodeCount();
             _ = self.st.getEdgeCount();
-            _ = self.st.countNodesForGraph("default", "t-none");
+            if (self.st.countNodesForGraph("default", "t-none")) |_| {} else |e| self.noteErr("countNodesForGraph", e);
             _ = self.walks.fetchAdd(1, .monotonic);
         }
     }

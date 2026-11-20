@@ -75,7 +75,7 @@ the 36 profile additions are appended.
 | 22 | `profile` | `true` | planner/execution |
 | 23 | `explain_policy` | `true` | security/policy |
 | 24 | `sonny_profile_version` | `1` | execution/profile |
-| 25 | `read_only_covers_admin_ddl` | `false` | execution/security |
+| 25 | `read_only_covers_admin_ddl` | `true` | execution/security |
 | 26 | `strict_tenancy_production_default` | `false` | security/tenancy |
 | 27 | `tenant_scope_fail_closed` | `false` | security/tenancy |
 | 28 | `tenant_binding_server_verified` | `false` | transport/security |
@@ -159,9 +159,13 @@ missing or client-invented tenant scope from widening retrieval.
 
 ### Read-only execution
 
-`read_only_execute` records the existing read-only execution surface;
-`read_only_covers_admin_ddl` remains false until auth, policy, and other admin
-mutations are included in the enforced boundary.
+`read_only_execute` records the existing read-only execution surface.
+`read_only_covers_admin_ddl` is true since SONNY-2751: a read-only request
+(and the MCP read-only mode) refuses the security DDL (CREATE / ALTER / DROP
+USER, a password change, CREATE / DROP ROLE, GRANT, REVOKE, CREATE / ALTER /
+DROP POLICY) and every procedure that is not on the read-only list (the
+tenant, FLE, TDE and CDC mutators among them), as it refuses data and schema
+changes.
 
 ### CDC
 
@@ -181,7 +185,7 @@ retrieval remains disabled while any of these gates is false.
 
 `explain`, `profile`, and `explain_policy` are required and currently true.
 They are node-local surfaces; distributed execution does not imply distributed
-EXPLAIN/PROFILE support (`docs/DISTRIBUTED_QUERY_COORDINATION.md:7`).
+EXPLAIN/PROFILE support (`docs/DISTRIBUTED_QUERY_COORDINATION.md:10`).
 
 ### Metric and dimension pinning
 

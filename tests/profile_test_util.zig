@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const proto = @import("proto_test_util.zig");
 
 pub fn runProfile(allocator: std.mem.Allocator, query: []const u8, env: ?[]const []const u8) ![]u8 {
@@ -6,7 +7,7 @@ pub fn runProfile(allocator: std.mem.Allocator, query: []const u8, env: ?[]const
     const addr = try proto.formatAddr(allocator, port);
     errdefer allocator.free(addr);
 
-    var server = try proto.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, env);
+    var server = try proto.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr }, env);
     errdefer server.deinit();
     try proto.waitForServerReady(allocator, addr, 10000);
 

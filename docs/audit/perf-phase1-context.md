@@ -44,7 +44,7 @@ Top-level `src/main.zig` is the default Zig scaffold (32 LOC placeholder) — NO
 | WAL fsync target | < 1 ms avg | BENCHMARK_REPORT.md:56 | confirmed (target) |
 | WAL write throughput | > 10 MB/s (4 KB pages) | BENCHMARK_REPORT.md:57 | confirmed (target) |
 | TDE page-encryption throughput | > 30 MB/s | BENCHMARK_REPORT.md:94 | confirmed (target) |
-| TDE OLTP overhead | < 5% | BENCHMARK_REPORT.md:94 | confirmed (target) |
+| TDE OLTP overhead | measured: ~+1% with per-commit fsync, ~+29% commit path without fsync | `zig build test-sonny6435-tde-overhead` | corrected 2026-11-12 (SONNY-6435); re-measured 2026-11-13 on graph_storage 0.4.14 |
 | RBAC check | < 1 μs | BENCHMARK_REPORT.md:119 | confirmed (target) |
 | ABAC (5 policies) | < 10 μs | BENCHMARK_REPORT.md:119 | confirmed (target) |
 | RLS filter generation | < 100 μs | BENCHMARK_REPORT.md:119 | confirmed (target) |
@@ -59,7 +59,7 @@ Top-level `src/main.zig` is the default Zig scaffold (32 LOC placeholder) — NO
 | QUIC `BufferedProtoReader.nextMessage` | CPU+Net | Per-message framing on hot stream path | src/server/quic_connection_handler.zig:282 |
 | `StreamScheduler` DRR loop | CPU | Per-stream quantum accounting, touched on every chunk | src/transport/stream_scheduler.zig:102 |
 | `wal.zig` fsync path | I/O (blocking) | Durability barrier, <1ms target, SSD-dependent | src/wal.zig |
-| `tde_file_encryption.zig` page encrypt | CPU | AES-256-GCM per page, targets 30 MB/s, <5% OLTP | src/storage/tde_file_encryption.zig |
+| `tde_file_encryption.zig` page encrypt | CPU | AES-256-GCM per page, targets 30 MB/s; overhead measured by test-sonny6435-tde-overhead | src/storage/tde_file_encryption.zig |
 | HNSW `searchVectorF32` | CPU | SIMD distance; <50ns/8D L2 claim in CLAUDE.md | src/index/vector_index.zig:92 |
 | `graph_store.zig` node/edge access | CPU+Mem | 6,560 LOC core; tier-1 rwlock | src/graph_store.zig |
 | `planner/cost_model.zig`, `enumerator.zig` | CPU | Per-query overhead; cost-based join enumeration | src/planner/cost_model.zig |

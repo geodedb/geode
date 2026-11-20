@@ -5,6 +5,7 @@ const build_options = @import("build_options");
 // Model Context Protocol (MCP) server for Geode - enables AI/LLM integration
 // The MCP server connects to the Geode database via QUIC transport for real query execution
 const mcp = @import("mcp");
+const error_detail = @import("error_detail.zig");
 
 const tools = @import("tools.zig");
 const resources = @import("resources.zig");
@@ -98,7 +99,7 @@ pub const GeodeMcpServer = struct {
         if (options.auth_mode == .bearer and options.bearer_token == null) {
             if (!@import("builtin").is_test) {
                 std.debug.print("ERROR: MCP server requires a bearer token when auth_mode is 'bearer' (the default). " ++
-                    "Set --mcp-token or pass bearer_token in Options. " ++
+                    "Set geode mcp --token (or GEODE_MCP_TOKEN), or pass bearer_token in Options. " ++
                     "To disable auth (NOT recommended), explicitly set auth_mode to .none.\n", .{});
             }
             return error.MissingBearerToken;
@@ -212,7 +213,7 @@ pub const GeodeMcpServer = struct {
         // CANARY: REQ=REQ-MCP-READ-ONLY-001; FEATURE="MCPReadOnly"; ASPECT=OptionDefinition; STATUS=TESTED; TEST=tests/test_mcp_read_only.zig; OWNER=mcp; UPDATED=2026-08-28
         // Task 6 (hybrid-RAG audit spec): defense-in-depth read-only mode.
         // When true, the `query` tool classifies each statement in-process
-        // (real parser + query_traits.isMutatingProgram) and refuses
+        // (real parser + query_traits.changesStoredState) and refuses
         // mutating or unparseable programs before they reach the wire.
         // Defaults to false to preserve existing behavior.
         read_only: bool = false,
@@ -228,10 +229,47 @@ pub const isLoopbackBind = @import("geode").net_policy.isLoopbackHost;
 // =============================================================================
 // MCP Handler Implementations
 // =============================================================================
+//
+// SONNY-6531 result ownership (mcp v0.1.22+, Handler "Result Ownership"):
+// every callback that returns `[]const u8` hands the slice to the server,
+// which frees it with the allocator passed to `mcp.Server.init`, after the
+// response is built, for a notification, and when building the response
+// fails. `GeodeMcpServer.init` passes `self.allocator` there, so every
+// handler below returns bytes from `self.allocator`: fixed text goes through
+// `ownedCopy`, never a literal (an invalid free). A callback that returns an
+// error hands nothing over.
+//
+// SONNY-6552: each result is the MCP 2025-11-25 result object on one line
+// (the stdio transport is newline-delimited), and a request geode cannot
+// answer is a JSON-RPC error, signalled by the Zig error the library maps
+// (mcp.zig processJsonValue): `error.InvalidParams` -> -32602 (an unknown
+// tool or prompt, a bad prompt argument, a cursor geode never issued),
+// `error.ResourceNotFound` -> -32002 (an unknown resource URI). Since
+// mcp v0.1.23 (SONNY-6585) `ToolNotFound` / `PromptNotFound` map to
+// -32602 too (they were -32002), and geode uses them; each error's message
+// and data come from `error_detail` (mcp.setErrorDetail), not the Zig
+// error's name. Every result is one JSON value (the library answers any
+// other with -32603).
+// CANARY: REQ=REQ-SONNY-6531-MCP-OWNERSHIP; FEATURE="MCPResultOwnership"; ASPECT=AllocatorOwnedHandlerResults; STATUS=TESTED; TEST=tests/test_sonny6531_mcp_ownership.zig; OWNER=mcp; UPDATED=2026-11-14
+
+/// A copy of `text` from the allocator the mcp server frees results with.
+fn ownedCopy(ctx: ?*anyopaque, text: []const u8) ![]const u8 {
+    const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
+    return self.allocator.dupe(u8, text);
+}
+
+/// SONNY-6585: geode's lists are one page and it never issues a cursor, so
+/// any cursor is invalid params (-32602); the message says so.
+fn refuseCursor(ctx: ?*anyopaque, comptime method: []const u8, cursor: ?[]const u8) !void {
+    const c = cursor orelse return;
+    const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
+    try error_detail.set(self.allocator, "Invalid cursor: geode answers " ++ method ++ " in one page and issues no cursor", .{ .cursor = c });
+    return error.InvalidParams;
+}
 
 fn listToolsHandler(ctx: ?*anyopaque, cursor: ?[]const u8) anyerror![]const u8 {
-    _ = ctx;
-    return tools.listTools(cursor);
+    try refuseCursor(ctx, "tools/list", cursor);
+    return ownedCopy(ctx, try tools.listTools(cursor));
 }
 
 fn callToolHandler(ctx: ?*anyopaque, name: []const u8, args_json: []const u8, cancel: *const mcp.CancelToken) anyerror![]const u8 {
@@ -244,18 +282,25 @@ fn callToolHandler(ctx: ?*anyopaque, name: []const u8, args_json: []const u8, ca
 }
 
 fn listResourcesHandler(ctx: ?*anyopaque, cursor: ?[]const u8) anyerror![]const u8 {
-    _ = ctx;
-    return resources.listResources(cursor);
+    const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
+    try refuseCursor(ctx, "resources/list", cursor);
+    return resources.listResources(self.allocator, cursor);
 }
 
 fn readResourceHandler(ctx: ?*anyopaque, uri: []const u8) anyerror![]const u8 {
     const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
-    return resources.readResource(self.allocator, self.geode_endpoint, uri);
+    return resources.readResource(self.allocator, self.geode_endpoint, uri) catch |err| {
+        // SONNY-6585: -32002 with the URI as data (escaped by std.json).
+        if (err == error.ResourceNotFound) {
+            try error_detail.setFmt(self.allocator, "Resource not found: {s}", .{uri}, .{ .uri = uri });
+        }
+        return err;
+    };
 }
 
 fn listResourceTemplatesHandler(ctx: ?*anyopaque) anyerror![]const u8 {
-    _ = ctx;
-    return resources.listResourceTemplates();
+    const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
+    return resources.listResourceTemplates(self.allocator);
 }
 
 // GAP-0516: Resource subscriptions are intentionally unsupported.
@@ -271,7 +316,7 @@ fn listResourceTemplatesHandler(ctx: ?*anyopaque) anyerror![]const u8 {
 // "this server does not implement this method" signal. (Previously
 // we returned `error.NotImplemented`, which the MCP library maps to
 // -32603 InternalError — misleading, because it suggests a server
-// bug rather than a missing capability. See mcp.zig:2795–2807.)
+// bug rather than a missing capability. See mcp.zig:2950–2962 in v0.1.22.)
 //
 // Clients that need change tracking should poll via `readResource`.
 // When Geode gains a graph-topology event producer, swap these
@@ -279,9 +324,9 @@ fn listResourceTemplatesHandler(ctx: ?*anyopaque) anyerror![]const u8 {
 //
 // KNOWN ADVERTISEMENT CAVEAT (documented, tested in
 // tests/test_gap0516_mcp_capabilities.zig and docs/MCP_SERVER.md):
-// the pinned `mcp` library (v0.1.7) hardcodes
+// the pinned `mcp` library (v0.1.22) hardcodes
 // `"resources":{"subscribe":true,...}` in its `initialize` response
-// (mcp.zig buildInitialize ~3127) and exposes no ServerOptions field
+// (mcp.zig handleInitialize ~3193) and exposes no ServerOptions field
 // to override it. Geode therefore cannot make the advertised
 // capability string match the handler behaviour without forking the
 // dependency. The authoritative, runtime-truthful contract is the
@@ -306,13 +351,24 @@ fn unsubscribeResourceHandler(ctx: ?*anyopaque, uri: []const u8) anyerror!void {
 }
 
 fn listPromptsHandler(ctx: ?*anyopaque, cursor: ?[]const u8) anyerror![]const u8 {
-    _ = ctx;
-    return prompts.listPrompts(cursor);
+    const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
+    try refuseCursor(ctx, "prompts/list", cursor);
+    return prompts.listPrompts(self.allocator, cursor);
 }
 
 fn getPromptHandler(ctx: ?*anyopaque, name: []const u8, args_json: ?[]const u8) anyerror![]const u8 {
-    _ = ctx;
-    return prompts.getPrompt(name, args_json);
+    const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
+    // SONNY-6585: mcp v0.1.23 answers PromptNotFound with -32602 (it was
+    // -32002); every refusal says what was wrong, with the prompt's name.
+    if (!prompts.exists(name)) {
+        try error_detail.setFmt(self.allocator, "Unknown prompt: {s}", .{name}, .{ .name = name });
+        return error.PromptNotFound;
+    }
+    var why: prompts.Why = .{};
+    return prompts.getPromptExplained(self.allocator, name, args_json, &why) catch |err| {
+        if (err == error.InvalidParams and why.len > 0) try error_detail.set(self.allocator, why.slice(), .{ .name = name });
+        return err;
+    };
 }
 
 // GAP-0516: completion/complete is optional per MCP spec §4.4.
@@ -320,16 +376,20 @@ fn getPromptHandler(ctx: ?*anyopaque, name: []const u8, args_json: ?[]const u8) 
 // MCP "completion" is argument-completion for tools and resources
 // (autocomplete parameter values while the user is typing), not
 // general text completion. Geode does not yet maintain a per-tool
-// argument suggestion index, so we return an empty JSON array — a
-// valid "no suggestions available" response. Clients receive a
-// successful response with zero items and fall back to showing
-// their own suggestions or plain text input. This is the spec-
-// compliant way to handle an unimplemented completion provider.
-// CANARY: REQ=REQ-MCP-COMPLETE-001; FEATURE="MCPCompletion"; ASPECT=EmptyProvider; STATUS=EXEMPT; OWNER=mcp; UPDATED=2026-04-11
+// argument suggestion index, so we answer a CompleteResult with no
+// values — a valid "no suggestions available" response. Clients
+// receive a successful response with zero items and fall back to
+// showing their own suggestions or plain text input.
+// SONNY-6544: the result is the protocol's CompleteResult object
+// (2025-11-25, the pinned library's version:
+// {"completion":{"values":[...],"total"?,"hasMore"?}}); it used to be a
+// bare `[]`, which has no `completion` for a client to read.
+// CANARY: REQ=REQ-MCP-COMPLETE-001; FEATURE="MCPCompletion"; ASPECT=EmptyProvider; STATUS=TESTED; TEST=tests/test_sonny6544_mcp_completion.zig; OWNER=mcp; UPDATED=2026-11-14
+pub const empty_completion = "{\"completion\":{\"values\":[],\"total\":0,\"hasMore\":false}}";
+
 fn completeHandler(ctx: ?*anyopaque, params_json: []const u8) anyerror![]const u8 {
-    _ = ctx;
     _ = params_json;
-    return "[]";
+    return ownedCopy(ctx, empty_completion);
 }
 
 // GAP-0516: logging/setLevel is optional per MCP spec §7.2.
@@ -448,12 +508,46 @@ test "GAP-0516: unsubscribeResourceHandler returns MethodNotFound (paired with s
     );
 }
 
-test "GAP-0516: completeHandler returns empty JSON array (spec §4.4 optional)" {
-    const result = try completeHandler(null, "{\"ref\":{\"type\":\"ref/tool\",\"name\":\"query\"}}");
-    // Must be a valid JSON array literal the MCP client can parse.
-    // "[]" is 2 bytes; anything else (including null-terminated or
-    // object form) would break the response contract.
-    try std.testing.expectEqualStrings("[]", result);
+test "GAP-0516: completeHandler returns an empty CompleteResult (SONNY-6544)" {
+    const allocator = std.testing.allocator;
+    const server = try GeodeMcpServer.init(allocator, .{ .auth_mode = .none });
+    defer server.deinit();
+    // SONNY-6531: the result is the caller's (the mcp server frees it).
+    const result = try completeHandler(server, "{\"ref\":{\"type\":\"ref/prompt\",\"name\":\"explore_graph\"},\"argument\":{\"name\":\"graph\",\"value\":\"\"}}");
+    defer allocator.free(result);
+    // A CompleteResult object, not a bare array (the dispatch-level
+    // contract is tests/test_sonny6544_mcp_completion.zig).
+    try std.testing.expectEqualStrings("{\"completion\":{\"values\":[],\"total\":0,\"hasMore\":false}}", result);
+}
+
+test "SONNY-6531: every handler returns a result from the server's allocator" {
+    const allocator = std.testing.allocator;
+    const server = try GeodeMcpServer.init(allocator, .{ .auth_mode = .none });
+    defer server.deinit();
+    // std.testing.allocator panics on freeing a literal and fails on a leak.
+    const results = [_][]const u8{
+        try listToolsHandler(server, null),
+        try listResourcesHandler(server, null),
+        try listResourceTemplatesHandler(server),
+        try listPromptsHandler(server, null),
+        try getPromptHandler(server, "find_nodes", "{\"label\":\"Person\"}"),
+        try completeHandler(server, "{}"),
+    };
+    for (results) |r| {
+        try std.testing.expect(r.len > 0);
+        allocator.free(r);
+    }
+    // SONNY-6552: an unknown prompt, a missing required argument, an
+    // unknown URI and a cursor are errors (nothing is handed over).
+    // SONNY-6585: an unknown prompt is PromptNotFound (-32602 in mcp
+    // v0.1.23). Each leaves an error detail for the dispatch to send; a
+    // dispatch frees the one left here (the mcp server clears a stale
+    // detail before it handles a request).
+    try std.testing.expectError(error.PromptNotFound, getPromptHandler(server, "no_such_prompt", "{}"));
+    try std.testing.expectError(error.InvalidParams, getPromptHandler(server, "find_nodes", null));
+    try std.testing.expectError(error.ResourceNotFound, readResourceHandler(server, "unknown://resource"));
+    try std.testing.expectError(error.InvalidParams, listResourcesHandler(server, "next"));
+    if (try server.server.processMessage("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}")) |r| allocator.free(r);
 }
 
 test "GAP-0516: setLogLevelHandler silently accepts any level (spec §7.2)" {

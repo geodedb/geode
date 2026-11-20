@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-017; FEATURE="Property Access Hot Path"; ASPECT=Engine; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_017_PropertyAccessHotPath; OWNER=engine; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-017; FEATURE="Property Access Hot Path"; ASPECT=Engine; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_017_PropertyAccessHotPath; OWNER=engine; UPDATED=2026-11-14
 
 fn propertyLookup(map: *std.StringHashMap(u64), key: []const u8) u64 {
     if (map.get(key)) |v| return v else return 0;

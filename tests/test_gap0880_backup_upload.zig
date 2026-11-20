@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 
 // GAP-0880: Backup protocol upload ingestion + honest compression codec.
@@ -108,6 +109,8 @@ fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 // metadata) records `.gzip`, the payload bytes carry the gzip magic, and the
 // round-trip restores the graph intact.
 test "GAP-0880 gzip backup compresses for real and round-trips" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     defer resetGlobalStorage(allocator);
 
@@ -150,7 +153,8 @@ test "GAP-0880 gzip backup compresses for real and round-trips" {
     // Round-trip: restore and verify the data is identical.
     const restore_dir = try makeTempDir(allocator, "gzrestore");
     defer cleanupTempDir(allocator, restore_dir);
-    try mgr.restoreToPointInTime(restore_dir, meta.timestamp + 1);
+    var restored_side = try mgr.restoreInto(restore_dir, meta.timestamp + 1, .{});
+    restored_side.deinit();
 
     try initAdapterForDir(allocator, restore_dir);
     var restored = try graph_store.GraphStore.init(allocator);
@@ -158,13 +162,15 @@ test "GAP-0880 gzip backup compresses for real and round-trips" {
     restored.data_dir = restore_dir;
     try restored.loadFromFile();
 
-    try testing.expectEqual(@as(usize, 2), restored.nodes.count());
-    try testing.expectEqual(@as(usize, 1), restored.edges.count());
-    const name = restored.getNodeProperty(seed.alice, "name") orelse return error.NodePropertyMissing;
+    // Counted through the hydrating reads: the restored store is cold, its
+    // resident `nodes`/`edges` caches empty until first access (SONNY-6277).
+    try testing.expectEqual(@as(usize, 2), restored.getNodeCount());
+    try testing.expectEqual(@as(usize, 1), restored.getEdgeCount());
+    const name = (try restored.getNodePropertyOrError(seed.alice, "name")) orelse return error.NodePropertyMissing;
     try testing.expectEqualStrings("Alice", name.String);
-    const title = restored.getNodeProperty(seed.post, "title") orelse return error.NodePropertyMissing;
+    const title = (try restored.getNodePropertyOrError(seed.post, "title")) orelse return error.NodePropertyMissing;
     try testing.expectEqualStrings("Hello World", title.String);
-    const edge_ptr = restored.edges.getPtr(seed.edge) orelse return error.EdgeMissing;
+    const edge_ptr = (try restored.getEdgePtrHydratedChecked(seed.edge)) orelse return error.EdgeMissing;
     const since = edge_ptr.properties.get("since") orelse return error.EdgePropertyMissing;
     try testing.expectEqual(@as(i64, 2026), since.Int);
 }
@@ -173,6 +179,8 @@ test "GAP-0880 gzip backup compresses for real and round-trips" {
 // recording a codec that wasn't applied (or silently degrading) lies to the
 // caller about what they got.
 test "GAP-0880 zstd request fails with UnsupportedCompression" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     defer resetGlobalStorage(allocator);
 
@@ -203,6 +211,8 @@ test "GAP-0880 zstd request fails with UnsupportedCompression" {
 // to disk, registers the backup durably in the metadata log, and the result
 // is restorable. Before GAP-0880 the handlers created an EMPTY file.
 test "GAP-0880 upload ingestion stores payload bytes and registers durably" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     defer resetGlobalStorage(allocator);
 
@@ -259,21 +269,26 @@ test "GAP-0880 upload ingestion stores payload bytes and registers durably" {
 
     const restore_dir = try makeTempDir(allocator, "uprestore");
     defer cleanupTempDir(allocator, restore_dir);
-    try fresh_mgr.restoreToPointInTime(restore_dir, ingested.timestamp + 1);
+    var restored_side = try fresh_mgr.restoreInto(restore_dir, ingested.timestamp + 1, .{});
+    restored_side.deinit();
 
     try initAdapterForDir(allocator, restore_dir);
     var restored = try graph_store.GraphStore.init(allocator);
     defer restored.deinit();
     restored.data_dir = restore_dir;
     try restored.loadFromFile();
-    try testing.expectEqual(@as(usize, 2), restored.nodes.count());
-    try testing.expectEqual(@as(usize, 1), restored.edges.count());
-    const name = restored.getNodeProperty(seed.alice, "name") orelse return error.NodePropertyMissing;
+    // Counted through the hydrating reads: the restored store is cold, its
+    // resident `nodes`/`edges` caches empty until first access (SONNY-6277).
+    try testing.expectEqual(@as(usize, 2), restored.getNodeCount());
+    try testing.expectEqual(@as(usize, 1), restored.getEdgeCount());
+    const name = (try restored.getNodePropertyOrError(seed.alice, "name")) orelse return error.NodePropertyMissing;
     try testing.expectEqualStrings("Alice", name.String);
 }
 
 // Rejection paths: nothing may be written or registered for bad uploads.
 test "GAP-0880 upload ingestion rejects invalid payloads" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     defer resetGlobalStorage(allocator);
 

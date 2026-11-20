@@ -24,11 +24,12 @@ const planner = @import("../planner.zig");
 // DP join enumeration, plan-tree CardinalityEstimator/CostModel) was DELETED.
 // It referenced `planner.PlanNode` / `planner.PlannerContext`, neither of
 // which exists in ../planner.zig — the code could not compile and survived
-// only through Zig's lazy analysis (zero live callers). The live cost-based
-// path is `src/server/index_optimizer.zig` (IndexOptimizer) plus the
+// only through Zig's lazy analysis (zero live callers). There is no live
+// cost-based plan choice: `src/server/index_optimizer.zig`, named here before,
+// was never compiled and was removed (SONNY-6298). EXPLAIN reports the
 // per-operator seed model in `src/planner/cost_explain.zig`. What remains
 // here is the genuinely shared piece: `StatsRegistry` (used by
-// `src/planner/cost_model.zig` and `src/distributed/query_planner.zig`)
+// `src/planner/cost_model.zig`)
 // and a truthful `explainEstimateJSON` that derives per-scan-node row
 // estimates from collected statistics.
 

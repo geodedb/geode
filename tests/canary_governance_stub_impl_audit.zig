@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=StubImplAudit; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceStubImplAudit; OWNER=tooling; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=StubImplAudit; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_010_GovernanceStubImplAudit; OWNER=tooling; UPDATED=2026-11-14
 
 fn shouldSkipDir(name: []const u8) bool {
     return std.mem.eql(u8, name, ".git") or

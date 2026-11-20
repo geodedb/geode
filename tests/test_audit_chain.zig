@@ -151,8 +151,8 @@ test "AuditLogger recovery from existing file" {
         var logger = try AuditLogger.init(allocator, config);
         defer logger.deinit();
 
-        try testing.expectEqual(@as(u64, 1), logger.last_seq); // 1 event written, so last_seq is 1? Or 0? Usually 0-indexed?
-        // If first event is seq 0, last_seq is 0. If next is 1.
-        // Let's assume start at 1.
+        // 1 event, then the DIGEST a clean close appends (SONNY-3147: it
+        // signs the records written since the last DIGEST): seq_no 2.
+        try testing.expectEqual(@as(u64, 2), logger.last_seq);
     }
 }

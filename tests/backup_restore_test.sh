@@ -39,7 +39,7 @@ BACKUP_DIR="$WORK_DIR/backups"
 LISTEN="127.0.0.1:8443"
 BIN="./zig-out/bin/geode"
 ADMIN_USER="geode"
-ADMIN_PW="gap0862-itest-pw"
+ADMIN_PW="Gap Backup Restore Itest Passphrase"
 export GEODE_ADMIN_PASSWORD="$ADMIN_PW"
 TLS="--insecure-tls-skip-verify"
 AUTH=(--user "$ADMIN_USER" --password "$ADMIN_PW")
@@ -135,9 +135,11 @@ else
     record "Backup artifact exists and is non-empty" 1 "no backup file under $BACKUP_DIR"
 fi
 
-# CLI restore from the backup file must report success.
-RESTORE_OUT=$($BIN restore "$BACKUP_FILE" --server "$LISTEN" $TLS "${AUTH[@]}" --yes 2>&1)
-assert_contains "CLI restore reports completion" "$RESTORE_OUT" "Restore completed successfully|RESTORE: (Restore initiated successfully|Point-in-time restore completed|Full backup restore completed)"
+# CLI restore writes the backup file into a fresh directory, offline, and
+# reports success only after verifying it (SONNY-6280). The backup holds
+# auth records and (SONNY-6299) not the HMAC key: pass the source's key file.
+RESTORE_OUT=$($BIN restore "$BACKUP_FILE" --data-dir "$WORK_DIR/restored" --yes --hmac-key-file "$DATA_DIR/.geode_hmac_key" 2>&1)
+assert_contains "CLI restore writes and verifies" "$RESTORE_OUT" "RESTORE: Restored and verified [0-9]+ files"
 
 # CLI backup list must run and not error out (directory scan).
 LIST_OUT=$($BIN backup list --dir "$BACKUP_DIR" 2>&1)

@@ -1,8 +1,11 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const util = @import("proto_test_util.zig");
 const schema = @import("schema");
+const test_ports = @import("test_ports.zig");
 
 // Zig 0.16 compat: std.Thread.sleep removed; nanosleep directly.
 fn compat_sleep(ns: u64) void {
@@ -26,13 +29,20 @@ fn nowNs() u64 {
     return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
 }
 
+/// A loopback QUIC address on a port the kernel reports free (SONNY-6332:
+/// these tests used fixed ports 3182-3186, shared with every other run on
+/// the host).
+fn freeAddr(buf: []u8) ![]const u8 {
+    return std.fmt.bufPrint(buf, "127.0.0.1:{d}", .{try test_ports.freeUdpPort()});
+}
+
 const ServerFixture = struct {
     server: util.ServerHandle,
     client: util.QuicProtoClient,
 };
 
 fn startServer(allocator: std.mem.Allocator, addr: []const u8) !ServerFixture {
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr }, null);
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr }, null);
     errdefer server.deinit();
 
     // Wait for server to be ready with retries
@@ -258,8 +268,11 @@ test "GAP-0203 Fix #3: error response format" {
 // ============================================================================
 
 test "GAP-0203 Fix #4: QUIC transaction state is in-memory" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
-    const addr = "127.0.0.1:3182";
+    var addr_buf: [32]u8 = undefined;
+    const addr = try freeAddr(&addr_buf);
     var fixture = try startServer(allocator, addr);
     defer fixture.client.deinit();
     defer fixture.server.deinit();
@@ -290,8 +303,11 @@ const ResumeLater = struct {
 };
 
 test "GAP-0203 Fix #4: a live-but-slow server is waited for, not timed out" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
-    const addr = "127.0.0.1:3185";
+    var addr_buf: [32]u8 = undefined;
+    const addr = try freeAddr(&addr_buf);
     var fixture = try startServer(allocator, addr);
     defer fixture.client.deinit();
     defer fixture.server.deinit();
@@ -309,8 +325,11 @@ test "GAP-0203 Fix #4: a live-but-slow server is waited for, not timed out" {
 }
 
 test "GAP-0203 Fix #4: a server that exited fails fast, not after the reply deadline" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
-    const addr = "127.0.0.1:3186";
+    var addr_buf: [32]u8 = undefined;
+    const addr = try freeAddr(&addr_buf);
     var fixture = try startServer(allocator, addr);
     defer fixture.client.deinit();
     defer fixture.server.deinit();
@@ -364,8 +383,11 @@ test "GAP-0203 Fix #10: debug logging is gated off by default" {
 // ============================================================================
 
 test "GAP-0203 Benchmark: Query execution throughput baseline" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
-    const addr = "127.0.0.1:3183";
+    var addr_buf: [32]u8 = undefined;
+    const addr = try freeAddr(&addr_buf);
     var fixture = try startServer(allocator, addr);
     defer fixture.client.deinit();
     defer fixture.server.deinit();
@@ -392,8 +414,11 @@ test "GAP-0203 Benchmark: Query execution throughput baseline" {
 }
 
 test "GAP-0203 Benchmark: Query execution with connection reuse" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
-    const addr = "127.0.0.1:3184";
+    var addr_buf: [32]u8 = undefined;
+    const addr = try freeAddr(&addr_buf);
     var fixture = try startServer(allocator, addr);
     defer fixture.client.deinit();
     defer fixture.server.deinit();
@@ -427,6 +452,8 @@ test "GAP-0203 Benchmark: Query execution with connection reuse" {
 }
 
 test "GAP-0203 Benchmark: Graph management query detection cost" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const queries = [_][]const u8{
         "RETURN 1 AS x",
         "MATCH (n:Person) WHERE n.age > 30 RETURN n.name",

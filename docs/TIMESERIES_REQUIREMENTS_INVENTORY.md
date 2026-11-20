@@ -5,6 +5,14 @@
 **Scope:** `src/timeseries/`, `tests/ts_store_integration.zig`, `tests/e2e_timeseries.zig`, `src/benchmarks/bench_timeseries.zig`, `specs/signal-analysis/`, build system, GitLab issues
 **Mode:** --skip-issues (no platform issues created)
 
+> **Status note (2026-11-11, SONNY-6298):** `src/timeseries/chunk_storage.zig`
+> was reachable from no executable or test in `build.zig`, so it was never
+> compiled, and it has been removed. The chunk-storage rows below are covered
+> by `tests/e2e_timeseries.zig` (`zig build test-e2e-timeseries`), which calls
+> the library's `timeseries_lib.chunk_storage` directly. The server's ingest
+> path does not use chunk storage: it writes through `timeseries-storage`
+> (`src/timeseries/timeseries.zig`).
+
 ---
 
 ## 0. Re-audit Addendum (2026-06-10, GAP-0866)

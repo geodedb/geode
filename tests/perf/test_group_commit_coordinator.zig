@@ -223,7 +223,7 @@ test "REQ-QUIC-HC-016: group commit reserves shard-aligned engine slots" {
         else => return error.UnexpectedPropertyType,
     }
 
-    const seq = store.getNodeProperty(node_id, "seq") orelse return error.PropertyNotFound;
+    const seq = (try store.getNodePropertyOrError(node_id, "seq")) orelse return error.PropertyNotFound;
     switch (seq) {
         .Int => |value| try testing.expectEqual(@as(i64, 42), value),
         else => return error.UnexpectedPropertyType,

@@ -82,8 +82,11 @@ fn callQueryTool(server: *GeodeMcpServer, allocator: std.mem.Allocator, query: [
 // for the `query` tool (formatErrorResponse / formatToolResult, both
 // heap-allocate via json_lib.encode) was never freed by the server. Fixed
 // upstream in mcp v0.1.12 (commit 956b07d): tools/call results are now
-// `.owned = true` and the server frees them. Back on the strict
-// std.testing.allocator below — a regression of the leak now fails these
+// `.owned = true` and the server frees them. Since mcp v0.1.22
+// (SONNY-6531) the server frees EVERY handler result (geode's handlers
+// return allocator-owned bytes; tests/test_sonny6531_mcp_ownership.zig
+// covers each method). Strict std.testing.allocator below — a regression of
+// the leak, or a handler returning a literal (an invalid free), fails these
 // tests, which is the whole point.
 test "read-only MCP refuses mutating query tool calls before the wire" {
     const allocator = std.testing.allocator;

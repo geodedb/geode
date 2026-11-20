@@ -16,6 +16,7 @@
 // CANARY: REQ=REQ-SONNY-3035-OFFLINE-CHAIN-ROOT; FEATURE="OfflineAuthStoreSafety"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny3035_offline_chain_root.zig; OWNER=security; UPDATED=2026-09-27
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
@@ -26,7 +27,7 @@ const graph_store = geode.graph_store;
 const AuthGraphManager = auth_graph_manager.AuthGraphManager;
 const linux = std.os.linux;
 
-const binary_path = "./zig-out/bin/geode";
+const binary_path = geode_test_bin.geode_exe;
 const hmac_hex = "6b" ** 32;
 
 fn nowMillis() i64 {
@@ -118,7 +119,7 @@ fn makeStore(aa: std.mem.Allocator, tag: []const u8, change: Change) ![]const u8
     const kr = try AuthGraphManager.resolveHmacKey(pa, dir);
     _ = try mgr.bootstrapDefaultAdmin(&kr.key);
     try mgr.verifyChain(&kr.key);
-    try testing.expect(mgr.storage.loadChainRoot() != null);
+    try testing.expect((try mgr.storage.loadChainRoot()) != null);
     switch (change) {
         .remove_all_records => {
             var users: std.ArrayList(u64) = .empty;
@@ -183,7 +184,7 @@ test "SONNY-3035: a store whose records were all removed at rest keeps its chain
         std.debug.print("auth init was not refused (exit {d}):\n{s}\n", .{ init.code, init.output });
         return error.AuthInitNotRefused;
     }
-    const create = try runGeode(aa, io, &.{ binary_path, "user", "create", "eve", "eve@example.com", "--password", "Correct Horse Battery Staple Seven", "--force", "--data-dir", dir });
+    const create = try runGeode(aa, io, &.{ binary_path, "user", "create", "eve", "eve@example.com", "--password", "Correct Horse Battery Staple Seven", "--data-dir", dir });
     if (create.code == 0 or std.mem.indexOf(u8, create.output, "does not verify") == null) {
         std.debug.print("user create was not refused (exit {d}):\n{s}\n", .{ create.code, create.output });
         return error.UserCreateNotRefused;
@@ -217,7 +218,7 @@ test "SONNY-3035: verification with no key available writes no key file, and ref
     }
     try testing.expect(!try keyFilePresent(aa, dir));
 
-    const create = try runGeode(aa, io, &.{ binary_path, "user", "create", "eve", "eve@example.com", "--password", "Correct Horse Battery Staple Seven", "--force", "--data-dir", dir });
+    const create = try runGeode(aa, io, &.{ binary_path, "user", "create", "eve", "eve@example.com", "--password", "Correct Horse Battery Staple Seven", "--data-dir", dir });
     try testing.expect(create.code != 0);
     const verify = try runGeode(aa, io, &.{ binary_path, "auth", "verify", "--data-dir", dir });
     try testing.expect(verify.code != 0);

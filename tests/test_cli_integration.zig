@@ -1,4 +1,5 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const builtin = @import("builtin");
 const cli_test_util = @import("cli_test_util.zig");
@@ -12,7 +13,7 @@ fn spawnTestServer(allocator: std.mem.Allocator) !proto_util.ServerHandle {
 test "geode unified binary exists and responds" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "--help" }, testing.allocator);
+    var child = std.process.Child.init(&.{ geode_test_bin.geode_exe, "--help" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -26,7 +27,7 @@ test "geode unified binary exists and responds" {
 test "geode serve help shows server options" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "serve", "--help" }, testing.allocator);
+    var child = std.process.Child.init(&.{ geode_test_bin.geode_exe, "serve", "--help" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -48,7 +49,7 @@ test "geode serve help shows server options" {
 test "geode query help shows client options" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query", "--help" }, testing.allocator);
+    var child = std.process.Child.init(&.{ geode_test_bin.geode_exe, "query", "--help" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -80,7 +81,7 @@ test "geode query executes with configured server" {
     defer server.deinit();
     const addr = server.getAddr();
 
-    const res = try cli_test_util.runAgainstServer(testing.allocator, addr, &.{ "./zig-out/bin/geode", "query", "RETURN 1 AS x" });
+    const res = try cli_test_util.runAgainstServer(testing.allocator, addr, &.{ geode_test_bin.geode_exe, "query", "RETURN 1 AS x" });
     defer testing.allocator.free(res.out);
     defer testing.allocator.free(res.err);
 
@@ -92,7 +93,7 @@ test "geode query executes with configured server" {
 test "geode shell command exists" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "shell", "--help" }, testing.allocator);
+    var child = std.process.Child.init(&.{ geode_test_bin.geode_exe, "shell", "--help" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -106,7 +107,7 @@ test "geode shell command exists" {
 test "geode backup command exists" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "backup", "--help" }, testing.allocator);
+    var child = std.process.Child.init(&.{ geode_test_bin.geode_exe, "backup", "--help" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -120,7 +121,7 @@ test "geode backup command exists" {
 test "geode user command exists" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "user", "--help" }, testing.allocator);
+    var child = std.process.Child.init(&.{ geode_test_bin.geode_exe, "user", "--help" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -134,7 +135,7 @@ test "geode user command exists" {
 test "invalid command returns usage error" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "invalid_command" }, testing.allocator);
+    var child = std.process.Child.init(&.{ geode_test_bin.geode_exe, "invalid_command" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -148,7 +149,7 @@ test "invalid command returns usage error" {
 test "query without arguments returns usage error" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "query" }, testing.allocator);
+    var child = std.process.Child.init(&.{ geode_test_bin.geode_exe, "query" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 
@@ -167,7 +168,7 @@ test "query responds to basic query" {
     const addr = server.getAddr();
 
     // Test basic query execution against configured server
-    const res = try cli_test_util.runAgainstServer(testing.allocator, addr, &.{ "./zig-out/bin/geode", "query", "RETURN 'hello' AS greeting", "--format", "json" });
+    const res = try cli_test_util.runAgainstServer(testing.allocator, addr, &.{ geode_test_bin.geode_exe, "query", "RETURN 'hello' AS greeting", "--format", "json" });
     defer testing.allocator.free(res.out);
     defer testing.allocator.free(res.err);
 
@@ -188,7 +189,7 @@ test "query error handling for invalid syntax" {
     const addr = server.getAddr();
 
     // Test error handling with invalid syntax
-    const res = try cli_test_util.runAgainstServer(testing.allocator, addr, &.{ "./zig-out/bin/geode", "query", "SELECT * FROM nonexistent_table" });
+    const res = try cli_test_util.runAgainstServer(testing.allocator, addr, &.{ geode_test_bin.geode_exe, "query", "SELECT * FROM nonexistent_table" });
     defer testing.allocator.free(res.out);
     defer testing.allocator.free(res.err);
 
@@ -204,7 +205,7 @@ test "process argument forwarding" {
     const addr = server.getAddr();
 
     // Test that arguments are properly forwarded to configured server
-    const res = try cli_test_util.runAgainstServer(testing.allocator, addr, &.{ "./zig-out/bin/geode", "query", "RETURN 42 AS answer", "--format", "json" });
+    const res = try cli_test_util.runAgainstServer(testing.allocator, addr, &.{ geode_test_bin.geode_exe, "query", "RETURN 42 AS answer", "--format", "json" });
     defer testing.allocator.free(res.out);
     defer testing.allocator.free(res.err);
 
@@ -230,7 +231,7 @@ test "concurrent query execution" {
         defer testing.allocator.free(query);
 
         child.* = std.process.Child.init(&.{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "query",
             query,
             "--server",
@@ -258,7 +259,7 @@ test "concurrent query execution" {
 test "version information available" {
     if (builtin.os.tag == .windows) return error.SkipZigTest;
 
-    var child = std.process.Child.init(&.{ "./zig-out/bin/geode", "--version" }, testing.allocator);
+    var child = std.process.Child.init(&.{ geode_test_bin.geode_exe, "--version" }, testing.allocator);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
 

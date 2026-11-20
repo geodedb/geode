@@ -448,8 +448,19 @@ blindly retry without a key.
 
 ### 11.11 The QUIC acceptor watchdog self‑restarts a wedged node
 
-If the `:3141` UDP rx_queue stays ≥ 8 MiB for ≥ 30 s, geode `exit(70)`s so the
-orchestrator restarts it. Opt out with `GEODE_ACCEPTOR_WATCHDOG_DISABLE=1`. Tuning
+If the QUIC listener's UDP socket keeps datagrams queued for ≥ 30 s with no
+datagram drained from it in that time, geode `exit(70)`s so the orchestrator
+restarts it. The watchdog watches the listener's bound address (an ephemeral
+`--listen host:0` port and an IPv6 listener included; it announces it at
+startup: `[startup] acceptor watchdog: watching udp ... port N`), and the
+backlog threshold is any queued datagram (1 byte; it was 8 MiB before
+SONNY-6480, which let an acceptor wedged with a few queued connection attempts
+run unrestarted).
+A node that is still draining its backlog, only slower than datagrams arrive (a
+CPU-starved or throttled pod, an overload), is slowed and not restarted
+(SONNY-2719); before that fix it was killed after the same 30 s. Thresholds:
+`GEODE_ACCEPTOR_WATCHDOG_RX_BYTES`, `GEODE_ACCEPTOR_WATCHDOG_DEADLINE_MS`.
+Opt out with `GEODE_ACCEPTOR_WATCHDOG_DISABLE=1`. Tuning
 knobs: `GEODE_QUIC_INITIAL_BUDGET` (server Initial processing budget/cycle, default
 64), `GEODE_QUIC_DRAIN_PACKETS` (socket drain cap). `v0.7.0` bounds the rx_queue so
 this rarely fires — frequent `exit(70)`s on a release build signal a regression.

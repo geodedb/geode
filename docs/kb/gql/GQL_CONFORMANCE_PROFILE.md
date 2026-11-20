@@ -1,5 +1,11 @@
 # GQL Conformance Profile (ISO/IEC 39075:2024)
 
+> **Status note (2026-11-13, SONNY-6343):** this is a historical snapshot.
+> MATCH pattern execution, property access, labels, traversal and OPTIONAL
+> MATCH (with outer-join semantics) have long been implemented and are
+> executed, not only parsed. See [GQL_COMPLIANCE.md](../../GQL_COMPLIANCE.md)
+> for the current status.
+
 ## A. Product
 
 - Implementation: Geode v0.1.0
@@ -65,7 +71,7 @@ The following core GQL features are **not yet implemented**:
 1. **MATCH patterns** - Parser recognizes but cannot execute graph traversal
 2. **Property access** - Cannot access node/edge properties (n.name syntax)
 3. **Node/edge labels** - No label-based filtering
-4. **OPTIONAL MATCH** - Parsed but not executed
+4. **OPTIONAL MATCH** - Parsed but not executed (2025-09; executed since, see the status note)
 5. **Path patterns** - No variable-length traversal
 6. **Graph mutations** - CREATE/DELETE/MERGE not supported
 7. **WITH clause** - Query chaining not implemented

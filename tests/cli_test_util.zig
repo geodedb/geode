@@ -84,8 +84,14 @@ pub fn runAgainstServer(
     var threaded = std.Io.Threaded.init(allocator, .{});
     defer threaded.deinit();
 
+    // SONNY-6782: a release build refuses --insecure without GEODE_ALLOW_INSECURE_TLS=1.
+    var env = try std.Io.Threaded.global_single_threaded.environ.process_environ.createMap(allocator);
+    defer env.deinit();
+    try env.put("GEODE_ALLOW_INSECURE_TLS", "1");
+
     const res = try std.process.run(allocator, threaded.io(), .{
         .argv = argv.items,
+        .environ_map = &env,
         .stdout_limit = .limited(1 << 20),
         .stderr_limit = .limited(1 << 20),
     });

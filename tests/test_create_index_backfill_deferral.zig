@@ -92,6 +92,7 @@ const Harness = struct {
     }
 };
 
+/// `name` is the runtime key, `<graph>\x1f<index>` (SONNY-6703).
 fn vectorIndexDimension(name: []const u8) ?u16 {
     const mgr = index_manager.getGlobalIndexManager() orelse return null;
     const wrapper = mgr.advanced_vector_indexes.get(name) orelse return null;
@@ -125,13 +126,13 @@ test "CREATE INDEX defers its backfill onto the post-write-lock rebuild queue" {
     _ = try h.exec("CREATE INDEX bkf_idx ON BKF (emb_b) USING vector WITH (metric = 'l2')");
 
     // The index exists...
-    try testing.expect(vectorIndexDimension("bkf_idx") != null);
+    try testing.expect(vectorIndexDimension("bkf\x1fbkf_idx") != null);
     // ...the backfill was ENQUEUED, not run under the writer lock. Before the
     // fix this map stayed empty and the scan happened inline.
     try testing.expectEqual(@as(usize, 1), pending.count());
-    try testing.expect(pending.contains("bkf_idx"));
+    try testing.expect(pending.contains("bkf\x1fbkf_idx"));
     // Nothing inserted yet — dimension is still unestablished.
-    try testing.expectEqual(@as(u16, 0), vectorIndexDimension("bkf_idx").?);
+    try testing.expectEqual(@as(u16, 0), vectorIndexDimension("bkf\x1fbkf_idx").?);
 
     // Draining the queue is what the handler does once the lock is released;
     // the backfill must still land in full.
@@ -140,7 +141,7 @@ test "CREATE INDEX defers its backfill onto the post-write-lock rebuild queue" {
     var it = pending.keyIterator();
     while (it.next()) |k| try mgr.rebuildAdvancedIndex(store, k.*);
 
-    try testing.expectEqual(@as(u16, 4), vectorIndexDimension("bkf_idx").?);
+    try testing.expectEqual(@as(u16, 4), vectorIndexDimension("bkf\x1fbkf_idx").?);
 }
 
 test "with no rebuild queue installed the backfill still runs inline" {
@@ -156,5 +157,5 @@ test "with no rebuild queue installed the backfill still runs inline" {
     // silently dropped.
     _ = try h.exec("CREATE INDEX bkf2_idx ON BKF2 (emb_c) USING vector WITH (metric = 'l2')");
 
-    try testing.expectEqual(@as(u16, 4), vectorIndexDimension("bkf2_idx").?);
+    try testing.expectEqual(@as(u16, 4), vectorIndexDimension("bkf2\x1fbkf2_idx").?);
 }

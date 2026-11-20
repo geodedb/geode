@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-050; FEATURE="Multi-Tenancy"; ASPECT=TenantRegistry; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_050_TenantRegistryBasic; OWNER=dist; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-050; FEATURE="Multi-Tenancy"; ASPECT=TenantRegistry; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_050_TenantRegistryBasic; OWNER=dist; UPDATED=2026-11-14
 
 pub const TenantId = u64;
 

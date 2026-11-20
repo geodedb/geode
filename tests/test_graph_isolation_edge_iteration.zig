@@ -51,7 +51,7 @@ test "GAP-0512: getEdgesByType(graph) returns only that graph's edges" {
     _ = try store.createEdgeWithGraph(b1, b2, "KNOWS", "beta");
 
     // Graph-scoped query for "alpha" must return exactly 2 edges.
-    const alpha_edges = store.getEdgesByType(allocator, "KNOWS", null, "alpha");
+    const alpha_edges = try store.getEdgesByType(allocator, "KNOWS", null, "alpha");
     defer if (alpha_edges.len > 0) allocator.free(alpha_edges);
 
     if (alpha_edges.len != 2) {
@@ -75,7 +75,7 @@ test "GAP-0512: getEdgesByType(graph) returns only that graph's edges" {
     }
 
     // Graph-scoped query for "beta" must return exactly 1 edge.
-    const beta_edges = store.getEdgesByType(allocator, "KNOWS", null, "beta");
+    const beta_edges = try store.getEdgesByType(allocator, "KNOWS", null, "beta");
     defer if (beta_edges.len > 0) allocator.free(beta_edges);
     try testing.expectEqual(@as(usize, 1), beta_edges.len);
 }
@@ -101,7 +101,7 @@ test "GAP-0512: getEdgesByType(null graph) returns union (admin path)" {
     // Unscoped (null) query is the admin/diagnostic path — must keep
     // returning edges from every graph. This is NOT a leak when the
     // caller explicitly asked for cross-graph data.
-    const all_edges = store.getEdgesByType(allocator, "REL", null, null);
+    const all_edges = try store.getEdgesByType(allocator, "REL", null, null);
     defer if (all_edges.len > 0) allocator.free(all_edges);
 
     try testing.expectEqual(@as(usize, 2), all_edges.len);
@@ -119,7 +119,7 @@ test "GAP-0512: getEdgesByType for non-existent graph returns empty" {
     const b = try store.createNodeWithGraph(&labels, "real");
     _ = try store.createEdgeWithGraph(a, b, "LINK", "real");
 
-    const nothing = store.getEdgesByType(allocator, "LINK", null, "ghost_graph");
+    const nothing = try store.getEdgesByType(allocator, "LINK", null, "ghost_graph");
     defer if (nothing.len > 0) allocator.free(nothing);
     try testing.expectEqual(@as(usize, 0), nothing.len);
 }

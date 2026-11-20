@@ -22,6 +22,8 @@ const query_traits = @import("../query/query_traits.zig");
 const gps = @import("../security/gps.zig");
 const principal_mod = @import("../security/principal.zig");
 const ast = @import("../gql/ast.zig");
+const user_mgmt = @import("../security/user_management.zig");
+const write_walk = @import("write_walk.zig");
 
 pub const GraphTarget = query_traits.GraphTarget;
 
@@ -85,21 +87,24 @@ pub fn mayBind(principal: ?*const principal_mod.Principal, graph: []const u8) bo
 // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=ProgramGraphGate; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
 // CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=ProgramReadGate; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
 /// The QUIC and gRPC handlers' read gate. May `principal` run a program
-/// whose statements touch the data of the graphs `programDataGraphList`
+/// whose statements touch the data of the graphs `programReadGraphList`
 /// names (from `start_graph`, the session's graph, with `home_graph` its
-/// home)? A principal whose builtin role holds Read reads every graph, as
-/// before; its graph access is `bind_graph`'s. Any other principal (a user
-/// with no stored role) needs `gps.graphReadPermitted` on every graph: a
-/// READ grant on it, read from the live grant table so a GRANT or REVOKE
-/// counts at once, or an allow policy on it.
+/// home; the graph an EXPLAIN'd statement would run on included)? Every
+/// principal needs `gps.graphReadPermitted` (`decide(match_, graph)`) on
+/// every one: a builtin role with Read, a READ grant on the graph (read from
+/// the live grant table, so a GRANT or REVOKE counts at once), or an allow
+/// policy naming READ or MATCH on it; and no deny naming READ or MATCH on it.
+/// SONNY-2781: a principal whose builtin role holds Read skipped this, so a
+/// DENY READ or DENY MATCH never stopped a plain MATCH.
 ///
-/// `bind_graph` alone cannot hold such a user: every session starts on
-/// the default graph, which any authenticated user may bind
+/// `bind_graph` alone cannot hold a user with no stored role: every session
+/// starts on the default graph, which any authenticated user may bind
 /// (`mayBind`), so without this gate the user read the default graph with
 /// no grant on it. A program that reads no store (`RETURN 1`, analysed as
 /// `analysis`) or touches no graph data (a lone USE GRAPH, which
-/// `bind_graph` decides) passes. Writes are gated separately, by
-/// `gps.writePermittedOn`.
+/// `bind_graph` decides; the security DDL) passes. A data change passes
+/// this gate too, on the graph it changes: it reads that graph. Writes are
+/// gated separately, by `gps.changePermittedOn`.
 pub fn programReadPermitted(
     allocator: std.mem.Allocator,
     principal: *const principal_mod.Principal,
@@ -108,14 +113,70 @@ pub fn programReadPermitted(
     start_graph: []const u8,
     home_graph: []const u8,
 ) !bool {
-    if (gps.holdsGlobalPermission(principal, .Read)) return true;
     if (analysis.kind == .rows and analysis.is_store_free and query_traits.restOfProgramIsNoop(analysis, start_graph)) return true;
-    const graphs = try query_traits.programDataGraphList(allocator, program, start_graph, home_graph);
+    const graphs = try query_traits.programReadGraphList(allocator, program, start_graph, home_graph);
     defer allocator.free(graphs);
     for (graphs) |g| {
         if (!gps.graphReadPermitted(allocator, principal, g)) return false;
     }
     return true;
+}
+
+// CANARY: REQ=REQ-SONNY-2782-AUTH-DISABLED-PARITY; FEATURE="StatementAuthorization"; ASPECT=RequestGate; STATUS=TESTED; TEST=tests/test_sonny2782_auth_disabled_transport_parity.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-2782: the principal the QUIC and gRPC handlers authorize a request
+/// as, and give the executor: `principal` (the session's) whenever
+/// authentication is enabled, for every session whatever its role (one with
+/// none is refused by every gate); null when authentication is disabled.
+///
+/// Authentication disabled is the in-process, single-user mode (embedders
+/// and tests; `geode serve` always enables authentication). No request is
+/// authenticated and none is authorized per user: with no principal every
+/// gate answers yes, as for an in-process caller (`mayBind`, `maySchema`,
+/// the procedure gate, and the executor's admin gates, which check
+/// `isAuthEnabled` themselves), so every request runs as if by an
+/// administrator, on every transport, and GPS policies, grants and roles
+/// are not consulted. `--insecure-allow-all` changes nothing there. The
+/// HELLO and the `/*+BATCH*/` route already used no principal with
+/// authentication off; the QUIC handler skipped its gates by the session's
+/// role and the gRPC handler ran its write gate anyway (decide answered
+/// unauthenticated, so every change was refused 42501 unless
+/// --insecure-allow-all), and both gave the executor an anonymous principal,
+/// which refused DDL and mutating procedures on both.
+pub fn requestPrincipal(principal: *const principal_mod.Principal) ?*const principal_mod.Principal {
+    return if (user_mgmt.isAuthEnabled()) principal else null;
+}
+
+/// SONNY-2782: the QUIC and gRPC handlers' write gate, for a program that
+/// changes state (`StatementPlan.is_mutation`), as `principal`
+/// (`requestPrincipal`): a self-locking CALL, which writes no one graph,
+/// needs `gps.writePermitted`; any other change `gps.changePermittedOn` on
+/// the graph it changes, by the actions it needs. No principal (authentication
+/// disabled): yes.
+pub fn requestChangePermitted(
+    allocator: std.mem.Allocator,
+    principal: ?*const principal_mod.Principal,
+    self_locking: bool,
+    graph: []const u8,
+    actions: write_walk.Actions,
+) bool {
+    const p = principal orelse return true;
+    if (self_locking) return gps.writePermitted(allocator, p);
+    return gps.changePermittedOn(allocator, p, graph, actions);
+}
+
+/// SONNY-2782: the QUIC and gRPC handlers' read gate
+/// (`programReadPermitted`), as `principal` (`requestPrincipal`). No
+/// principal (authentication disabled): yes.
+pub fn requestReadPermitted(
+    allocator: std.mem.Allocator,
+    principal: ?*const principal_mod.Principal,
+    program: *const ast.Program,
+    analysis: *const query_traits.ProgramAnalysis,
+    start_graph: []const u8,
+    home_graph: []const u8,
+) !bool {
+    const p = principal orelse return true;
+    return programReadPermitted(allocator, p, program, analysis, start_graph, home_graph);
 }
 
 // CANARY: REQ=REQ-SONNY-2803-GRAPH-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=MaySchema; STATUS=TESTED; TEST=tests/test_sonny2803_graph_ddl_gate.zig; OWNER=security; UPDATED=2026-09-26
@@ -146,19 +207,15 @@ pub fn maySchema(principal: ?*const principal_mod.Principal, graph: []const u8) 
 // CANARY: REQ=REQ-SONNY-3030-CATALOG-DDL-GATE; FEATURE="GraphRBACEnforcement"; ASPECT=MaySchemaDatabase; STATUS=TESTED; TEST=tests/test_sonny3030_catalog_ddl_gate.zig; OWNER=security; UPDATED=2026-09-27
 /// SONNY-3030: may `principal` change the schema of the whole database:
 /// every graph at once? `gps.decide(schema, graph "*")`: Admin's builtin
-/// Schema permission, or a GPS policy `FOR SCHEMA` scoped to `*`. A policy
-/// scoped to one graph does not match. No principal: yes (an in-process
+/// Schema permission, or a GPS policy `FOR SCHEMA` scoped to `*`. An allow
+/// scoped to one graph does not match. SONNY-2753: and a DENY SCHEMA on any
+/// graph refuses it, as the change binds that graph too
+/// (`gps.schemaPermittedEverywhere`). No principal: yes (an in-process
 /// caller).
 pub fn maySchemaDatabase(principal: ?*const principal_mod.Principal) bool {
     const p = principal orelse return true;
-    const req = gps.DecisionRequest{
-        .principal = p,
-        .action = .schema,
-        .resource = .{ .graph = "*" },
-    };
     // smp_allocator: the governance-approved global allocator in src/.
-    const decision = gps.decide(std.heap.smp_allocator, &req) catch return false;
-    return decision.kind == .allow;
+    return gps.schemaPermittedEverywhere(std.heap.smp_allocator, p);
 }
 
 /// SONNY-3030: refuse index and constraint DDL (`Unauthorized`, 42501) unless

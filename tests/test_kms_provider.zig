@@ -1,21 +1,32 @@
 const std = @import("std");
 const testing = std.testing;
-const kms = @import("../src/security/kms.zig");
+const kms = @import("security/kms");
+const logging = @import("logging");
+
+// SONNY-6775: a release build logs the refusal of a non-production provider at
+// error level; the test runner fails a test that logs an error, so a test that
+// expects the refusal raises the log level first.
+fn quietRefusalLog() void {
+    logging.init(.{ .level = .fatal });
+    logging.setLevel(.fatal);
+}
 
 // CANARY: REQ=REQ-GQL-SEC-KMS-001; FEATURE="KMSProviderSystem"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SEC_KMS_001_ComprehensiveKMSProvider; OWNER=security; UPDATED=2025-10-05
 
 test "TestCANARY_REQ_GQL_SEC_KMS_001_ComprehensiveKMSProvider" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
 
-    // Test all three provider types
+    // The provider KMSProvider implements (SONNY-2441 removed remote_kms,
+    // SONNY-6448 local_dev).
     const provider_configs = [_]kms.KMSConfig{
-        .{ .provider_type = .local_dev },
         .{ .provider_type = .external_kms, .seed = 0x123456789ABCDEF0 },
-        .{ .provider_type = .remote_kms, .endpoint = "localhost", .port = 3141, .auth_token = "test_token" },
     };
 
     for (provider_configs) |config| {
-        var provider = kms.KMSProvider.init(allocator, config);
+        var provider = try kms.KMSProvider.init(allocator, config);
         defer provider.deinit();
 
         // Test provider info
@@ -24,59 +35,28 @@ test "TestCANARY_REQ_GQL_SEC_KMS_001_ComprehensiveKMSProvider" {
         try testing.expectEqual(config.auth_token != null, info.authenticated);
 
         // Test master key ID generation
-        if (config.provider_type != .remote_kms) { // Skip remote for unit tests
-            const master_key_id = try provider.fetchActiveMasterKey();
-            try testing.expect(master_key_id.len > 0);
+        const master_key_id = try provider.fetchActiveMasterKey();
+        try testing.expect(master_key_id.len > 0);
 
-            if (config.provider_type == .local_dev) {
-                try testing.expectEqualStrings("local-dev-master-key-v1", master_key_id);
-            } else if (config.provider_type == .external_kms) {
-                defer allocator.free(master_key_id);
-                try testing.expect(std.mem.startsWith(u8, master_key_id, "external-kms-"));
-            }
-        }
+        defer allocator.free(master_key_id);
+        try testing.expect(std.mem.startsWith(u8, master_key_id, "external-kms-"));
     }
 }
 
-test "KMS local dev provider security warning" {
-    const allocator = testing.allocator;
-    var provider = kms.localDevProvider(allocator);
-    defer provider.deinit();
-
-    const plaintext1 = "test_data_key_12345678901234567890"; // 32 bytes
-    const plaintext2 = "different_key_098765432109876543"; // 32 bytes
-
-    var wrapped1 = try provider.wrapDataKey(plaintext1);
-    defer wrapped1.deinit(allocator);
-
-    var wrapped2 = try provider.wrapDataKey(plaintext2);
-    defer wrapped2.deinit(allocator);
-
-    // Different plaintexts should produce different ciphertexts
-    try testing.expect(!std.mem.eql(u8, wrapped1.ciphertext, wrapped2.ciphertext));
-
-    // Verify unwrapping works correctly
-    const unwrapped1 = try provider.unwrapDataKey(wrapped1);
-    defer allocator.free(unwrapped1);
-
-    const unwrapped2 = try provider.unwrapDataKey(wrapped2);
-    defer allocator.free(unwrapped2);
-
-    try testing.expectEqualSlices(u8, plaintext1, unwrapped1);
-    try testing.expectEqualSlices(u8, plaintext2, unwrapped2);
-}
-
 test "KMS external provider deterministic behavior" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
 
-    // Same seed should produce same results
-    var provider1 = kms.externalKMSProvider(allocator, 0xDEADBEEFCAFEBABE);
+    // Same seed: the same wrapping key
+    var provider1 = try kms.externalKMSProvider(allocator, 0xDEADBEEFCAFEBABE);
     defer provider1.deinit();
 
-    var provider2 = kms.externalKMSProvider(allocator, 0xDEADBEEFCAFEBABE);
+    var provider2 = try kms.externalKMSProvider(allocator, 0xDEADBEEFCAFEBABE);
     defer provider2.deinit();
 
-    const plaintext = "test_deterministic_behavior_32b"; // 32 bytes
+    const plaintext = "test_deterministic_behavior_32b!"; // 32 bytes
 
     var wrapped1 = try provider1.wrapDataKey(plaintext);
     defer wrapped1.deinit(allocator);
@@ -84,15 +64,16 @@ test "KMS external provider deterministic behavior" {
     var wrapped2 = try provider2.wrapDataKey(plaintext);
     defer wrapped2.deinit(allocator);
 
-    // Same seed + same plaintext should produce identical results
-    try testing.expectEqualSlices(u8, wrapped1.ciphertext, wrapped2.ciphertext);
-    try testing.expectEqualSlices(u8, wrapped1.metadata.?, wrapped2.metadata.?);
+    // Each wrap draws a fresh random nonce (GAP-0017/GAP-0069), so two
+    // wraps of the same key differ; a repeated nonce under one key would
+    // break AES-GCM.
+    try testing.expect(!std.mem.eql(u8, wrapped1.metadata.?, wrapped2.metadata.?));
 
-    // Verify both unwrap to original plaintext
-    const unwrapped1 = try provider1.unwrapDataKey(wrapped1);
+    // The seed determines the key: each provider unwraps the other's wrap.
+    const unwrapped1 = try provider1.unwrapDataKey(wrapped2);
     defer allocator.free(unwrapped1);
 
-    const unwrapped2 = try provider2.unwrapDataKey(wrapped2);
+    const unwrapped2 = try provider2.unwrapDataKey(wrapped1);
     defer allocator.free(unwrapped2);
 
     try testing.expectEqualSlices(u8, plaintext, unwrapped1);
@@ -100,15 +81,18 @@ test "KMS external provider deterministic behavior" {
 }
 
 test "KMS external provider different seeds" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
 
-    var provider1 = kms.externalKMSProvider(allocator, 0x1111111111111111);
+    var provider1 = try kms.externalKMSProvider(allocator, 0x1111111111111111);
     defer provider1.deinit();
 
-    var provider2 = kms.externalKMSProvider(allocator, 0x2222222222222222);
+    var provider2 = try kms.externalKMSProvider(allocator, 0x2222222222222222);
     defer provider2.deinit();
 
-    const plaintext = "same_plaintext_different_seeds_32"; // 32 bytes
+    const plaintext = "same_plaintext_different_seed_32"; // 32 bytes
 
     var wrapped1 = try provider1.wrapDataKey(plaintext);
     defer wrapped1.deinit(allocator);
@@ -132,20 +116,15 @@ test "KMS external provider different seeds" {
 }
 
 test "KMS metadata handling" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
 
-    // Test local dev provider (no metadata)
-    var local_provider = kms.localDevProvider(allocator);
-    defer local_provider.deinit();
+    const plaintext = "metadata_test_key_12345678901234"; // 32 bytes
 
-    const plaintext = "metadata_test_key_123456789012345"; // 32 bytes
-    var local_wrapped = try local_provider.wrapDataKey(plaintext);
-    defer local_wrapped.deinit(allocator);
-
-    try testing.expect(local_wrapped.metadata == null);
-
-    // Test external KMS provider (has metadata)
-    var external_provider = kms.externalKMSProvider(allocator, 0xFEEDFACEDEADBEEF);
+    // External KMS provider (has metadata)
+    var external_provider = try kms.externalKMSProvider(allocator, 0xFEEDFACEDEADBEEF);
     defer external_provider.deinit();
 
     var external_wrapped = try external_provider.wrapDataKey(plaintext);
@@ -164,10 +143,13 @@ test "KMS metadata handling" {
 }
 
 test "KMS error handling" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     // Test invalid key length for external KMS
-    var external_provider = kms.externalKMSProvider(allocator, 0x4242424242424242);
+    var external_provider = try kms.externalKMSProvider(allocator, 0x4242424242424242);
     defer external_provider.deinit();
 
     const short_plaintext = "too_short"; // Less than 32 bytes
@@ -187,43 +169,29 @@ test "KMS error handling" {
 }
 
 test "KMS factory functions" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
-
-    // Test localDevProvider factory
-    var local = kms.localDevProvider(allocator);
-    defer local.deinit();
-    try testing.expectEqual(kms.KMSProviderType.local_dev, local.config.provider_type);
 
     // Test externalKMSProvider factory
     const seed = 0x1337C0DE;
-    var external = kms.externalKMSProvider(allocator, seed);
+    var external = try kms.externalKMSProvider(allocator, seed);
     defer external.deinit();
     try testing.expectEqual(kms.KMSProviderType.external_kms, external.config.provider_type);
     try testing.expectEqual(seed, external.config.seed.?);
-
-    // Test remoteKMSProvider factory
-    const endpoint = "kms.example.com";
-    const port = 9443;
-    const auth_token = "secure_token_123";
-    var remote = kms.remoteKMSProvider(allocator, endpoint, port, auth_token);
-    defer remote.deinit();
-    try testing.expectEqual(kms.KMSProviderType.remote_kms, remote.config.provider_type);
-    try testing.expectEqualStrings(endpoint, remote.config.endpoint.?);
-    try testing.expectEqual(port, remote.config.port.?);
-    try testing.expectEqualStrings(auth_token, remote.config.auth_token.?);
-
-    // Test defaultProvider legacy function
-    var default = kms.defaultProvider();
-    defer default.deinit();
-    try testing.expectEqual(kms.KMSProviderType.local_dev, default.config.provider_type);
 }
 
 test "KMS custom master key ID" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     const custom_key_id = "custom-enterprise-key-2025";
-    var provider = kms.KMSProvider.init(allocator, kms.KMSConfig{
-        .provider_type = .local_dev,
+    var provider = try kms.KMSProvider.init(allocator, kms.KMSConfig{
+        .provider_type = .external_kms,
+        .seed = 0xC0570A,
         .master_key_id = custom_key_id,
     });
     defer provider.deinit();
@@ -240,15 +208,18 @@ test "KMS custom master key ID" {
 }
 
 test "KMS cross-provider compatibility" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     // Test that providers with same seed produce compatible results
     const seed = 0xABCDEF0123456789;
 
-    var provider1 = kms.externalKMSProvider(allocator, seed);
+    var provider1 = try kms.externalKMSProvider(allocator, seed);
     defer provider1.deinit();
 
-    var provider2 = kms.externalKMSProvider(allocator, seed);
+    var provider2 = try kms.externalKMSProvider(allocator, seed);
     defer provider2.deinit();
 
     const plaintext = "cross_provider_compatibility_32b"; // 32 bytes
@@ -265,8 +236,11 @@ test "KMS cross-provider compatibility" {
 }
 
 test "KMS large scale operations" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
     const allocator = testing.allocator;
-    var provider = kms.externalKMSProvider(allocator, 0x1122334455667788);
+    var provider = try kms.externalKMSProvider(allocator, 0x1122334455667788);
     defer provider.deinit();
 
     const num_operations = 10;
@@ -293,4 +267,39 @@ test "KMS large scale operations" {
         // Clean up wrapped key
         wrapped_keys[i].deinit(allocator);
     }
+}
+
+// SONNY-6453: moved from src/security/kms.zig, whose inline tests ran in no
+// step (the ones test_kms_provider.zig did not already cover).
+test "KMS provider types report their configuration (external_kms, vault_transit)" {
+    // SONNY-6775: a release build refuses external_kms (UnsafeKMSProvider, by
+    // design); this test needs a Debug build to construct one.
+    if (kms.is_production_build) return error.SkipZigTest;
+    const configs = [_]kms.KMSConfig{
+        .{ .provider_type = .external_kms, .seed = 0x12345 },
+        .{ .provider_type = .vault_transit, .endpoint = "https://vault.example.com", .auth_token = "test_token" },
+    };
+    for (configs) |config| {
+        var provider = try kms.KMSProvider.init(testing.allocator, config);
+        defer provider.deinit();
+        const info = provider.getProviderInfo();
+        try testing.expectEqual(config.provider_type, info.provider_type);
+        try testing.expectEqual(config.auth_token != null, info.authenticated);
+    }
+}
+
+test "GAP-0066: isProductionSafe identifies external_kms as unsafe and vault_transit as safe" {
+    try testing.expect(!kms.KMSProviderType.external_kms.isProductionSafe());
+    try testing.expect(kms.KMSProviderType.vault_transit.isProductionSafe());
+}
+
+test "GAP-0066: default config is external_kms" {
+    const default_config = kms.KMSConfig{};
+    try testing.expectEqual(kms.KMSProviderType.external_kms, default_config.provider_type);
+}
+
+test "SONNY-6775: a release build refuses the non-production external_kms provider" {
+    if (!kms.is_production_build) return error.SkipZigTest;
+    quietRefusalLog();
+    try testing.expectError(error.UnsafeKMSProvider, kms.KMSProvider.init(testing.allocator, .{ .provider_type = .external_kms, .seed = 1 }));
 }

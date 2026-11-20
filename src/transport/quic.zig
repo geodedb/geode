@@ -28,7 +28,7 @@ fn monoNsRaw() u64 {
 // PollSync uses mutex+condvar instead of atomic spin-loops, QuicConfig heap-allocated
 // to ensure cert/key DER lifetime, quic_connection nullable field on QuicConnection.
 
-// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICCore; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_074_QUICCore; OWNER=wire; UPDATED=2025-11-21
+// CANARY: REQ=REQ-GQL-074; FEATURE="Network Transport"; ASPECT=QUICCore; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_074_QUICCore; OWNER=wire; UPDATED=2026-11-14
 
 const logging = @import("logging");
 const tlog = logging.scoped("transport");
@@ -42,13 +42,14 @@ const dns_search = @import("dns_search");
 
 // Import the QUIC modules through the vendor API which re-exports them
 const api = @import("vendor_quic");
+const quic_x509 = @import("quic_x509");
 const Endpoint = api.QuicEndpoint;
 const Connection = api.QuicConnection;
 const VendorQuicConfig = api.QuicConfig;
 const builtin = @import("builtin");
-// SONNY-2394: the signal-safe, environment-carrying Io certificate
-// auto-generation spawns openssl with (shared with tools/cert_gen.zig).
-const spawn_io = @import("spawn_io");
+// SONNY-6325: the self-signed certificate fallback (shared with
+// tools/cert_gen.zig); it spawns openssl through spawn_io (SONNY-2394).
+const tls_material = @import("tls_material");
 
 /// Allocation-free, Io-independent readability check for a cert/key file.
 /// Mirrors `cert_gen.certFileReadable`: it attempts a raw `openat` and lets the
@@ -114,6 +115,11 @@ pub const app_error = struct {
     /// knows the connection died under it and that a retry on a fresh
     /// connection is the correct response (it is not a graceful close).
     pub const server_teardown: u64 = 0x4745_0001;
+
+    /// SONNY-3232: the client sent a message over the 16 MiB maximum. The
+    /// server answered SQLSTATE 54000 on the stream and closed the
+    /// connection, since it cannot stop the client sending the rest.
+    pub const message_too_large: u64 = 0x4745_0002;
 };
 
 // Module-level pointer set by listen() so the OTel gauge callback can read
@@ -550,6 +556,13 @@ pub const QuicTransport = struct {
     /// would-block loop for another iteration. Surface via the
     /// `quic_poll_overrun_total` gauge.
     poll_overrun_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    // CANARY: REQ=REQ-SONNY-2719-DATAGRAMS-DRAINED; FEATURE="QUIC High-Concurrency Connection Admission"; ASPECT=AcceptorProgressCounter; STATUS=TESTED; TEST=tests/test_sonny2719_starved_acceptor_survives.zig; OWNER=transport; UPDATED=2026-11-13
+    /// SONNY-2719: datagrams this endpoint has read off its socket, over
+    /// every server-side poll (the poll loop and the accept path). The
+    /// acceptor wedge watchdog's progress signal: a wedged acceptor drains
+    /// nothing; a starved or overloaded one drains slower than datagrams
+    /// arrive, and is not wedged.
+    datagrams_drained: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// Last wall-clock ns a slow-poll warning was emitted (rate limiting).
     /// See shouldWarnSlowPoll and observePollCycle. Updated lock-free via CAS.
     slow_poll_last_warn_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
@@ -583,6 +596,10 @@ pub const QuicTransport = struct {
         /// When true, connections without a valid client certificate will be rejected.
         /// CANARY: REQ=REQ-AUTH-MTLS-QUIC-002; FEATURE="mTLS over QUIC"; ASPECT=Config; STATUS=TESTED; TEST=geodetestlab-cli/specs/authn_mtls_rejection_matrix.yml; OWNER=transport; UPDATED=2026-06-11
         require_client_cert: bool = false,
+        /// SONNY-6457: DER client CA certificates (`ClientCaTrust.ders`) the
+        /// server TLS layer validates a client chain against and completes
+        /// a leaf-only chain from. Borrowed: must outlive the transport.
+        inline_client_ca_der: ?[]const []const u8 = null,
         /// SONNY-2394: may `listen` self-sign a missing certificate? The
         /// default refuses in production posture (see `CertAutoGenerate`).
         cert_auto_generate: CertAutoGenerate = .dev_only,
@@ -833,10 +850,15 @@ pub const QuicTransport = struct {
         // Allocate QuicConfig on the heap so cert/key DER slices remain valid
         // for the lifetime of the endpoint (endpointInit stores references).
         const cfg = try self.allocator.create(VendorQuicConfig);
+        // SONNY-6489: `self.quic_config` is set to `cfg` below, before the
+        // endpoint is created; a failure after that (an address the endpoint
+        // refuses) must not leave it pointing at freed memory, or `deinit`
+        // frees the config, certificate and key a second time.
         errdefer {
             self.allocator.free(inline_cert_der);
             self.allocator.free(inline_priv_key);
             self.allocator.destroy(cfg);
+            self.quic_config = null;
         }
         cfg.* = VendorQuicConfig{
             .version = .v1,
@@ -864,35 +886,78 @@ pub const QuicTransport = struct {
             .dead_conn_reap_ms = self.config.dead_conn_reap_ms,
             .defer_accept_until_stream = true,
             .require_client_cert = self.config.require_client_cert,
+            .inline_client_ca_der = self.config.inline_client_ca_der,
             .inline_server_cert_der = inline_cert_der,
             .inline_server_priv_p256 = inline_priv_key,
         };
         self.quic_config = cfg;
 
-        // Normalize "localhost" to "127.0.0.1"
-        const bind_address = if (std.mem.eql(u8, self.config.address, "localhost"))
-            "127.0.0.1"
-        else
-            self.config.address;
-
-        // Create bind address string
-        const bind_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ bind_address, self.config.port });
+        const bind_addr = try formatBindAddress(self.allocator, self.config.address, self.config.port);
         defer self.allocator.free(bind_addr);
 
         // Initialize endpoint using api.endpointInit (heap-allocates the Endpoint struct).
         self.endpoint = try api.endpointInit(&self.allocator, bind_addr, cfg);
 
+        // SONNY-6332: report the port the socket is bound to, not the
+        // configured one: with port 0 the kernel chooses it.
+        const bound_port = self.boundPort();
         tlog.info("QUIC transport listening", &.{
-            Attr.int("port", @intCast(self.config.port)),
+            Attr.int("port", @intCast(bound_port)),
             Attr.string("tls", "true"),
             Attr.string("status", "listening"),
         });
         // Startup banner for operational tooling (JSON on stderr)
-        std.debug.print("{{\"component\":\"transport\",\"transport\":\"quic\",\"tls\":\"true\",\"port\":{d},\"library\":\"vendor/quic\",\"api\":\"native-endpoint\",\"status\":\"listening\"}}\n", .{self.config.port});
+        std.debug.print("{{\"component\":\"transport\",\"transport\":\"quic\",\"tls\":\"true\",\"port\":{d},\"library\":\"vendor/quic\",\"api\":\"native-endpoint\",\"status\":\"listening\"}}\n", .{bound_port});
         // Register OTel observable gauge for active connection count.
         // Set module-level pointer so the callback can read getConnectionCount().
         g_quic_transport_instance = self;
         @import("otel_metrics").registerTransportConnectionGauge(activeConnectionCountProvider) catch {};
+    }
+
+    /// SONNY-6494: the `host:port` the endpoint binds. `address` may be
+    /// bracketed (`[::1]`, as `--listen` passes it) or bare (`::1`, as
+    /// GEODE_CLUSTER_LISTEN_ADDRESS may be written); an IPv6 host is always
+    /// bracketed, which the QUIC library's address parser requires.
+    /// "localhost" binds 127.0.0.1. (src/client/host_port.zig formatAlloc,
+    /// which this module cannot import: that file belongs to the geode
+    /// module, which imports this one.)
+    pub fn formatBindAddress(allocator: std.mem.Allocator, address: []const u8, port: u16) ![]u8 {
+        const host = if (std.mem.eql(u8, address, "localhost"))
+            "127.0.0.1"
+        else if (address.len >= 2 and address[0] == '[' and address[address.len - 1] == ']')
+            address[1 .. address.len - 1]
+        else
+            address;
+        if (std.mem.indexOfScalar(u8, host, ':') != null)
+            return std.fmt.allocPrint(allocator, "[{s}]:{d}", .{ host, port });
+        return std.fmt.allocPrint(allocator, "{s}:{d}", .{ host, port });
+    }
+
+    /// The UDP port the listening socket is bound to (SONNY-6332). Differs
+    /// from `config.port` when that is 0 (the kernel chooses a free port).
+    /// The configured port before `listen`, or if the socket cannot be read.
+    pub fn boundPort(self: *QuicTransport) u16 {
+        const ep = self.endpoint orelse return self.config.port;
+        const addr = ep.transport.getLocalAddr() catch return self.config.port;
+        const port: u16 = switch (addr.storage.family) {
+            std.posix.AF.INET => std.mem.bigToNative(u16, @as(*const std.posix.sockaddr.in, @ptrCast(@alignCast(&addr.storage))).port),
+            std.posix.AF.INET6 => std.mem.bigToNative(u16, @as(*const std.posix.sockaddr.in6, @ptrCast(@alignCast(&addr.storage))).port),
+            else => 0,
+        };
+        return if (port != 0) port else self.config.port;
+    }
+
+    /// The listening socket's bound address (SONNY-6480: the acceptor
+    /// watchdog watches it), or null before `listen` or if it cannot be read.
+    pub fn boundAddress(self: *QuicTransport) ?std.posix.sockaddr.storage {
+        const ep = self.endpoint orelse return null;
+        const addr = ep.transport.getLocalAddr() catch return null;
+        return addr.storage;
+    }
+
+    /// Whether shutdown has begun (the acceptor stops accepting).
+    pub fn isShuttingDown(self: *QuicTransport) bool {
+        return self.shutting_down.load(.acquire);
     }
 
     fn pollOnce(self: *QuicTransport, timeout_ms: u32) !api.PollStats {
@@ -909,6 +974,7 @@ pub const QuicTransport = struct {
             // quiet socket wakes every blocked handler every 500us.
             const stats = try ep.pollWithStats(timeout_i32);
             if (stats.packets_processed > 0) {
+                _ = self.datagrams_drained.fetchAdd(stats.packets_processed, .monotonic);
                 self.poll_sync.notifyPoll();
             }
             return stats;
@@ -1188,14 +1254,20 @@ pub const QuicTransport = struct {
         return self.poll_overrun_total.load(.monotonic);
     }
 
+    /// SONNY-2719: datagrams drained off this endpoint's socket so far.
+    pub fn getDatagramsDrained(self: *QuicTransport) u64 {
+        return self.datagrams_drained.load(.monotonic);
+    }
+
     pub fn tryAccept(self: *QuicTransport) ?*QuicConnection {
         // Gap 0039: refuse new connections the moment shutdown is signalled.
         if (self.shutting_down.load(.acquire)) return null;
         if (self.endpoint) |ep| {
             // QUIC library v0.1.10: poll() is internally thread-safe
-            ep.poll(0) catch {
+            const stats = ep.pollWithStats(0) catch {
                 return null;
             };
+            _ = self.datagrams_drained.fetchAdd(stats.packets_processed, .monotonic); // SONNY-2719
             self.poll_sync.notifyPoll();
             const conn = api.tryAccept(ep) orelse return null;
             const wrapper = self.allocator.create(QuicConnection) catch return null;
@@ -1314,52 +1386,16 @@ pub const QuicTransport = struct {
     }
 
     fn generateSelfSignedCert(self: *QuicTransport) !void {
-        // SONNY-2394: do NOT spawn through `global_single_threaded` -- that Io
-        // ships with `.allocator = .failing`, so `std.process.spawn` OOMs
-        // inside spawnPosix's argv arena before it ever forks, and this
-        // auto-generation path could never succeed (the old "unimplemented in
-        // Zig 0.16" note in distributed/cluster.zig). Nor through a second
-        // `Threaded.init` instance: that swaps process-wide signal handlers.
-        // `spawn_io` has neither problem and carries the process environment.
-        var spawn_threaded = spawn_io.threaded();
-        defer spawn_threaded.deinit();
-        const io = spawn_threaded.io();
-
-        // Ensure the parent directory for the certificate exists.
-        if (std.fs.path.dirname(self.config.cert_path)) |dir_path| {
-            if (dir_path.len > 0) {
-                std.Io.Dir.cwd().createDirPath(io, dir_path) catch |err| switch (err) {
-                    error.PathAlreadyExists => {},
-                    else => return QuicError.CertificateError,
-                };
-            }
-        }
-
-        // Build argv: openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1
-        //   -nodes -keyout <key_path> -out <cert_path> -days 365 -subj "/CN=geode-autogen"
-        const argv = [_][]const u8{
-            "openssl",                      "req",    "-x509",
-            "-newkey",                      "ec",     "-pkeyopt",
-            "ec_paramgen_curve:prime256v1", "-nodes", "-keyout",
-            self.config.key_path,           "-out",   self.config.cert_path,
-            "-days",                        "365",    "-subj",
-            "/CN=geode-autogen",
-        };
-
-        var child = try std.process.spawn(io, .{
-            .argv = &argv,
-            .stdin = .ignore,
-            .stdout = .ignore,
-            .stderr = .ignore,
-        });
-
-        const term = try std.process.Child.wait(&child, io);
-        switch (term) {
-            .exited => |code| {
-                if (code != 0) return QuicError.CertificateError;
-            },
+        // SONNY-6325: through tls_material, the same generator `geode serve`
+        // uses: openssl writes into a private staging directory and the pair
+        // is installed exclusive and no-follow (key 0600, certificate 0644),
+        // so nothing already at either path (a planted file or symbolic link)
+        // is followed or replaced. SONNY-2394: tls_material spawns openssl
+        // through spawn_io (no signal-handler swap, the process environment).
+        tls_material.generateSelfSigned(self.config.cert_path, self.config.key_path, .{ .subject = "/CN=geode-autogen" }) catch |err| switch (err) {
+            error.OutOfMemory => return err,
             else => return QuicError.CertificateError,
-        }
+        };
     }
 };
 
@@ -1399,9 +1435,9 @@ pub const QuicConnection = struct {
     /// mechanism on the routine server-stop path: the frame was already on the
     /// wire by the time `destroyConnectionWithError` ran, so its named code was
     /// a no-op. Latched here so the code is assertable without a live peer —
-    /// vendored quic v0.1.40 discards the received code on the receiving side
-    /// (`endpoint/frame_handler.zig handleConnectionClose`), so no client can
-    /// observe it yet (review follow-up T-8).
+    /// vendored quic (v0.1.40 through v0.1.51) discards the received code on
+    /// the receiving side (`endpoint/frame_handler.zig handleConnectionClose`),
+    /// so no client can observe it yet (review follow-up T-8).
     close_app_error: std.atomic.Value(u64) = std.atomic.Value(u64).init(app_error.no_error),
     /// SONNY-1219c (m-9): lock-free mirror of `streams.items.len`, maintained
     /// under `streams_mu` at every append/release. The `quic_max_tracked_streams`
@@ -1522,6 +1558,26 @@ pub const QuicConnection = struct {
         const chain = tls_ctx.peer_cert_chain orelse return null;
         if (chain.len == 0) return null;
         return chain[0];
+    }
+
+    /// SONNY-6453: the peer's leaf certificate only when the peer PROVED it
+    /// holds the key: it sent a CertificateVerify, which the TLS layer checks
+    /// (with the chain) before the handshake can complete. A client may send
+    /// a Certificate without a CertificateVerify; the vendor TLS server then
+    /// validates nothing, so `getPeerCertificateDer` alone is not evidence
+    /// of anything and must not authenticate or satisfy mTLS.
+    pub fn getVerifiedPeerCertificateDer(self: *QuicConnection) ?[]const u8 {
+        const qc = self.quic_connection orelse return null;
+        const tls_ctx = qc.tls_context orelse return null;
+        if (tls_ctx.peer_cert_verify_sig == null) return null;
+        return self.getPeerCertificateDer();
+    }
+
+    /// Keying material exported from this connection's TLS handshake under
+    /// `label` (see `exportTlsKeyingMaterial`).
+    pub fn exportKeyingMaterial(self: *QuicConnection, label: []const u8, out: []u8) !void {
+        const qc = self.quic_connection orelse return error.NoTlsContext;
+        return exportTlsKeyingMaterial(qc, label, out);
     }
 
     /// Return a human-readable IP string for the peer (e.g. "192.168.1.1").
@@ -1728,6 +1784,10 @@ pub const QuicConnection = struct {
 ///
 /// Generic over `conn` so the fallback policy is unit-testable with a fake
 /// connection that simulates the no-TX `error.InvalidStream` path.
+///
+/// Still needed on quic v0.1.51: its stream retirement (SONNY-6478) did not
+/// change this case; `closeStream` still returns `error.InvalidStream` for a
+/// stream with no TX entry (`connection/methods_b.zig closeStream`).
 fn finalizeStreamSend(conn: anytype, stream_id: u64) void {
     conn.closeStream(stream_id, 0) catch |err| {
         // Stream already FIN'd/aborted: a terminator was already emitted and
@@ -1759,6 +1819,19 @@ pub const QuicStream = struct {
     /// `destroyStream` frees only when it latches the flag itself, so a handler
     /// racing a connection teardown cannot double-free.
     released: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    /// SONNY-3232: close this stream's connection with `app_error_code`
+    /// (CONNECTION_CLOSE on the wire), from a stream handler that must stop
+    /// the peer sending: the library cannot send STOP_SENDING. The connection
+    /// drains and is torn down by its acceptor as for a peer close.
+    pub fn closeConnection(self: *QuicStream, app_error_code: u64) void {
+        if (self.poll_sync) |ps| ps.enterIo();
+        defer {
+            if (self.poll_sync) |ps| ps.leaveIo();
+        }
+        api.closeConnection(self.connection, app_error_code) catch {};
+        if (self.poll_sync) |ps| ps.notifyPoll();
+    }
 
     pub fn write(self: *QuicStream, data: []const u8) !usize {
         if (self.shutdown_requested) |shutdown| {
@@ -1895,9 +1968,11 @@ pub const QuicStream = struct {
         }
     }
 
+    /// SONNY-6480: as `QuicClientStream.readLineWithInterrupt`, the line
+    /// grows with the bytes read; a call that reads nothing allocates nothing.
     pub fn readLine(self: *QuicStream, max_size: usize) ![]u8 {
-        var temp_buf = try self.allocator.alloc(u8, max_size);
-        defer self.allocator.free(temp_buf);
+        var line: std.ArrayList(u8) = .empty;
+        defer line.deinit(self.allocator);
         var pos: usize = 0;
         var retry_count: usize = 0;
         const max_retries: usize = 100; // Max 100 retries = 500ms wait time
@@ -1931,7 +2006,7 @@ pub const QuicStream = struct {
                 return error.UnexpectedEndOfStream;
             }
 
-            temp_buf[pos] = byte[0];
+            try line.append(self.allocator, byte[0]);
             pos += 1;
             retry_count = 0; // Reset retry count when we successfully read a byte
 
@@ -1940,11 +2015,8 @@ pub const QuicStream = struct {
 
         if (pos == 0) return error.EndOfStream;
 
-        const result = try self.allocator.alloc(u8, pos);
-        @memcpy(result, temp_buf[0..pos]);
-
         // GAP-0200: Debug prints removed from hot path for performance
-        return result;
+        return line.toOwnedSlice(self.allocator);
     }
 
     pub fn close(self: *QuicStream) void {
@@ -2025,6 +2097,52 @@ pub fn resolveHostIpAlloc(allocator: std.mem.Allocator, host: []const u8) ![]u8 
     const out = try allocator.dupe(u8, r.ip);
     if (r.allocated) allocator.free(@constCast(r.ip));
     return out;
+}
+
+/// The mTLS client CA bundle (GEODE_MTLS_CLIENT_CA), see `loadClientCaTrust`.
+pub const ClientCaTrust = struct {
+    allocator: std.mem.Allocator,
+    /// SONNY-6457: the bundle's DER certificates, for
+    /// `QuicTransport.Config.inline_client_ca_der`.
+    ders: []const []const u8,
+
+    /// Frees the certificates.
+    pub fn deinit(self: *ClientCaTrust) void {
+        for (self.ders) |d| self.allocator.free(d);
+        self.allocator.free(self.ders);
+    }
+};
+
+// CANARY: REQ=REQ-AUTH-MTLS-QUIC-008; FEATURE="mTLS over QUIC"; ASPECT=ClientCaScope; STATUS=TESTED; TEST=tests/test_sonny6490_client_ca_scope.zig; OWNER=security; UPDATED=2026-11-13
+/// SONNY-6453: load the CA certificates in the PEM bundle at `path`, the
+/// only anchors client certificates (mTLS) are verified against. Every
+/// certificate in the bundle must be a CA (basicConstraints CA:TRUE): the
+/// TLS layer requires the chain's last certificate to be one. A bundle that
+/// cannot be loaded, holds no certificate, or holds a non-CA certificate is
+/// an error.
+///
+/// SONNY-6457: the returned `ders` must be set as the transport's
+/// `inline_client_ca_der`; with them the server TLS layer trusts only these
+/// CAs for client chains and completes a chain the client sent without its
+/// issuer (a leaf of a bundle CA, sent alone, is accepted).
+///
+/// SONNY-6490: the bundle reaches the listener only. It is NOT installed as
+/// the process-wide x509 trust store, which every client TLS context with no
+/// CA of its own validates a SERVER certificate against: an outbound dial
+/// would then accept a server certificate from a client CA.
+pub fn loadClientCaTrust(allocator: std.mem.Allocator, path: []const u8) !ClientCaTrust {
+    const chain = try loadCaChainDer(allocator, path);
+    errdefer {
+        for (chain) |der| allocator.free(der);
+        allocator.free(chain);
+    }
+    for (chain) |der| {
+        var cert = quic_x509.parseCert(allocator, der) catch return error.InvalidClientCaCertificate;
+        defer cert.deinit(allocator);
+        const is_ca = if (cert.basic) |b| b.ca else false;
+        if (!is_ca) return error.ClientCaNotACa;
+    }
+    return .{ .allocator = allocator, .ders = chain };
 }
 
 /// GAP-0838: parse a PEM CA file into a DER trust-anchor chain.
@@ -2116,6 +2234,79 @@ test "parsePemCertChain: single + multi-cert PEM bundle -> DER chain (GAP-0838)"
     try std.testing.expectEqual(@as(usize, 2), pair.len);
 }
 
+/// RFC 8446 §7.5 exporter value of `conn`'s completed TLS handshake under
+/// `label`, with an empty context (SONNY-6442). Both ends of one TLS session
+/// derive the same value and no other session does, so an application
+/// message that covers it is bound to this channel. Fails with
+/// error.NoTlsContext or error.HandshakeIncomplete before the handshake has
+/// produced the exporter master secret.
+///
+/// Computed by the tls library (`Context.exportSecret`, RFC 8446 §7.5 since
+/// tls v0.1.25; SONNY-6448 retired geode's own copy of the construction). The
+/// value is unchanged from that copy, so peers on either side of the
+/// retirement agree.
+fn exportTlsKeyingMaterial(conn: *Connection, label: []const u8, out: []u8) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    conn.tls_context_mu.lockUncancelable(io);
+    defer conn.tls_context_mu.unlock(io);
+    const ctx = conn.tls_context orelse return error.NoTlsContext;
+    if (!ctx.secrets.exporter_master.valid) return error.HandshakeIncomplete;
+    return ctx.exportSecret(label, out);
+}
+
+// SONNY-6448 / SONNY-6442: the channel binding of the remote-KMS attestation is
+// this exporter, computed independently by both ends. Pin it to RFC 8446 §7.5
+// (TLS-Exporter(label, "", L) = HKDF-Expand-Label(Derive-Secret(secret, label,
+// ""), "exporter", Hash(""), L)) with an independent std.crypto computation and
+// a known-answer value, so a library change that alters it fails here instead
+// of splitting a geode cluster across versions.
+test "tls Context.exportSecret is the RFC 8446 §7.5 exporter (SONNY-6448 regression)" {
+    const TlsContext = std.meta.Child(std.meta.Child(@FieldType(Connection, "tls_context")));
+    var ctx = try TlsContext.init(.{ .allocator = std.testing.allocator, .role = .Client }, .{});
+    defer ctx.deinit();
+    const secret = [_]u8{0x42} ** 32;
+    const SecretT = @FieldType(@TypeOf(ctx.secrets.exporter_master), "value");
+    ctx.secrets.exporter_master.store(.Application, .sha256, SecretT.fromSlice(.sha256, &secret));
+
+    const label = "EXPORTER-geode-kms-attest-v3";
+    var library: [32]u8 = undefined;
+    try ctx.exportSecret(label, &library);
+
+    // Independent HKDF-Expand-Label construction with std.crypto.
+    const Hkdf = std.crypto.kdf.hkdf.HkdfSha256;
+    var empty: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash("", &empty, .{});
+    const label1 = "tls13 " ++ label;
+    var info1: [2 + 1 + label1.len + 1 + 32]u8 = undefined;
+    std.mem.writeInt(u16, info1[0..2], 32, .big);
+    info1[2] = label1.len;
+    @memcpy(info1[3..][0..label1.len], label1);
+    info1[3 + label1.len] = 32;
+    @memcpy(info1[4 + label1.len ..], &empty);
+    var derived: [32]u8 = undefined;
+    Hkdf.expand(&derived, &info1, secret);
+    const label2 = "tls13 exporter";
+    var info2: [2 + 1 + label2.len + 1 + 32]u8 = undefined;
+    std.mem.writeInt(u16, info2[0..2], 32, .big);
+    info2[2] = label2.len;
+    @memcpy(info2[3..][0..label2.len], label2);
+    info2[3 + label2.len] = 32;
+    @memcpy(info2[4 + label2.len ..], &empty);
+    var want: [32]u8 = undefined;
+    Hkdf.expand(&want, &info2, derived);
+    try std.testing.expectEqualSlices(u8, &want, &library);
+
+    // Known answer (computed independently with Python hmac/hashlib).
+    var kat: [32]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&kat, "9fb896eaa06183c132e861542ac2486ca30cd8ce6c910a98d465e5cbd4ec1867");
+    try std.testing.expectEqualSlices(u8, &kat, &library);
+
+    // Another label, another value.
+    var other: [32]u8 = undefined;
+    try ctx.exportSecret("EXPORTER-other", &other);
+    try std.testing.expect(!std.mem.eql(u8, &library, &other));
+}
+
 pub const QuicClient = struct {
     allocator: std.mem.Allocator,
     /// Heap-allocated endpoint (via api.endpointInit / api.endpointDeinit).
@@ -2128,6 +2319,12 @@ pub const QuicClient = struct {
     /// the vendor TLS client via cfg.inline_ca_chain_der. Owns its backing; freed
     /// last in deinit() so it outlives any TLS context that references it.
     ca_chain_der: ?[]const []const u8 = null,
+    /// SONNY-6457: DER client certificate and private key presented when the
+    /// server requests one, handed to the vendor TLS client via
+    /// cfg.inline_client_cert_der / cfg.inline_client_priv_key. Owned; freed
+    /// (the key zeroed first) after the endpoint in deinit().
+    client_cert_der: ?[]u8 = null,
+    client_key_der: ?[]u8 = null,
 
     pub fn init(allocator: std.mem.Allocator) QuicClient {
         return QuicClient{
@@ -2192,6 +2389,55 @@ pub const QuicClient = struct {
             self.allocator.free(chain);
             self.ca_chain_der = null;
         }
+        self.freeClientIdentity();
+    }
+
+    fn freeClientIdentity(self: *QuicClient) void {
+        if (self.client_cert_der) |der| {
+            self.allocator.free(der);
+            self.client_cert_der = null;
+        }
+        if (self.client_key_der) |der| {
+            std.crypto.secureZero(u8, der);
+            self.allocator.free(der);
+            self.client_key_der = null;
+        }
+    }
+
+    /// SONNY-6457: load the PEM client certificate and private key into
+    /// client_cert_der / client_key_der. Any failure is an error, never a
+    /// connection without the certificate the caller asked to present.
+    fn loadClientIdentity(self: *QuicClient, cert_path: []const u8, key_path: []const u8) !void {
+        self.freeClientIdentity();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const limit: std.Io.Limit = .limited(1024 * 1024);
+
+        const cert_pem = std.Io.Dir.cwd().readFileAlloc(io, cert_path, self.allocator, limit) catch |err| {
+            tlog.err("TLS: cannot read client certificate; refusing to connect", &.{ Attr.string("path", cert_path), Attr.string("error", @errorName(err)) });
+            return err;
+        };
+        defer self.allocator.free(cert_pem);
+        const cert_der = api.pem.parseCertificate(self.allocator, cert_pem) catch |err| {
+            tlog.err("TLS: cannot parse client certificate; refusing to connect", &.{ Attr.string("path", cert_path), Attr.string("error", @errorName(err)) });
+            return err;
+        };
+        errdefer self.allocator.free(cert_der);
+
+        const key_pem = std.Io.Dir.cwd().readFileAlloc(io, key_path, self.allocator, limit) catch |err| {
+            tlog.err("TLS: cannot read client private key; refusing to connect", &.{ Attr.string("path", key_path), Attr.string("error", @errorName(err)) });
+            return err;
+        };
+        defer {
+            std.crypto.secureZero(u8, key_pem);
+            self.allocator.free(key_pem);
+        }
+        const key_der = api.pem.parsePrivateKey(self.allocator, key_pem) catch |err| {
+            tlog.err("TLS: cannot parse client private key; refusing to connect", &.{ Attr.string("path", key_path), Attr.string("error", @errorName(err)) });
+            return err;
+        };
+
+        self.client_cert_der = cert_der;
+        self.client_key_der = key_der;
     }
 
     pub fn connect(self: *QuicClient, host: []const u8, port: u16) !void {
@@ -2246,11 +2492,16 @@ pub const QuicClient = struct {
         };
         self.quic_config = cfg;
 
-        // Initialize client endpoint using api.endpointInit (heap-allocates Endpoint).
-        self.endpoint = try api.endpointInit(&self.allocator, "0.0.0.0:0", cfg);
+        // SONNY-6487: an IPv6 server needs an IPv6 endpoint and a bracketed
+        // dial address (`[::1]:3141`); the endpoint was always 0.0.0.0:0 and
+        // `::1:3141` is not a parseable address.
+        const server_v6 = std.mem.indexOfScalar(u8, resolved.ip, ':') != null;
+        self.endpoint = try api.endpointInit(&self.allocator, if (server_v6) "[::]:0" else "0.0.0.0:0", cfg);
 
-        // Create server address string using resolved IP.
-        const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ resolved.ip, port });
+        const server_addr = if (server_v6)
+            try std.fmt.allocPrint(self.allocator, "[{s}]:{d}", .{ resolved.ip, port })
+        else
+            try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ resolved.ip, port });
         defer self.allocator.free(server_addr);
 
         // Connect to server using public API.
@@ -2279,15 +2530,28 @@ pub const QuicClient = struct {
         // cfg.inline_ca_chain_der (DER trust anchors), NOT cfg.ca_path (a path string).
         // Load the CA bundle here so cluster TLS actually has a trust anchor and can
         // complete a leaf-only server chain. Owned by self; freed in deinit().
+        // SONNY-6448: a CA bundle that cannot be loaded is an error, never a
+        // connection without the trust anchor the caller asked for.
         if (ca_cert_path) |ca_p| {
-            self.ca_chain_der = loadCaChainDer(self.allocator, ca_p) catch |err| blk: {
-                tlog.warn("cluster TLS: failed to load CA chain; proceeding without pinned anchor", &.{
+            self.ca_chain_der = loadCaChainDer(self.allocator, ca_p) catch |err| {
+                tlog.err("TLS: cannot load CA bundle; refusing to connect", &.{
                     Attr.string("path", ca_p),
                     Attr.string("error", @errorName(err)),
                 });
-                break :blk null;
+                return err;
             };
         }
+
+        // SONNY-6457: the client certificate goes in inline_client_cert_der /
+        // inline_client_priv_key, the fields the vendor client TLS context
+        // sends from. Never in cfg.cert_path: a cert_path makes the vendor
+        // endpoint a SERVER. A certificate needs its key and vice versa.
+        // CANARY: REQ=REQ-AUTH-MTLS-QUIC-007; FEATURE="mTLS over QUIC"; ASPECT=ClientCertPresentation; STATUS=TESTED; TEST=tests/test_sonny6457_connectex_client_cert.zig; OWNER=security; UPDATED=2026-11-13
+        if ((client_cert_path == null) != (client_key_path == null)) {
+            tlog.err("TLS: a client certificate and its private key must be given together; refusing to connect", &.{});
+            return error.ClientCertificateKeyMismatch;
+        }
+        if (client_cert_path) |cert_p| try self.loadClientIdentity(cert_p, client_key_path.?);
 
         // Allocate QUIC config on the heap so the alpn_storage slice remains valid.
         const cfg = try self.allocator.create(VendorQuicConfig);
@@ -2312,28 +2576,51 @@ pub const QuicClient = struct {
             // GAP-0259: Match server idle timeout (300s) to prevent premature disconnect during bulk writes
             .max_idle_timeout_ms = 300000,
             .max_udp_payload = 1350,
-            .cert_path = client_cert_path,
-            .key_path = client_key_path,
+            .cert_path = null,
+            .key_path = null,
             .ca_path = ca_cert_path,
             .allow_insecure = false,
             .aead_confidentiality_limit_override = null,
             .aead_integrity_limit_override = null,
             .inline_server_cert_der = null,
             .inline_server_priv_p256 = null,
+            .inline_client_cert_der = self.client_cert_der,
+            .inline_client_priv_key = self.client_key_der,
             // GAP-0838: hand the loaded CA trust anchors to the vendor TLS client.
             .inline_ca_chain_der = self.ca_chain_der,
         };
         self.quic_config = cfg;
 
-        // Initialize client endpoint using api.endpointInit (heap-allocates Endpoint).
-        self.endpoint = try api.endpointInit(&self.allocator, "0.0.0.0:0", cfg);
+        // SONNY-6487: an IPv6 server needs an IPv6 endpoint and a bracketed
+        // dial address (`[::1]:3141`); the endpoint was always 0.0.0.0:0 and
+        // `::1:3141` is not a parseable address.
+        const server_v6 = std.mem.indexOfScalar(u8, resolved.ip, ':') != null;
+        self.endpoint = try api.endpointInit(&self.allocator, if (server_v6) "[::]:0" else "0.0.0.0:0", cfg);
 
-        // Create server address string using resolved IP.
-        const server_addr = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ resolved.ip, port });
+        const server_addr = if (server_v6)
+            try std.fmt.allocPrint(self.allocator, "[{s}]:{d}", .{ resolved.ip, port })
+        else
+            try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ resolved.ip, port });
         defer self.allocator.free(server_addr);
 
         // Connect to server using public API. SNI uses original hostname for TLS.
         self.connection = try api.connect(self.endpoint.?, server_addr, normalized_address);
+    }
+
+    /// Connect and verify the server's certificate chain against the CA
+    /// bundle at `ca_cert_path` and its name against `address` (SONNY-6442).
+    /// A CA bundle that cannot be loaded is an error, never a connection
+    /// without a trust anchor (as in `connectEx` since SONNY-6448).
+    pub fn connectWithCa(self: *QuicClient, address: []const u8, port: u16, ca_cert_path: []const u8) !void {
+        self.ca_chain_der = try loadCaChainDer(self.allocator, ca_cert_path);
+        return self.connectEx(address, port, null, null, null);
+    }
+
+    /// Keying material exported from this client's TLS handshake under
+    /// `label` (see `exportTlsKeyingMaterial`).
+    pub fn exportKeyingMaterial(self: *QuicClient, label: []const u8, out: []u8) !void {
+        const conn = self.connection orelse return error.NoTlsContext;
+        return exportTlsKeyingMaterial(conn, label, out);
     }
 
     pub fn waitForHandshake(self: *QuicClient, timeout_secs: u32) !void {
@@ -2438,6 +2725,10 @@ pub const QuicClientStream = struct {
         const max_blocked_retries: usize = 1_000_000; // safety cap; wall-clock deadline is authoritative
         while (written < data.len) {
             if (monoNsRaw() -| start_ns > max_blocked_ns) return QuicError.WriteError;
+            // SONNY-3232: a peer that closed the connection (a server
+            // refusing a message over its maximum) frees no more credit; stop
+            // now instead of waiting out the writer deadline.
+            if (api.isDrained(self.connection)) return QuicError.Closed;
             const n = self.write(data[written..]) catch |err| {
                 if (err == error.FlowControlBlocked or err == error.WouldBlock) {
                     blocked_retries += 1;
@@ -2498,9 +2789,15 @@ pub const QuicClientStream = struct {
 
     /// readLine with optional interrupt checking callback
     /// If interrupt_check returns true, returns error.Interrupted
+    // CANARY: REQ=REQ-SONNY-6480-READLINE-NO-ALLOC; FEATURE="QuicClient"; ASPECT=ReadLineAllocatesOnlyForALine; STATUS=TESTED; TEST=tests/test_sonny6480_readline_alloc.zig; OWNER=transport; UPDATED=2026-11-13
+    /// SONNY-6480: the line is collected in a buffer that grows with the
+    /// bytes read, so a call that reads nothing (WouldBlock, Interrupted)
+    /// allocates nothing; it allocated `max_size` (8 KiB from the shell and
+    /// the KMS client) on every call, an mmap/munmap pair per poll retry on
+    /// page_allocator.
     pub fn readLineWithInterrupt(self: *QuicClientStream, max_size: usize, interrupt_check: ?*const fn () bool) ![]u8 {
-        var temp_buf = try self.allocator.alloc(u8, max_size);
-        defer self.allocator.free(temp_buf);
+        var line: std.ArrayList(u8) = .empty;
+        defer line.deinit(self.allocator);
         var pos: usize = 0;
         var retry_count: usize = 0;
         const max_retries: usize = 20; // Max 20 retries = ~100ms, allows frequent interrupt checks
@@ -2547,7 +2844,7 @@ pub const QuicClientStream = struct {
                 continue;
             }
 
-            temp_buf[pos] = byte[0];
+            try line.append(self.allocator, byte[0]);
             pos += 1;
             retry_count = 0; // Reset retry count when we successfully read a byte
 
@@ -2556,9 +2853,7 @@ pub const QuicClientStream = struct {
 
         if (pos == 0) return error.EndOfStream;
 
-        const result = try self.allocator.alloc(u8, pos);
-        @memcpy(result, temp_buf[0..pos]);
-        return result;
+        return line.toOwnedSlice(self.allocator);
     }
 
     pub fn close(self: *QuicClientStream) void {
@@ -2838,7 +3133,7 @@ test "tracked streams: destroyStream proves liveness by list membership, never t
 // The code each path hands to `api.closeConnection` is latched in
 // `close_app_error`, which is what these assert. (The peer-side assertion the
 // SONNY-1219c addendum asks for is not expressible against vendored quic
-// v0.1.40: `endpoint/frame_handler.zig:308 handleConnectionClose` discards the
+// v0.1.40 through v0.1.51: `endpoint/frame_handler.zig handleConnectionClose` discards the
 // received error code entirely — it returns only `saw_close` — so no
 // `QuicClient` can observe it. That is review follow-up T-8.)
 // =============================================================================

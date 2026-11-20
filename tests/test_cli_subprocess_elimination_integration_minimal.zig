@@ -2,6 +2,8 @@
 // Minimal integration tests for CLI subprocess elimination - focus on exit codes
 
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const expect = testing.expect;
 const proto_util = @import("proto_test_util.zig");
@@ -31,6 +33,8 @@ fn getExitCode(allocator: std.mem.Allocator, args: []const []const u8) !u8 {
 
 // Test --insecure flag returns success exit code
 test "integration --insecure returns exit code 0" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try spawnTestServer(allocator);
@@ -38,7 +42,7 @@ test "integration --insecure returns exit code 0" {
     const addr = server.getAddr();
 
     const exit_code = try getExitCode(allocator, &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "RETURN 1 AS test",
         "--server",
@@ -54,7 +58,7 @@ test "integration query without text returns exit code 2" {
     const allocator = testing.allocator;
 
     const exit_code = try getExitCode(allocator, &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
     });
 
@@ -66,7 +70,7 @@ test "integration help returns exit code 0" {
     const allocator = testing.allocator;
 
     const exit_code = try getExitCode(allocator, &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "--help",
     });
 
@@ -78,7 +82,7 @@ test "integration invalid command returns non-zero exit code" {
     const allocator = testing.allocator;
 
     const exit_code = try getExitCode(allocator, &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "invalid-command",
     });
 
@@ -87,6 +91,8 @@ test "integration invalid command returns non-zero exit code" {
 
 // Test with different queries all return success with --insecure
 test "integration various queries with --insecure return success" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try spawnTestServer(allocator);
@@ -102,7 +108,7 @@ test "integration various queries with --insecure return success" {
 
     for (test_queries) |query| {
         const exit_code = try getExitCode(allocator, &[_][]const u8{
-            "./zig-out/bin/geode",
+            geode_test_bin.geode_exe,
             "query",
             query,
             "--server",
@@ -119,7 +125,7 @@ test "integration invalid server address returns error" {
     const allocator = testing.allocator;
 
     const exit_code = try getExitCode(allocator, &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "RETURN 1",
         "--server",
@@ -131,6 +137,8 @@ test "integration invalid server address returns error" {
 
 // Test binary can be executed (basic smoke test)
 test "integration binary execution smoke test" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try spawnTestServer(allocator);
@@ -139,7 +147,7 @@ test "integration binary execution smoke test" {
 
     // Just verify we can execute the binary without crashing
     const exit_code = try getExitCode(allocator, &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "RETURN 'smoke test'",
         "--server",
@@ -153,6 +161,8 @@ test "integration binary execution smoke test" {
 
 // CANARY compliance test
 test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_003" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     var server = try spawnTestServer(allocator);
@@ -163,7 +173,7 @@ test "TestCANARY_REQ_CLI_SUBPROCESS_INTEGRATION_003" {
     // as specified in REQ-CLI-SUBPROCESS-INTEGRATION-003
 
     const exit_code = try getExitCode(allocator, &[_][]const u8{
-        "./zig-out/bin/geode",
+        geode_test_bin.geode_exe,
         "query",
         "CANARY TEST",
         "--server",

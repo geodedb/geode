@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 const schema = @import("schema");
@@ -43,6 +45,8 @@ fn seedLabeled(client: *util.QuicProtoClient, allocator: std.mem.Allocator) !voi
 }
 
 test "storage: two-hop expansion (GraphStore)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("two-hop expansion (GraphStore)");
     errdefer util.testFail();
 
@@ -64,7 +68,7 @@ test "storage: two-hop expansion (GraphStore)" {
     util.progress("Starting server on port {d}...", .{port});
     var server = util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", tmp.dir_path },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data_dir", tmp.dir_path },
         util.TestEnv.standard(),
     ) catch |err| {
         util.progress("Server spawn failed: {}", .{err});
@@ -104,6 +108,8 @@ test "storage: two-hop expansion (GraphStore)" {
 }
 
 test "storage: labeled expansion (GraphStore)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("labeled expansion (GraphStore)");
     errdefer util.testFail();
 
@@ -125,7 +131,7 @@ test "storage: labeled expansion (GraphStore)" {
     util.progress("Starting server on port {d}...", .{port});
     var server = util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data_dir", tmp.dir_path },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data_dir", tmp.dir_path },
         util.TestEnv.standard(),
     ) catch |err| {
         util.progress("Server spawn failed: {}", .{err});

@@ -152,6 +152,11 @@ geode query
 geode query "RETURN 1" --server 127.0.0.1:3141
 # Exit code: 0 (success)
 # Output: SCHEMA and BINDINGS JSON lines from the server
+
+# A query the server answers with an error (SONNY-6369; it exited 0)
+geode query "RETURN 1/0" --server 127.0.0.1:3141
+# Exit code: 1 (general_error)
+# Output: the error status (e.g. 22012) and message
 ```
 
 ## TLS Validation

@@ -62,9 +62,11 @@ test "GAP-0901: RLS deny-policy DDL reports 'not initialized' when callbacks are
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
-    const res = try h.run("CALL geode.rls.add_deny_policy('g', 'Secret', 'alice')");
-    // The null-callback path returns a single status row naming the missing wiring.
-    try testing.expect(std.mem.indexOf(u8, firstCellStr(res), "not initialized") != null);
+    // The null-callback path fails naming the missing wiring: SONNY-6369
+    // made it an error (55000, RlsEngineNotInitialized); it was a 00000
+    // status row starting "error: RLS filter engine not initialized".
+    try testing.expectError(error.RlsEngineNotInitialized, h.run("CALL geode.rls.add_deny_policy('g', 'Secret', 'alice')"));
+    try testing.expectEqualStrings("55000", geode.proto_util.mapError(error.RlsEngineNotInitialized).code);
 }
 
 test "GAP-0901: once the callbacks are wired, the RLS DDL succeeds (post-hoist state both transports see)" {

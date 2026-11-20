@@ -128,7 +128,7 @@ fn store() *graph_store.GraphStore {
 }
 
 fn tOf(id: u64) []const u8 {
-    const v = store().getNodeProperty(id, "t") orelse return "";
+    const v = (store().getNodePropertyOrError(id, "t") catch @panic("SONNY-6621: unexpected read failure")) orelse return "";
     return switch (v) {
         .String => |t| t,
         else => "?",
@@ -319,26 +319,29 @@ test "SONNY-2806: MERGE's index refuses a holder whose id has bit 63 set, in eve
     // as is, which reads as "shared, lowest holder <the id without bit 63>",
     // naming another node. The refusal is now a runtime check. No node gets
     // such an id (`parsePersistedPublicId`, time-based ids); a reserved id
-    // is the only way in.
+    // was the only way in, and SONNY-6362 closed it: a node is not created
+    // with such an id (`refuseFlaggedNodeId`), so the index's own refusal is
+    // defence in depth.
     const allocator = testing.allocator;
     var gs = try graph_store.GraphStore.init(allocator);
     defer gs.deinit();
     try gs.createGraph("g");
     const flag: u64 = @as(u64, 1) << 63;
 
-    // A second holder with the flag bit: the entry keeps the first.
+    // A second holder with the flag bit: it is not created, and the entry
+    // keeps the first.
     const low = try gs.createNodeWithGraph(&[_][]const u8{"B63"}, "g");
     try gs.setNodeProperty(low, "x", .{ .Int = 7 });
-    try gs.createNodeWithReservedIdAndGraph(flag | 5, &[_][]const u8{"B63"}, "g");
-    try gs.setNodeProperty(flag | 5, "x", .{ .Int = 7 });
+    try testing.expectError(error.NodeIdFlagged, gs.createNodeWithReservedIdAndGraph(flag | 5, &[_][]const u8{"B63"}, "g"));
+    try testing.expect(gs.getNodePtr(flag | 5) == null);
     var id: u64 = 0;
     try testing.expectEqual(graph_store.GraphStore.MergeLookupResult.found, gs.lookupMergeCandidate("g", "B63", "x", .{ .Int = 7 }, &id));
     try testing.expectEqual(low, id);
     try testing.expectEqual(graph_store.GraphStore.MergeLookupResult.found, gs.lookupOnlyMergeHolder("g", "B63", "x", .{ .Int = 7 }, &id));
     try testing.expectEqual(low, id);
 
-    // A first holder with the flag bit: no entry is written for it.
-    try gs.createNodeWithReservedIdAndGraph(flag | 9, &[_][]const u8{"B64"}, "g");
-    try gs.setNodeProperty(flag | 9, "x", .{ .Int = 8 });
+    // A first holder with the flag bit: no such node, and no entry.
+    try testing.expectError(error.NodeIdFlagged, gs.createNodeWithReservedIdAndGraph(flag | 9, &[_][]const u8{"B64"}, "g"));
+    try testing.expect(gs.getNodePtr(flag | 9) == null);
     try testing.expectEqual(graph_store.GraphStore.MergeLookupResult.not_found, gs.lookupOnlyMergeHolder("g", "B64", "x", .{ .Int = 8 }, &id));
 }

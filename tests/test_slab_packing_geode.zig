@@ -47,6 +47,23 @@ fn nameFor(buf: []u8, i: usize) []const u8 {
     return std.fmt.bufPrint(buf, "taxon-{d}", .{i}) catch unreachable;
 }
 
+/// Counts the edges in `shard`'s edge index that carry a property head, and
+/// fails on a slab head: edge properties use legacy page chains. (The index
+/// is an `EdgeIndexMap`, visited through `forEachLive`, with u64 heads.)
+fn countLegacyEdgePropHeads(shard: anytype) !usize {
+    const Ctx = struct {
+        n: usize = 0,
+        fn visit(self: *@This(), _: gs.EdgeId, entry: gs.edge_index_map.EdgeIndexEntry) anyerror!void {
+            if (entry.prop_head == 0) return;
+            self.n += 1;
+            try testing.expect(!gs.prop_store.isSlabHead(entry.prop_head));
+        }
+    };
+    var ctx: Ctx = .{};
+    try shard.edge_index.forEachLive(&ctx, Ctx.visit);
+    return ctx.n;
+}
+
 const ranks = [_][]const u8{ "species", "genus", "family", "order", "class" };
 
 /// P0 metric through the geode stack: total allocated props-store pages
@@ -157,21 +174,12 @@ test "GAP-ENT-0020 P7a: slab-packed node props + legacy edge props through the g
         try testing.expect(edge_pages_delta >= E * 3 / 4);
         // Every edge-index prop_head is set and is NOT a slab head.
         var edges_with_props: usize = 0;
-        for (mg.engine.shards) |shard| {
-            var it = shard.edge_index.iterator();
-            while (it.next()) |entry| {
-                const ph: u32 = entry.value_ptr.prop_head;
-                if (ph != 0) {
-                    edges_with_props += 1;
-                    try testing.expect(!gs.prop_store.isSlabHead(@as(u64, ph)));
-                }
-            }
-        }
+        for (mg.engine.shards) |shard| edges_with_props += try countLegacyEdgePropHeads(shard);
         try testing.expectEqual(E, edges_with_props);
 
         // ---- (b) read parity BEFORE shutdown. ----
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
-        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
         var s: usize = 0;
         while (s < N) : (s += SAMPLE) {
             const got = try store.getNodePropertyValue(seed_ids[s], "name");
@@ -183,7 +191,7 @@ test "GAP-ENT-0020 P7a: slab-packed node props + legacy edge props through the g
         }
         i = 0;
         while (i < E) : (i += 17) {
-            const edge = store.getEdgePtrHydrated(edge_ids[i]) orelse return error.EdgeNotFound;
+            const edge = (try store.getEdgePtrHydratedChecked(edge_ids[i])) orelse return error.EdgeNotFound;
             const w = edge.properties.get("weight") orelse return error.PropertyNotFound;
             try testing.expectEqual(@as(i64, @intCast(i)), w.Int);
             const k = edge.properties.get("kind") orelse return error.PropertyNotFound;
@@ -205,7 +213,7 @@ test "GAP-ENT-0020 P7a: slab-packed node props + legacy edge props through the g
 
         // Counts (triggers hydration of the reopened slab-backed graph).
         try testing.expectEqual(N, store.countNodesByLabel(GRAPH, LABEL, null));
-        try testing.expectEqual(N, store.countNodesForGraph(GRAPH, null));
+        try testing.expectEqual(N, try store.countNodesForGraph(GRAPH, null));
 
         // Node property parity: hydrate-on-miss reads through the adapter's
         // slab-aware engine readers.
@@ -228,7 +236,7 @@ test "GAP-ENT-0020 P7a: slab-packed node props + legacy edge props through the g
         // Edge property parity after reopen (legacy chains read back).
         var i: usize = 0;
         while (i < E) : (i += 17) {
-            const edge = store.getEdgePtrHydrated(edge_ids[i]) orelse return error.EdgeNotFound;
+            const edge = (try store.getEdgePtrHydratedChecked(edge_ids[i])) orelse return error.EdgeNotFound;
             const w = edge.properties.get("weight") orelse return error.PropertyNotFound;
             try testing.expectEqual(@as(i64, @intCast(i)), w.Int);
         }
@@ -237,16 +245,7 @@ test "GAP-ENT-0020 P7a: slab-packed node props + legacy edge props through the g
         const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
         const mg = adapter.engines.get(GRAPH) orelse return error.GraphNotFound;
         var edges_with_props: usize = 0;
-        for (mg.engine.shards) |shard| {
-            var it = shard.edge_index.iterator();
-            while (it.next()) |entry| {
-                const ph: u32 = entry.value_ptr.prop_head;
-                if (ph != 0) {
-                    edges_with_props += 1;
-                    try testing.expect(!gs.prop_store.isSlabHead(@as(u64, ph)));
-                }
-            }
-        }
+        for (mg.engine.shards) |shard| edges_with_props += try countLegacyEdgePropHeads(shard);
         try testing.expectEqual(E, edges_with_props);
 
         // A post-reopen write still works on both paths (slab node put +
@@ -255,7 +254,7 @@ test "GAP-ENT-0020 P7a: slab-packed node props + legacy edge props through the g
         const renamed = try store.getNodePropertyValue(seed_ids[0], "name");
         try testing.expectEqualStrings("renamed-0", renamed.String);
         try store.setEdgeProperty(edge_ids[0], "weight", .{ .Int = 424242 });
-        const edge = store.getEdgePtrHydrated(edge_ids[0]) orelse return error.EdgeNotFound;
+        const edge = (try store.getEdgePtrHydratedChecked(edge_ids[0])) orelse return error.EdgeNotFound;
         const w2 = edge.properties.get("weight") orelse return error.PropertyNotFound;
         try testing.expectEqual(@as(i64, 424242), w2.Int);
 

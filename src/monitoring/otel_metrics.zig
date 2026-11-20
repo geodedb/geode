@@ -1376,6 +1376,11 @@ const RuntimeBridge = struct {
 
 fn observeRuntimeBridge(ctx: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
     const b: *const RuntimeBridge = @ptrCast(@alignCast(ctx.?));
+    // SONNY-6794: under the detach lock, so a bridge is never read while
+    // `detachRuntimeMetricsOtel` clears it. A detached bridge observes nothing.
+    g_runtime_bridges_mu.lockUncancelable(initIo());
+    defer g_runtime_bridges_mu.unlock(initIo());
+    if (b.counter_ptr == null and b.gauge_cb == null) return;
     observer.observeInt(b.read(), &.{});
 }
 
@@ -1389,6 +1394,20 @@ const RuntimeBridgeAlloc = struct {
     name: []const u8,
 };
 var g_runtime_bridges: std.ArrayListUnmanaged(RuntimeBridgeAlloc) = .empty;
+/// SONNY-6794: guards the bridges' source pointers against
+/// `detachRuntimeMetricsOtel`. Leaf lock: held only around one bridge read.
+var g_runtime_bridges_mu: std.Io.Mutex = std.Io.Mutex.init;
+
+/// SONNY-6794: stop every `geode.runtime.*` bridge reading its source. Call
+/// before the runtime registry's sources (its counters, the gauge callback
+/// contexts) are freed: OTel's shutdown runs a final collect, and a bridge
+/// still pointing at a freed source read freed memory (a segfault at
+/// `geode serve` exit with OTLP push on). A detached bridge observes nothing.
+pub fn detachRuntimeMetricsOtel() void {
+    g_runtime_bridges_mu.lockUncancelable(initIo());
+    defer g_runtime_bridges_mu.unlock(initIo());
+    for (g_runtime_bridges.items) |rb| rb.bridge.* = .{};
+}
 
 /// Export every entry of the runtime metrics Registry as a `geode.runtime.<name>`
 /// OTel observable gauge. Call ONCE at startup AFTER the registry is fully

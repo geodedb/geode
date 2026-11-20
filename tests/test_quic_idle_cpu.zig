@@ -26,12 +26,14 @@
 // with the graph_storage residual + CI load noise) from ANY regression of the
 // four spinners above (each is >100% on its own when broken). FAILS before the
 // fix (670% on the ReleaseSafe binary / ~100% on the 1-worker debug build).
-// Depends on a pre-built ./zig-out/bin/geode (SKIPs if missing); Linux-only.
+// Spawns the geode this build emitted (SONNY-2697); Linux-only.
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
+const test_ports = @import("test_ports.zig");
 
-const BINARY_PATH = "./zig-out/bin/geode";
+const BINARY_PATH = geode_test_bin.geode_exe;
 
 fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
     return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
@@ -84,7 +86,7 @@ fn buildChildEnv(aa: std.mem.Allocator) !*std.process.Environ.Map {
     if (posixGetenv("PATH")) |p| try env_ptr.put("PATH", p);
     if (posixGetenv("HOME")) |p| try env_ptr.put("HOME", p);
     if (posixGetenv("LD_LIBRARY_PATH")) |p| try env_ptr.put("LD_LIBRARY_PATH", p);
-    try env_ptr.put("GEODE_ADMIN_PASSWORD", "idlecputest123"); // gitleaks:allow — test fixture password
+    try env_ptr.put("GEODE_ADMIN_PASSWORD", "Idle Cpu Test Admin Passphrase"); // gitleaks:allow — test fixture password
     return env_ptr;
 }
 
@@ -107,8 +109,10 @@ test "idle server (0 connections) does not burn CPU in the poll loop" {
     std.Io.Dir.cwd().createDirPath(io, data_dir) catch {};
     defer std.Io.Dir.cwd().deleteTree(io, data_dir) catch {};
 
+    // SONNY-6301: free ports, not constants: another run on the host held them.
+    const listen = try std.fmt.allocPrint(aa, "127.0.0.1:{d}", .{try test_ports.freeUdpPort()});
     const args = [_][]const u8{
-        BINARY_PATH,  "serve",  "--listen",    "127.0.0.1:31777",
+        BINARY_PATH,  "serve",  "--listen",    listen,
         "--data-dir", data_dir, "--log-level", "error",
     };
     var child = try std.process.spawn(io, .{

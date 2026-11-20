@@ -1,4 +1,5 @@
 const std = @import("std");
+const statement_undo = @import("../statement_undo.zig");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const value_types = @import("../value_types.zig");
@@ -133,7 +134,7 @@ pub var parallel_union_serial_fallbacks: std.atomic.Value(u64) = std.atomic.Valu
 /// SONNY-1330 review follow-up (1330c): clause fields are NOT the only query
 /// carriers. `ast.Expr.InSubquery` / `.NotInSubquery` each hold a `*Query`
 /// parsed by the full `parseQuery` (`parser.zig`, the `IN (` branch), executed
-/// through `eval.evalExpr` -> `executeQueryWithEnv` ->
+/// through `eval.evalExpr` -> `runSubquery` ->
 /// `executeQueryWithContext` — so it can carry `set_clauses`, `create`,
 /// `merge`, `delete`, `remove`, `call`, `cte_list` and `next_query` of its own.
 /// `MATCH (n:T) WHERE n.k IN (MATCH (m:T) SET m.c = m.c + 1 RETURN m.k)
@@ -439,6 +440,9 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                 else
                     try executeQueryNoLimitWithContext(allocator, part.query, context);
                 defer part_result.deinit(allocator);
+                // SONNY-6613: the rows copied from the arm by reference hold the
+                // paths (and nodes and relationships) its tracker owns.
+                result.takeOwnedGraphEntities(&part_result);
 
                 // Validate column count match
                 if (part_result.columns.len != result.columns.len) {
@@ -496,6 +500,9 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
                 else
                     try executeQueryNoLimitWithContext(allocator, part.query, context);
                 defer part_result.deinit(allocator);
+                // SONNY-6613: the rows copied from the arm by reference hold the
+                // paths (and nodes and relationships) its tracker owns.
+                result.takeOwnedGraphEntities(&part_result);
 
                 // Validate column count match
                 if (part_result.columns.len != result.columns.len) {
@@ -1052,8 +1059,15 @@ const ArmJob = struct {
     /// SONNY-3316: this arm runs on a thread of its own (every arm but the
     /// last, which runs on the calling thread).
     spawned: bool = false,
+    /// SONNY-6362: the statement's undo record, which a spawned arm joins
+    /// (`statement_undo.attach`), so a write it made would be recorded,
+    /// undone and checked with the statement's. The arms are read-only today
+    /// (`unionArmsAreParallelEligible`); the record must not depend on that.
+    undo_record: ?*statement_undo.Record = null,
 
     fn runnerEntry(self: *ArmJob) void {
+        if (self.spawned) statement_undo.attach(self.undo_record);
+        defer if (self.spawned) statement_undo.detach();
         // CANARY: REQ=REQ-SONNY-3316-LIMIT-RELAY; FEATURE="ParallelUnionArms"; ASPECT=ArmLimitRelay; STATUS=TESTED; TEST=tests/test_sonny3316_limit_relay.zig; OWNER=execution; UPDATED=2026-09-28
         // SONNY-3316 (round 16, I4): the statement relay (a limit error a
         // WHERE, a cell or an aggregate swallowed, recorded by `eval`, and an
@@ -1169,7 +1183,7 @@ pub var test_force_limit_in_spawned_arms: std.atomic.Value(bool) = .init(false);
 /// SONNY-3315: make `res`, built by a parallel UNION arm through the
 /// frame-local `LockedAllocator`, free through `parent` from now on.
 fn reownArmResult(res: *ExecutionResult, parent: std.mem.Allocator) void {
-    if (res.owned_graph_entities) |tracker| tracker.allocator = parent;
+    if (res.owned_graph_entities) |tracker| tracker.setAllocator(parent);
     if (res.variable_bindings) |bindings| bindings.allocator = parent;
 }
 
@@ -1196,9 +1210,10 @@ fn tryParallelUnion(
 
     // Arm 0: the first query. Arms 1..N: each tail's query (preserves
     // original left-to-right order so UNION DISTINCT merge is stable).
-    jobs[0] = .{ .query = union_query.first, .context = context, .allocator = arm_allocator };
+    const undo_record = statement_undo.current(); // SONNY-6362
+    jobs[0] = .{ .query = union_query.first, .context = context, .allocator = arm_allocator, .undo_record = undo_record };
     for (union_query.tails, 0..) |tail, i| {
-        jobs[i + 1] = .{ .query = tail.query, .context = context, .allocator = arm_allocator };
+        jobs[i + 1] = .{ .query = tail.query, .context = context, .allocator = arm_allocator, .undo_record = undo_record };
     }
 
     // Spawn a thread for every arm except the last, which we run on the
@@ -1318,6 +1333,9 @@ fn tryParallelUnion(
         var part_result = jobs[job_idx].result.?;
         jobs[job_idx].result = null;
         defer part_result.deinit(allocator);
+        // SONNY-6613: the rows copied from the arm by reference hold the
+        // paths (and nodes and relationships) its tracker owns.
+        result.takeOwnedGraphEntities(&part_result);
 
         if (part_result.columns.len != result.columns.len) {
             return error.UnionColumnCountMismatch;

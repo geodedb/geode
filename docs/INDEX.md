@@ -23,8 +23,8 @@ Quick reference to all Geode documentation.
 - [ML_GRAPH_EMBEDDINGS.md](ML_GRAPH_EMBEDDINGS.md) - Graph embeddings
 - [REAL_TIME_ANALYTICS.md](REAL_TIME_ANALYTICS.md) - Streaming analytics
 - [MATERIALIZED_VIEWS.md](MATERIALIZED_VIEWS.md) - View management
-- [ENHANCED_TRANSACTION_ISOLATION.md](ENHANCED_TRANSACTION_ISOLATION.md) - MVCC
-- [DISTRIBUTED_QUERY_COORDINATION.md](DISTRIBUTED_QUERY_COORDINATION.md) - Federation
+- [ENHANCED_TRANSACTION_ISOLATION.md](ENHANCED_TRANSACTION_ISOLATION.md) - Status note: not implemented (removed 2026-11-11, SONNY-6298)
+- [DISTRIBUTED_QUERY_COORDINATION.md](DISTRIBUTED_QUERY_COORDINATION.md) - Status note: not implemented (removed 2026-11-11, SONNY-6279)
 - [GRAPH_ALGORITHMS_USAGE_GUIDE.md](GRAPH_ALGORITHMS_USAGE_GUIDE.md) - Algorithms
 - [FULLTEXT_SEARCH.md](FULLTEXT_SEARCH.md) - Full-text search (fts-storage-backed)
 - [TIMESERIES.md](TIMESERIES.md) - Time-series (timeseries-storage-backed)

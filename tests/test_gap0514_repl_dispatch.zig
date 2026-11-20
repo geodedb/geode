@@ -17,6 +17,7 @@
 // CANARY: REQ=REQ-GAP-0514-REPL-DISPATCH; FEATURE="CanaryReconciliation"; ASPECT=ReplDispatchRegression; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-06-11
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const repl_util = @import("repl_test_util.zig");
@@ -172,6 +173,8 @@ test "checkForInterrupt: signal flag is consumed; piped (non-TTY) stdin relies o
 // REQ-SHELL-INTERRUPT-017 (HelloAuthInterrupt)
 // ---------------------------------------------------------------------------
 test "hello: unauthenticated HELLO is rejected on an auth-required server; SIGINT aborts hello and helloWithAuth" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     disarmSigint();
     defer disarmSigint();
@@ -230,6 +233,8 @@ test "hello: unauthenticated HELLO is rejected on an auth-required server; SIGIN
 // REQ-SHELL-INTERRUPT-039 (ThreadedRead)
 // ---------------------------------------------------------------------------
 test "session: back-to-back queries do not desync the protocol (inline page consumed); disconnect clears session state" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     disarmSigint();
     defer disarmSigint();
@@ -284,6 +289,8 @@ test "session: back-to-back queries do not desync the protocol (inline page cons
 // REQ-SHELL-INTERRUPT-023 (DrainWithTimeout, stale-data discard lane)
 // ---------------------------------------------------------------------------
 test "transactions: happy commit/rollback, interrupt lanes set last_txn_error, scaled rollback timeout, stale drain" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     disarmSigint();
     defer disarmSigint();
@@ -349,6 +356,8 @@ test "transactions: happy commit/rollback, interrupt lanes set last_txn_error, s
 // REQ-SHELL-INTERRUPT-033 (DrainWithSpinner)
 // ---------------------------------------------------------------------------
 test "drain: quiet-connection timeout lanes and interrupt lanes" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     disarmSigint();
     defer disarmSigint();
@@ -407,6 +416,8 @@ test "drain: quiet-connection timeout lanes and interrupt lanes" {
 // REQ-SHELL-SOURCE-ERROR-001 (BatchErrorExtraction)
 // ---------------------------------------------------------------------------
 test "executeSourceFile: small batch path, re-source tracking, error extraction" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     disarmSigint();
     defer disarmSigint();
@@ -496,6 +507,8 @@ test "executeSourceFile: small batch path, re-source tracking, error extraction"
 }
 
 test "executeSourceFile: >32KB file takes the chunked execution path; pullAll interrupt during PULL" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     disarmSigint();
     defer disarmSigint();

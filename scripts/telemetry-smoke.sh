@@ -14,7 +14,7 @@ PAGE_SIZE="${1:-1}"
 LOG_FILE="$(mktemp -t geode_telemetry.XXXXXX.log)"
 PID_FILE="$(mktemp -t geode_telemetry.XXXXXX.pid)"
 ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
-ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-Geode Test Admin Passphrase}"
 
 cleanup() {
   if [[ -f "$PID_FILE" ]]; then

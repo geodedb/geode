@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
@@ -29,11 +31,13 @@ fn contains(hay: []const u8, needle: []const u8) bool {
 // available future feature per the 2025-09-26 spec; it is hardcoded false at
 // grpc_server.zig and quic_connection_handler.zig and is deliberately not wired.
 test "protocol: transport parity diagnostics (US001) QUIC vs gRPC (gated)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("transport parity diagnostics (US001) QUIC vs gRPC");
     errdefer util.testFail();
 
     const allocator = testing.allocator;
-    const exe = "./zig-out/bin/geode";
+    const exe = geode_test_bin.geode_exe;
     const q = "RETURN 1 LIMIT 10 OFFSET 5";
 
     // `util.GrpcProtoClient` speaks plaintext HTTP/2 while the gRPC listener is
@@ -48,35 +52,39 @@ test "protocol: transport parity diagnostics (US001) QUIC vs gRPC (gated)" {
         util.TestEnv.grpcPlaintext(),
     ) catch |err| {
         util.progress("Parity run failed: {}", .{err});
-        util.testSkip();
-        return;
+        // SONNY-6548: a failed parity run fails the smoke (it skipped and passed).
+        return err;
     };
     defer parity_run.server.deinit();
     defer parity_run.result.quic.deinit(allocator);
-    defer parity_run.result.grpc.deinit(allocator);
+    defer if (parity_run.result.grpc) |*g| g.deinit(allocator);
 
     const quic_res = parity_run.result.quic;
-    const grpc_res = parity_run.result.grpc;
 
     util.progress("Asserting US001 is not enforced on either transport...", .{});
     // No diagnostic: unordered pagination is legal.
     try testing.expect(quic_res.error_code == null);
-    try testing.expect(grpc_res.error_code == null);
     try testing.expectEqualStrings("00000", quic_res.status_class);
-    try testing.expectEqualStrings("00000", grpc_res.status_class);
     try testing.expectEqual(@as(usize, 0), quic_res.additional_statuses.len);
-    try testing.expectEqual(@as(usize, 0), grpc_res.additional_statuses.len);
+    // No US001 diagnostic is ever flagged.
+    for (quic_res.flagger_findings) |finding| try testing.expect(!contains(finding, "US001"));
 
-    util.progress("Comparing transport parity...", .{});
-    // Parity: identical observable result on both transports.
-    try testing.expectEqual(quic_res.ordered, grpc_res.ordered);
-    try testing.expectEqual(quic_res.rows.len, grpc_res.rows.len);
-    try testing.expectEqual(quic_res.columns.len, grpc_res.columns.len);
-    try testing.expectEqual(quic_res.flagger_findings.len, grpc_res.flagger_findings.len);
-    for (quic_res.flagger_findings, 0..) |finding, i| {
-        try testing.expectEqualStrings(finding, grpc_res.flagger_findings[i]);
-        // No US001 diagnostic is ever flagged.
-        try testing.expect(!contains(finding, "US001"));
+    // SONNY-6782: plaintext gRPC is served in Debug only; a release build
+    // checks the QUIC half and the CLI arm.
+    if (parity_run.result.grpc) |grpc_res| {
+        try testing.expect(grpc_res.error_code == null);
+        try testing.expectEqualStrings("00000", grpc_res.status_class);
+        try testing.expectEqual(@as(usize, 0), grpc_res.additional_statuses.len);
+
+        util.progress("Comparing transport parity...", .{});
+        // Parity: identical observable result on both transports.
+        try testing.expectEqual(quic_res.ordered, grpc_res.ordered);
+        try testing.expectEqual(quic_res.rows.len, grpc_res.rows.len);
+        try testing.expectEqual(quic_res.columns.len, grpc_res.columns.len);
+        try testing.expectEqual(quic_res.flagger_findings.len, grpc_res.flagger_findings.len);
+        for (quic_res.flagger_findings, 0..) |finding, i| {
+            try testing.expectEqualStrings(finding, grpc_res.flagger_findings[i]);
+        }
     }
 
     util.progress("Asserting CLI exit status (GAP-0272)...", .{});

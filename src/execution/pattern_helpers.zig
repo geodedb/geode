@@ -9,6 +9,8 @@ const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 const distinct_set = @import("distinct_set.zig");
+const value_utilities = @import("value_utilities.zig");
+const fle_integration = @import("../fle_integration.zig");
 const valuesEqual = execution.valuesEqual;
 
 // Local type aliases
@@ -308,19 +310,90 @@ pub fn matchesLabels(node: *graph_store.Node, required_labels: []const []const u
     return true;
 }
 
+/// SONNY-6335 (3): the record an inline property map is compared against,
+/// for the FLE read policy (`fle_integration.readStoredString`).
+pub const FleOwner = struct {
+    kind: fle_integration.EntityKind,
+    type_name: []const u8,
+    id: u64,
+    tenant: []const u8,
+};
+
+pub fn nodeOwner(node: anytype) FleOwner {
+    return .{ .kind = .node, .type_name = if (node.labels.len > 0) node.labels[0] else "Unknown", .id = node.id, .tenant = node.tenant_id };
+}
+
+pub fn edgeOwner(edge: anytype) FleOwner {
+    return .{ .kind = .edge, .type_name = edge.label, .id = edge.id, .tenant = edge.tenant_id };
+}
+
+// CANARY: REQ=REQ-SONNY-6335-INLINE-MAP-FLE; FEATURE="FieldLevelEncryption"; ASPECT=InlineMapReadsAsWhere; STATUS=TESTED; TEST=tests/test_sonny6335_fle_identity_and_indexes.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6335 (3): a stored property as an inline property map
+/// (`(n:L {p: v})`, `-[:R {p: v}]->`) compares it: a string through the same
+/// FLE read policy as `WHERE n.p = v` (`n.p`'s member read), so the two agree.
+/// They did not: the map compared the stored envelope, which matched for no
+/// one, while WHERE matched the plaintext for a role that may read it. A role
+/// without plaintext compares "[REDACTED]" (no match, nothing revealed); a
+/// searchable field it may not search, or bytes that do not decrypt, are the
+/// statement's error (42501, 58030), as in WHERE. Without FLE fields the
+/// stored bytes, lock-free. What it decrypts is lent from the statement's
+/// scratch arena.
+pub fn storedValueForMatch(allocator: std.mem.Allocator, owner: FleOwner, key: []const u8, stored: graph_store.PropertyValue) !Value {
+    return switch (stored) {
+        .String => |s| .{ .Str = try fle_integration.readStoredString(value_utilities.lentAllocator(allocator), owner.kind, owner.type_name, key, s, owner.id, owner.tenant) },
+        else => propertyValueToValue(stored),
+    };
+}
+
+/// SONNY-6335 (3): does an inline property map anywhere in `pattern` name a
+/// field FLE-encrypted in any type (`fle_integration.fieldEncryptedInAnyType`;
+/// false at once without FLE fields)? The engine-direct reads
+/// (`planned_read_runtime`, `node_scan_stream`) compare a map against the
+/// stored bytes, the envelope of an encrypted value, which matched for no
+/// one; they decline such a pattern, and the executor, which compares as
+/// WHERE reads (`storedValueForMatch`), answers it.
+pub fn patternMapsNameEncryptedField(pattern: ast.GraphPattern) bool {
+    if (!fle_integration.hasEncryptedFields()) return false;
+    for (pattern.chains) |chain| {
+        if (chain.head) |head| if (propsNameEncryptedField(head.props)) return true;
+        for (chain.hops) |hop| {
+            if (propsNameEncryptedField(hop.left.props) or propsNameEncryptedField(hop.rel.props) or propsNameEncryptedField(hop.right.props)) return true;
+        }
+    }
+    return false;
+}
+
+/// SONNY-6335 (3): `patternMapsNameEncryptedField` for one map.
+pub fn propsNameEncryptedField(props: ?[]ast.Property) bool {
+    for (props orelse return false) |prop| {
+        if (fle_integration.fieldEncryptedInAnyType(prop.key)) return true;
+    }
+    return false;
+}
+
 /// Check if an edge's properties match the required property constraints from a RelPattern.
 /// Returns true if all required properties exist and match, or if no properties are required.
-pub fn matchesEdgeProperties(allocator: std.mem.Allocator, edge: graph_store.Edge, required_props: ?[]const ast.Property) bool {
+// CANARY: REQ=REQ-SONNY-6296-REL-MAP-PARAMS; FEATURE="PatternMatching"; ASPECT=RelationshipMapParameters; STATUS=TESTED; TEST=tests/test_sonny6296_legacy_read_gaps.zig; OWNER=execution; UPDATED=2026-11-13
+/// SONNY-6296 (2): the map's values are evaluated with the statement's query
+/// parameters (the active context's), so `-[:R {w: $p}]->` matches; they were
+/// evaluated with none, so a parameter never matched. SONNY-6483 (4): a value
+/// that cannot be evaluated fails the statement (ISO/IEC 39075 19.1 GR 1), as
+/// on a node (`nodeMatchesProps`); it matched nothing. What it computes is
+/// lent from the statement's scratch arena.
+pub fn matchesEdgeProperties(allocator: std.mem.Allocator, edge: graph_store.Edge, required_props: ?[]const ast.Property) !bool {
     const props = required_props orelse return true;
+    const ctx = execution.getActiveContext();
     const empty_env = Env{
         .names = &.{},
         .values = &.{},
         .allocator = allocator,
+        .param_names = if (ctx) |c| c.query_param_names else &.{},
+        .param_values = if (ctx) |c| c.query_param_values else &.{},
     };
     for (props) |prop| {
         if (edge.properties.get(prop.key)) |edge_prop_val| {
-            const edge_val = propertyValueToValue(edge_prop_val);
-            const expected_val = eval.evalExpr(allocator, prop.value.*, empty_env) catch return true;
+            const edge_val = try storedValueForMatch(allocator, edgeOwner(&edge), prop.key, edge_prop_val);
+            const expected_val = try eval.evalExpr(value_utilities.lentAllocator(allocator), prop.value.*, empty_env);
             if (!valuesEqual(edge_val, expected_val)) return false;
         } else {
             return false;
@@ -403,152 +476,4 @@ pub fn whereExprReferencesVar(root: ast.Expr, var_name: []const u8) bool {
         },
         else => false,
     };
-}
-
-// CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-WITH-002; FEATURE="OptionalMatchWithAggregation"; ASPECT=AggregationComputation; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
-// Compute aggregation for a group of rows
-pub fn computeAggregationForGroup(allocator: std.mem.Allocator, expr: ast.Expr, group_rows: []const []Value, columns: []const []const u8, param_names: []const []const u8, param_values: []const Value) !Value {
-    if (expr != .Call) return Value{ .Null = {} };
-
-    const call = expr.Call;
-    if (call.callee.* != .Ident) return Value{ .Null = {} };
-
-    const func_name = call.callee.Ident.orig;
-    const arg_ptr: ?*ast.Expr = if (call.args.len > 0) call.args[0] else null;
-
-    // Handle count(*)
-    if (std.ascii.eqlIgnoreCase(func_name, "count")) {
-        if (arg_ptr == null or (arg_ptr.?.* == .Ident and std.mem.eql(u8, arg_ptr.?.Ident.orig, "*"))) {
-            return Value{ .Int = @intCast(group_rows.len) };
-        }
-        // count(expr) - count non-null values
-        var count: i64 = 0;
-        for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .param_names = param_names,
-                .param_values = param_values,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
-            if (val != .Null) count += 1;
-        }
-        return Value{ .Int = count };
-    }
-
-    // CANARY: REQ=REQ-COUNT-DISTINCT-GROUP-001; FEATURE="CountDistinctGroupAggregation"; ASPECT=GroupAggregation; STATUS=TESTED; TEST=tests/test_bug731_aggregates_vectors.zig; OWNER=engine; UPDATED=2026-07-31
-    // Handle countDistinct(expr) - COUNT(DISTINCT expr) for groups.
-    // docs/@BUGS_731.md bug 6b: converged onto the shared DistinctSet, which
-    // adds node/edge identity (by id) and full numeric coverage this site was
-    // missing. Empty group -> 0 (never NULL).
-    if (std.ascii.eqlIgnoreCase(func_name, "countDistinct")) {
-        if (arg_ptr == null) return Value{ .Int = 0 };
-        var distinct = distinct_set.DistinctSet.init(allocator);
-        defer distinct.deinit();
-
-        for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .param_names = param_names,
-                .param_values = param_values,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
-            _ = try distinct.add(val);
-        }
-        return Value{ .Int = @intCast(distinct.count()) };
-    }
-
-    // Handle sum(expr)
-    if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
-        if (arg_ptr == null) return Value{ .Null = {} };
-        var sum: i64 = 0;
-        var has_value = false;
-        for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .param_names = param_names,
-                .param_values = param_values,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
-            if (val == .Int) {
-                // SONNY-2769: checked; `+=` aborted the server past i64.
-                sum = std.math.add(i64, sum, val.Int) catch return error.IntegerOverflow;
-                has_value = true;
-            }
-        }
-        return if (has_value) Value{ .Int = sum } else Value{ .Null = {} };
-    }
-
-    // Handle min(expr)
-    if (std.ascii.eqlIgnoreCase(func_name, "min")) {
-        if (arg_ptr == null) return Value{ .Null = {} };
-        var min: ?i64 = null;
-        for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .param_names = param_names,
-                .param_values = param_values,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
-            if (val == .Int) {
-                if (min == null or val.Int < min.?) {
-                    min = val.Int;
-                }
-            }
-        }
-        return if (min) |m| Value{ .Int = m } else Value{ .Null = {} };
-    }
-
-    // Handle max(expr)
-    if (std.ascii.eqlIgnoreCase(func_name, "max")) {
-        if (arg_ptr == null) return Value{ .Null = {} };
-        var max: ?i64 = null;
-        for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .param_names = param_names,
-                .param_values = param_values,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
-            if (val == .Int) {
-                if (max == null or val.Int > max.?) {
-                    max = val.Int;
-                }
-            }
-        }
-        return if (max) |m| Value{ .Int = m } else Value{ .Null = {} };
-    }
-
-    // CANARY: REQ=REQ-AGG-COLLECT-004; FEATURE="AggregationFunctions"; ASPECT=COLLECT_GROUP; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=engine; UPDATED=2025-12-28
-    // B02 Fix: Handle collect(expr) - collect non-NULL values into a list
-    if (std.ascii.eqlIgnoreCase(func_name, "collect")) {
-        if (arg_ptr == null) return Value{ .List = &.{} };
-        var list = std.ArrayList(Value).initCapacity(allocator, group_rows.len) catch return Value{ .List = &.{} };
-        for (group_rows) |row| {
-            const env = Env{
-                .names = columns,
-                .values = row,
-                .param_names = param_names,
-                .param_values = param_values,
-                .allocator = allocator,
-            };
-            const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
-            // B02 Fix: Skip NULL values - COLLECT only collects non-NULL values
-            if (val != .Null) {
-                list.append(allocator, val) catch {};
-            }
-        }
-        return Value{ .List = list.toOwnedSlice(allocator) catch &.{} };
-    }
-
-    return Value{ .Null = {} };
 }

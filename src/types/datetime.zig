@@ -10,6 +10,8 @@ pub const Date = struct {
 
     pub fn fromStr(str: []const u8) Error!Date {
         if (str.len != 10 or str[4] != '-' or str[7] != '-') return Error.ParseError;
+        // SONNY-2808: digits only (parseInt took a sign: '+024-01-01').
+        if (!allDigits(str[0..4]) or !allDigits(str[5..7]) or !allDigits(str[8..10])) return Error.ParseError;
 
         const year = std.fmt.parseInt(i32, str[0..4], 10) catch return Error.ParseError;
         const month = std.fmt.parseInt(u8, str[5..7], 10) catch return Error.ParseError;
@@ -105,25 +107,73 @@ pub const Date = struct {
     }
 };
 
+/// The fields of a temporal value (SONNY-2796): the calendar date and the
+/// time of day of its ISO 8601 representation. The time of day is the floor
+/// modulo of a day, so a datetime before 1970 has the hours of its day (it
+/// was @rem, negative). A field the value lacks is null.
+pub const Fields = struct {
+    year: ?i64 = null,
+    month: ?i64 = null,
+    day: ?i64 = null,
+    hour: ?i64 = null,
+    minute: ?i64 = null,
+    second: ?i64 = null,
+    microsecond: ?i64 = null,
+
+    pub fn ofDate(days_since_epoch: i32) Fields {
+        const ymd = Date.dateFromDays(days_since_epoch);
+        return .{ .year = ymd.year, .month = ymd.month, .day = ymd.day };
+    }
+
+    pub fn ofTimeOfDay(micros: i64) Fields {
+        const tod = @mod(micros, std.time.us_per_day);
+        return .{
+            .hour = @divFloor(tod, std.time.us_per_hour),
+            .minute = @divFloor(@mod(tod, std.time.us_per_hour), std.time.us_per_min),
+            .second = @divFloor(@mod(tod, std.time.us_per_min), std.time.us_per_s),
+            .microsecond = @mod(tod, std.time.us_per_s),
+        };
+    }
+
+    pub fn ofEpochMicros(micros: i64) Fields {
+        var f = ofTimeOfDay(micros);
+        const date = ofDate(@intCast(@divFloor(micros, std.time.us_per_day)));
+        f.year = date.year;
+        f.month = date.month;
+        f.day = date.day;
+        return f;
+    }
+};
+
 pub const Time = struct {
     micros_since_midnight: i64,
 
+    // CANARY: REQ=REQ-SONNY-2808-TEMPORAL-PARSING; FEATURE="DateTimeFunctions"; ASPECT=StrictIso8601Strings; STATUS=TESTED; TEST=tests/test_sonny2808_temporal_parsing.zig; OWNER=datetime; UPDATED=2026-11-13
+    /// An ISO 8601-1 local time of day, extended format: `hh:mm`, `hh:mm:ss`
+    /// or `hh:mm:ss.f` (1 to 6 fraction digits), and nothing else. SONNY-2808:
+    /// the parser read the first eight characters and ignored the rest, so
+    /// '10:00:00+01:00' (a zoned time) and '10:00:00xyz' parsed as 10:00:00.
     pub fn fromStr(str: []const u8) Date.Error!Time {
-        if (str.len < 8) return Date.Error.ParseError;
-
+        if (str.len < 5 or str[2] != ':') return Date.Error.ParseError;
+        if (!allDigits(str[0..2]) or !allDigits(str[3..5])) return Date.Error.ParseError;
         const hour = std.fmt.parseInt(u8, str[0..2], 10) catch return Date.Error.ParseError;
-        if (str[2] != ':') return Date.Error.ParseError;
         const minute = std.fmt.parseInt(u8, str[3..5], 10) catch return Date.Error.ParseError;
-        if (str[5] != ':') return Date.Error.ParseError;
-        const second = std.fmt.parseInt(u8, str[6..8], 10) catch return Date.Error.ParseError;
+        var second: u8 = 0;
+        var frac_str: []const u8 = "";
+        if (str.len > 5) {
+            if (str.len < 8 or str[5] != ':' or !allDigits(str[6..8])) return Date.Error.ParseError;
+            second = std.fmt.parseInt(u8, str[6..8], 10) catch return Date.Error.ParseError;
+            if (str.len > 8) {
+                if (str[8] != '.') return Date.Error.ParseError;
+                frac_str = str[9..];
+                if (frac_str.len == 0 or frac_str.len > 6 or !allDigits(frac_str)) return Date.Error.ParseError;
+            }
+        }
 
         if (hour >= 24 or minute >= 60 or second >= 60) return Date.Error.InvalidDate;
 
         var micros: i64 = @as(i64, hour) * 3600_000_000 + @as(i64, minute) * 60_000_000 + @as(i64, second) * 1_000_000;
-
-        if (str.len > 8 and str[8] == '.') {
-            const frac_str = str[9..];
-            if (frac_str.len > 6) return Date.Error.ParseError;
+        if (frac_str.len > 0) {
             const frac_val = std.fmt.parseInt(u32, frac_str, 10) catch return Date.Error.ParseError;
             const scale = std.math.powi(u32, 10, @as(u32, @intCast(6 - frac_str.len))) catch 1;
             micros += @as(i64, frac_val * scale);
@@ -186,6 +236,7 @@ pub const TimeTZ = struct {
 
         const idx = sign_index orelse return Date.Error.ParseError;
         if (idx + 6 != str.len or str[idx + 3] != ':') return Date.Error.ParseError;
+        if (!allDigits(str[idx + 1 .. idx + 3]) or !allDigits(str[idx + 4 .. idx + 6])) return Date.Error.ParseError;
 
         const time_part = str[0..idx];
         const sign: i32 = if (str[idx] == '-') -1 else 1;
@@ -266,18 +317,21 @@ pub const TimestampTZ = struct {
         if (ts_part.len < 19) return Date.Error.ParseError; // Timestamp needs at least 19 chars (YYYY-MM-DDTHH:MM:SS)
         const ts = try Timestamp.fromStr(ts_part);
 
+        // SONNY-2808: the zone designator ends the string: 'Z', or
+        // '+hh:mm' / '-hh:mm' (trailing text after either was ignored).
         var offset_seconds: i32 = 0;
-        if (tz_start < str.len) {
-            const tz_part = str[tz_start..];
-            if (tz_part[0] == 'Z') {
-                offset_seconds = 0;
-            } else if (tz_part.len >= 6 and (tz_part[0] == '+' or tz_part[0] == '-')) {
-                const sign: i32 = if (tz_part[0] == '+') 1 else -1;
-                const hours = std.fmt.parseInt(u8, tz_part[1..3], 10) catch return Date.Error.ParseError;
-                const minutes = std.fmt.parseInt(u8, tz_part[4..6], 10) catch return Date.Error.ParseError;
-                offset_seconds = sign * (@as(i32, hours) * 3600 + @as(i32, minutes) * 60);
-            }
-        }
+        const tz_part = str[tz_start..];
+        if (tz_part.len == 1 and tz_part[0] == 'Z') {
+            offset_seconds = 0;
+        } else if (tz_part.len == 6 and (tz_part[0] == '+' or tz_part[0] == '-') and tz_part[3] == ':' and
+            allDigits(tz_part[1..3]) and allDigits(tz_part[4..6]))
+        {
+            const sign: i32 = if (tz_part[0] == '+') 1 else -1;
+            const hours = std.fmt.parseInt(u8, tz_part[1..3], 10) catch return Date.Error.ParseError;
+            const minutes = std.fmt.parseInt(u8, tz_part[4..6], 10) catch return Date.Error.ParseError;
+            if (hours > 23 or minutes > 59) return Date.Error.ParseError;
+            offset_seconds = sign * (@as(i32, hours) * 3600 + @as(i32, minutes) * 60);
+        } else return Date.Error.ParseError;
 
         const utc_micros = ts.micros_since_epoch - @as(i64, offset_seconds) * 1_000_000;
         return TimestampTZ{ .micros_since_epoch_utc = utc_micros };
@@ -329,7 +383,13 @@ pub const Interval = struct {
         return a.months == b.months or a.dayTimeMicros() == b.dayTimeMicros();
     }
 
-    pub fn fromStr(str: []const u8) Date.Error!Interval {
+    /// SONNY-6499: a component past its field's range (`P99999999999Y`,
+    /// `P999999999Y`) is IntervalFieldOverflow (ISO/IEC 39075 22015
+    /// interval field overflow); text that is not an ISO 8601 duration is
+    /// ParseError (22G0H). Both were ParseError.
+    pub const FromStrError = Date.Error || error{IntervalFieldOverflow};
+
+    pub fn fromStr(str: []const u8) FromStrError!Interval {
         if (str.len == 0 or str[0] != 'P') return Date.Error.ParseError;
 
         var months: i32 = 0;
@@ -345,33 +405,56 @@ pub const Interval = struct {
                 continue;
             }
 
-            var num_end = i;
+            // SONNY-2808: a component is `[-]digits` (21.x <iso8601 sint>),
+            // and the seconds may carry `.digits` (<iso8601 seconds>).
+            const negative = str[i] == '-';
+            const digits_start = if (negative) i + 1 else i;
+            var num_end = digits_start;
             while (num_end < str.len and std.ascii.isDigit(str[num_end])) num_end += 1;
-            if (num_end == i or num_end >= str.len) return Date.Error.ParseError;
+            if (num_end == digits_start or num_end >= str.len) return Date.Error.ParseError;
 
-            const num = std.fmt.parseInt(i32, str[i..num_end], 10) catch return Date.Error.ParseError;
+            const magnitude = std.fmt.parseInt(i32, str[digits_start..num_end], 10) catch |e| return switch (e) {
+                error.Overflow => error.IntervalFieldOverflow,
+                error.InvalidCharacter => Date.Error.ParseError,
+            };
+            const num = if (negative) -magnitude else magnitude;
+            var frac_micros: i64 = 0;
+            if (str[num_end] == '.') {
+                const frac_start = num_end + 1;
+                var frac_end = frac_start;
+                while (frac_end < str.len and std.ascii.isDigit(str[frac_end])) frac_end += 1;
+                if (frac_end == frac_start or frac_end >= str.len or str[frac_end] != 'S' or !in_time) return Date.Error.ParseError;
+                // Microseconds: the first six fraction digits (truncated).
+                var scale: i64 = 100_000;
+                for (str[frac_start..@min(frac_end, frac_start + 6)]) |c| {
+                    frac_micros += @as(i64, c - '0') * scale;
+                    scale = @divTrunc(scale, 10);
+                }
+                if (negative) frac_micros = -frac_micros;
+                num_end = frac_end;
+            }
             const unit = str[num_end];
 
             // GAP-0906: components accumulate with checked arithmetic — the
             // unchecked forms panicked on overflow (e.g. P999999999Y, whose
             // year count fits i32 but whose month total does not, or repeated
-            // units that overflow an accumulator). Overflow is reported as
-            // ParseError, the same class the 10-digit forms already produce.
+            // units that overflow an accumulator). SONNY-6499: overflow is
+            // IntervalFieldOverflow, as the 10-digit forms are.
             switch (unit) {
                 'Y' => {
-                    const yr_months = std.math.mul(i32, num, 12) catch return Date.Error.ParseError;
-                    months = std.math.add(i32, months, yr_months) catch return Date.Error.ParseError;
+                    const yr_months = std.math.mul(i32, num, 12) catch return error.IntervalFieldOverflow;
+                    months = std.math.add(i32, months, yr_months) catch return error.IntervalFieldOverflow;
                 },
                 'M' => {
                     if (in_time) {
-                        micros = std.math.add(i64, micros, @as(i64, num) * 60 * 1_000_000) catch return Date.Error.ParseError;
+                        micros = std.math.add(i64, micros, @as(i64, num) * 60 * 1_000_000) catch return error.IntervalFieldOverflow;
                     } else {
-                        months = std.math.add(i32, months, num) catch return Date.Error.ParseError;
+                        months = std.math.add(i32, months, num) catch return error.IntervalFieldOverflow;
                     }
                 },
-                'D' => days = std.math.add(i32, days, num) catch return Date.Error.ParseError,
-                'H' => micros = std.math.add(i64, micros, @as(i64, num) * 3600 * 1_000_000) catch return Date.Error.ParseError,
-                'S' => micros = std.math.add(i64, micros, @as(i64, num) * 1_000_000) catch return Date.Error.ParseError,
+                'D' => days = std.math.add(i32, days, num) catch return error.IntervalFieldOverflow,
+                'H' => micros = std.math.add(i64, micros, @as(i64, num) * 3600 * 1_000_000) catch return error.IntervalFieldOverflow,
+                'S' => micros = std.math.add(i64, micros, @as(i64, num) * 1_000_000 + frac_micros) catch return error.IntervalFieldOverflow,
                 else => return Date.Error.ParseError,
             }
 
@@ -382,40 +465,64 @@ pub const Interval = struct {
     }
 
     pub fn toString(self: Interval, allocator: std.mem.Allocator) ![]u8 {
+        var aw: std.Io.Writer.Allocating = .init(allocator);
+        defer aw.deinit();
+        self.writeIso(&aw.writer) catch return error.OutOfMemory;
+        return aw.toOwnedSlice();
+    }
+
+    // CANARY: REQ=REQ-SONNY-6489-TEMPORAL-RENDERING; FEATURE="TemporalTypes"; ASPECT=DurationIsoWriter; STATUS=TESTED; TEST=tests/test_sonny6489_temporal_rendering.zig; OWNER=datetime; UPDATED=2026-11-13
+    /// SONNY-6489: the ISO 8601 form of the duration (ISO/IEC 39075 21.2
+    /// <duration literal>), the one writer for stringify, CAST and the wire;
+    /// `fromStr` reads it back as the same duration. Each component carries
+    /// the sign of its part (truncating division: P-1M, PT-1H-1M), and the
+    /// seconds keep their fraction, trailing zeros trimmed (PT1.5S, PT-0.25S).
+    /// The wire writer used a floor division (P-1M came out P-1Y-1M) and both
+    /// writers dropped the fraction (PT0.5S came out "PT").
+    pub fn writeIso(self: Interval, w: *std.Io.Writer) std.Io.Writer.Error!void {
         if (self.months == 0 and self.days == 0 and self.micros == 0) {
-            return allocator.dupe(u8, "PT0S");
+            return w.writeAll("PT0S");
         }
-
-        var result: std.ArrayList(u8) = .empty;
-        defer result.deinit(allocator);
-
-        try result.append(allocator, 'P');
-
+        try w.writeByte('P');
         if (self.months != 0) {
-            const years = @divFloor(self.months, 12);
+            const years = @divTrunc(self.months, 12);
             const months = @rem(self.months, 12);
-            if (years != 0) try result.print(allocator, "{d}Y", .{years});
-            if (months != 0) try result.print(allocator, "{d}M", .{months});
+            if (years != 0) try w.print("{d}Y", .{years});
+            if (months != 0) try w.print("{d}M", .{months});
         }
-
-        if (self.days != 0) {
-            try result.print(allocator, "{d}D", .{self.days});
-        }
-
+        if (self.days != 0) try w.print("{d}D", .{self.days});
         if (self.micros != 0) {
-            try result.append(allocator, 'T');
-            const hours = @divFloor(self.micros, 3600 * 1_000_000);
-            const minutes = @divFloor(@rem(self.micros, 3600 * 1_000_000), 60 * 1_000_000);
-            const seconds = @divFloor(@rem(self.micros, 60 * 1_000_000), 1_000_000);
-
-            if (hours != 0) try result.print(allocator, "{d}H", .{hours});
-            if (minutes != 0) try result.print(allocator, "{d}M", .{minutes});
-            if (seconds != 0) try result.print(allocator, "{d}S", .{seconds});
+            try w.writeByte('T');
+            const hours = @divTrunc(self.micros, 3600 * 1_000_000);
+            const minutes = @divTrunc(@rem(self.micros, 3600 * 1_000_000), 60 * 1_000_000);
+            const sec_micros = @rem(self.micros, 60 * 1_000_000);
+            if (hours != 0) try w.print("{d}H", .{hours});
+            if (minutes != 0) try w.print("{d}M", .{minutes});
+            if (sec_micros != 0) {
+                const whole = @divTrunc(sec_micros, 1_000_000);
+                const frac: u64 = @abs(@rem(sec_micros, 1_000_000));
+                if (sec_micros < 0 and whole == 0) try w.writeByte('-');
+                try w.print("{d}", .{whole});
+                if (frac != 0) {
+                    var digits: [6]u8 = undefined;
+                    _ = std.fmt.bufPrint(&digits, "{d:0>6}", .{frac}) catch unreachable;
+                    var len: usize = 6;
+                    while (digits[len - 1] == '0') len -= 1;
+                    try w.writeByte('.');
+                    try w.writeAll(digits[0..len]);
+                }
+                try w.writeByte('S');
+            }
         }
-
-        return result.toOwnedSlice(allocator);
     }
 };
+
+fn allDigits(s: []const u8) bool {
+    for (s) |c| {
+        if (!std.ascii.isDigit(c)) return false;
+    }
+    return true;
+}
 
 test "date parsing" {
     const d = try Date.fromStr("2024-02-29");

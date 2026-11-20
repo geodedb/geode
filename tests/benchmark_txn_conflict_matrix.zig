@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-GQL-013; FEATURE="Txn Conflict Matrix"; ASPECT=Engine; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_013_TxnConflictMatrix; OWNER=engine; UPDATED=2025-09-20
+// CANARY: REQ=REQ-GQL-013; FEATURE="Txn Conflict Matrix"; ASPECT=Engine; STATUS=IMPL; BENCH=BenchmarkCANARY_REQ_GQL_013_TxnConflictMatrix; OWNER=engine; UPDATED=2026-11-14
 
 pub fn main() !void {}
 

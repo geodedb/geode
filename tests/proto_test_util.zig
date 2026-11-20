@@ -1,4 +1,7 @@
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
+const test_scratch = @import("test_scratch.zig");
+const test_ports = @import("test_ports.zig");
 const builtin = @import("builtin");
 const protobuf = @import("protobuf");
 const schema = @import("schema");
@@ -48,18 +51,16 @@ pub fn progress(comptime fmt: []const u8, args: anytype) void {
 // Port Randomization
 // ============================================================================
 
-/// Get a random available port by binding to port 0 and reading the assigned port.
-/// This uses UDP to avoid leaving a connection in TIME_WAIT state.
-///
-/// Use Zig's target-specific network backend for the ephemeral UDP bind.
+/// A free UDP port for a QUIC listener (`--listen`): bind port 0, read the
+/// port the kernel chose, release it. See tests/test_ports.zig (SONNY-6301);
+/// a gRPC, metrics or LSP listener is TCP: use `getRandomTcpPort`.
 pub fn getRandomPort() !u16 {
-    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
-    defer threaded.deinit();
-    const io = threaded.io();
-    const addr = try std.Io.net.IpAddress.parse("0.0.0.0", 0);
-    const socket = try addr.bind(io, .{ .mode = .dgram, .protocol = .udp });
-    defer socket.close(io);
-    return socket.address.getPort();
+    return test_ports.freeUdpPort();
+}
+
+/// A free TCP port for a gRPC (`--listen-grpc`), metrics or LSP listener.
+pub fn getRandomTcpPort() !u16 {
+    return test_ports.freeTcpPort();
 }
 
 /// Format an address string with the given port
@@ -70,6 +71,24 @@ pub fn formatAddr(allocator: std.mem.Allocator, port: u16) ![]u8 {
 // ============================================================================
 // Test Environment Configuration
 // ============================================================================
+
+/// SONNY-6782: true when the spawned geode (built with this test's optimize
+/// mode) serves plaintext gRPC under `TestEnv.grpcPlaintext()`.
+/// `grpc_server.shouldAllowGrpcPlaintextFallback` ignores the opt-in outside
+/// Debug, so the plaintext `GrpcProtoClient` and the CLI's plaintext gRPC
+/// client cannot reach a release server; gate gRPC lanes on this.
+pub const grpc_plaintext_served = builtin.mode == .Debug;
+
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+/// SONNY-6782: an in-process MCP client reads GEODE_ALLOW_INSECURE_TLS live
+/// (`zig_quic_bridge.liveInsecurePosture`), and a release test binary is
+/// production posture, so a DSN `insecure=true` needs this acknowledgement
+/// there. A no-op for posture in Debug. Pair `true` with a deferred `false`.
+pub fn setInsecureTlsAck(on: bool) void {
+    _ = if (on) setenv("GEODE_ALLOW_INSECURE_TLS", "1", 1) else unsetenv("GEODE_ALLOW_INSECURE_TLS");
+}
 
 /// Standard test environment variables
 pub const TestEnv = struct {
@@ -141,6 +160,40 @@ pub const ServerHandle = struct {
         if (self.addr.len > 0) {
             self.allocator.free(self.addr);
         }
+    }
+
+    // CANARY: REQ=REQ-SONNY-6614-GRACEFUL-STOP; FEATURE="Test harness"; ASPECT=GracefulServerStop; STATUS=TESTED; TEST=tests/test_sonny6614_offline_verify.zig; OWNER=testing; UPDATED=2026-11-15
+    /// How `stopGracefully` stopped the server.
+    pub const StopOutcome = enum {
+        /// It shut itself down after SIGTERM (its shutdown checkpoint ran).
+        exited,
+        /// It was still running at the bound and was SIGKILLed.
+        killed,
+    };
+
+    /// SONNY-6614: SIGTERM, then wait (`timeout_ms` at most) for the
+    /// server's own clean shutdown, which runs the shutdown checkpoint and
+    /// writes its side-car files; SIGKILL only past the bound. Then the
+    /// handle is released as `deinit` releases it. For tests of shutdown or
+    /// side-car behaviour only: `deinit`, the default teardown, stays
+    /// SIGKILL (a stuck graceful shutdown must not hang the build).
+    pub fn stopGracefully(self: *ServerHandle, timeout_ms: u64) StopOutcome {
+        var outcome: StopOutcome = .exited;
+        if (self.child.id) |pid| {
+            posix.kill(pid, .TERM) catch {};
+            const deadline = compat_milliTimestamp() + @as(i64, @intCast(timeout_ms));
+            while (processAlive(pid)) {
+                if (compat_milliTimestamp() > deadline) {
+                    outcome = .killed;
+                    break;
+                }
+                compat_sleep(20 * std.time.ns_per_ms);
+            }
+        }
+        // Reaps the exited process (a SIGKILL to a zombie does nothing), or
+        // kills the one still running.
+        self.deinit();
+        return outcome;
     }
 
     /// Get the server address for connecting
@@ -238,6 +291,9 @@ pub fn spawnServerRandom(
 
     // Wait for server to be ready
     waitForServerReady(allocator, addr, 10000) catch |err| {
+        // SONNY-6542: the errdefer above frees addr; deinit must not free it
+        // again (a server that missed the deadline crashed the test binary).
+        handle.addr = "";
         handle.deinit();
         return err;
     };
@@ -252,13 +308,13 @@ pub fn spawnServerWithAddr(
     addr: []const u8,
     env: ?[]const []const u8,
 ) !ServerHandle {
-    const args = &[_][]const u8{ "./zig-out/bin/geode", "serve", "--listen", addr };
+    const args = &[_][]const u8{ geode_test_bin.geode_exe, "serve", "--listen", addr };
     return spawnServer(allocator, args, env);
 }
 
 pub const DefaultAuth = struct {
     pub const username: []const u8 = "geode";
-    pub const password: []const u8 = "geode-test-password";
+    pub const password: []const u8 = "Geode Test Admin Passphrase";
 };
 
 pub fn defaultUsername() []const u8 {
@@ -352,16 +408,15 @@ pub fn spawnServer(
     // durability still see the same store, while sibling test binaries no
     // longer collide. An explicit `--data-dir` argument or a caller/parent
     // GEODE_DATA_DIR always wins.
+    //
+    // SONNY-2413: the dir lives under the process's scratch root, which is
+    // removed when the test process exits (it used to be `/tmp/geode-test-<pid>`,
+    // which nothing ever removed).
     if (map.get("GEODE_DATA_DIR") == null and !hasFlag(args, "--data-dir")) {
-        var dir_buf: [64]u8 = undefined;
-        const pid = if (comptime builtin.os.tag == .linux)
-            @as(i64, std.os.linux.getpid())
-        else
-            @as(i64, std.c.getpid());
-        if (std.fmt.bufPrint(&dir_buf, "/tmp/geode-test-{d}", .{pid})) |test_data_dir| {
-            std.Io.Dir.cwd().createDirPath(io, test_data_dir) catch {};
-            map.put("GEODE_DATA_DIR", test_data_dir) catch {};
-        } else |_| {}
+        var dir_buf: [192]u8 = undefined;
+        const test_data_dir = try std.fmt.bufPrint(&dir_buf, "{s}/data", .{try test_scratch.processRoot()});
+        try std.Io.Dir.cwd().createDirPath(io, test_data_dir);
+        try map.put("GEODE_DATA_DIR", test_data_dir);
     }
 
     // CANARY: REQ=REQ-QUIC-HC-024; FEATURE="QUIC High-Concurrency Diagnostics"; ASPECT=ServerStderrPassThrough; STATUS=TESTED; TEST=test-quic-high-concurrency-e2e; OWNER=transport; UPDATED=2026-05-26
@@ -400,12 +455,12 @@ const Addr = struct {
     port: u16,
 };
 
-fn parseAddr(addr: []const u8) !Addr {
-    const colon = std.mem.lastIndexOfScalar(u8, addr, ':') orelse return error.InvalidAddress;
-    const host = addr[0..colon];
-    if (host.len == 0) return error.InvalidAddress;
-    const port = try std.fmt.parseInt(u16, addr[colon + 1 ..], 10);
-    return .{ .host = host, .port = port };
+/// SONNY-6487: `host:port` or `[ipv6]:port` (geode.host_port, the server's
+/// own grammar); the host comes back without brackets.
+pub fn parseAddr(addr: []const u8) !Addr {
+    const hp = geode.host_port.split(addr, null) catch return error.InvalidAddress;
+    if (hp.host.len == 0) return error.InvalidAddress;
+    return .{ .host = hp.host, .port = hp.port };
 }
 
 pub const TestValue = union(enum) {
@@ -708,8 +763,14 @@ pub const QuicProtoClient = struct {
     read_wait_misses: u32 = 0,
     post_write_poll: bool = true,
     /// SONNY-2394 (GAP-0203): the spawned server this client talks to (see
-    /// `watchServerLiveness`). null = plain fixed per-reply deadlines.
+    /// `watchServerLiveness`).
     server_pid: ?posix.pid_t = null,
+    /// SONNY-6301: the loopback address the server listens on, set by
+    /// `connect`. With no `server_pid`, whether a socket still holds this
+    /// UDP port is the liveness signal (the kernel releases a process's
+    /// ports when it exits). null (not a loopback IP literal) = plain fixed
+    /// per-reply deadlines.
+    server_addr: ?std.Io.net.IpAddress = null,
     slow_server_reported: bool = false,
     liveness_checked_ns: u64 = 0,
 
@@ -755,10 +816,36 @@ pub const QuicProtoClient = struct {
         };
         try client.waitForHandshake(@max(handshake_timeout_secs, 1));
         const stream = try client.getStream();
-        return .{ .allocator = allocator, .client = client, .stream = stream };
+        return .{ .allocator = allocator, .client = client, .stream = stream, .server_addr = livenessAddr(parsed) };
     }
 
+    /// SONNY-6301: the server address to probe for liveness, when it is a
+    /// loopback IP literal (or `localhost`): every reply wait on such a
+    /// client then waits for a live server past its deadline.
+    fn livenessAddr(parsed: Addr) ?std.Io.net.IpAddress {
+        const ip = if (std.mem.eql(u8, parsed.host, "localhost"))
+            std.Io.net.IpAddress{ .ip4 = std.Io.net.Ip4Address.loopback(parsed.port) }
+        else
+            std.Io.net.IpAddress.parse(parsed.host, parsed.port) catch return null;
+        return if (test_ports.isLoopback(ip)) ip else null;
+    }
+
+    /// Close the way a real client does (SONNY-6475 item 2): CONNECTION_CLOSE
+    /// on the wire, then free the endpoint. `QuicClient.deinit` alone frees
+    /// it silently, so the server held every test client's connection — and
+    /// any read it left running — until its own timeouts.
     pub fn deinit(self: *QuicProtoClient) void {
+        self.stream.deinit();
+        self.client.closeGraceful(quic.app_error.no_error);
+        if (self.session_id.len > 0) {
+            self.allocator.free(self.session_id);
+        }
+    }
+
+    /// Vanish WITHOUT a CONNECTION_CLOSE, as a crashed client or a dropped
+    /// network does (SONNY-6466): the endpoint is freed locally and the
+    /// server hears nothing more.
+    pub fn abandon(self: *QuicProtoClient) void {
         self.stream.deinit();
         self.client.deinit();
         if (self.session_id.len > 0) {
@@ -884,41 +971,102 @@ pub const QuicProtoClient = struct {
 
     // CANARY: REQ=REQ-QUIC-HC-005; FEATURE="QUIC High-Concurrency Client Wait"; ASPECT=ProtoReadDeadline; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-25
     /// SONNY-2394 (GAP-0203 Fix #4 flake): bind this client to the server
-    /// process it talks to. Every reply wait then treats its timeout as a SOFT
-    /// deadline: once it expires, the wait continues in 1 s slices for as long
-    /// as the server process is alive (running or stopped), up to
+    /// process it talks to. A reply wait then fails at once with
+    /// error.ServerExited when the server exits, and a `.while_server_alive_ms`
+    /// wait (see `ReplyWait`) continues past its slice in 1 s steps for as
+    /// long as the server process is alive (running or stopped), up to
     /// `liveness_cap_ns`. A live-but-slow server -- a Debug build doing real
     /// work (first-touch graph creation on COMMIT, Argon2id on HELLO) under
     /// parallel test load -- is waited for instead of failing at a fixed 5 s;
-    /// a server that EXITED fails immediately with error.ServerExited; a
-    /// genuine hang still fails at the cap.
+    /// a genuine hang still fails at the cap.
+    ///
+    /// SONNY-6484: an explicit timeout (`readPacket(.., timeout_ms)`,
+    /// `helloWithTimeout`, `executeAndCollectWithTimeout`) is a HARD deadline
+    /// and is never extended; only the calls that take no timeout (`hello`,
+    /// `executeAndCollect`, `begin`, `commit`, ...) and `readPacketWait` with
+    /// `.while_server_alive_ms` wait on liveness. Until SONNY-6484 every wait
+    /// of a liveness-bound client was extended, so an explicit timeout never
+    /// fired while the server was alive.
+    ///
+    /// SONNY-6301: a client `connect`ed to a loopback address is bound
+    /// without this call, probing whether the server still holds its UDP
+    /// port (`server_addr`). The pid is the more precise signal (a port can
+    /// be held by a process other than the server); bind it when the test
+    /// has it.
     pub fn watchServerLiveness(self: *QuicProtoClient, pid: posix.pid_t) void {
         self.server_pid = pid;
     }
 
-    pub const liveness_cap_ns: u64 = 60 * std.time.ns_per_s;
+    /// The longest a reply wait extends past its deadline for a live server.
+    /// SONNY-6301: 120 s (was 60 s); minutes, because a loaded Debug server
+    /// running Argon2id, CREATE GRAPH or a backup's per-file fsyncs answers
+    /// in tens of seconds, and a dead one fails at once regardless.
+    pub const liveness_cap_ns: u64 = 120 * std.time.ns_per_s;
+
+    fn livenessBound(self: *const QuicProtoClient) bool {
+        return self.server_pid != null or self.server_addr != null;
+    }
+
+    /// The bound server is gone: its pid exited or, with no pid, nothing
+    /// holds its port any more. An inconclusive port probe is not "gone".
+    fn serverGone(self: *const QuicProtoClient) bool {
+        if (self.server_pid) |pid| return !processAlive(pid);
+        if (self.server_addr) |addr| return test_ports.udpPortHeld(addr) == .free;
+        return false;
+    }
+
+    /// How long a reply wait lasts (SONNY-6484).
+    pub const ReplyWait = union(enum) {
+        /// A hard deadline: error.Timeout once this many ms have passed,
+        /// whether or not the server is alive (a bound server that exits
+        /// fails sooner, with error.ServerExited).
+        deadline_ms: u32,
+        /// Wait for as long as the bound server is alive, up to
+        /// `liveness_cap_ns`; after this many ms a slow server is reported
+        /// once. A client with no bound server (not loopback, no
+        /// `watchServerLiveness`) treats it as `deadline_ms`.
+        while_server_alive_ms: u32,
+    };
 
     const ReadDeadline = struct {
         soft_ns: u64,
         hard_ns: u64,
+        extends: bool,
 
-        fn init(self: *const QuicProtoClient, timeout_ms: u32) ReadDeadline {
+        fn init(self: *const QuicProtoClient, wait: ReplyWait) ReadDeadline {
             const now = compat_monoNs();
-            const soft = now + @as(u64, timeout_ms) * std.time.ns_per_ms;
-            return .{ .soft_ns = soft, .hard_ns = if (self.server_pid != null) @max(soft, now + liveness_cap_ns) else soft };
+            switch (wait) {
+                .deadline_ms => |ms| {
+                    const at = now + @as(u64, ms) * std.time.ns_per_ms;
+                    return .{ .soft_ns = at, .hard_ns = at, .extends = false };
+                },
+                .while_server_alive_ms => |ms| {
+                    const soft = now + @as(u64, ms) * std.time.ns_per_ms;
+                    const extends = self.livenessBound();
+                    return .{ .soft_ns = soft, .hard_ns = if (extends) @max(soft, now + liveness_cap_ns) else soft, .extends = extends };
+                },
+            }
         }
     };
 
-    /// The soft deadline expired: extend it by one slice if the bound server is
-    /// still alive and the liveness cap has not been reached.
+    /// The soft deadline expired: fail at the hard deadline, or extend by one
+    /// slice if this wait extends while the bound server is alive.
     fn extendReadDeadline(self: *QuicProtoClient, deadline: *ReadDeadline) !void {
-        const pid = self.server_pid orelse return error.Timeout;
-        if (!processAlive(pid)) return error.ServerExited;
+        if (self.livenessBound() and self.serverGone()) return error.ServerExited;
         const now = compat_monoNs();
-        if (now >= deadline.hard_ns) return error.Timeout;
+        if (now >= deadline.hard_ns or !deadline.extends) {
+            if (deadline.extends) {
+                std.debug.print("QuicProtoClient: no reply from a live server within the {d} s liveness cap\n", .{liveness_cap_ns / std.time.ns_per_s});
+            }
+            return error.Timeout;
+        }
         if (!self.slow_server_reported) {
             self.slow_server_reported = true;
-            std.debug.print("QuicProtoClient: server pid {d} is alive but slow; waiting past the reply deadline (cap {d} s)\n", .{ pid, liveness_cap_ns / std.time.ns_per_s });
+            if (self.server_pid) |pid| {
+                std.debug.print("QuicProtoClient: server pid {d} is alive but slow; waiting past the reply deadline (cap {d} s)\n", .{ pid, liveness_cap_ns / std.time.ns_per_s });
+            } else {
+                std.debug.print("QuicProtoClient: server on port {d} is alive but slow; waiting past the reply deadline (cap {d} s)\n", .{ self.server_addr.?.getPort(), liveness_cap_ns / std.time.ns_per_s });
+            }
         }
         deadline.soft_ns = @min(now + std.time.ns_per_s, deadline.hard_ns);
     }
@@ -926,11 +1074,11 @@ pub const QuicProtoClient = struct {
     fn waitForReadProgress(self: *QuicProtoClient, deadline: *ReadDeadline) !void {
         // A bound server that has EXITED fails the wait at once (probed at most
         // every 100 ms) instead of burning the rest of the reply deadline.
-        if (self.server_pid) |pid| {
+        if (self.livenessBound()) {
             const now = compat_monoNs();
             if (now -| self.liveness_checked_ns >= 100 * std.time.ns_per_ms) {
                 self.liveness_checked_ns = now;
-                if (!processAlive(pid)) return error.ServerExited;
+                if (self.serverGone()) return error.ServerExited;
             }
         }
         if (compat_monoNs() >= deadline.soft_ns) try self.extendReadDeadline(deadline);
@@ -943,6 +1091,11 @@ pub const QuicProtoClient = struct {
         // then use a bounded adaptive park until bytes arrive and reset the
         // miss counter.
         try self.client.poll(0);
+        // SONNY-6374: a connection the server closed (a refused admission
+        // sends CONNECTION_CLOSE) can deliver nothing more. The stream read
+        // reports WouldBlock regardless, so without this check a live
+        // server's refusal ran out the whole liveness cap (120 s).
+        if (self.client.isClosed()) return error.ConnectionClosed;
         const now_ns = compat_monoNs();
         if (now_ns >= deadline.soft_ns) return self.extendReadDeadline(deadline);
         self.read_wait_misses +|= 1;
@@ -955,10 +1108,15 @@ pub const QuicProtoClient = struct {
         compat_sleep(@min(wait_ns, deadline.soft_ns - now_ns));
     }
 
+    /// Read one reply; error.Timeout after `timeout_ms` (a hard deadline).
     pub fn readPacket(self: *QuicProtoClient, allocator: std.mem.Allocator, timeout_ms: u32) !schema.ServerPacket {
+        return self.readPacketWait(allocator, .{ .deadline_ms = timeout_ms });
+    }
+
+    pub fn readPacketWait(self: *QuicProtoClient, allocator: std.mem.Allocator, wait: ReplyWait) !schema.ServerPacket {
         var len_buf: [4]u8 = undefined;
         var total_read: usize = 0;
-        var deadline = ReadDeadline.init(self, timeout_ms);
+        var deadline = ReadDeadline.init(self, wait);
 
         while (total_read < 4) {
             const n = self.stream.read(len_buf[total_read..]) catch |err| {
@@ -1005,9 +1163,9 @@ pub const QuicProtoClient = struct {
         return packet;
     }
 
-    fn drainBytes(self: *QuicProtoClient, len: u64, timeout_ms: u32) !void {
+    fn drainBytes(self: *QuicProtoClient, len: u64, wait: ReplyWait) !void {
         var remaining: u64 = len;
-        var deadline = ReadDeadline.init(self, timeout_ms);
+        var deadline = ReadDeadline.init(self, wait);
         var buf: [4096]u8 = undefined;
 
         while (remaining > 0) {
@@ -1025,11 +1183,18 @@ pub const QuicProtoClient = struct {
         }
     }
 
+    /// HELLO, waiting while the bound server is alive (Argon2id on a loaded
+    /// Debug server takes seconds).
     pub fn hello(self: *QuicProtoClient, allocator: std.mem.Allocator, username: []const u8, password: []const u8) !HelloResult {
-        return self.helloWithTimeout(allocator, username, password, 5000);
+        return self.helloWait(allocator, username, password, .{ .while_server_alive_ms = 5000 });
     }
 
+    /// HELLO with a hard deadline of `timeout_ms`.
     pub fn helloWithTimeout(self: *QuicProtoClient, allocator: std.mem.Allocator, username: []const u8, password: []const u8, timeout_ms: u32) !HelloResult {
+        return self.helloWait(allocator, username, password, .{ .deadline_ms = timeout_ms });
+    }
+
+    pub fn helloWait(self: *QuicProtoClient, allocator: std.mem.Allocator, username: []const u8, password: []const u8, wait: ReplyWait) !HelloResult {
         const req = schema.HelloRequest{
             .username = username,
             .password = password,
@@ -1040,7 +1205,7 @@ pub const QuicProtoClient = struct {
         };
         try self.writeMessage(.{ .hello = req });
 
-        var packet = try self.readPacket(allocator, timeout_ms);
+        var packet = try self.readPacketWait(allocator, wait);
         defer packet.deinit(allocator);
 
         const msg = packet.quic orelse return error.InvalidMessage;
@@ -1065,7 +1230,7 @@ pub const QuicProtoClient = struct {
 
     pub fn ping(self: *QuicProtoClient, allocator: std.mem.Allocator) !bool {
         try self.writeMessage(.{ .ping = .{} });
-        var packet = try self.readPacket(allocator, 2000);
+        var packet = try self.readPacketWait(allocator, .{ .while_server_alive_ms = 2000 });
         defer packet.deinit(allocator);
         const msg = packet.quic orelse return error.InvalidMessage;
         if (msg != .ping) return error.InvalidMessage;
@@ -1075,7 +1240,7 @@ pub const QuicProtoClient = struct {
     pub fn cdcDiagnostics(self: *QuicProtoClient, allocator: std.mem.Allocator) !schema.CdcDiagnosticsResponse {
         try self.ensureHello(allocator);
         try self.writeMessage(.{ .cdc_diag = .{} });
-        var packet = try self.readPacket(allocator, 5000);
+        var packet = try self.readPacketWait(allocator, .{ .while_server_alive_ms = 5000 });
         defer packet.deinit(allocator);
         const msg = packet.quic orelse return error.InvalidMessage;
         if (msg != .cdc_diag) return error.InvalidMessage;
@@ -1086,7 +1251,7 @@ pub const QuicProtoClient = struct {
         try self.ensureHello(allocator);
         const req = schema.CdcControlRequest{ .action = action };
         try self.writeMessage(.{ .cdc_ctrl = req });
-        var packet = try self.readPacket(allocator, 5000);
+        var packet = try self.readPacketWait(allocator, .{ .while_server_alive_ms = 5000 });
         defer packet.deinit(allocator);
         const msg = packet.quic orelse return error.InvalidMessage;
         if (msg != .cdc_ctrl) return error.InvalidMessage;
@@ -1102,13 +1267,13 @@ pub const QuicProtoClient = struct {
         try self.ensureHello(allocator);
         const req = schema.BackupRequest{ .backup_type = backup_type, .compress = compress };
         try self.writeMessage(.{ .backup = req });
-        var packet = try self.readPacket(allocator, 10000);
+        var packet = try self.readPacketWait(allocator, .{ .while_server_alive_ms = 10000 });
         defer packet.deinit(allocator);
         const msg = packet.quic orelse return error.InvalidMessage;
         if (msg != .backup) return error.InvalidMessage;
         const resp = msg.backup;
         if (resp.success and resp.size_bytes > 0) {
-            try self.drainBytes(resp.size_bytes, 10000);
+            try self.drainBytes(resp.size_bytes, .{ .while_server_alive_ms = 10000 });
         }
         return .{
             .success = resp.success,
@@ -1125,7 +1290,7 @@ pub const QuicProtoClient = struct {
         try self.ensureHello(allocator);
         const req = schema.RestoreRequest{ .target_time = target_time orelse "", .confirm = confirm };
         try self.writeMessage(.{ .restore = req });
-        var packet = try self.readPacket(allocator, 10000);
+        var packet = try self.readPacketWait(allocator, .{ .while_server_alive_ms = 10000 });
         defer packet.deinit(allocator);
         const msg = packet.quic orelse return error.InvalidMessage;
         if (msg != .restore) return error.InvalidMessage;
@@ -1143,7 +1308,7 @@ pub const QuicProtoClient = struct {
         try self.ensureHello(allocator);
         const req = schema.UploadBackupRequest{ .size_bytes = size_bytes, .checksum = checksum };
         try self.writeMessage(.{ .upload_backup = req });
-        var packet = try self.readPacket(allocator, 5000);
+        var packet = try self.readPacketWait(allocator, .{ .while_server_alive_ms = 5000 });
         defer packet.deinit(allocator);
         const msg = packet.quic orelse return error.InvalidMessage;
         if (msg != .upload_backup) return error.InvalidMessage;
@@ -1158,7 +1323,7 @@ pub const QuicProtoClient = struct {
     pub fn begin(self: *QuicProtoClient, allocator: std.mem.Allocator) !BeginResult {
         const req = schema.BeginRequest{ .read_only = false, .session_id = "" };
         try self.writeMessage(.{ .begin = req });
-        var packet = try self.readPacket(allocator, 5000);
+        var packet = try self.readPacketWait(allocator, .{ .while_server_alive_ms = 5000 });
         defer packet.deinit(allocator);
         const msg = packet.quic orelse return error.InvalidMessage;
         if (msg != .begin) return error.InvalidMessage;
@@ -1171,7 +1336,7 @@ pub const QuicProtoClient = struct {
     pub fn commit(self: *QuicProtoClient, allocator: std.mem.Allocator) !bool {
         const req = schema.CommitRequest{ .session_id = "" };
         try self.writeMessage(.{ .commit = req });
-        var packet = try self.readPacket(allocator, 5000);
+        var packet = try self.readPacketWait(allocator, .{ .while_server_alive_ms = 5000 });
         defer packet.deinit(allocator);
         const msg = packet.quic orelse return error.InvalidMessage;
         if (msg != .commit) return error.InvalidMessage;
@@ -1181,7 +1346,7 @@ pub const QuicProtoClient = struct {
     pub fn rollback(self: *QuicProtoClient, allocator: std.mem.Allocator) !bool {
         const req = schema.RollbackRequest{ .session_id = "" };
         try self.writeMessage(.{ .rollback = req });
-        var packet = try self.readPacket(allocator, 5000);
+        var packet = try self.readPacketWait(allocator, .{ .while_server_alive_ms = 5000 });
         defer packet.deinit(allocator);
         const msg = packet.quic orelse return error.InvalidMessage;
         if (msg != .rollback) return error.InvalidMessage;
@@ -1193,7 +1358,7 @@ pub const QuicProtoClient = struct {
     pub fn savepoint(self: *QuicProtoClient, allocator: std.mem.Allocator, name: []const u8) !bool {
         const req = schema.SavepointRequest{ .name = name, .session_id = "" };
         try self.writeMessage(.{ .savepoint = req });
-        var packet = try self.readPacket(allocator, 5000);
+        var packet = try self.readPacketWait(allocator, .{ .while_server_alive_ms = 5000 });
         defer packet.deinit(allocator);
         const msg = packet.quic orelse return error.InvalidMessage;
         if (msg != .savepoint) return error.InvalidMessage;
@@ -1205,7 +1370,7 @@ pub const QuicProtoClient = struct {
     pub fn rollbackTo(self: *QuicProtoClient, allocator: std.mem.Allocator, name: []const u8) !bool {
         const req = schema.RollbackToRequest{ .name = name, .session_id = "" };
         try self.writeMessage(.{ .rollback_to = req });
-        var packet = try self.readPacket(allocator, 5000);
+        var packet = try self.readPacketWait(allocator, .{ .while_server_alive_ms = 5000 });
         defer packet.deinit(allocator);
         const msg = packet.quic orelse return error.InvalidMessage;
         if (msg != .rollback_to) return error.InvalidMessage;
@@ -1236,6 +1401,29 @@ pub const QuicProtoClient = struct {
         graph: ?[]const u8,
         tenant: ?[]const u8,
     ) !HelloResult {
+        return self.helloFull(allocator, username, password, graph, tenant, null);
+    }
+
+    /// HELLO naming an FLE role (HelloRequest.role; SONNY-6334).
+    pub fn helloAs(
+        self: *QuicProtoClient,
+        allocator: std.mem.Allocator,
+        username: []const u8,
+        password: []const u8,
+        fle_role: []const u8,
+    ) !HelloResult {
+        return self.helloFull(allocator, username, password, null, null, fle_role);
+    }
+
+    fn helloFull(
+        self: *QuicProtoClient,
+        allocator: std.mem.Allocator,
+        username: []const u8,
+        password: []const u8,
+        graph: ?[]const u8,
+        tenant: ?[]const u8,
+        fle_role: ?[]const u8,
+    ) !HelloResult {
         const req = schema.HelloRequest{
             .username = username,
             .password = password,
@@ -1244,10 +1432,11 @@ pub const QuicProtoClient = struct {
             .client_version = "0.0.0",
             .wanted_conformance = "min",
             .graph = graph,
+            .role = fle_role,
         };
         try self.writeMessage(.{ .hello = req });
 
-        var packet = try self.readPacket(allocator, 5000);
+        var packet = try self.readPacketWait(allocator, .{ .while_server_alive_ms = 5000 });
         defer packet.deinit(allocator);
 
         const msg = packet.quic orelse return error.InvalidMessage;
@@ -1370,7 +1559,9 @@ pub const QuicProtoClient = struct {
         params: std.ArrayList(schema.Param),
         page_size: u32,
     ) !ExecResult {
-        return self.executeAndCollectWithTimeout(allocator, query, params, page_size, 5);
+        // No timeout given: the server-side query timeout is 5 s and each
+        // reply waits while the bound server is alive (SONNY-6484).
+        return self.executeAndCollectWait(allocator, query, params, page_size, 5, .{ .while_server_alive_ms = 5000 }, null);
     }
 
     // CANARY: REQ=REQ-QUIC-HC-023; FEATURE="QUIC High-Concurrency Diagnostics"; ASPECT=ClientExecTimeout; STATUS=TESTED; TEST=test_quic_condition_timedwait_cadence; OWNER=transport; UPDATED=2026-05-26
@@ -1385,6 +1576,12 @@ pub const QuicProtoClient = struct {
         return self.executeAndCollectWithTimeoutTiming(allocator, query, params, page_size, query_timeout_secs, null);
     }
 
+    /// `query_timeout_secs` is both the server-side query timeout and a HARD
+    /// deadline for the whole exchange (every reply page, measured from the
+    /// EXECUTE; the session's first HELLO, if `ensureHello` sends one, is not
+    /// counted): error.Timeout when it passes, whether or not the server is
+    /// alive (SONNY-6484; it used to be a per-reply soft deadline extended for
+    /// as long as the server lived).
     pub fn executeAndCollectWithTimeoutTiming(
         self: *QuicProtoClient,
         allocator: std.mem.Allocator,
@@ -1394,11 +1591,29 @@ pub const QuicProtoClient = struct {
         query_timeout_secs: u32,
         timing: ?*ExecTiming,
     ) !ExecResult {
+        return self.executeAndCollectWait(allocator, query, params, page_size, query_timeout_secs, .{ .deadline_ms = query_timeout_secs *| 1000 }, timing);
+    }
+
+    /// `wait`: `.deadline_ms` bounds the whole exchange; `.while_server_alive_ms`
+    /// applies to each reply on its own (`ReplyWait`).
+    pub fn executeAndCollectWait(
+        self: *QuicProtoClient,
+        allocator: std.mem.Allocator,
+        query: []const u8,
+        params: std.ArrayList(schema.Param),
+        page_size: u32,
+        query_timeout_secs: u32,
+        wait: ReplyWait,
+        timing: ?*ExecTiming,
+    ) !ExecResult {
         if (timing) |stats| stats.* = .{};
         const total_start_ns = compat_monoNs();
         try self.ensureHello(allocator);
         const QuicProtocolAdapter = struct {
             client: *QuicProtoClient,
+            wait: ReplyWait,
+            /// `.deadline_ms`: when the whole exchange must be done.
+            deadline_ns: u64,
             timing: ?*ExecTiming = null,
             execute_write_done_ns: u64 = 0,
             response_messages: u32 = 0,
@@ -1435,10 +1650,13 @@ pub const QuicProtoClient = struct {
                 read_timeout_secs: u32,
             ) !schema.QuicServerMessage {
                 const adapter_self: *@This() = @ptrCast(@alignCast(proto.context));
-                const timeout_ms = @as(u32, @intCast(@max(read_timeout_secs, 1) * 1000));
                 while (true) {
                     const read_start_ns = compat_monoNs();
-                    const packet = adapter_self.client.readPacket(alloc, timeout_ms) catch |err| {
+                    const reply_wait: ReplyWait = switch (adapter_self.wait) {
+                        .deadline_ms => .{ .deadline_ms = @intCast(@min(adapter_self.deadline_ns -| read_start_ns, @as(u64, std.math.maxInt(u32)) * std.time.ns_per_ms) / std.time.ns_per_ms) },
+                        .while_server_alive_ms => .{ .while_server_alive_ms = @as(u32, @intCast(@max(read_timeout_secs, 1))) * 1000 },
+                    };
+                    const packet = adapter_self.client.readPacketWait(alloc, reply_wait) catch |err| {
                         const read_end_ns = compat_monoNs();
                         if (adapter_self.timing) |stats| {
                             stats.response_read_ns +|= read_end_ns -| read_start_ns;
@@ -1471,7 +1689,11 @@ pub const QuicProtoClient = struct {
             }
         };
 
-        var adapter = QuicProtocolAdapter{ .client = self, .timing = timing };
+        const deadline_ns = switch (wait) {
+            .deadline_ms => |ms| compat_monoNs() + @as(u64, ms) * std.time.ns_per_ms,
+            .while_server_alive_ms => 0,
+        };
+        var adapter = QuicProtocolAdapter{ .client = self, .wait = wait, .deadline_ns = deadline_ns, .timing = timing };
         var protocol_client = query_runner.ProtocolClient{
             .context = &adapter,
             .sendClientMessageFn = QuicProtocolAdapter.sendClientMessage,
@@ -1508,7 +1730,7 @@ pub const QuicProtoClient = struct {
         };
         try self.writeMessage(.{ .execute = req });
 
-        var packet = try self.readPacket(allocator, 5000);
+        var packet = try self.readPacketWait(allocator, .{ .while_server_alive_ms = 5000 });
         defer packet.deinit(allocator);
         const msg = packet.quic orelse return error.InvalidMessage;
         if (msg != .execute) return error.InvalidMessage;
@@ -1525,13 +1747,22 @@ pub const GrpcProtoClient = struct {
     allocator: std.mem.Allocator,
     stream: std.Io.net.Stream,
     session_id: []const u8 = "",
+    /// SONNY-6567 (1): every RPC on the connection takes its own stream id.
+    stream_ids: grpc_query_transport.StreamIds = .{},
+
+    /// SONNY-6301: the socket read/write timeout. It was 5 s, so a loaded
+    /// server answering in 6 s failed the test. TCP reports a server that
+    /// exited at once (the kernel closes its connections: EOF or reset), so
+    /// a long timeout waits only for a live server, the same contract as
+    /// `QuicProtoClient.liveness_cap_ns`.
+    pub const read_timeout_secs: u32 = @intCast(QuicProtoClient.liveness_cap_ns / std.time.ns_per_s);
 
     pub fn connect(allocator: std.mem.Allocator, addr: []const u8) !GrpcProtoClient {
         const parsed = try parseAddr(addr);
         const deadline = compat_milliTimestamp() + 10_000;
         var last_err: anyerror = error.ConnectionRefused;
         while (compat_milliTimestamp() < deadline) {
-            const stream = grpc_query_transport.connectPlaintext(allocator, parsed.host, parsed.port, 5, .{}) catch |err| {
+            const stream = grpc_query_transport.connectPlaintext(allocator, parsed.host, parsed.port, read_timeout_secs, .{}) catch |err| {
                 last_err = err;
                 compat_sleep(100 * std.time.ns_per_ms);
                 continue;
@@ -1559,9 +1790,10 @@ pub const GrpcProtoClient = struct {
     }
 
     pub fn hello(self: *GrpcProtoClient, allocator: std.mem.Allocator, username: []const u8, password: []const u8) !HelloResult {
-        const resp = try grpc_query_transport.hello(
+        const resp = try grpc_query_transport.helloOn(
             allocator,
             self.stream,
+            try self.stream_ids.take(),
             .{
                 .username = username,
                 .password = password,
@@ -1602,9 +1834,10 @@ pub const GrpcProtoClient = struct {
         password: []const u8,
         graph: []const u8,
     ) !HelloResult {
-        const resp = try grpc_query_transport.hello(
+        const resp = try grpc_query_transport.helloOn(
             allocator,
             self.stream,
+            try self.stream_ids.take(),
             .{
                 .username = username,
                 .password = password,
@@ -1673,7 +1906,7 @@ pub const GrpcProtoClient = struct {
         page_size: u32,
     ) !ExecResult {
         try self.ensureHello(allocator);
-        var adapter = grpc_query_transport.StreamingQueryAdapter{ .stream = self.stream };
+        var adapter = grpc_query_transport.StreamingQueryAdapter{ .stream = self.stream, .stream_ids = &self.stream_ids };
         var transport = adapter.asTransport();
 
         var result = try query_runner.collectQueryWithTransport(allocator, &transport, .{

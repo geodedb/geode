@@ -1,7 +1,7 @@
 const std = @import("std");
 const cdc = @import("../src/streaming/cdc_enhanced.zig");
 
-// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedLogBuffer; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformedLogBuffer; OWNER=streaming; UPDATED=2026-02-04
+// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=ChangeStreamMalformedLogBuffer; STATUS=IMPL; TEST=TestCANARY_REQ_GQL_042_CDC_ChangeStreamMalformedLogBuffer; OWNER=streaming; UPDATED=2026-11-14
 
 // This test feeds 100 malformed change records and validates that the ring buffer captured
 // snapshots for count=1 and count=100 (they will be the only two entries).

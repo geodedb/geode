@@ -97,6 +97,23 @@ pub fn execute(
 ///   - `error.Unsupported`  — the adapter/graph/index does not exist (a clear
 ///                            failure rather than a silent empty result, matching
 ///                            the prior scalar surface's contract).
+// CANARY: REQ=REQ-SONNY-6335-NO-INDEX-ON-ENCRYPTED-FIELD; FEATURE="FieldLevelEncryption"; ASPECT=FulltextSearchRefused; STATUS=TESTED; TEST=tests/test_sonny6335_fle_identity_and_indexes.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6335: a fulltext index over an FLE-encrypted field (one made before
+/// CREATE INDEX refused them) holds ciphertext tokens: a search over it is
+/// refused (0A000) instead of silently matching nothing.
+fn refuseEncryptedFulltext(allocator: std.mem.Allocator, context: ExecutionContext, index_name: []const u8) !void {
+    const fle_integration = @import("../fle_integration.zig");
+    if (!fle_integration.hasEncryptedFields()) return;
+    const rows = try context.catalog.listIndexesForGraph(allocator, graph_store.DEFAULT_GRAPH_NAME);
+    defer allocator.free(rows);
+    for (rows) |row| {
+        if (!std.mem.eql(u8, row.name, index_name)) continue;
+        for (row.columns) |col| {
+            if (fle_integration.fieldRequiresEncryption(row.table_name, col)) return error.IndexOnEncryptedField;
+        }
+    }
+}
+
 fn handleFtsSearch(
     allocator: std.mem.Allocator,
     call_stmt: ast.CallProcedure,
@@ -109,6 +126,7 @@ fn handleFtsSearch(
     if (args.len < 2 or args.len > 3) return error.InvalidArgs;
 
     const index_name = try literalString(args[0]);
+    try refuseEncryptedFulltext(allocator, context, index_name); // SONNY-6335
     const query_text = try literalString(args[1]);
 
     var max_results: usize = DEFAULT_MAX_RESULTS;
@@ -149,7 +167,9 @@ fn handleFtsSearch(
     // ids -> resolve under database-enforced authorization -> discard
     // unauthorized rows BEFORE results leave the engine.
     // CANARY: REQ=REQ-FTS-ROW-VISIBILITY-001; FEATURE="FullText"; ASPECT=SearchRowFilter; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-28
-    var authorized = try filterAuthorizedHits(allocator, hits, filter_tenant);
+    var label_arena = std.heap.ArenaAllocator.init(allocator);
+    defer label_arena.deinit();
+    var authorized = try filterAuthorizedHits(allocator, hits, filter_tenant, try indexLabels(label_arena.allocator(), context, index_name));
     defer authorized.deinit(allocator);
 
     // Build the (node, score) binding table. Column names are dupe'd so they own
@@ -204,6 +224,7 @@ fn handleFtsPhrase(
     if (args.len < 2 or args.len > 3) return error.InvalidArgs;
 
     const index_name = try literalString(args[0]);
+    try refuseEncryptedFulltext(allocator, context, index_name); // SONNY-6335
     const phrase_text = try literalString(args[1]);
 
     var max_results: usize = DEFAULT_MAX_RESULTS;
@@ -225,7 +246,9 @@ fn handleFtsPhrase(
     // ids -> resolve under database-enforced authorization -> discard
     // unauthorized rows BEFORE results leave the engine.
     // CANARY: REQ=REQ-FTS-ROW-VISIBILITY-001; FEATURE="FullText"; ASPECT=PhraseRowFilter; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-28
-    var authorized = try filterAuthorizedHits(allocator, hits, filter_tenant);
+    var label_arena = std.heap.ArenaAllocator.init(allocator);
+    defer label_arena.deinit();
+    var authorized = try filterAuthorizedHits(allocator, hits, filter_tenant, try indexLabels(label_arena.allocator(), context, index_name));
     defer authorized.deinit(allocator);
 
     return try buildNodeScoreResult(allocator, call_stmt, authorized.items);
@@ -252,6 +275,7 @@ fn handleFtsProximity(
     if (args.len < 3 or args.len > 4) return error.InvalidArgs;
 
     const index_name = try literalString(args[0]);
+    try refuseEncryptedFulltext(allocator, context, index_name); // SONNY-6335
     const query_text = try literalString(args[1]);
 
     if (args[2].* != .Int) return error.TypeMismatch;
@@ -281,7 +305,9 @@ fn handleFtsProximity(
     // ids -> resolve under database-enforced authorization -> discard
     // unauthorized rows BEFORE results leave the engine.
     // CANARY: REQ=REQ-FTS-ROW-VISIBILITY-001; FEATURE="FullText"; ASPECT=ProximityRowFilter; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-28
-    var authorized = try filterAuthorizedHits(allocator, hits, filter_tenant);
+    var label_arena = std.heap.ArenaAllocator.init(allocator);
+    defer label_arena.deinit();
+    var authorized = try filterAuthorizedHits(allocator, hits, filter_tenant, try indexLabels(label_arena.allocator(), context, index_name));
     defer authorized.deinit(allocator);
 
     return try buildNodeScoreResult(allocator, call_stmt, authorized.items);
@@ -417,6 +443,7 @@ fn filterAuthorizedHits(
     allocator: std.mem.Allocator,
     hits: []const fulltext.FullTextIndex.SearchResult,
     filter_tenant: ?[]const u8,
+    index_labels: []const []const u8,
 ) !std.ArrayList(fulltext.FullTextIndex.SearchResult) {
     const store = graph_store.getGlobalStore(graph_store.global_allocator());
     var reusable_row = std.StringHashMap(rls.Value).init(allocator);
@@ -433,18 +460,60 @@ fn filterAuthorizedHits(
         }
 
         // CANARY: REQ=REQ-FTS-ROW-VISIBILITY-HYDRATE-001; FEATURE="FullText"; ASPECT=SearchHitHydrate; STATUS=TESTED; TEST=tests/test_fts_authorization.zig; OWNER=security; UPDATED=2026-08-29
+        // CANARY: REQ=REQ-SONNY-6567-FTS-UNREADABLE-HIT; FEATURE="FullText"; ASPECT=UnreadableHitFailsSearch; STATUS=TESTED; TEST=tests/test_sonny6567_fts_unreadable_hit.zig; OWNER=fts; UPDATED=2026-11-15
+        // Never call the hydrating accessor while the shard lock is held —
+        // it is self-locking (getOrHydrate re-takes the same map_lock) and
+        // re-entrant cache calls are forbidden. We are outside that lock here
+        // (the block above already released it). SONNY-6567 (3): null is a
+        // node that is gone (deleted, the posting stale): its hit is skipped.
+        // An error is a node that exists and could not be read: the search
+        // fails. It was taken for "gone" (`catch null`), and the hit was left
+        // out of a result reported as complete.
         const node = resident_node orelse
-            // Never call the hydrating accessor while the shard lock is held
-            // — it is self-locking (getOrHydrate re-takes the same map_lock)
-            // and re-entrant cache calls are forbidden. We are outside that
-            // lock here (the block above already released it).
-            (store.nodes.getOrHydrate(hit.doc_id) catch null) orelse continue; // genuinely gone — no fallback possible
+            (try store.nodes.getOrHydrate(hit.doc_id)) orelse continue;
 
+        // SONNY-6421: a node that no longer carries the index's label is not
+        // in the index, whatever postings it left: the engine cannot take a
+        // document out, and a label can go by a path that does no index
+        // maintenance (an undo of SET n:L, a replicated apply).
+        if (index_labels.len > 0 and !carriesAnyLabel(node.labels, index_labels)) continue;
         if (match_operations.passesRowVisibilityFilters(&reusable_row, node, filter_tenant)) {
             authorized.appendAssumeCapacity(hit);
         }
     }
     return authorized;
+}
+
+fn carriesAnyLabel(node_labels: []const []const u8, wanted: []const []const u8) bool {
+    for (node_labels) |have| {
+        for (wanted) |w| if (std.mem.eql(u8, have, w)) return true;
+    }
+    return false;
+}
+
+// CANARY: REQ=REQ-SONNY-6421-FTS-LABEL-FILTER; FEATURE="FullText"; ASPECT=SearchLabelFilter; STATUS=TESTED; TEST=tests/test_sonny6421_index_maintenance.zig; OWNER=fts; UPDATED=2026-11-12
+/// SONNY-6421: the labels whose nodes `index_name` indexes (its catalog row's
+/// `FOR (n:Label)`, else the fulltext label registry), copied into
+/// `allocator`. Empty when neither knows the index; the search then filters
+/// by visibility only, as before.
+fn indexLabels(allocator: std.mem.Allocator, context: ExecutionContext, index_name: []const u8) ![]const []const u8 {
+    var out: std.ArrayListUnmanaged([]const u8) = .empty;
+    {
+        const rows = try context.catalog.listIndexesForGraph(allocator, graph_store.DEFAULT_GRAPH_NAME);
+        defer allocator.free(rows);
+        for (rows) |row| {
+            if (!std.mem.eql(u8, row.name, index_name)) continue;
+            try out.append(allocator, try allocator.dupe(u8, row.table_name));
+        }
+    }
+    if (out.items.len == 0) {
+        const adapter = graph_store.getGlobalAdapter() orelse return out.toOwnedSlice(allocator);
+        const mg = adapter.lookupManagedGraph(graph_store.DEFAULT_GRAPH_NAME) catch return out.toOwnedSlice(allocator);
+        for (try mg.snapshotFtsLabelIndex(allocator)) |entry| {
+            if (std.mem.eql(u8, entry.name, index_name)) try out.append(allocator, entry.label);
+        }
+    }
+    return out.toOwnedSlice(allocator);
 }
 
 /// Build the `(node, score)` binding table from facade SearchResults, applying

@@ -12,7 +12,9 @@
 #
 # GEODE_OTEL_PASSWORD MUST be set in the environment (no secret is committed). The verify
 # script and `make otel-compose-up` auto-generate a random one; for a manual `docker compose
-# up` export your own, e.g.  GEODE_OTEL_PASSWORD=$(openssl rand -hex 12) docker compose ... up
+# up` export your own passphrase (it seeds the admin, so it must meet the password policy:
+# 20+ characters, 3+ words, upper and lower case), e.g.
+#   GEODE_OTEL_PASSWORD="Otel Compose $(openssl rand -hex 12) Passphrase" docker compose ... up
 services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.162.0
@@ -95,7 +97,7 @@ services:
       # IP-only dotted-quad (metrics_server.zig:359 parses address only, no port).
       GEODE_METRICS_PORT: "9091"
       GEODE_METRICS_BIND: "0.0.0.0"
-      LOG_LEVEL: "info"
+      # The log level is --log-level (below); geode reads no LOG_LEVEL.
     command: ["--data-dir", "/data", "--listen", "0.0.0.0:3141", "--log-level", "info"]
     # Host QUIC published on 13141 (not 3141) so this stack coexists with a
     # host-resident geode (e.g. a systemd geode.service) that already owns
@@ -126,7 +128,12 @@ services:
       nproc:
         soft: 4096
         hard: 4096
-    pids_limit: 4096
+    deploy:
+      resources:
+        limits:
+          # SONNY-6453: here, not pids_limit, so a later deploy limit cannot
+          # conflict with it (Compose refuses both).
+          pids: 4096
 
 volumes:
   otel-output:

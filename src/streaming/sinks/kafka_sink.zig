@@ -41,6 +41,7 @@ fn compat_microTimestamp() i64 {
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
 const cdc_sinks = @import("../cdc_sinks.zig");
+const host_port = @import("../../client/host_port.zig");
 const kafka_wire = @import("kafka_wire.zig");
 
 const logging = @import("logging");
@@ -216,10 +217,11 @@ pub const KafkaSink = struct {
     ) !void {
         const io = std.Io.Threaded.global_single_threaded.io();
 
-        // Parse host:port.
-        const colon = std.mem.lastIndexOfScalar(u8, broker, ':') orelse return error.InvalidBroker;
-        const host = broker[0..colon];
-        const port = std.fmt.parseInt(u16, broker[colon + 1 ..], 10) catch return error.InvalidBroker;
+        // SONNY-6487: host:port or [ipv6]:port (the shared grammar).
+        const hp = host_port.split(broker, null) catch return error.InvalidBroker;
+        if (hp.host.len == 0) return error.InvalidBroker;
+        const host = hp.host;
+        const port = hp.port;
 
         const addr = kafka_wire_resolve(io, host, port) catch return error.ConnectionRefused;
         var stream = std.Io.net.IpAddress.connect(&addr, io, .{ .mode = .stream }) catch return error.ConnectionRefused;

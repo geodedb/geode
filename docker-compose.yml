@@ -182,7 +182,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        ZIG_VERSION: "0.15.2"
+        ZIG_VERSION: "0.16.0"
         TARGETARCH: amd64
     image: geode:latest
     container_name: geode-db
@@ -191,18 +191,13 @@ services:
       - "3141:3141/udp"  # QUIC protocol
       - "9091:9091/tcp"  # Metrics endpoint
     environment:
-      - LOG_LEVEL=${GEODE_LOG_LEVEL:-info}
       - GEODE_DATA_DIR=${GEODE_DATA_DIR:-/data}
-      - VAULT_ADDR=${VAULT_ADDR:-http://vault:8200}
-      - VAULT_TOKEN=${VAULT_TOKEN:?set VAULT_TOKEN in .env}
-      - REDIS_URL=redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
-      - S3_ENDPOINT=${S3_ENDPOINT:-http://minio:9000}
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env}
-      - S3_SECRET_KEY=${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
-      - S3_BUCKET=${S3_BUCKET:-geode-backups}
-      # QUIC Performance: GSO is enabled by default on Linux 4.18+
-      # Uncomment to disable GSO (not recommended):
-      # - QUIC_GO_DISABLE_GSO=true
+      # geode reads no LOG_LEVEL (the log level is --log-level, below), no
+      # VAULT_* (no KMS provider reads Vault; the page key is GEODE_TDE_KEY)
+      # and no REDIS_URL (it has no Redis cache). SONNY-6435.
+      # geode reads no S3_* variable: backups are local files written by
+      # `geode backup create` (SONNY-6290); copy them to object storage yourself
+      # (scripts/init-minio.sh sets up the MinIO bucket). SONNY-6430.
     # QUIC Performance Optimizations - UDP buffer sizes for high-throughput transfers
     # These sysctls require --privileged or appropriate capabilities
     sysctls:
@@ -221,13 +216,20 @@ services:
       - "/certs/server.crt"
       - "--key"
       - "/certs/server.key"
+      - "--log-level"
+      - "${GEODE_LOG_LEVEL:-info}"
     # Release builds spawn ~800 threads; set explicit limits to avoid
     # SystemResources (EAGAIN from pthread_create) on restrictive daemon configs.
     ulimits:
       nproc:
         soft: 4096
         hard: 4096
-    pids_limit: 4096
+    deploy:
+      resources:
+        limits:
+          # SONNY-6453: here, not pids_limit, so a later deploy limit cannot
+          # conflict with it (Compose refuses both).
+          pids: 4096
     # Security: Use specific capabilities instead of privileged mode.
     # NET_ADMIN is needed for QUIC UDP buffer sysctl tuning.
     # SYS_NICE is needed for real-time thread scheduling.
@@ -247,13 +249,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    depends_on:
-      vault:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    # SONNY-6442: geode does not wait for Vault, MinIO or Redis: it uses none
+    # of them (no KMS provider reads Vault, backups are local files, there is
+    # no Redis cache). They stay in this stack for the other services.
 
   # Geode CLI - Debug/Admin Container
   geode-cli:

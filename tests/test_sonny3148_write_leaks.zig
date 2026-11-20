@@ -25,15 +25,15 @@
 // tenant-scoped (persisted) and RLS-policy (persisted) sessions
 // (tests/sonny738_write_harness.zig).
 //
-// A path a result row returns (`RETURN p`, and the target rows `DETACH DELETE
-// p` reads) keeps its two arrays: a path is copied by reference everywhere
-// (`duplicateValue`, `duplicateResult`, which the gRPC server keeps past the
-// request), so nothing can free them safely. Those shapes run on a private
-// allocator, and the arrays are the only allocation allowed to remain.
+// A path a result row returns (`RETURN p`) keeps its two arrays until the
+// result is released: SONNY-6613 made the result's entity tracker own them
+// (they were the one allocation allowed to remain), so every shape runs on
+// the leak-checked allocator.
 //
 // CANARY: REQ=REQ-SONNY-3148-WRITE-LEAKS; FEATURE="WriteStatementOwnership"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny3148_write_leaks.zig; OWNER=engine; UPDATED=2026-09-27
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const h = @import("sonny738_write_harness.zig");
@@ -51,9 +51,6 @@ const Shape = struct {
     checks: []const Check = &.{},
     /// Bind `$rows`, a list of three maps `{id, name}`.
     rows_param: bool = false,
-    /// A returned path's arrays: the bytes allowed to remain (see above);
-    /// the statement then runs on a private allocator.
-    residual_bytes: usize = 0,
 };
 
 fn lessThan(_: void, a: []const u8, b: []const u8) bool {
@@ -132,23 +129,10 @@ fn runShape(mode: h.Mode, shape: Shape, f: *h.Failures) !void {
         s.ctx.query_param_values = &values;
     }
 
-    var rows: ?[]const []const u8 = null;
-    if (shape.residual_bytes == 0) {
-        rows = runStatement(&s, testing.allocator, shape) catch |err| blk: {
-            try f.add("[{s}] {s}: error {s}", .{ @tagName(mode), shape.query, @errorName(err) });
-            break :blk null;
-        };
-    } else {
-        var dbg: std.heap.DebugAllocator(.{ .enable_memory_limit = true }) = .init;
-        defer dbg.deinitWithoutLeakChecks();
-        rows = runStatement(&s, dbg.allocator(), shape) catch |err| blk: {
-            try f.add("[{s}] {s}: error {s}", .{ @tagName(mode), shape.query, @errorName(err) });
-            break :blk null;
-        };
-        if (rows != null and dbg.total_requested_bytes != shape.residual_bytes) {
-            try f.add("[{s}] {s}: {d} bytes remain after the result was released, expected the path arrays' {d}", .{ @tagName(mode), shape.query, dbg.total_requested_bytes, shape.residual_bytes });
-        }
-    }
+    const rows: ?[]const []const u8 = runStatement(&s, testing.allocator, shape) catch |err| blk: {
+        try f.add("[{s}] {s}: error {s}", .{ @tagName(mode), shape.query, @errorName(err) });
+        break :blk null;
+    };
     if (rows) |got| if (shape.want) |want| {
         const exp = try aa.dupe([]const u8, want);
         std.mem.sort([]const u8, exp, {}, lessThan);
@@ -188,9 +172,6 @@ fn gx(comptime want: []const []const u8) [1]Check {
 fn xx(comptime want: []const []const u8) [1]Check {
     return .{.{ .query = "MATCH (x:X) WHERE x.x = 1 RETURN x.j", .want = want }};
 }
-
-/// One single-hop path's arrays: two node pointers and one edge pointer.
-const path_bytes = 3 * @sizeOf(usize);
 
 // ---------------------------------------------------------------------------
 // 1. An initial WITH.
@@ -282,12 +263,15 @@ test "SONNY-3148: a WITH stage before a write frees the items it computed, and a
 // Task W round 3: a statement that writes with a path variable (a SET beside
 // one, a path DELETE) is not an allowlisted write shape (SONNY-3146), so
 // only reads reach these arrays.
-test "SONNY-3148: a single-hop path variable frees its node and edge arrays unless a row returns the path, which keeps them" {
+test "SONNY-3148: a single-hop path variable frees its node and edge arrays, with the result when a row returns the path" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     try runShapes("single-hop path", &.{
         .{ .query = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i >= 5 RETURN length(p) AS len", .want = &.{ "1", "1", "1", "1", "1" } },
         .{ .query = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 RETURN x.j AS j, length(p) AS len", .want = &.{"5|1"} },
-        // The residual: a row that returns the path keeps its arrays.
-        .{ .query = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 RETURN p, length(p) AS len", .want = &.{"<Path 2:1>|1"}, .residual_bytes = path_bytes },
+        // SONNY-6613: a row that returns the path keeps its arrays until
+        // the result is released (they remained after it).
+        .{ .query = "MATCH p = (n:G)-[:R]->(x:X) WHERE n.i = 5 RETURN p, length(p) AS len", .want = &.{"<Path 2:1>|1"} },
     });
 }
 
@@ -309,5 +293,42 @@ test "SONNY-3148: a variable-length relationship variable frees its edge list, r
             .{ .query = "MATCH (n:G) WHERE n.z = 1 RETURN n.i", .want = &.{"5"} },
         } },
         .{ .query = "MATCH (n:G)-[r:R*1..2]->(x:X) WITH n, r WHERE n.i = 5 SET n.x = 1 RETURN size(r) AS s, r AS rels", .want = &.{"1|[<Edge>]"}, .checks = &gx(&.{"5"}) },
+    });
+}
+
+// ---------------------------------------------------------------------------
+// SONNY-3148 (2026-11 follow-up): a `+` concatenation, and a map literal
+// that repeats a key. `+` of two strings or two lists allocates its result
+// (src/eval.zig `evalBinary` .Add) as `||` does, but only `||` was freed
+// (`value_utilities.evaluatesFresh` / `freeEvaluatedValue` knew `.Concat`
+// only). A map literal's repeated key replaced the earlier value with
+// `map.put`, and what the earlier value's expression allocated was lost.
+
+test "SONNY-3148: a + concatenation of strings or lists and a map literal's repeated key are freed" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    try runShapes("+ concatenation and repeated map keys", &.{
+        // An initial WITH (query_execution `executeWithInitialWith`).
+        .{ .query = "WITH 'k' + '1' AS tag MATCH (n:G) WHERE n.i = 5 SET n.x = 1 RETURN tag AS t", .want = &.{"k1"}, .checks = &gx(&.{"5"}) },
+        .{ .query = "WITH 'k' + '1' AS tag MATCH (n:G) WHERE n.i = 5 SET n.s = tag", .checks = &.{
+            .{ .query = "MATCH (n:G) WHERE n.s IS NOT NULL RETURN n.i, n.s", .want = &.{"5|k1"} },
+        } },
+        .{ .query = "WITH $rows + $rows AS rr MATCH (n:G) WHERE n.i = 5 SET n.x = 1 RETURN size(rr) AS c", .rows_param = true, .want = &.{"6"}, .checks = &gx(&.{"5"}) },
+        .{ .query = "WITH $rows + $rows AS rr MATCH (n:G) WHERE n.i = 5 SET n.c = size(rr)", .rows_param = true, .checks = &.{
+            .{ .query = "MATCH (n:G) WHERE n.c IS NOT NULL RETURN n.i, n.c", .want = &.{"5|6"} },
+        } },
+        .{ .query = "WITH {a: 'x' || '1', a: 'y' || '2'} AS m MATCH (n:G) WHERE n.i = 5 SET n.s = m.a RETURN m AS m", .want = &.{"{a:y2}"}, .checks = &.{
+            .{ .query = "MATCH (n:G) WHERE n.s IS NOT NULL RETURN n.i, n.s", .want = &.{"5|y2"} },
+        } },
+        .{ .query = "WITH {a: toUpper('p'), a: 'q' + 'r', b: 1} AS m MATCH (n:G) WHERE n.i = 5 SET n.s = m.a", .checks = &.{
+            .{ .query = "MATCH (n:G) WHERE n.s IS NOT NULL RETURN n.i, n.s", .want = &.{"5|qr"} },
+        } },
+        // A WITH stage after the MATCH (match_operations `ownWithStageValues`).
+        .{ .query = "MATCH (n:G) WITH n, n.g + '-x' AS s WHERE n.i >= 8 SET n.s = s RETURN s AS s, n.i AS i", .want = &.{ "b-x|8", "b-x|9" }, .checks = &.{
+            .{ .query = "MATCH (n:G) WHERE n.s IS NOT NULL RETURN n.i, n.s", .want = &.{ "8|b-x", "9|b-x" } },
+        } },
+        .{ .query = "MATCH (n:G) WITH n, {g: n.g || '1', g: n.g + '2'} AS m WHERE n.i = 9 SET n.s = m.g RETURN m AS m", .want = &.{"{g:b2}"}, .checks = &.{
+            .{ .query = "MATCH (n:G) WHERE n.s IS NOT NULL RETURN n.i, n.s", .want = &.{"9|b2"} },
+        } },
     });
 }

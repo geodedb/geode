@@ -571,6 +571,10 @@ const function_probes = [_]FunctionProbe{
     // Null handling
     .{ .name = "coalesce", .query = "RETURN coalesce(NULL, 1)" },
     .{ .name = "nullif", .query = "RETURN nullIf(1, 1)" },
+    // SONNY-6613: catalogued extension functions.
+    .{ .name = "st_point", .query = "RETURN st_x(st_point(1, 2))" },
+    .{ .name = "ipaddr", .query = "RETURN ipaddr('10.0.0.1')" },
+    .{ .name = "url_host", .query = "RETURN url_host(url('https://example.com/a'))" },
 };
 
 fn probeFor(name: []const u8) ?FunctionProbe {
@@ -821,14 +825,17 @@ test "FN-DISPATCH-PARITY: datetime accepts a date-only literal and reports parse
     // part and the caller swallowed the parse failure with `catch return null`,
     // which fell through to error.UnknownFunction (42883) — a data exception
     // misreported as "no such function".
-    try testing.expectEqual(@as(i64, 2024), try h.scalarInt("RETURN datetime('2024-06-15').year AS year"));
+    try testing.expectEqual(@as(i64, 2024), try h.scalarInt("RETURN datetime('2024-06-15').year AS `year`"));
 
     // A malformed literal on a RESOLVED function is TimeParse, never 42883.
     try testing.expectError(error.TimeParse, h.exec("RETURN datetime('garbage') AS x"));
-    try testing.expectError(error.TimeParse, h.exec("RETURN duration('garbage') AS x"));
-    // Non-string / wrong-arity are data exceptions on the resolved name too.
+    // SONNY-6489: a duration string's own data exception (22G0H).
+    try testing.expectError(error.DurationParse, h.exec("RETURN duration('garbage') AS x"));
+    // A non-string is a data exception on the resolved name too; a wrong
+    // arity is 42000 (SONNY-6555 item 5: the operand count is the program
+    // text's; it was 22023).
     try testing.expectError(error.TypeMismatch, h.exec("RETURN datetime(123) AS x"));
-    try testing.expectError(error.InvalidArgs, h.exec("RETURN datetime('a', 'b') AS x"));
+    try testing.expectError(error.WrongArgumentCount, h.exec("RETURN datetime('a', 'b') AS x"));
 }
 
 test "FN-DISPATCH-PARITY: valueType() names the value's type without type()'s edge special-case" {

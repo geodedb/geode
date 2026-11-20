@@ -22,6 +22,7 @@
 // CANARY: REQ=REQ-SONNY-2798-OFFLINE-VERIFY-FIRST; FEATURE="OfflineAuthStoreSafety"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny2798_offline_verify.zig; OWNER=security; UPDATED=2026-09-26
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
@@ -32,7 +33,7 @@ const graph_store = geode.graph_store;
 const AuthGraphManager = auth_graph_manager.AuthGraphManager;
 const linux = std.os.linux;
 
-const binary_path = "./zig-out/bin/geode";
+const binary_path = geode_test_bin.geode_exe;
 const hmac_hex = "5a" ** 32;
 const strong_password = "Correct Horse Battery Staple Seven";
 
@@ -172,24 +173,25 @@ fn argvOf(aa: std.mem.Allocator, args: []const []const u8) ![]const []const u8 {
     return aa.dupe([]const u8, args);
 }
 
-/// The offline commands that change the store, as run against `dir`. The
-/// user commands pass --force past the live-server probe: this test process
-/// keeps files of the store it built open, and the probe would refuse for
-/// that reason first.
+/// The offline commands that change the store, as run against `dir`.
+/// (SONNY-6619: they passed --force past the live-server probe because this
+/// test process kept a descriptor of the store it built open; the store now
+/// releases it.)
 fn commands(aa: std.mem.Allocator, dir: []const u8) ![]const []const []const u8 {
     var list: std.ArrayList([]const []const u8) = .empty;
-    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "create", "bob", "bob@example.com", "--password", strong_password, "--force", "--data-dir", dir }));
-    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "reset-password", "geode", "--new-password", strong_password, "--force", "--data-dir", dir }));
-    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "disable", "geode", "--force", "--data-dir", dir }));
-    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "assign-role", "geode", "reader", "--force", "--data-dir", dir }));
-    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "delete", "bob", "--force", "--data-dir", dir }));
+    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "create", "bob", "bob@example.com", "--password", strong_password, "--data-dir", dir }));
+    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "reset-password", "geode", "--new-password", strong_password, "--data-dir", dir }));
+    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "disable", "geode", "--data-dir", dir }));
+    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "assign-role", "geode", "reader", "--data-dir", dir }));
+    try list.append(aa, try argvOf(aa, &.{ binary_path, "user", "delete", "bob", "--data-dir", dir }));
     try list.append(aa, try argvOf(aa, &.{ binary_path, "role", "create", "auditor", "--data-dir", dir }));
     try list.append(aa, try argvOf(aa, &.{ binary_path, "role", "delete", "auditor", "--data-dir", dir }));
     try list.append(aa, try argvOf(aa, &.{ binary_path, "policy", "create", "orders-rls", "--table", "orders", "--data-dir", dir }));
     try list.append(aa, try argvOf(aa, &.{ binary_path, "policy", "delete", "orders-rls", "--data-dir", dir }));
-    try list.append(aa, try argvOf(aa, &.{ binary_path, "grant", "read", "--to", "geode", "--data-dir", dir }));
-    try list.append(aa, try argvOf(aa, &.{ binary_path, "revoke", "read", "--from", "geode", "--data-dir", dir }));
-    try list.append(aa, try argvOf(aa, &.{ binary_path, "apikey", "create", "--user", "geode", "--data-dir", dir }));
+    try list.append(aa, try argvOf(aa, &.{ binary_path, "grant", "read", "--to", "geode", "--graph", "g2798", "--data-dir", dir }));
+    try list.append(aa, try argvOf(aa, &.{ binary_path, "revoke", "read", "--from", "geode", "--graph", "g2798", "--data-dir", dir }));
+    // SONNY-6554: `apikey create` is refused as not supported (no server
+    // accepts API keys) before it opens any store, so it signs nothing.
     try list.append(aa, try argvOf(aa, &.{ binary_path, "auth", "init", "--data-dir", dir }));
     return list.items;
 }
@@ -251,10 +253,10 @@ test "SONNY-2798: on an intact store offline changes go through and are sealed, 
     const dir = try makeStore(aa, "intact", null);
     defer std.Io.Dir.cwd().deleteTree(io_fs, dir) catch {};
     const sequence = [_][]const []const u8{
-        try argvOf(aa, &.{ binary_path, "user", "create", "carol", "carol@example.com", "--password", strong_password, "--force", "--data-dir", dir }),
+        try argvOf(aa, &.{ binary_path, "user", "create", "carol", "carol@example.com", "--password", strong_password, "--data-dir", dir }),
         try argvOf(aa, &.{ binary_path, "role", "create", "auditor", "--data-dir", dir }),
         try argvOf(aa, &.{ binary_path, "policy", "create", "orders-rls", "--table", "orders", "--data-dir", dir }),
-        try argvOf(aa, &.{ binary_path, "grant", "read", "--to", "carol", "--data-dir", dir }),
+        try argvOf(aa, &.{ binary_path, "grant", "read", "--to", "carol", "--graph", "g2798", "--data-dir", dir }),
     };
     for (sequence) |argv| {
         const run = try runGeode(aa, io, argv);

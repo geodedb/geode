@@ -4,6 +4,7 @@ const undo_log = logging.scoped("txn_undo_log");
 const graph_store = @import("graph_store.zig");
 const property_codec = @import("property_value_codec.zig");
 const statement_undo = @import("statement_undo.zig");
+const txn_durable_undo = @import("txn_durable_undo.zig");
 // CANARY: REQ=REQ-TXN-UNDO-SERVER-014; FEATURE="TransactionUndoLog"; ASPECT=GraphCommonImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const graph_common = @import("types/graph_common.zig");
 
@@ -258,10 +259,17 @@ pub const UndoLog = struct {
 
     pub fn queueAdvancedIndexRebuild(self: *UndoLog, index_name: []const u8) !void {
         if (!self.active) return;
-        const name_copy = try self.allocator.dupe(u8, index_name);
         self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        try self.pending_advanced_index_rebuilds.put(self.allocator, name_copy, {});
+        // SONNY-3381: an index queued already keeps its key; the copy made
+        // for a second write to it was dropped by `put` unfreed (a leak per
+        // repeated write to an indexed property inside a transaction).
+        const gop = try self.pending_advanced_index_rebuilds.getOrPut(self.allocator, index_name);
+        if (gop.found_existing) return;
+        gop.key_ptr.* = self.allocator.dupe(u8, index_name) catch |err| {
+            self.pending_advanced_index_rebuilds.removeByPtr(gop.key_ptr);
+            return err;
+        };
     }
 
     pub fn flushPendingRebuilds(self: *UndoLog, store: *graph_store.GraphStore) void {
@@ -372,7 +380,14 @@ pub const UndoLog = struct {
         // rebuilds that session's COMMIT was to run.
     }
 
-    pub fn commit(self: *UndoLog, store: ?*graph_store.GraphStore) void {
+    /// SONNY-2979: the caller has committed the transaction's engine
+    /// transactions; the durable undo log's COMMITTED record is written
+    /// first, and is the commit point. If it cannot be written the
+    /// transaction is left as it was (open, its entries kept) and
+    /// `error.TxnCommitRecordFailed` returned: the caller rolls it back and
+    /// fails the COMMIT.
+    pub fn commit(self: *UndoLog, store: ?*graph_store.GraphStore) error{TxnCommitRecordFailed}!void {
+        try markDurableCommit();
         if (store) |s| {
             self.flushPendingRebuilds(s);
         } else {
@@ -392,7 +407,8 @@ pub const UndoLog = struct {
     /// WITHOUT flushing pending index rebuilds. Caller is responsible for calling
     /// flushPendingRebuilds separately -- typically after releasing the write lock
     /// to avoid blocking other connections during the O(N) index population scan.
-    pub fn commitDeferRebuilds(self: *UndoLog) void {
+    pub fn commitDeferRebuilds(self: *UndoLog) error{TxnCommitRecordFailed}!void {
+        try markDurableCommit(); // SONNY-2979: as in `commit`
         self.discardTxn(threadTxn());
         self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -480,9 +496,12 @@ pub const UndoLog = struct {
         // inside that statement's scope, and the fence made it a no-op).
         statement_undo.suspendCapture();
         defer statement_undo.resumeCapture();
+        // SONNY-3381: the indexes kept beside the store, after the undo.
+        var repair = IndexRepair.init(self.allocator);
+        defer repair.finish(store);
         var complete = true;
         for (entries) |entry| {
-            (if (statement_undo.takeTestUndoFailure()) error.InjectedUndoFailure else self.undoEntry(store, entry)) catch |err| {
+            (if (statement_undo.takeTestUndoFailure()) error.InjectedUndoFailure else self.undoEntry(store, entry, &repair)) catch |err| {
                 complete = false;
                 _ = statement_undo.replay_failures_total.fetchAdd(1, .monotonic);
                 undo_log.err("transaction undo: an entry could not be undone; the transaction is partly applied", &.{logging.Attr.string("error", @errorName(err))});
@@ -748,6 +767,9 @@ pub const UndoLog = struct {
 
         // SONNY-3348 (round 19, m3): the transaction is over either way.
         defer t_txn_state = .{};
+        // SONNY-2979: then its undo is committed in the engine and the
+        // durable undo log records the rollback (before the line above).
+        defer txn_durable_undo.markThreadRolledBack();
         try self.undoAndFree(store, owned_entries.items);
     }
 
@@ -774,26 +796,30 @@ pub const UndoLog = struct {
         if (self.entries.items.len == 0) self.active = false;
         self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
+        // SONNY-3381: the indexes kept beside the store, after the undo.
+        const store = graph_store.getGlobalStore(self.allocator);
+        var repair = IndexRepair.init(self.allocator);
+        defer repair.finish(store);
         for (owned_entries.items) |entry| {
-            self.undoEntryGraphStore(entry);
+            self.undoEntryGraphStore(store, entry, &repair);
             self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             self.freeEntry(entry);
             self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         }
 
+        txn_durable_undo.markThreadRolledBack(); // SONNY-2979: as in `rollback`
         t_txn_state = .{};
     }
 
-    fn undoEntryGraphStore(self: *UndoLog, entry: UndoEntry) void {
-        const store = graph_store.getGlobalStore(self.allocator);
-        self.undoEntry(store, entry) catch |err| {
+    fn undoEntryGraphStore(self: *UndoLog, store: *graph_store.GraphStore, entry: UndoEntry, repair: *IndexRepair) void {
+        self.undoEntry(store, entry, repair) catch |err| {
             std.log.err("rollbackGraphStore failed: {}", .{err});
         };
     }
 
-    fn undoEntry(self: *UndoLog, store: *graph_store.GraphStore, entry: UndoEntry) !void {
+    fn undoEntry(self: *UndoLog, store: *graph_store.GraphStore, entry: UndoEntry, repair: ?*IndexRepair) !void {
         _ = self;
-        try undoEntryLogged(store, entry);
+        try undoEntryLogged(store, entry, repair);
     }
 
     // CANARY: REQ=REQ-SONNY-3059-UNDO-ALL-CHANGES; FEATURE="TransactionUndoLog"; ASPECT=AdoptStatementRecord; STATUS=TESTED; TEST=tests/test_sonny3348_statement_undo.zig; OWNER=engine; UPDATED=2026-09-29
@@ -823,6 +849,15 @@ pub const UndoLog = struct {
         copies.clearRetainingCapacity();
     }
 };
+
+/// SONNY-2979: write the durable undo log's COMMITTED record of the calling
+/// thread's transaction (none when it logged no entry).
+fn markDurableCommit() error{TxnCommitRecordFailed}!void {
+    txn_durable_undo.markThreadCommitted() catch |err| {
+        undo_log.err("could not write the COMMITTED record of a transaction to the durable undo log; the COMMIT fails and the transaction is rolled back", &.{logging.Attr.string("error", @errorName(err))});
+        return error.TxnCommitRecordFailed;
+    };
+}
 
 /// SONNY-2799: is a transaction open on the calling thread? (SONNY-3348:
 /// a statement's undo record joins it when the statement succeeds.)
@@ -981,16 +1016,27 @@ pub fn cloneEntry(allocator: std.mem.Allocator, entry: UndoEntry) !UndoEntry {
 /// skipped, and so is a delete whose entity is still there (the delete
 /// never happened). The caller suspends the statement record and the write
 /// fence (`statement_undo.suspendCapture`).
-pub fn undoEntryLogged(store: *graph_store.GraphStore, entry: UndoEntry) !void {
+///
+/// SONNY-6594 (1): an entity whose body cannot be READ is neither: the undo
+/// fails with the read's error (the caller reports the rollback incomplete,
+/// 40003). It was taken for an absent entity, the change was skipped and
+/// ROLLBACK reported success with the transaction's write still in place.
+///
+/// SONNY-3381: `repair` (when given) is told which indexed (graph, label,
+/// property) each undone node change touches, so the indexes the executor
+/// keeps beside the store can be rebuilt once the undo is done
+/// (`IndexRepair.finish`).
+pub fn undoEntryLogged(store: *graph_store.GraphStore, entry: UndoEntry, repair: ?*IndexRepair) !void {
+    if (repair) |r| r.noteBefore(store, entry);
     switch (entry) {
         .CreateNode => |e| {
-            if (store.nodeExistsForUndo(e.node_id)) store.deleteNode(e.node_id);
+            if (try store.nodeExistsForUndo(e.node_id)) try store.deleteNodeChecked(e.node_id);
         },
         .CreateEdge => |e| {
-            if (store.edgeExistsForUndo(e.edge_id)) store.deleteEdge(e.edge_id);
+            if (try store.edgeExistsForUndo(e.edge_id)) try store.deleteEdgeChecked(e.edge_id);
         },
         .SetNodeProperty => |e| {
-            if (!store.nodeExistsForUndo(e.node_id)) return;
+            if (!(try store.nodeExistsForUndo(e.node_id))) return;
             if (e.had_old_value) {
                 const pv = try e.old_value.toPropertyValue(store.allocator);
                 defer if (e.old_value.value_type == 5) property_codec.freePropertyValue(store.allocator, pv);
@@ -1000,13 +1046,13 @@ pub fn undoEntryLogged(store: *graph_store.GraphStore, entry: UndoEntry) !void {
             }
         },
         .RemoveNodeProperty => |e| {
-            if (!store.nodeExistsForUndo(e.node_id)) return;
+            if (!(try store.nodeExistsForUndo(e.node_id))) return;
             const pv = try e.old_value.toPropertyValue(store.allocator);
             defer if (e.old_value.value_type == 5) property_codec.freePropertyValue(store.allocator, pv);
             try store.setNodeProperty(e.node_id, e.old_value.key, pv);
         },
         .SetEdgeProperty => |e| {
-            if (!store.edgeExistsForUndo(e.edge_id)) return;
+            if (!(try store.edgeExistsForUndo(e.edge_id))) return;
             if (e.had_old_value) {
                 const pv = try e.old_value.toPropertyValue(store.allocator);
                 defer if (e.old_value.value_type == 5) property_codec.freePropertyValue(store.allocator, pv);
@@ -1016,13 +1062,13 @@ pub fn undoEntryLogged(store: *graph_store.GraphStore, entry: UndoEntry) !void {
             }
         },
         .RemoveEdgeProperty => |e| {
-            if (!store.edgeExistsForUndo(e.edge_id)) return;
+            if (!(try store.edgeExistsForUndo(e.edge_id))) return;
             const pv = try e.old_value.toPropertyValue(store.allocator);
             defer if (e.old_value.value_type == 5) property_codec.freePropertyValue(store.allocator, pv);
             try store.setEdgeProperty(e.edge_id, e.old_value.key, pv);
         },
         .DeleteNode => |e| {
-            if (store.nodeExistsForUndo(e.node_id)) return;
+            if (try store.nodeExistsForUndo(e.node_id)) return;
             const tenant = if (e.tenant_id.len > 0) e.tenant_id else graph_store.DEFAULT_TENANT_ID;
             try store.createNodeWithReservedIdGraphAndTenant(e.node_id, e.labels, e.graph_name, tenant);
             for (e.properties) |prop| {
@@ -1032,7 +1078,7 @@ pub fn undoEntryLogged(store: *graph_store.GraphStore, entry: UndoEntry) !void {
             }
         },
         .DeleteEdge => |e| {
-            if (store.edgeExistsForUndo(e.edge_id)) return;
+            if (try store.edgeExistsForUndo(e.edge_id)) return;
             const tenant = if (e.tenant_id.len > 0) e.tenant_id else graph_store.DEFAULT_TENANT_ID;
             try store.restoreDeletedEdge(e.edge_id, e.from_id, e.to_id, e.label, e.graph_name, tenant);
             for (e.properties) |prop| {
@@ -1042,22 +1088,170 @@ pub fn undoEntryLogged(store: *graph_store.GraphStore, entry: UndoEntry) !void {
             }
         },
         .AddNodeLabel => |e| {
-            if (!store.nodeExistsForUndo(e.node_id)) return;
+            if (!(try store.nodeExistsForUndo(e.node_id))) return;
             try store.removeNodeLabel(e.node_id, e.label);
         },
         .RemoveNodeLabel => |e| {
-            if (!store.nodeExistsForUndo(e.node_id)) return;
+            if (!(try store.nodeExistsForUndo(e.node_id))) return;
             try store.addNodeLabel(e.node_id, e.label);
         },
     }
 }
 
+// CANARY: REQ=REQ-SONNY-3381-UNDO-INDEX-REPAIR; FEATURE="TransactionUndoLog"; ASPECT=IndexRepairCollector; STATUS=TESTED; TEST=tests/test_sonny3381_undo_index_entries.zig; OWNER=engine; UPDATED=2026-11-12
+/// SONNY-3381: the indexes an undo leaves stale, and their repair.
+///
+/// The executor keeps the full-text indexes and the advanced (vector,
+/// spatial, ...) indexes current beside the graph store's write methods
+/// (`property_mutation.setNodePropertyFromValue`, the CREATE and DELETE
+/// paths), but an undo replays through the store's write methods only. The
+/// full-text engine is append-only with permanent per-document tombstones
+/// and HNSW cannot remove an entry, so neither can take back the one change
+/// an undo reverts: after the undo an index held the undone value (a word an
+/// undone SET wrote, a vector an undone SET added) or lacked the restored one
+/// (a node whose DELETE was undone stays tombstoned) until it was rebuilt.
+///
+/// So every undo (a failed statement's replay, ROLLBACK, ROLLBACK TO
+/// SAVEPOINT) collects the (graph, label, property) of each node change it
+/// reverts, and when it is done (`finish`) hands them to the executor's hook
+/// (`execution/undo_index_repair.zig`), which rebuilds, from the store as the
+/// undo left it, every full-text and advanced index covering one of them
+/// (edge properties too: an advanced index can cover an edge type's). An
+/// undone CREATE is not collected: the node or edge is gone, and the searches
+/// drop a hit whose entity does not exist.
+pub const IndexRepair = struct {
+    allocator: std.mem.Allocator,
+    targets: std.ArrayListUnmanaged(Target) = .empty,
+    /// A change could not be collected (out of memory): repair every index.
+    everything: bool = false,
+
+    /// One indexed node change: `property` null for a change of the whole
+    /// node (a restored node, a label added or removed).
+    pub const Target = struct {
+        graph: []const u8,
+        label: []const u8,
+        property: ?[]const u8,
+    };
+
+    pub fn init(allocator: std.mem.Allocator) IndexRepair {
+        return .{ .allocator = allocator };
+    }
+
+    /// Collect what undoing `entry` changes, before it is undone.
+    pub fn noteBefore(self: *IndexRepair, store: *graph_store.GraphStore, entry: UndoEntry) void {
+        switch (entry) {
+            .SetNodeProperty => |e| self.noteNode(store, e.node_id, e.key, null),
+            .RemoveNodeProperty => |e| self.noteNode(store, e.node_id, e.old_value.key, null),
+            .AddNodeLabel => |e| self.noteNode(store, e.node_id, null, e.label),
+            .RemoveNodeLabel => |e| self.noteNode(store, e.node_id, null, e.label),
+            .DeleteNode => |e| {
+                const graph = if (e.graph_name.len > 0) e.graph_name else graph_store.DEFAULT_GRAPH_NAME;
+                for (e.labels) |label| self.note(graph, label, null);
+            },
+            // An advanced index can cover an edge type's property too.
+            .SetEdgeProperty => |e| self.noteEdge(store, e.edge_id, e.key),
+            .RemoveEdgeProperty => |e| self.noteEdge(store, e.edge_id, e.old_value.key),
+            .DeleteEdge => |e| self.note(if (e.graph_name.len > 0) e.graph_name else graph_store.DEFAULT_GRAPH_NAME, e.label, null),
+            .CreateNode, .CreateEdge => {},
+        }
+    }
+
+    /// Edge `edge_id`'s graph and type, with `property`.
+    /// SONNY-6594 (1): an edge whose body cannot be read is not skipped (its
+    /// index would stay stale): every index is repaired, as when a target
+    /// cannot be collected.
+    fn noteEdge(self: *IndexRepair, store: *graph_store.GraphStore, edge_id: u64, property: []const u8) void {
+        if (!(store.edgeExistsForUndo(edge_id) catch return self.noteUnreadable())) return;
+        const edge = (store.getEdgeHydratedChecked(edge_id) catch return self.noteUnreadable()) orelse return;
+        self.note(edge.graph_name, edge.label, property);
+    }
+
+    /// Node `node_id`'s graph and labels (or only `label`, for a label
+    /// change), with `property`.
+    fn noteNode(self: *IndexRepair, store: *graph_store.GraphStore, node_id: u64, property: ?[]const u8, label: ?[]const u8) void {
+        if (!(store.nodeExistsForUndo(node_id) catch return self.noteUnreadable())) return;
+        const node = (store.getNodePtrHydratedChecked(node_id) catch return self.noteUnreadable()) orelse return;
+        if (label) |l| return self.note(node.graph_name, l, property);
+        for (node.labels) |l| self.note(node.graph_name, l, property);
+    }
+
+    /// SONNY-6594 (1): the entity's body could not be read, so its indexes
+    /// are unknown: repair every index.
+    fn noteUnreadable(self: *IndexRepair) void {
+        self.everything = true;
+    }
+
+    fn note(self: *IndexRepair, graph: []const u8, label: []const u8, property: ?[]const u8) void {
+        if (self.everything) return;
+        for (self.targets.items) |t| {
+            if (!std.mem.eql(u8, t.graph, graph) or !std.mem.eql(u8, t.label, label)) continue;
+            // A whole-node target covers every property of the label.
+            if (t.property == null) return;
+            if (property) |p| if (std.mem.eql(u8, t.property.?, p)) return;
+        }
+        self.append(graph, label, property) catch {
+            self.everything = true;
+        };
+    }
+
+    fn append(self: *IndexRepair, graph: []const u8, label: []const u8, property: ?[]const u8) !void {
+        const a = self.allocator;
+        const g = try a.dupe(u8, graph);
+        errdefer a.free(g);
+        const l = try a.dupe(u8, label);
+        errdefer a.free(l);
+        const p: ?[]const u8 = if (property) |x| try a.dupe(u8, x) else null;
+        errdefer if (p) |x| a.free(x);
+        try self.targets.append(a, .{ .graph = g, .label = l, .property = p });
+    }
+
+    /// The undo is done: repair the indexes it left stale, then free.
+    pub fn finish(self: *IndexRepair, store: *graph_store.GraphStore) void {
+        defer self.deinit();
+        if (self.targets.items.len == 0 and !self.everything) return;
+        const hook = index_repair_hook.load(.acquire) orelse {
+            // No executor in this process: nothing maintains these indexes
+            // beside the store either.
+            return;
+        };
+        hook(store, self.targets.items, self.everything);
+    }
+
+    fn deinit(self: *IndexRepair) void {
+        for (self.targets.items) |t| {
+            self.allocator.free(t.graph);
+            self.allocator.free(t.label);
+            if (t.property) |p| self.allocator.free(p);
+        }
+        self.targets.deinit(self.allocator);
+    }
+};
+
+/// SONNY-3381: rebuilds the indexes covering `targets` (every index when
+/// `everything`) from the store. Installed by the executor
+/// (`execution/undo_index_repair.zig`); never fails the undo.
+pub const IndexRepairHook = *const fn (store: *graph_store.GraphStore, targets: []const IndexRepair.Target, everything: bool) void;
+
+var index_repair_hook: std.atomic.Value(?IndexRepairHook) = .init(null);
+
+pub fn setIndexRepairHook(hook: ?IndexRepairHook) void {
+    index_repair_hook.store(hook, .release);
+}
+
 // Global undo log instance for CLI mode
 var global_undo_log: ?UndoLog = null;
 
+/// SONNY-6429: the process-global undo log outlives every request, so in the
+/// server it allocates from the process allocator, never from the caller's
+/// (often a per-request or per-statement arena, freed while the log still
+/// holds entries and allocates through it: the next transaction statement's
+/// `adoptStatementEntries` then called through a freed arena and the server
+/// died with a segfault). Test binaries keep the first caller's allocator,
+/// which their harnesses pick deliberately (the testing allocator for leak
+/// checks, or `page_allocator` for a log that outlives a test).
 pub fn getGlobalUndoLog(allocator: std.mem.Allocator) *UndoLog {
     if (global_undo_log == null) {
-        global_undo_log = UndoLog.init(allocator);
+        global_undo_log = UndoLog.init(if (@import("builtin").is_test) allocator else std.heap.smp_allocator);
     }
     return &global_undo_log.?;
 }
@@ -1072,6 +1266,19 @@ pub fn getGlobalUndoLog(allocator: std.mem.Allocator) *UndoLog {
 /// log — lazily created once and never reset — kept the prior test's entries).
 /// Idempotent (no-op if never initialized). The undo log is logically coupled to
 /// the store's lifetime.
+/// SONNY-3381: the advanced index `index_name` is about to be rebuilt from
+/// the store (`execution/undo_index_repair.zig`), so a rebuild a transaction
+/// queued for it (`UndoLog.queueAdvancedIndexRebuild`) is done by that one.
+/// Dropped BEFORE the rebuild reads the store: a write queued after this is
+/// queued again. ROLLBACK left its transaction's queued rebuilds behind for
+/// the next COMMIT of any session to run.
+pub fn dropPendingAdvancedIndexRebuild(index_name: []const u8) void {
+    const log = if (global_undo_log) |*l| l else return;
+    log.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer log.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (log.pending_advanced_index_rebuilds.fetchRemove(index_name)) |kv| log.allocator.free(kv.key);
+}
+
 pub fn deinitGlobalUndoLog() void {
     if (global_undo_log) |*log| {
         log.deinit();
@@ -1080,47 +1287,11 @@ pub fn deinitGlobalUndoLog() void {
     t_txn_state = .{};
 }
 
-/// File-based persistence for undo log (to survive across CLI invocations)
-fn getUndoLogFilePath(allocator: std.mem.Allocator) ![]const u8 {
-    var env_map = try std.process.getEnvMap(allocator);
-    defer env_map.deinit();
-
-    if (env_map.get("GEODE_DATA_DIR")) |data_dir| {
-        return try std.fmt.allocPrint(allocator, "{s}/geode_undo_log.bin", .{data_dir});
-    }
-    return try allocator.dupe(u8, "/tmp/geode_undo_log.bin");
-}
-
-/// Save undo log to disk for persistence across CLI invocations
-pub fn saveUndoLog(allocator: std.mem.Allocator, log: *UndoLog) !void {
-    if (!log.active or log.entries.items.len == 0) {
-        // No active transaction or no entries, clear the file
-        try clearUndoLogFile(allocator);
-        return;
-    }
-
-    const file_path = try getUndoLogFilePath(allocator);
-    defer allocator.free(file_path);
-
-    const io_fs = std.Io.Threaded.global_single_threaded.io();
-    const file = try std.Io.Dir.cwd().createFile(io_fs, file_path, .{});
-    defer file.close(io_fs);
-
-    var file_writer_buf: [4096]u8 = undefined;
-    var file_writer = file.writer(io_fs, &file_writer_buf);
-    const w = &file_writer.interface;
-
-    // Write number of entries
-    var count_buf: [8]u8 = undefined;
-    std.mem.writeInt(u64, &count_buf, log.entries.items.len, .little);
-    try w.writeAll(&count_buf);
-
-    // Write each entry (simplified binary format)
-    for (log.entries.items) |entry| {
-        try writeUndoEntry(w, entry);
-    }
-    try w.flush();
-}
+// SONNY-6325: the undo log's file persistence (saveUndoLog, loadUndoLog,
+// clearUndoLogFile) was removed: nothing called it, it no longer compiled
+// against Zig 0.16 (std.process.getEnvMap, an Io-less deleteFile), and
+// without GEODE_DATA_DIR it used the fixed /tmp/geode_undo_log.bin. The
+// entry encoders below remain (round-trip tested).
 
 fn writeU32(file: *std.Io.Writer, value: u32) !void {
     var buf: [4]u8 = undefined;
@@ -1241,58 +1412,6 @@ fn writeUndoEntry(file: *std.Io.Writer, entry: UndoEntry) !void {
             try writeString(file, e.label);
         },
     }
-}
-
-/// Load undo log from disk
-pub fn loadUndoLog(allocator: std.mem.Allocator) !?*UndoLog {
-    const file_path = try getUndoLogFilePath(allocator);
-    defer allocator.free(file_path);
-
-    const io_fs = std.Io.Threaded.global_single_threaded.io();
-    const file = std.Io.Dir.cwd().openFile(io_fs, file_path, .{}) catch |err| {
-        if (err == error.FileNotFound) return null;
-        return err;
-    };
-    defer file.close(io_fs);
-
-    var file_reader_buf: [4096]u8 = undefined;
-    var file_reader_obj = file.reader(io_fs, &file_reader_buf);
-    const r = &file_reader_obj.interface;
-
-    var log = getGlobalUndoLog(allocator);
-    log.clear();
-    // Legacy CLI persistence: the process that saved the log owned the
-    // transaction.  On reload, stamp the current thread with a fresh txn
-    // id so rollback()/commit() can find the entries.
-    t_txn_state.txn_id = allocTxnId();
-    t_txn_state.active = true;
-    log.active = true;
-
-    // Read number of entries
-    const count = try r.takeInt(u64, .little);
-
-    // Read entries
-    var i: u64 = 0;
-    while (i < count) : (i += 1) {
-        const entry = try readUndoEntry(allocator, r);
-        if (entry) |e| {
-            log.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            log.entries.append(allocator, e) catch |append_err| {
-                log.freeEntry(e);
-                log.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-                return append_err;
-            };
-            log.entry_txns.append(allocator, t_txn_state.txn_id) catch |append_err| {
-                _ = log.entries.pop();
-                log.freeEntry(e);
-                log.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-                return append_err;
-            };
-            log.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        }
-    }
-
-    return log;
 }
 
 fn readU32(file: *std.Io.Reader) !u32 {
@@ -1468,15 +1587,6 @@ fn readUndoEntry(allocator: std.mem.Allocator, file: *std.Io.Reader) !?UndoEntry
     }
 }
 
-/// Clear the undo log file
-pub fn clearUndoLogFile(allocator: std.mem.Allocator) !void {
-    const file_path = try getUndoLogFilePath(allocator);
-    defer allocator.free(file_path);
-    std.Io.Dir.cwd().deleteFile(file_path) catch |err| {
-        if (err != error.FileNotFound) return err;
-    };
-}
-
 test "basic undo log operations" {
     const allocator = std.testing.allocator;
     var log = UndoLog.init(allocator);
@@ -1498,7 +1608,7 @@ test "basic undo log operations" {
     try std.testing.expectEqual(@as(usize, 3), log.entries.items.len);
 
     // Commit clears the log
-    log.commit(null);
+    try log.commit(null);
     try std.testing.expectEqual(@as(usize, 0), log.entries.items.len);
     try std.testing.expect(!log.active);
 }
@@ -1650,7 +1760,7 @@ test "savepoint create and rollback to savepoint" {
     try std.testing.expectEqual(@as(usize, 5), undo.savepoints.items[1].own_count);
 
     // Commit clears savepoints
-    undo.commit(null);
+    try undo.commit(null);
     try std.testing.expectEqual(@as(usize, 0), undo.entries.items.len);
     try std.testing.expectEqual(@as(usize, 0), undo.savepoints.items.len);
     try std.testing.expect(!undo.active);
@@ -1671,7 +1781,7 @@ test "savepoint not found error" {
     // easily construct in a unit test without initializing the full engine.
     // Instead we test that the error is returned for a missing name.
     try std.testing.expectError(error.SavepointNotFound, undo.rollbackToSavepoint("nonexistent", dummy_store_ptr));
-    undo.commit(null);
+    try undo.commit(null);
 }
 
 const dummy_store_ptr = @as(*graph_store.GraphStore, @ptrFromInt(std.mem.alignForward(usize, 0xdeadbeef, @alignOf(graph_store.GraphStore))));
@@ -1688,7 +1798,7 @@ test "begin clears savepoints from previous transaction" {
     // Begin a new transaction — should clear previous savepoints
     undo.begin();
     try std.testing.expectEqual(@as(usize, 0), undo.savepoints.items.len);
-    undo.commit(null);
+    try undo.commit(null);
 }
 
 test "SerializedProperty round-trips decimal and ext values" {

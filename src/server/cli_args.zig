@@ -27,6 +27,8 @@ fn inlineLongOptionValue(arg: []const u8, option: []const u8) ?[]const u8 {
 // External configuration library - XDG compliant, multi-format support (YAML, TOML, JSON)
 // Provides config file support with precedence: flags > env > project > user > system > defaults
 const config_lib = @import("config");
+// SONNY-6487: the shared host:port grammar (src/client/host_port.zig).
+const host_port = @import("geode").host_port;
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-007; FEATURE="ServerRefactoring"; ASPECT=CLI_ARGS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.2 - CLI Argument Parsing Module (Third Increment)
@@ -48,9 +50,6 @@ pub const ServerConfig = struct {
 
     // Query behavior
     order_keys_mode_expr: bool = false, // ident-only by default; env/flag can enable
-
-    // Authentication (enabled by default for security; use --no-auth to disable)
-    enable_auth: bool = true,
 
     // CANARY: REQ=REQ-GPS-PDP-007; FEATURE="GPS Decision Engine"; ASPECT=InsecureAllowAll; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
     // --insecure-allow-all: when true, gps.decide() returns allow for every
@@ -124,7 +123,7 @@ pub const ServerConfig = struct {
 
     // Whether cert_path/key_path were EXPLICITLY supplied by the operator
     // (via --cert/--key or a config file) as opposed to auto-derived from
-    // --data-dir / GEODE_CERT_DIR / the /tmp fallback. An explicitly-provided
+    // --data-dir / GEODE_CERT_DIR / the resolved data dir. An explicitly-provided
     // cert MUST be loaded as-is and never regenerated or replaced by a
     // throwaway self-signed cert. See
     // docs/bugs/2026-06-04-cluster-cert-provided-cert-discarded-containerized.md.
@@ -285,7 +284,9 @@ pub fn printHelp() void {
     std.debug.print("Options:\n", .{});
     std.debug.print("  -c, --config <path>          Path to config file (YAML, TOML, or JSON)\n", .{});
     std.debug.print("  --listen <addr:port>         Listen on QUIC/TLS (e.g., 0.0.0.0:3141). Also GEODE_PORT=<port> (binds 0.0.0.0:<port>)\n", .{});
-    std.debug.print("  --listen-grpc <addr:port>    Listen on gRPC (e.g., 0.0.0.0:3142)\n", .{});
+    std.debug.print("  --listen-grpc <addr:port>    Listen on gRPC (e.g., 0.0.0.0:50051); IPv4 only; a port alone binds the --listen address (0.0.0.0 without --listen; refused when --listen is not IPv4)\n", .{});
+    std.debug.print("  --lsp-port=<port>            Embedded LSP TCP listener port (default 3142; 0 disables it; also GEODE_LSP_PORT)\n", .{});
+    std.debug.print("  --lsp-bind-all               Bind the embedded LSP listener on 0.0.0.0 instead of 127.0.0.1\n", .{});
     std.debug.print("  --cert <path>                Path to TLS certificate (default: auto-generate)\n", .{});
     std.debug.print("  --key <path>                 Path to TLS private key (default: auto-generate)\n", .{});
     std.debug.print("  --data_dir <path>            Data directory for storage and generated certs\n", .{});
@@ -297,10 +298,9 @@ pub fn printHelp() void {
     std.debug.print("  --grpc-session-idle-timeout <ms>    Close a gRPC session idle this long (default: 1800000; 0 = never)\n", .{});
     std.debug.print("  --grpc-max-sessions-per-principal <n>  Most gRPC sessions one user holds; past it the least recently used idle one is closed (default: 1024; 0 = no cap)\n", .{});
     std.debug.print("  --max-connections <n>        Cap concurrent QUIC connections (default: 10000)\n", .{});
-    std.debug.print("  --persist-interval <ms>      Background persistence interval in milliseconds (default: 100)\n", .{});
+    std.debug.print("  --persist-interval <ms>      Persistence tick: WAL sync + light checkpoint every <ms> (default: 30000)\n", .{});
     std.debug.print("  --cluster-port <port>        Raft cluster listen port (also requires GEODE_CLUSTER_TOKEN to activate)\n", .{});
     std.debug.print("  --peers <h:p,h:p,...>        Comma-separated list of cluster peers (cluster ports, not client ports)\n", .{});
-    std.debug.print("  --no-auth                    Disable authentication (NOT recommended for production)\n", .{});
     std.debug.print("  --insecure-allow-all         Bypass ALL authorization checks (NOT FOR PRODUCTION)\n", .{});
     std.debug.print("  --strict-tenancy             Reject tenant-scoped ops with no tenant scope (also GEODE_STRICT_TENANCY=1)\n", .{});
     std.debug.print("  --require-capability-profile <path>  Refuse startup unless the required capability profile is satisfied (also GEODE_REQUIRE_CAPABILITY_PROFILE)\n", .{});
@@ -312,7 +312,7 @@ pub fn printHelp() void {
     std.debug.print("  1. .geode/config.{{yaml|toml|json}}    (project config)\n", .{});
     std.debug.print("  2. ~/.config/geode/config.*          (user config)\n", .{});
     std.debug.print("\nIf no listen option is specified, defaults to 0.0.0.0:3141 (QUIC/TLS).\n", .{});
-    std.debug.print("Auto-generated certificates are placed in data_dir or /tmp.\n", .{});
+    std.debug.print("Auto-generated certificates are placed in GEODE_CERT_DIR or the data directory.\n", .{});
 }
 
 /// Parse command line arguments into ServerConfig
@@ -333,6 +333,145 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
     defer allocator.free(args);
 
     return try parseArgsFromSlice(allocator, args);
+}
+
+/// Options of `geode serve` that take a value (the next argument).
+const serve_value_options = [_][]const u8{
+    "--listen",                          "--listen-quic",                 "--listen-grpc",
+    "--cert",                            "--key",                         "--data_dir",
+    "--data-dir",                        "--order-keys",                  "--log-level",
+    "--idle-timeout",                    "--idle-in-transaction-timeout", "--grpc-session-idle-timeout",
+    "--grpc-max-sessions-per-principal", "--max-connections",             "--persist-interval",
+    "--cluster-port",                    "--peers",                       "--auth-lockout-attempts",
+    "--auth-lockout-secs",               "--auth-lockout-ip-attempts",    "--tde-provider",
+    "--config",                          "-c",                            "--require-capability-profile",
+};
+
+/// Index of the first `geode serve` option in `args`: the one after the
+/// `serve` subcommand, or 1 when argv has none (the parser's unit tests).
+fn serveOptionsStart(args: []const []const u8) usize {
+    for (args[1..], 1..) |arg, i| {
+        if (std.mem.eql(u8, arg, "serve")) return i + 1;
+    }
+    return 1;
+}
+
+/// SONNY-6442: refuse an argument `geode serve` does not accept. It used to
+/// be skipped, so a misspelt option (`--data-dri /srv/geode`) or a removed
+/// one started a server on the defaults. A known option without its value
+/// is error.MissingArgument; anything else error.UnknownServeOption. The
+/// caller (`geode serve`) exits 2 on both, as `geode backup create` does.
+fn refuseServeArgument(arg: []const u8) error{ MissingArgument, UnknownServeOption } {
+    for (serve_value_options) |opt| {
+        if (std.mem.eql(u8, arg, opt)) {
+            std.debug.print("Error: geode serve: option '{s}' requires a value (see geode serve --help)\n", .{arg});
+            return error.MissingArgument;
+        }
+    }
+    if (std.mem.startsWith(u8, arg, "-")) {
+        std.debug.print("Error: geode serve: unknown option '{s}' (see geode serve --help)\n", .{arg});
+    } else {
+        std.debug.print("Error: geode serve: unexpected argument '{s}' (see geode serve --help)\n", .{arg});
+    }
+    return error.UnknownServeOption;
+}
+
+// CANARY: REQ=REQ-SONNY-1336-GRPC-BIND; FEATURE="GrpcListenAddress"; ASPECT=ResolveBind; STATUS=TESTED; TEST=tests/test_sonny1336_grpc_bind_address.zig; OWNER=transport; UPDATED=2026-11-13
+/// SONNY-1336: the address and port the gRPC listener binds.
+pub const GrpcBind = struct {
+    /// An IPv4 literal (grpc-zig's `GrpcServer.initWithBind` parses IPv4 only).
+    address: []const u8,
+    port: u16,
+};
+
+pub const GrpcListenError = error{
+    /// The port is missing, not a number, or out of range.
+    InvalidGrpcListenPort,
+    /// Not an IPv4 address (IPv6 or a host name): grpc-zig cannot bind it.
+    GrpcListenAddressNotIpv4,
+    /// A port alone binds the --listen address, and that is not IPv4 (an
+    /// IPv6 address or a host name) (SONNY-6494).
+    GrpcPortOnlyListenNotIpv4,
+};
+
+/// The IPv4 address a listen host names, or null when it names none.
+/// "localhost" is 127.0.0.1, as for the QUIC listener.
+fn ipv4ListenHost(host: []const u8) ?[]const u8 {
+    if (std.ascii.eqlIgnoreCase(host, "localhost")) return "127.0.0.1";
+    _ = std.Io.net.Ip4Address.parse(host, 0) catch return null;
+    return host;
+}
+
+/// The QUIC listener's default port (src/transport/quic.zig DEFAULT_PORT).
+const default_quic_port: u16 = 3141;
+
+pub const QuicListen = struct {
+    /// What the QUIC transport binds: an IPv6 address keeps its brackets
+    /// (`[::1]`), because the transport formats `"{address}:{port}"`.
+    address: []const u8,
+    port: u16,
+};
+
+pub const QuicListenError = error{
+    /// The port is not 1-5 digits or is above 65535.
+    InvalidQuicListenPort,
+    /// Unterminated or misplaced brackets, brackets around something that is
+    /// not an IPv6 address, or a bare (unbracketed) IPv6 address.
+    InvalidQuicListenAddress,
+};
+
+fn isPortOnly(text: []const u8) bool {
+    if (text.len == 0) return false;
+    for (text) |c| if (!std.ascii.isDigit(c)) return false;
+    return true;
+}
+
+/// SONNY-6487: resolve `--listen` (docs/DSN.md grammar): `<port>` and
+/// `:<port>` bind 0.0.0.0, a host without a port binds port 3141,
+/// `[ipv6]:<port>` binds IPv6. A port that is not a port is refused; it used
+/// to fall back to 3141, and a host without a port fell back to
+/// 0.0.0.0:3141 (every interface).
+pub fn resolveQuicListen(listen: []const u8) QuicListenError!QuicListen {
+    if (isPortOnly(listen)) {
+        return .{ .address = "0.0.0.0", .port = host_port.parsePort(listen) catch return error.InvalidQuicListenPort };
+    }
+    const hp = host_port.split(listen, default_quic_port) catch |err| return switch (err) {
+        error.InvalidPort => error.InvalidQuicListenPort,
+        error.InvalidAddress => error.InvalidQuicListenAddress,
+    };
+    return .{ .address = if (hp.host.len == 0) "0.0.0.0" else hp.host_literal, .port = hp.port };
+}
+
+/// The address a port-only --listen-grpc binds: the QUIC listener's, or
+/// 0.0.0.0 -- QUIC's own port-only default -- with no --listen. SONNY-6494:
+/// a --listen that is IPv6 or a host name is refused, not widened to
+/// 0.0.0.0 (every IPv4 interface while QUIC listens on one address).
+fn grpcPortOnlyHost(listen_quic: ?[]const u8) GrpcListenError![]const u8 {
+    const quic = resolveQuicListen(listen_quic orelse return "0.0.0.0") catch return error.GrpcPortOnlyListenNotIpv4;
+    return ipv4ListenHost(quic.address) orelse error.GrpcPortOnlyListenNotIpv4;
+}
+
+/// SONNY-1336: resolve `--listen-grpc` (`<ipv4>:<port>`, `localhost:<port>`
+/// or `<port>`) to the address the gRPC listener binds. A port alone binds
+/// the QUIC listener's address (`listen_quic`), or 0.0.0.0 -- the QUIC
+/// port-only default -- when there is no `listen_quic`; it is refused when
+/// that address is not IPv4 (SONNY-6494). An IPv6 address or a host name is
+/// refused rather than replaced: grpc-zig binds IPv4 only.
+/// SONNY-6487: parsed with the shared grammar, so `[::1]:50051` and
+/// `::1:50051` are refused as IPv6 (not as a host named `[::1]`), and a port
+/// is 1-5 digits (`+80` and `1_000` are refused).
+pub fn resolveGrpcBind(listen_grpc: []const u8, listen_quic: ?[]const u8) GrpcListenError!GrpcBind {
+    if (isPortOnly(listen_grpc)) {
+        const port = host_port.parsePort(listen_grpc) catch return error.InvalidGrpcListenPort;
+        return .{ .address = try grpcPortOnlyHost(listen_quic), .port = port };
+    }
+    const hp = host_port.split(listen_grpc, null) catch |err| return switch (err) {
+        error.InvalidPort => error.InvalidGrpcListenPort,
+        error.InvalidAddress => error.GrpcListenAddressNotIpv4,
+    };
+    if (hp.host.len == 0) return .{ .address = try grpcPortOnlyHost(listen_quic), .port = hp.port };
+    const address = ipv4ListenHost(hp.host) orelse return error.GrpcListenAddressNotIpv4;
+    return .{ .address = address, .port = hp.port };
 }
 
 /// Parse command line arguments from a caller-supplied slice.
@@ -360,7 +499,7 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
     var ai: usize = 1;
     while (ai < args.len) : (ai += 1) {
         if (std.mem.eql(u8, args[ai], "--config") or std.mem.eql(u8, args[ai], "-c")) {
-            if (ai + 1 >= args.len) return error.MissingArgument;
+            if (ai + 1 >= args.len) return refuseServeArgument(args[ai]);
             custom_config_path = args[ai + 1];
             break;
         }
@@ -396,16 +535,19 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
     if (posixGetenv("GEODE_REQUIRE_CAPABILITY_PROFILE")) |path|
         try setCapabilityProfile(allocator, &config, path);
 
-    // Parse all arguments (CLI flags override config file values)
+    // Parse all arguments (CLI flags override config file values).
+    // SONNY-6442: the options are the arguments after the `serve`
+    // subcommand (global CLI flags such as --audit may precede it); every
+    // one must be known.
     var saw_capability_profile = false;
-    ai = 1;
+    ai = serveOptionsStart(args);
     while (ai < args.len) : (ai += 1) {
         const arg = args[ai];
 
         if (std.mem.eql(u8, arg, "--require-capability-profile")) {
             if (saw_capability_profile) return error.DuplicateCapabilityProfileArgument;
             saw_capability_profile = true;
-            if (ai + 1 >= args.len) return error.MissingArgument;
+            if (ai + 1 >= args.len) return refuseServeArgument(arg);
             ai += 1;
             if (std.mem.startsWith(u8, args[ai], "-")) return error.InvalidCapabilityProfilePath;
             try setCapabilityProfile(allocator, &config, args[ai]);
@@ -482,7 +624,9 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
             config.max_connections = std.fmt.parseUnsigned(usize, args[ai + 1], 10) catch 0;
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--persist-interval") and ai + 1 < args.len) {
-            config.persist_interval_ms = std.fmt.parseUnsigned(u64, args[ai + 1], 10) catch 100;
+            // SONNY-6523 (6): an unparsable value keeps the default (30000);
+            // it fell back to 100, a checkpoint every 100 ms.
+            config.persist_interval_ms = std.fmt.parseUnsigned(u64, args[ai + 1], 10) catch config.persist_interval_ms;
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--cluster-port") and ai + 1 < args.len) {
             // CANARY: REQ=REQ-DIST-CLI-001; FEATURE="DistributedClusterCLI"; ASPECT=ClusterPort; STATUS=TESTED; TEST=tests/test_cli_args_cluster.zig; OWNER=core; UPDATED=2026-05-25
@@ -516,14 +660,16 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
             config._allocated_peers = true;
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--enable-auth")) {
-            config.enable_auth = true;
+            // Authentication is always on; accepted for old scripts.
         } else if (std.mem.eql(u8, arg, "--no-auth")) {
-            if (@import("builtin").mode != .Debug) {
-                std.debug.print("Error: --no-auth is only available in debug builds. Use proper credentials for production.\n", .{});
-                std.process.exit(1);
-            }
-            config.enable_auth = false;
-            std.log.warn("Authentication disabled via --no-auth. This is NOT recommended for production use.", .{});
+            // CANARY: REQ=REQ-SONNY-6329-NO-AUTH-REFUSED; FEATURE="ServerCli"; ASPECT=NoAuthFlagRefused; STATUS=TESTED; TEST=tests/test_sonny6329_user_cache_and_ddl_serialization.zig; OWNER=security; UPDATED=2026-11-12
+            // SONNY-6329: `geode serve --no-auth` set a field nothing read and
+            // logged "Authentication disabled" while authentication stayed
+            // on (in a Debug build; other builds exited). A flag that claims
+            // to disable authentication must not be accepted either way: it
+            // fails at startup in every build mode.
+            std.debug.print("Error: geode serve --no-auth is not supported: authentication cannot be disabled on a server. For local development, set GEODE_ADMIN_PASSWORD (or use the generated bootstrap credentials) and connect with them.\n", .{});
+            return error.NoAuthUnsupported;
         } else if (std.mem.eql(u8, arg, "--insecure-allow-all")) {
             // CANARY: REQ=REQ-GPS-PDP-007; FEATURE="GPS Decision Engine"; ASPECT=InsecureAllowAll; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
             config.insecure_allow_all = true;
@@ -550,6 +696,10 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
         } else if (std.mem.eql(u8, arg, "--config") or std.mem.eql(u8, arg, "-c")) {
             // Already processed in first pass, skip value
             if (ai + 1 < args.len) ai += 1;
+        } else if (inlineLongOptionValue(arg, "--lsp-port") != null or std.mem.eql(u8, arg, "--lsp-bind-all")) {
+            // Read by server/main.zig (parseLspBootstrapConfig).
+        } else {
+            return refuseServeArgument(arg);
         }
     }
 
@@ -577,6 +727,32 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
         config.listen_quic = "0.0.0.0:3141";
     }
 
+    // SONNY-6487: refuse a QUIC listen address that cannot be bound as given
+    // (it used to fall back to port 3141, or to 0.0.0.0:3141 for a host with
+    // no port).
+    if (config.listen_quic) |quic_addr| {
+        _ = resolveQuicListen(quic_addr) catch |err| {
+            switch (err) {
+                error.InvalidQuicListenPort => std.debug.print("Error: geode serve: --listen '{s}' has no valid port (expected <host>:<port>, [<ipv6>]:<port> or <port>, port 0-65535)\n", .{quic_addr}),
+                error.InvalidQuicListenAddress => std.debug.print("Error: geode serve: --listen '{s}' is not a valid address (an IPv6 address must be bracketed: [::1]:3141)\n", .{quic_addr}),
+            }
+            return err;
+        };
+    }
+
+    // SONNY-1336: refuse a gRPC listen address that cannot be bound as given,
+    // instead of listening on loopback (or on port 3142) without saying so.
+    if (config.listen_grpc) |grpc_addr| {
+        _ = resolveGrpcBind(grpc_addr, config.listen_quic) catch |err| {
+            switch (err) {
+                error.InvalidGrpcListenPort => std.debug.print("Error: geode serve: --listen-grpc '{s}' has no valid port (expected <ipv4>:<port> or <port>, port 0-65535)\n", .{grpc_addr}),
+                error.GrpcListenAddressNotIpv4 => std.debug.print("Error: geode serve: --listen-grpc '{s}' is not an IPv4 address; the gRPC listener binds IPv4 only (for example 0.0.0.0:50051 or 127.0.0.1:50051)\n", .{grpc_addr}),
+                error.GrpcPortOnlyListenNotIpv4 => std.debug.print("Error: geode serve: --listen-grpc '{s}' has no address, and a port alone binds the --listen address '{s}', which is not IPv4; the gRPC listener binds IPv4 only, so give --listen-grpc an IPv4 address (for example 127.0.0.1:50051)\n", .{ grpc_addr, config.listen_quic orelse "" }),
+            }
+            return err;
+        };
+    }
+
     // CANARY: REQ=REQ-MULTI-TENANT-STRICT-001; FEATURE="StrictTenancyMode"; ASPECT=EnvVar; STATUS=TESTED; TEST=tests/test_gap0840_strict_tenancy.zig; OWNER=security; UPDATED=2026-06-08
     // GAP-0840: GEODE_STRICT_TENANCY=1 (truthy: "1"/"true"/"on", case-insensitive)
     // enables strict tenancy as an alternative to --strict-tenancy. Either source
@@ -596,54 +772,36 @@ pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8
 }
 
 /// Resolve certificate paths based on configuration.
-/// Precedence: CLI flags > GEODE_CERT_DIR env > data_dir > /tmp fallback.
+/// Precedence: CLI flags > GEODE_CERT_DIR env > the resolved data directory.
 /// Returns the resolved cert_path/key_path plus whether each was EXPLICITLY
 /// supplied by the operator (vs auto-derived). Callers must honor an explicit
 /// cert by loading it as-is and failing loud if it cannot be read — never
 /// regenerate or fall back. See
 /// docs/bugs/2026-06-04-cluster-cert-provided-cert-discarded-containerized.md.
-pub fn resolveCertPaths(allocator: std.mem.Allocator, config: *ServerConfig) !struct {
+///
+/// SONNY-6325: `data_dir` is the RESOLVED data directory (--data-dir,
+/// GEODE_DATA_DIR or the per-user default), the one the server locks. With no
+/// --data-dir the auto pair used to land at the fixed /tmp/geode-server.{crt,key},
+/// and a gRPC-only server put it in ./certs of its working directory.
+pub fn resolveCertPaths(allocator: std.mem.Allocator, config: *ServerConfig, data_dir: []const u8) !struct {
     cert_path: []const u8,
     key_path: []const u8,
     cert_explicit: bool,
     key_explicit: bool,
 } {
-    // If QUIC is enabled and no custom certs specified, use defaults
-    if (config.listen_quic != null) {
-        if (config.cert_path == null or config.key_path == null) {
-            // Check GEODE_CERT_DIR env var first (set by systemd unit).
-            // This puts certs in /etc/geode/certs/ (0755) so non-root
-            // processes can read the public cert for CA verification.
-            const cert_dir: ?[]const u8 = posixGetenv("GEODE_CERT_DIR");
-
-            if (config.cert_path == null) {
-                if (cert_dir) |dir| {
-                    config.cert_path = try std.fmt.allocPrint(allocator, "{s}/server.crt", .{dir});
-                    config._allocated_cert_path = true;
-                } else if (config.data_dir) |dir| {
-                    config.cert_path = try std.fmt.allocPrint(allocator, "{s}/server.crt", .{dir});
-                    config._allocated_cert_path = true;
-                } else {
-                    config.cert_path = "/tmp/geode-server.crt";
-                }
-            }
-
-            if (config.key_path == null) {
-                if (cert_dir) |dir| {
-                    config.key_path = try std.fmt.allocPrint(allocator, "{s}/server.key", .{dir});
-                    config._allocated_key_path = true;
-                } else if (config.data_dir) |dir| {
-                    config.key_path = try std.fmt.allocPrint(allocator, "{s}/server.key", .{dir});
-                    config._allocated_key_path = true;
-                } else {
-                    config.key_path = "/tmp/geode-server.key";
-                }
-            }
+    if (config.cert_path == null or config.key_path == null) {
+        // GEODE_CERT_DIR first (set by the systemd unit: /etc/geode/certs,
+        // 0755, so non-root processes can read the public cert for CA
+        // verification); otherwise the data directory.
+        const cert_dir: []const u8 = posixGetenv("GEODE_CERT_DIR") orelse data_dir;
+        if (config.cert_path == null) {
+            config.cert_path = try std.fmt.allocPrint(allocator, "{s}/server.crt", .{cert_dir});
+            config._allocated_cert_path = true;
         }
-    } else {
-        // For non-QUIC, use dummy paths if not specified
-        config.cert_path = config.cert_path orelse "certs/server.crt";
-        config.key_path = config.key_path orelse "certs/server.key";
+        if (config.key_path == null) {
+            config.key_path = try std.fmt.allocPrint(allocator, "{s}/server.key", .{cert_dir});
+            config._allocated_key_path = true;
+        }
     }
 
     return .{

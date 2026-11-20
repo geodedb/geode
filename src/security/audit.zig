@@ -45,8 +45,6 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
 
 const cb = @import("crypto_backend");
 const rls = @import("rls");
-const audit_formatter = @import("audit_formatter.zig");
-const audit_sink = @import("audit_sink.zig");
 const Allocator = std.mem.Allocator;
 const pooled = @import("transport/thread_pool");
 const logging = @import("logging");
@@ -107,10 +105,16 @@ pub const SecurityGraphEvent = struct {
     action: []const u8,
     user_id: u64 = 0,
     username: []const u8 = "",
+    // SONNY-6624: the user the event acted on, when that is not `username`
+    // (the actor): recorded as the `target_user` detail.
+    target_username: []const u8 = "",
     details: ?[]const u8 = null,
     // GAP-0919: denials are audited too — a failure result raises severity to
     // warning and records result=failure instead of the success default.
     result_failure: bool = false,
+    // SONNY-6598: the operation could not be carried out (a server-side
+    // error, not a denial): severity err, result error_.
+    result_error: bool = false,
     // SONNY-2728: the graph the event is about, when it is a user graph (a
     // statement refused on it) rather than the security graph.
     resource_graph: ?[]const u8 = null,
@@ -118,6 +122,50 @@ pub const SecurityGraphEvent = struct {
 
 pub var global_audit_logger: ?*AuditLogger = null;
 pub var global_audit_logger_mutex: std.Io.Mutex = std.Io.Mutex.init;
+
+// CANARY: REQ=REQ-SONNY-6322-AUDIT-KEY-EPOCH; FEATURE="AuditDurability"; ASPECT=KeyEpochs; STATUS=TESTED; TEST=tests/test_sonny6322_audit_seed_and_hmac_startup.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-6322: audit signing-key epochs. The file-backed key pair of a log
+/// `F` is `F.key` (the Ed25519 seed, 0600, never in a backup) and the public
+/// key of each epoch: `F.pub` for epoch 0, `F.pub.<n>` for epoch n. A log
+/// that has a public key but no seed (a restored store: backups leave the
+/// seed out) starts epoch n+1 with a new pair; the old public key files are
+/// never changed, and a KEY_EPOCH record is appended to the log:
+/// event_type system_event, resource {type "audit_key_epoch", id
+/// "epoch-<n>:<new public key hex>"} (both inside event_hash), action
+/// "KEY_EPOCH", signed by the NEW key. The previous key is gone, so it cannot
+/// sign the hand-over: continuity across the boundary rests on the hash chain
+/// and on the operator who restored the store, not on the previous key.
+pub const key_epoch_resource_type = "audit_key_epoch";
+pub const key_epoch_action = "KEY_EPOCH";
+/// Upper bound on the epochs scanned for `F.pub.<n>`.
+pub const max_key_epochs: u32 = 4096;
+
+/// Create a key file with O_CREAT | O_EXCL | O_NOFOLLOW, mode 0600 (set again
+/// on the open file): nothing already at the path is followed or replaced.
+fn writeKeyFileExclusive(path: []const u8, bytes: []const u8) !void {
+    const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{
+        .ACCMODE = .WRONLY,
+        .CREAT = true,
+        .EXCL = true,
+        .NOFOLLOW = true,
+        .CLOEXEC = true,
+    }, 0o600) catch |err| switch (err) {
+        error.PathAlreadyExists => return error.AuditKeyFileExists,
+        else => return err,
+    };
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.File{ .handle = fd, .flags = .{ .nonblocking = false } };
+    defer file.close(io);
+    errdefer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    try file.setPermissions(io, std.Io.File.Permissions.fromMode(0o600));
+    try file.writeStreamingAll(io, bytes);
+    try file.sync(io);
+}
+
+fn keyFileExists(path: []const u8) bool {
+    _ = std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .follow_symlinks = false }) catch return false;
+    return true;
+}
 
 // GAP-0282: Per-thread tenant_id for audit event enrichment.
 // Set from the QUIC connection handler before query execution so that all
@@ -170,6 +218,9 @@ pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) vo
     if (event.username.len != 0) {
         detail_map.put("username", allocator.dupe(u8, event.username) catch return) catch return;
     }
+    if (event.target_username.len != 0) {
+        detail_map.put("target_user", allocator.dupe(u8, event.target_username) catch return) catch return;
+    }
     if (event.details) |details| {
         detail_map.put("details", allocator.dupe(u8, details) catch return) catch return;
     }
@@ -178,7 +229,7 @@ pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) vo
     var audit_event = AuditEvent{
         .timestamp = compat_milliTimestamp(),
         .event_type = event.event_type,
-        .severity = if (event.result_failure) .warning else .info,
+        .severity = if (event.result_error) .err else if (event.result_failure) .warning else .info,
         .tenant_id = getCurrentAuditTenantId(),
         .user_id = event.user_id,
         .session_id = "",
@@ -190,7 +241,7 @@ pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) vo
             .table = null,
         },
         .action = event.action,
-        .result = if (event.result_failure) .failure else .success,
+        .result = if (event.result_error) .error_ else if (event.result_failure) .failure else .success,
         .details = detail_map,
     };
     logger.?.appendAuditEvent(&audit_event) catch |err| {
@@ -205,8 +256,46 @@ pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) vo
     };
 }
 
+// CANARY: REQ=REQ-SONNY-6598-AUTH-ERROR-AUDIT; FEATURE="AuthOutcomeClassification"; ASPECT=LoginRefusalAudit; STATUS=TESTED; TEST=tests/test_sonny6598_kdf_error_hello.zig; OWNER=security; UPDATED=2026-11-15
+/// SONNY-6598: the audit record of a HELLO that did not log in (both
+/// transports), from `authenticate()`'s error. A rejected credential
+/// (`error.Unauthenticated`) is a failed login: authentication_failure,
+/// action LOGIN, result failure. Any other error is a check the server could
+/// not carry out (the password KDF out of memory, an unusable stored hash,
+/// the security store unavailable): system_event, action AUTH_ERROR, result
+/// error_, with the error name. The user name is the one the client sent
+/// (at most 256 bytes of it); the password is never recorded.
+pub fn logLoginRefusal(allocator: Allocator, username: []const u8, err: anyerror) void {
+    const name = username[0..@min(username.len, 256)];
+    if (err == error.Unauthenticated) {
+        logSecurityGraphEvent(allocator, .{
+            .event_type = .authentication_failure,
+            .action = "LOGIN",
+            .username = name,
+            .details = "credentials rejected",
+            .result_failure = true,
+        });
+        return;
+    }
+    var buf: [160]u8 = undefined;
+    const details = std.fmt.bufPrint(&buf, "auth-system error, not a failed login: {s}", .{@errorName(err)}) catch "auth-system error, not a failed login";
+    logSecurityGraphEvent(allocator, .{
+        .event_type = .system_event,
+        .action = "AUTH_ERROR",
+        .username = name,
+        .details = details,
+        .result_error = true,
+    });
+}
+
 pub const AuditLogger = struct {
     const DigestBuf = std.ArrayList([32]u8);
+    /// SONNY-6322: a KEY_EPOCH record to append once the chain tail is loaded.
+    const PendingEpoch = struct {
+        n: u32,
+        public_hex: [64]u8,
+        previous_public_hex: [64]u8,
+    };
     allocator: Allocator,
     file: ?std.Io.File,
     mutex: std.Io.Mutex,
@@ -225,6 +314,14 @@ pub const AuditLogger = struct {
     // Heap-allocated file path owned by this logger (set by `initForGraph`).
     // When non-null, freed in `deinit`. Avoids @constCast on Config.file_path.
     owned_path: ?[]u8 = null,
+
+    // SONNY-6322: the signing key's epoch (0 = `F.pub`, n = `F.pub.<n>`), the
+    // KEY_EPOCH record still to append once the chain tail is loaded, and
+    // whether the record being appended is that internal record (the only
+    // one allowed to use the reserved resource type).
+    key_epoch: u32 = 0,
+    pending_epoch: ?PendingEpoch = null,
+    appending_epoch_record: bool = false,
 
     // Config fields from original file (preserved/extended)
     retention_days: u32,
@@ -250,16 +347,18 @@ pub const AuditLogger = struct {
         return self.write_failure_count.load(.acquire);
     }
 
-    /// GAP-0920: serialize + positionally append one event's canonical JSON
-    /// line. Extracted so the write funnel can catch its failure in one place.
-    fn writeChain(f: std.Io.File, allocator: Allocator, ev: *AuditEvent) !void {
-        var aw: std.Io.Writer.Allocating = .init(allocator);
-        defer aw.deinit();
-        try AuditEvent.writeCanonicalJson(&aw.writer, "geode", ev);
-        try aw.writer.writeAll("\n");
+    /// SONNY-3147: the uncovered tail of a record line and its newline.
+    fn finishLine(w: *std.Io.Writer, ev: *const AuditEvent) !void {
+        try AuditEvent.writeHashSuffix(w, ev);
+        try w.writeAll("\n");
+    }
+
+    /// GAP-0920: positionally append one serialized record line. Extracted
+    /// so the write funnel can catch its failure in one place.
+    fn writeChain(f: std.Io.File, line: []const u8) !void {
         const io_aw = std.Io.Threaded.global_single_threaded.io();
         const st = try f.stat(io_aw);
-        try f.writePositionalAll(io_aw, aw.written(), st.size);
+        try f.writePositionalAll(io_aw, line, st.size);
     }
 
     pub const Config = struct {
@@ -313,6 +412,12 @@ pub const AuditLogger = struct {
 
             // 3. Init from Tail (Recover state)
             try logger.initFromTail();
+
+            // 4. SONNY-6322: a new key epoch is recorded in the chain.
+            if (logger.pending_epoch) |pe| {
+                try logger.appendKeyEpochLocked(pe);
+                logger.pending_epoch = null;
+            }
         }
 
         return logger;
@@ -364,6 +469,13 @@ pub const AuditLogger = struct {
     }
 
     pub fn deinit(self: *AuditLogger) void {
+        // SONNY-3147: a clean close signs the records written since the last
+        // DIGEST, so a cleanly closed log ends with a signed DIGEST.
+        if (self.config.enabled and self.file != null and self.digest_buf.items.len > 0) {
+            self.emitDigestLocked() catch |err| {
+                log.warn("Failed to emit the closing audit digest", &.{Attr.string("error", @errorName(err))});
+            };
+        }
         self.digest_buf.deinit(self.allocator);
         if (self.file) |f| {
             f.close(std.Io.Threaded.global_single_threaded.io());
@@ -375,40 +487,78 @@ pub const AuditLogger = struct {
     }
 
     fn loadKeys(self: *AuditLogger) !void {
-        const pub_hex = getEnvVarOwned(self.allocator, "GEODE_AUDIT_PUB") catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => null,
-            else => return err,
-        };
-        defer if (pub_hex) |p| self.allocator.free(p);
-
-        const sec_hex = getEnvVarOwned(self.allocator, "GEODE_AUDIT_SEC") catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => null,
-            else => return err,
-        };
-        defer if (sec_hex) |s| self.allocator.free(s);
-
-        if (pub_hex != null and sec_hex != null) {
-            if (pub_hex.?.len != 64 or (sec_hex.?.len != 64 and sec_hex.?.len != 128)) {
-                log.err("Invalid key length in env vars", &.{
-                    Attr.int("pub_key_len", @intCast(pub_hex.?.len)),
-                    Attr.int("sec_key_len", @intCast(sec_hex.?.len)),
-                    Attr.int("expected_pub_len", 64),
-                    Attr.int("expected_sec_len", 64),
-                });
-                return error.ConfigError;
-            }
-            const seed_hex: []const u8 = if (sec_hex.?.len == 128) blk: {
-                log.warn("GEODE_AUDIT_SEC legacy 128-char format; using embedded 32-byte seed — re-export the 64-char seed to silence.", &.{});
-                break :blk sec_hex.?[0..64];
-            } else sec_hex.?;
-            var seed: [32]u8 = undefined;
-            _ = try std.fmt.hexToBytes(&seed, seed_hex);
-            const kp = try cb.Sig.KeyPair.fromPrivateBytes(.ed25519, &seed);
+        if (try loadEnvSigningKey(self.allocator)) |kp| {
             self.signing_key = kp;
             return;
         }
-
         try self.loadOrCreateFileBackedKeys();
+    }
+
+    // CANARY: REQ=REQ-SONNY-6422-ENV-KEY-FAIL-CLOSED; FEATURE="Key configuration"; ASPECT=AuditKeyPairComplete; STATUS=TESTED; TEST=tests/test_sonny6422_env_key_fail_closed.zig; OWNER=security; UPDATED=2026-11-12
+    /// The audit signing key from GEODE_AUDIT_PUB (64 hex characters, the
+    /// Ed25519 public key) and GEODE_AUDIT_SEC (64 hex characters, the seed;
+    /// the legacy 128-character secret key is accepted), or null when
+    /// neither is set (an empty value counts as unset): the logger then uses
+    /// file-based keys beside the log.
+    ///
+    /// SONNY-6422: only one of the two set, a malformed value, or a public
+    /// key that is not the seed's is an error. One of the pair alone used to
+    /// fall back to generating file-based keys, so a half-configured pair
+    /// signed with a key the operator never saw. No key bytes are logged.
+    pub fn loadEnvSigningKey(allocator: Allocator) !?cb.Sig.KeyPair {
+        const pub_raw = getEnvVarOwned(allocator, "GEODE_AUDIT_PUB") catch |err| switch (err) {
+            error.EnvironmentVariableNotFound => null,
+            else => return err,
+        };
+        defer if (pub_raw) |p| allocator.free(p);
+        const sec_raw = getEnvVarOwned(allocator, "GEODE_AUDIT_SEC") catch |err| switch (err) {
+            error.EnvironmentVariableNotFound => null,
+            else => return err,
+        };
+        defer if (sec_raw) |s| {
+            std.crypto.secureZero(u8, s);
+            allocator.free(s);
+        };
+        const pub_hex: ?[]const u8 = if (pub_raw) |p| (if (p.len == 0) null else p) else null;
+        const sec_hex: ?[]const u8 = if (sec_raw) |s| (if (s.len == 0) null else s) else null;
+
+        if (pub_hex == null and sec_hex == null) return null;
+        if (pub_hex == null or sec_hex == null) {
+            log.err("GEODE_AUDIT_PUB and GEODE_AUDIT_SEC must be set together; only one is set", &.{
+                Attr.boolean("pub_set", pub_hex != null),
+                Attr.boolean("sec_set", sec_hex != null),
+            });
+            return error.AuditKeyPairIncomplete;
+        }
+        const ph = pub_hex.?;
+        const sh = sec_hex.?;
+        if (ph.len != 64 or (sh.len != 64 and sh.len != 128)) {
+            log.err("Invalid key length in env vars", &.{
+                Attr.int("pub_key_len", @intCast(ph.len)),
+                Attr.int("sec_key_len", @intCast(sh.len)),
+                Attr.int("expected_pub_len", 64),
+                Attr.int("expected_sec_len", 64),
+            });
+            return error.AuditKeyInvalid;
+        }
+        const seed_hex: []const u8 = if (sh.len == 128) blk: {
+            log.warn("GEODE_AUDIT_SEC legacy 128-char format; using embedded 32-byte seed — re-export the 64-char seed to silence.", &.{});
+            break :blk sh[0..64];
+        } else sh;
+        var seed: [32]u8 = undefined;
+        defer std.crypto.secureZero(u8, &seed);
+        _ = std.fmt.hexToBytes(&seed, seed_hex) catch return error.AuditKeyInvalid;
+        var want_pub: [32]u8 = undefined;
+        _ = std.fmt.hexToBytes(&want_pub, ph) catch return error.AuditKeyInvalid;
+        var kp = try cb.Sig.KeyPair.fromPrivateBytes(.ed25519, &seed);
+        errdefer kp.deinit();
+        var got_pub: [32]u8 = undefined;
+        _ = try kp.publicBytes(&got_pub);
+        if (!std.mem.eql(u8, &got_pub, &want_pub)) {
+            log.err("GEODE_AUDIT_PUB is not the public key of GEODE_AUDIT_SEC", &.{});
+            return error.AuditKeyMismatch;
+        }
+        return kp;
     }
 
     fn loadOrCreateFileBackedKeys(self: *AuditLogger) !void {
@@ -417,8 +567,21 @@ pub const AuditLogger = struct {
         const sec_path = try std.fmt.allocPrint(self.allocator, "{s}.key", .{self.config.file_path});
         defer self.allocator.free(sec_path);
 
+        // SONNY-6322: the newest epoch's public key file (`F.pub.<n>`, else `F.pub`).
+        var newest: u32 = 0;
+        while (newest < max_key_epochs) : (newest += 1) {
+            var nbuf: [std.fs.max_path_bytes]u8 = undefined;
+            const p = std.fmt.bufPrint(&nbuf, "{s}.pub.{d}", .{ self.config.file_path, newest + 1 }) catch break;
+            if (!keyFileExists(p)) break;
+        }
+        const newest_pub_path = if (newest == 0)
+            try self.allocator.dupe(u8, pub_path)
+        else
+            try std.fmt.allocPrint(self.allocator, "{s}.pub.{d}", .{ self.config.file_path, newest });
+        defer self.allocator.free(newest_pub_path);
+
         const io_rf = std.Io.Threaded.global_single_threaded.io();
-        const pub_hex_raw = std.Io.Dir.cwd().readFileAlloc(io_rf, pub_path, self.allocator, .limited(256)) catch |err| switch (err) {
+        const pub_hex_raw = std.Io.Dir.cwd().readFileAlloc(io_rf, newest_pub_path, self.allocator, .limited(256)) catch |err| switch (err) {
             error.FileNotFound => null,
             else => return err,
         };
@@ -429,44 +592,112 @@ pub const AuditLogger = struct {
             error.FileNotFound => null,
             else => return err,
         };
-        defer if (sec_hex_raw) |bytes| self.allocator.free(bytes);
+        defer if (sec_hex_raw) |bytes| {
+            std.crypto.secureZero(u8, bytes);
+            self.allocator.free(bytes);
+        };
         const sec_hex: ?[]const u8 = if (sec_hex_raw) |b| std.mem.trim(u8, b, " \t\r\n") else null;
 
-        if (pub_hex != null and sec_hex != null) {
-            if (pub_hex.?.len != 64 or (sec_hex.?.len != 64 and sec_hex.?.len != 128)) {
-                return error.ConfigError;
-            }
-            const seed_hex: []const u8 = if (sec_hex.?.len == 128) blk: {
+        if (sec_hex) |sh| {
+            if (sh.len != 64 and sh.len != 128) return error.ConfigError;
+            if (pub_hex) |ph| if (ph.len != 64) return error.ConfigError;
+            const seed_hex: []const u8 = if (sh.len == 128) blk: {
                 log.warn("GEODE_AUDIT_SEC legacy 128-char format; using embedded 32-byte seed — re-export the 64-char seed to silence.", &.{});
-                break :blk sec_hex.?[0..64];
-            } else sec_hex.?;
+                break :blk sh[0..64];
+            } else sh;
             var seed: [32]u8 = undefined;
+            defer std.crypto.secureZero(u8, &seed);
             _ = try std.fmt.hexToBytes(&seed, seed_hex);
-            const kp = try cb.Sig.KeyPair.fromPrivateBytes(.ed25519, &seed);
+            var kp = try cb.Sig.KeyPair.fromPrivateBytes(.ed25519, &seed);
+            if (pub_hex == null) {
+                // A seed without a public key file: record the public key
+                // (exclusively; nothing existing is replaced).
+                var pb: [32]u8 = undefined;
+                _ = try kp.publicBytes(&pb);
+                const ph = std.fmt.bytesToHex(pb, .lower);
+                writeKeyFileExclusive(newest_pub_path, &ph) catch |err| {
+                    kp.deinit();
+                    return err;
+                };
+            }
             self.signing_key = kp;
+            self.key_epoch = newest;
             return;
         }
 
         var kp = try cb.Sig.generate(.ed25519);
+        errdefer kp.deinit();
         var pub_bytes: [32]u8 = undefined;
         _ = try kp.publicBytes(&pub_bytes);
         var seed_bytes: [32]u8 = undefined;
+        defer std.crypto.secureZero(u8, &seed_bytes);
         _ = try kp.privateSeed(&seed_bytes);
         const generated_pub = std.fmt.bytesToHex(pub_bytes, .lower);
-        const generated_sec = std.fmt.bytesToHex(seed_bytes, .lower);
+        var generated_sec = std.fmt.bytesToHex(seed_bytes, .lower);
+        defer std.crypto.secureZero(u8, &generated_sec);
 
-        const pub_file = try std.Io.Dir.cwd().createFile(io_rf, pub_path, .{ .truncate = true, .permissions = std.Io.File.Permissions.fromMode(0o600) });
-        defer pub_file.close(io_rf);
-        try pub_file.writeStreamingAll(io_rf, &generated_pub);
-
-        const sec_file = try std.Io.Dir.cwd().createFile(io_rf, sec_path, .{ .truncate = true, .permissions = std.Io.File.Permissions.fromMode(0o600) });
-        defer sec_file.close(io_rf);
-        try sec_file.writeStreamingAll(io_rf, &generated_sec);
-
+        if (pub_hex) |old_pub| {
+            // SONNY-6322: a public key but no seed — a restored store (backups
+            // leave the seed out). The old public key file must keep
+            // verifying the entries it signed, so it is never truncated:
+            // start epoch newest+1 with a new pair in `F.pub.<n>`.
+            if (old_pub.len != 64) return error.ConfigError;
+            const n = newest + 1;
+            if (n > max_key_epochs) return error.TooManyAuditKeyEpochs;
+            const new_pub_path = try std.fmt.allocPrint(self.allocator, "{s}.pub.{d}", .{ self.config.file_path, n });
+            defer self.allocator.free(new_pub_path);
+            try writeKeyFileExclusive(new_pub_path, &generated_pub);
+            try writeKeyFileExclusive(sec_path, &generated_sec);
+            var prev: [64]u8 = undefined;
+            @memcpy(&prev, old_pub[0..64]);
+            self.pending_epoch = .{ .n = n, .public_hex = generated_pub, .previous_public_hex = prev };
+            self.key_epoch = n;
+            log.warn("audit signing seed missing (restored store?); started a new audit key epoch", &.{
+                Attr.string("path", self.config.file_path),
+                Attr.int("epoch", @intCast(n)),
+            });
+            std.debug.print(
+                "[audit] {s}: the signing seed is missing (a restored store?); started audit key epoch {d}, public key in {s}. " ++
+                    "Entries before it verify with the previous public key ({s}); continuity across the boundary is attested by the operator who restored the store, not by the previous key.\n",
+                .{ self.config.file_path, n, new_pub_path, newest_pub_path },
+            );
+        } else {
+            try writeKeyFileExclusive(pub_path, &generated_pub);
+            try writeKeyFileExclusive(sec_path, &generated_sec);
+            self.key_epoch = 0;
+            log.info("Generated audit signing keys", &.{Attr.string("path", self.config.file_path)});
+        }
         self.signing_key = kp;
-        log.info("Generated audit signing keys", &.{Attr.string("path", self.config.file_path)});
 
         std.log.warn("Audit signing keys stored as files. Set GEODE_AUDIT_PUB and GEODE_AUDIT_SEC env vars for production.", .{});
+    }
+
+    /// SONNY-6322: append the KEY_EPOCH record of `pe`, signed by the new key
+    /// (see `key_epoch_resource_type`). Caller holds the mutex or is `init`.
+    fn appendKeyEpochLocked(self: *AuditLogger, pe: PendingEpoch) !void {
+        var id_buf: [96]u8 = undefined;
+        const id = try std.fmt.bufPrint(&id_buf, "epoch-{d}:{s}", .{ pe.n, &pe.public_hex });
+        var epoch_buf: [16]u8 = undefined;
+        const epoch_str = try std.fmt.bufPrint(&epoch_buf, "{d}", .{pe.n});
+        var details = std.StringHashMap([]const u8).init(self.allocator);
+        defer details.deinit();
+        try details.put("epoch", epoch_str);
+        try details.put("previous_public_key", &pe.previous_public_hex);
+        try details.put("continuity", "attested by the restore operator; the previous key did not sign this record");
+        var ev = AuditEvent{
+            .timestamp = compat_milliTimestamp(),
+            .event_type = .system_event,
+            .severity = .warning,
+            .user_id = 0,
+            .session_id = "",
+            .resource = .{ .type = key_epoch_resource_type, .id = id, .name = "audit key epoch", .graph = null, .table = null },
+            .action = key_epoch_action,
+            .result = .success,
+            .details = details,
+        };
+        self.appending_epoch_record = true;
+        defer self.appending_epoch_record = false;
+        try self.appendEventLocked(&ev);
     }
 
     fn initFromTail(self: *AuditLogger) !void {
@@ -548,6 +779,10 @@ pub const AuditLogger = struct {
     /// deadlock where appendAuditEvent → emitDigest → appendAuditEvent caused
     /// SIGABRT from Zig's deadlock detector.
     fn appendEventLocked(self: *AuditLogger, ev: *AuditEvent) !void {
+        // SONNY-6322: only the logger writes (and signs) a key-epoch record.
+        const is_epoch_record = std.mem.eql(u8, ev.resource.type, key_epoch_resource_type);
+        if (is_epoch_record and !self.appending_epoch_record) return error.ReservedAuditRecord;
+
         // GAP-0282: Enrich event with per-thread tenant_id if not already set
         if (ev.tenant_id == null) {
             ev.tenant_id = getCurrentAuditTenantId();
@@ -567,25 +802,44 @@ pub const AuditLogger = struct {
         _ = try cb.Hash.digest(.sha256, &self.last_hash, &new_prev_hash);
         ev.prev_hash = new_prev_hash;
 
-        // Compute Event Hash (Hash of content excluding signatures)
-        var hasher = try cb.Hash.Stream.init(.sha256);
-        defer hasher.deinit();
-        try hasher.update(&ev.prev_hash);
-        try hasher.update(@tagName(ev.event_type));
-        try hasher.update(ev.resource.id);
-        try hasher.update(ev.action);
-        var eh: [32]u8 = undefined;
-        _ = try hasher.final(&eh);
-        ev.event_hash = eh;
+        // CANARY: REQ=REQ-SONNY-3147-AUDIT-HASH-COVERAGE; FEATURE="AuditDurability"; ASPECT=WriterHashesWholeRecord; STATUS=TESTED; TEST=tests/test_sonny3147_audit_hash_coverage.zig; OWNER=security; UPDATED=2026-11-12
+        // SONNY-3147: the event hash covers the whole record: the canonical
+        // bytes the line is made of up to "prev_hash" (every field written,
+        // in a fixed order), under the record kind's tag, with the previous
+        // hash (AuditEvent.eventHashV2, hash format 2). It covered only
+        // event_type, resource.id and action, so the timestamp, actor,
+        // tenant, session, client address, reason, result, resource type and
+        // details could be edited without breaking the chain. The body is
+        // serialized once and hashed in place.
+        var aw: std.Io.Writer.Allocating = .init(self.allocator);
+        defer aw.deinit();
+        AuditEvent.writeCanonicalBody(&aw.writer, "geode", ev) catch |err| {
+            self.last_seq = prev_seq_snapshot;
+            return err;
+        };
+        const kind: AuditEvent.RecordKind = if (ev.event_type == .DIGEST)
+            .digest
+        else if (is_epoch_record)
+            .key_epoch
+        else
+            .event;
+        ev.event_hash = AuditEvent.eventHashV2(kind, &ev.prev_hash, aw.written());
 
-        self.last_hash = ev.event_hash;
-
-        // Sign if it is a DIGEST
-        if (ev.event_type == .DIGEST and self.signing_key != null) {
+        // Sign if it is a DIGEST, or the KEY_EPOCH record (SONNY-6322)
+        if ((ev.event_type == .DIGEST or is_epoch_record) and self.signing_key != null) {
             var sig_out: [64]u8 = undefined;
-            _ = try cb.Sig.sign(.ed25519, &self.signing_key.?, ev.event_hash[0..], &sig_out);
+            _ = cb.Sig.sign(.ed25519, &self.signing_key.?, ev.event_hash[0..], &sig_out) catch |err| {
+                self.last_seq = prev_seq_snapshot;
+                return err;
+            };
             ev.signature = sig_out;
         }
+        finishLine(&aw.writer, ev) catch |err| {
+            self.last_seq = prev_seq_snapshot;
+            return err;
+        };
+
+        self.last_hash = ev.event_hash;
 
         if (self.file) |f| {
             // CANARY: REQ=REQ-GAP-0920-AUDIT-WRITE-FAILURE-DIAGNOSTIC; FEATURE="AuditDurability"; ASPECT=MidRunWriteFailure; STATUS=TESTED; TEST=tests/test_gap0920_audit_write_failure.zig; OWNER=security; UPDATED=2026-07-10
@@ -595,7 +849,7 @@ pub const AuditLogger = struct {
             // gap. Emit a LOUD diagnostic at the single write funnel (so no
             // swallowing caller can hide it), flag the logger degraded, roll
             // the chain state back to keep it consistent, and re-raise.
-            writeChain(f, self.allocator, ev) catch |err| {
+            writeChain(f, aw.written()) catch |err| {
                 self.last_seq = prev_seq_snapshot;
                 self.last_hash = prev_hash_snapshot;
                 self.write_degraded.store(true, .release);
@@ -783,1480 +1037,48 @@ pub const AuditLogger = struct {
         dm.deinit();
     }
 
-    // Log rotation and management functionality
-    pub fn rotateLogFile(self: *AuditLogger) !void {
-        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-        if (self.file) |f| {
-            const io_rl = std.Io.Threaded.global_single_threaded.io();
-            const stat = try f.stat(io_rl);
-            const size_mb = stat.size / (1024 * 1024);
-
-            if (size_mb >= self.config.rotation_size_mb) {
-                // Close current file
-                f.close(io_rl);
-
-                // Rename current file with timestamp
-                const timestamp = compat_milliTimestamp();
-                var buf: [256]u8 = undefined;
-                const new_path = try std.fmt.bufPrint(&buf, "{s}.{d}", .{ self.config.file_path, timestamp });
-                try std.Io.Dir.cwd().rename(self.config.file_path, std.Io.Dir.cwd(), new_path, io_rl);
-
-                // Open new file
-                self.file = try std.Io.Dir.cwd().createFile(io_rl, self.config.file_path, .{
-                    .truncate = false,
-                    .exclusive = false,
-                });
-
-                log.info("Audit log rotated", &.{
-                    Attr.string("old_file", new_path),
-                    Attr.string("new_file", self.config.file_path),
-                });
-            }
-        }
-    }
-
+    // CANARY: REQ=REQ-SONNY-6346-NO-SILENT-DEGRADE; FEATURE="AuditDurability"; ASPECT=CleanupOwnDirectory; STATUS=TESTED; TEST=tests/test_sonny6346_silent_degrade_audit_housekeeping.zig; OWNER=security; UPDATED=2026-11-12
+    /// Delete this log's rotated files (`<log file name>.<ms>`, beside the
+    /// log) whose timestamp is older than `retention_days`. SONNY-6346: it
+    /// scanned the WORKING directory for `audit.jsonl.<ts>`, so the log's
+    /// own rotated files were never removed, a log of another name never
+    /// cleaned, and matching files in the working directory deleted.
     pub fn cleanupOldLogs(self: *AuditLogger) !struct { files_deleted: u32, bytes_freed: u64 } {
         var files_deleted: u32 = 0;
         var bytes_freed: u64 = 0;
 
-        // Scan for old log files
         const io_cl = std.Io.Threaded.global_single_threaded.io();
-        var dir = try std.Io.Dir.cwd().openDir(io_cl, ".", .{ .iterate = true });
+        const log_dir = std.fs.path.dirname(self.config.file_path) orelse ".";
+        const base = std.fs.path.basename(self.config.file_path);
+        var dir = try std.Io.Dir.cwd().openDir(io_cl, log_dir, .{ .iterate = true });
         defer dir.close(io_cl);
 
         var iter = dir.iterate();
         const cutoff_time = compat_milliTimestamp() - (@as(i64, @intCast(self.config.retention_days)) * 24 * 60 * 60 * 1000);
 
         while (try iter.next(io_cl)) |entry| {
-            // Check if file is an old audit log (pattern: audit.jsonl.TIMESTAMP)
-            if (std.mem.startsWith(u8, entry.name, "audit.jsonl.") and entry.kind == .file) {
-                // Parse timestamp from filename
-                const timestamp_str = entry.name["audit.jsonl.".len..];
-                const timestamp = std.fmt.parseInt(i64, timestamp_str, 10) catch continue;
+            if (entry.kind != .file) continue;
+            if (entry.name.len <= base.len + 1) continue;
+            if (!std.mem.startsWith(u8, entry.name, base) or entry.name[base.len] != '.') continue;
+            const timestamp_str = entry.name[base.len + 1 ..];
+            const all_digits = for (timestamp_str) |c| {
+                if (!std.ascii.isDigit(c)) break false;
+            } else true;
+            if (!all_digits) continue;
+            const timestamp = std.fmt.parseInt(i64, timestamp_str, 10) catch continue;
+            if (timestamp >= cutoff_time) continue;
 
-                if (timestamp < cutoff_time) {
-                    // Get file size before deletion
-                    const file = try std.Io.Dir.cwd().openFile(io_cl, entry.name, .{});
-                    const stat = try file.stat(io_cl);
-                    file.close(io_cl);
+            const stat = try dir.statFile(io_cl, entry.name, .{ .follow_symlinks = false });
+            try dir.deleteFile(io_cl, entry.name);
+            files_deleted += 1;
+            bytes_freed += stat.size;
 
-                    // Delete old file
-                    try std.Io.Dir.cwd().deleteFile(io_cl, entry.name);
-                    files_deleted += 1;
-                    bytes_freed += stat.size;
-
-                    log.info("Audit log cleaned up", &.{
-                        Attr.string("deleted", entry.name),
-                        Attr.int("size", @intCast(stat.size)),
-                    });
-                }
-            }
+            log.info("Audit log cleaned up", &.{
+                Attr.string("deleted", entry.name),
+                Attr.int("size", @intCast(stat.size)),
+            });
         }
 
         return .{ .files_deleted = files_deleted, .bytes_freed = bytes_freed };
     }
-
-    pub fn testRotationContinuity(self: *AuditLogger) !bool {
-        // Test that rotation maintains hash chain continuity
-        try self.rotateLogFile();
-
-        // Log a test event after rotation
-        try self.logEvent(.{
-            .timestamp = compat_milliTimestamp(),
-            .event_type = .access_granted,
-            .user_id = 999,
-            .tenant_id = null,
-            .resource = "rotation_test",
-            .action = "verify",
-            .policy_id = null,
-            .reason = null,
-            .ip_address = null,
-            .session_id = null,
-            .query_hash = null,
-            .additional_context = null,
-        });
-
-        return true;
-    }
-
-    pub fn logDataAccessEvent(self: *AuditLogger, category: []const u8, resource: []const u8, user_id: u64) !void {
-        try self.logDataAccessEventWithTenant(category, resource, user_id, null);
-    }
-
-    /// Log a data access event with optional tenant context.
-    /// Call sites that have tenant information should use this variant directly.
-    pub fn logDataAccessEventWithTenant(self: *AuditLogger, category: []const u8, resource: []const u8, user_id: u64, tenant_id: ?u64) !void {
-        const event_type: AuditEventType = if (std.mem.eql(u8, category, "read"))
-            .access_granted
-        else if (std.mem.eql(u8, category, "write"))
-            .data_export
-        else if (std.mem.eql(u8, category, "schema"))
-            .schema_change
-        else
-            .access_granted;
-
-        try self.logEvent(.{
-            .timestamp = compat_milliTimestamp(),
-            .event_type = event_type,
-            .user_id = user_id,
-            .tenant_id = tenant_id,
-            .resource = resource,
-            .action = category,
-            .policy_id = null,
-            .reason = null,
-            .ip_address = null,
-            .session_id = null,
-            .query_hash = null,
-            .additional_context = null,
-        });
-    }
-
-    pub fn updateConfig(self: *AuditLogger, rotation_size_mb: u32, retention_days: u32) void {
-        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-
-        self.config.rotation_size_mb = rotation_size_mb;
-        self.config.retention_days = retention_days;
-
-        log.info("Audit config updated", &.{
-            Attr.int("rotation_size_mb", @intCast(rotation_size_mb)),
-            Attr.int("retention_days", @intCast(retention_days)),
-        });
-    }
-
-    // Platform-specific output formatters moved to audit_formatter.zig
-    // Use audit_formatter.formatWindowsEventLog() and audit_formatter.formatSyslog()
-
-    pub fn writeToWindowsEventLog(self: *AuditLogger, allocator: std.mem.Allocator) !u32 {
-        _ = self;
-        _ = allocator;
-        return 0;
-    }
-
-    pub fn writeToSyslog(self: *AuditLogger, allocator: std.mem.Allocator) !u32 {
-        _ = self;
-        _ = allocator;
-        return 0;
-    }
-
-    // Security Analysis Functions
-    pub fn detectAnomalies(self: *AuditLogger, allocator: std.mem.Allocator) !struct {
-        anomalies_detected: u32,
-        risk_score: f64,
-        patterns: []const u8,
-    } {
-        _ = self;
-        // Complex anomaly detection using statistical analysis
-        var anomaly_count: u32 = 0;
-        var risk_score: f64 = 0.0;
-
-        // Simulate reading recent events and analyzing patterns
-        const event_window = 100;
-        var failed_login_count: u32 = 0;
-        var rapid_access_count: u32 = 0;
-        var unusual_hours_count: u32 = 0;
-
-        // Analyze events for anomalies
-        var i: usize = 0;
-        while (i < event_window) : (i += 1) {
-            const timestamp = compat_milliTimestamp();
-            const hour = @mod(@divFloor(timestamp, 3600000), 24);
-
-            // Check for unusual access hours (2am - 4am)
-            if (hour >= 2 and hour <= 4) {
-                unusual_hours_count += 1;
-            }
-
-            // Simulate failed login detection
-            if (i % 7 == 0) {
-                failed_login_count += 1;
-            }
-
-            // Simulate rapid access detection
-            if (i % 3 == 0) {
-                rapid_access_count += 1;
-            }
-        }
-
-        // Calculate anomaly score based on patterns
-        if (failed_login_count > 10) {
-            anomaly_count += 1;
-            risk_score += 25.0;
-        }
-        if (rapid_access_count > 20) {
-            anomaly_count += 1;
-            risk_score += 30.0;
-        }
-        if (unusual_hours_count > 5) {
-            anomaly_count += 1;
-            risk_score += 15.0;
-        }
-
-        // Add baseline risk for any activity
-        risk_score += 10.0;
-
-        const patterns = try std.fmt.allocPrint(allocator, "failed_logins={d},rapid_access={d},unusual_hours={d}", .{ failed_login_count, rapid_access_count, unusual_hours_count });
-
-        std.debug.print("ANOMALY_DETECTION count={d} risk_score={d:.2} patterns={s}\n", .{ anomaly_count, risk_score, patterns });
-
-        return .{
-            .anomalies_detected = anomaly_count,
-            .risk_score = risk_score,
-            .patterns = patterns,
-        };
-    }
-
-    pub fn extractThreatIndicators(self: *AuditLogger, allocator: std.mem.Allocator) !struct {
-        ioc_count: u32,
-        threat_types: []const u8,
-        confidence: f64,
-    } {
-        _ = self;
-        // Extract Indicators of Compromise (IOCs)
-        var ioc_count: u32 = 0;
-        var confidence: f64 = 0.0;
-
-        // Simulate IOC detection
-        const suspicious_ips = [_][]const u8{
-            "192.168.1.100",
-            "10.0.0.50",
-            "172.16.0.25",
-        };
-
-        const suspicious_commands = [_][]const u8{
-            "DROP TABLE",
-            "UNION SELECT",
-            "1=1",
-            "../../../",
-        };
-
-        const suspicious_users = [_][]const u8{
-            "admin'--",
-            "root",
-            "sa",
-        };
-
-        // Count IOCs
-        ioc_count += suspicious_ips.len;
-        ioc_count += suspicious_commands.len;
-        ioc_count += suspicious_users.len;
-
-        // Calculate confidence based on IOC count
-        confidence = @min(95.0, @as(f64, @floatFromInt(ioc_count)) * 10.5);
-
-        const threat_types = try std.fmt.allocPrint(allocator, "sql_injection,path_traversal,brute_force,suspicious_ip", .{});
-
-        std.debug.print("THREAT_INDICATORS ioc_count={d} confidence={d:.2} types={s}\n", .{ ioc_count, confidence, threat_types });
-
-        return .{
-            .ioc_count = ioc_count,
-            .threat_types = threat_types,
-            .confidence = confidence,
-        };
-    }
-
-    pub fn detectPrivilegeEscalation(self: *AuditLogger, allocator: std.mem.Allocator) !struct {
-        escalation_attempts: u32,
-        blocked: u32,
-        risk_level: []const u8,
-    } {
-        _ = self;
-        _ = allocator;
-        // Complex privilege escalation detection
-        var escalation_attempts: u32 = 0;
-        var blocked_count: u32 = 0;
-
-        // Simulate checking for privilege escalation patterns
-        const patterns = [_]struct {
-            pattern: []const u8,
-            severity: u32,
-        }{
-            .{ .pattern = "sudo_without_password", .severity = 3 },
-            .{ .pattern = "setuid_binary_execution", .severity = 5 },
-            .{ .pattern = "role_change_to_admin", .severity = 4 },
-            .{ .pattern = "permission_bypass_attempt", .severity = 4 },
-            .{ .pattern = "unauthorized_grant", .severity = 5 },
-        };
-
-        for (patterns) |p| {
-            // Simulate detection
-            if (p.severity >= 4) {
-                escalation_attempts += 1;
-                blocked_count += 1;
-            } else {
-                escalation_attempts += 1;
-            }
-        }
-
-        const risk_level = if (escalation_attempts > 3) "HIGH" else if (escalation_attempts > 1) "MEDIUM" else "LOW";
-
-        std.debug.print("PRIVILEGE_ESCALATION attempts={d} blocked={d} risk={s}\n", .{ escalation_attempts, blocked_count, risk_level });
-
-        return .{
-            .escalation_attempts = escalation_attempts,
-            .blocked = blocked_count,
-            .risk_level = risk_level,
-        };
-    }
-
-    pub fn correlateEvents(self: *AuditLogger, allocator: std.mem.Allocator) !struct {
-        correlated_count: u32,
-        alert_generated: bool,
-        correlation_id: []const u8,
-    } {
-        _ = self;
-        // SIEM event correlation
-        var correlated_count: u32 = 0;
-        var alert_generated = false;
-
-        // Simulate event correlation using time windows and patterns
-        const time_window_ms: i64 = 5000; // 5 second window
-        const base_time = compat_milliTimestamp();
-
-        // Event patterns to correlate
-        const event_chain = [_]struct {
-            timestamp: i64,
-            event_type: []const u8,
-            severity: u32,
-        }{
-            .{ .timestamp = base_time, .event_type = "failed_login", .severity = 2 },
-            .{ .timestamp = base_time + 100, .event_type = "failed_login", .severity = 2 },
-            .{ .timestamp = base_time + 200, .event_type = "failed_login", .severity = 2 },
-            .{ .timestamp = base_time + 500, .event_type = "successful_login", .severity = 1 },
-            .{ .timestamp = base_time + 600, .event_type = "privilege_grant", .severity = 3 },
-            .{ .timestamp = base_time + 700, .event_type = "data_export", .severity = 4 },
-        };
-
-        // Correlate events within time window
-        for (event_chain) |event| {
-            if (event.timestamp - base_time <= time_window_ms) {
-                correlated_count += 1;
-                if (event.severity >= 4) {
-                    alert_generated = true;
-                }
-            }
-        }
-
-        // Generate correlation ID
-        const correlation_id = try std.fmt.allocPrint(allocator, "CORR-{d}-{x}", .{ base_time, std.hash.Wyhash.hash(0, "correlation") });
-
-        std.debug.print("SIEM_CORRELATION events={d} alert={} correlation_id={s}\n", .{ correlated_count, alert_generated, correlation_id });
-
-        return .{
-            .correlated_count = correlated_count,
-            .alert_generated = alert_generated,
-            .correlation_id = correlation_id,
-        };
-    }
-
-    pub fn generateAlerts(self: *AuditLogger, allocator: std.mem.Allocator) !struct {
-        alerts_generated: u32,
-        critical_count: u32,
-        destinations: []const u8,
-    } {
-        _ = self;
-        // Complex alert generation logic
-        var alerts_generated: u32 = 0;
-        var critical_count: u32 = 0;
-
-        // Define alert rules
-        const alert_rules = [_]struct {
-            name: []const u8,
-            condition: []const u8,
-            severity: []const u8,
-            action: []const u8,
-        }{
-            .{ .name = "BruteForce", .condition = "failed_login>5", .severity = "HIGH", .action = "email,sms" },
-            .{ .name = "DataExfiltration", .condition = "data_export>100MB", .severity = "CRITICAL", .action = "email,pager,slack" },
-            .{ .name = "PrivilegeAbuse", .condition = "unauthorized_grant", .severity = "CRITICAL", .action = "email,soc" },
-            .{ .name = "AnomalousAccess", .condition = "unusual_hour", .severity = "MEDIUM", .action = "email" },
-            .{ .name = "SQLInjection", .condition = "sql_pattern_match", .severity = "CRITICAL", .action = "waf,email" },
-        };
-
-        // Process rules and generate alerts
-        for (alert_rules) |rule| {
-            // Simulate rule evaluation
-            const triggered = std.mem.eql(u8, rule.severity, "CRITICAL") or
-                std.mem.eql(u8, rule.severity, "HIGH");
-
-            if (triggered) {
-                alerts_generated += 1;
-                if (std.mem.eql(u8, rule.severity, "CRITICAL")) {
-                    critical_count += 1;
-                }
-            }
-        }
-
-        const destinations = try std.fmt.allocPrint(allocator, "email,slack,pagerduty,soc_dashboard", .{});
-
-        std.debug.print("ALERT_GENERATION total={d} critical={d} destinations={s}\n", .{ alerts_generated, critical_count, destinations });
-
-        return .{
-            .alerts_generated = alerts_generated,
-            .critical_count = critical_count,
-            .destinations = destinations,
-        };
-    }
-
-    pub fn testCombinedOutput(self: *AuditLogger, allocator: std.mem.Allocator) !u32 {
-        _ = self;
-        _ = allocator;
-        return 0;
-    }
-
-    /// Phase 4: Performance Testing - Real throughput testing
-    pub fn performanceTest(self: *AuditLogger, _: std.mem.Allocator) !struct {
-        events_per_second: u64,
-        avg_latency_ms: f64,
-        max_latency_ms: f64,
-        memory_used_mb: f64,
-        cpu_percent: f64,
-    } {
-        const start_time = compat_milliTimestamp();
-        const test_duration_ms: u64 = 1000; // Test for 1 second
-        var events_written: u64 = 0;
-        var max_latency: u64 = 0;
-        var total_latency: u64 = 0;
-
-        // Measure initial memory - simplified for now
-        const initial_mem: usize = 100 * 1024 * 1024; // 100MB baseline estimate
-
-        // Performance test - write as many events as possible in 1 second
-        while (compat_milliTimestamp() - start_time < test_duration_ms) {
-            const event_start = std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds();
-
-            // Create varied test events for realistic performance measurement
-            const test_event = AuditEvent{
-                .timestamp = compat_milliTimestamp(),
-                .event_type = if (events_written % 4 == 0) .authentication_failure else if (events_written % 4 == 1) .data_export else if (events_written % 4 == 2) .policy_violation else .schema_change,
-                .severity = .info,
-                .user_id = @intCast(1000 + (events_written % 100)),
-                .tenant_id = "perf_tenant",
-                .resource = .{ .type = "system", .id = "perf", .name = "perf_test", .graph = null, .table = null },
-                .action = if (events_written % 3 == 0) "SELECT" else if (events_written % 3 == 1) "INSERT" else "UPDATE",
-                .result = .success,
-                .policy_id = if (events_written % 5 == 0) 12345 else null,
-                .reason = if (events_written % 7 == 0) "policy_violation" else null,
-                .ip_address = "192.168.1.1",
-                .session_id = "perf-test",
-                .query_hash = events_written * 0x1234567,
-                .additional_context = null,
-                .details = null,
-            };
-
-            try self.logEvent(test_event);
-
-            const event_end = std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io()).toNanoseconds();
-            const latency_ns = @as(u64, @intCast(event_end - event_start));
-            const latency_ms = latency_ns / 1_000_000;
-
-            total_latency += latency_ms;
-            if (latency_ms > max_latency) {
-                max_latency = latency_ms;
-            }
-
-            events_written += 1;
-
-            // Simulate some CPU work for realistic measurement
-            var sum: u64 = 0;
-            for (0..100) |i| {
-                sum += i * events_written;
-            }
-        }
-
-        const end_time = compat_milliTimestamp();
-        const actual_duration_ms = end_time - start_time;
-
-        // Measure final memory - simplified for now
-        const final_mem: usize = 110 * 1024 * 1024; // 110MB estimate after operations
-        const memory_used = @as(f64, @floatFromInt(final_mem - initial_mem)) / (1024.0 * 1024.0);
-
-        // Calculate metrics
-        const events_per_second = if (actual_duration_ms > 0)
-            (events_written * 1000) / @as(u64, @intCast(actual_duration_ms))
-        else
-            0;
-
-        const avg_latency_ms = if (events_written > 0)
-            @as(f64, @floatFromInt(total_latency)) / @as(f64, @floatFromInt(events_written))
-        else
-            0.0;
-
-        // Estimate CPU usage (simplified - actual would use system calls)
-        const cpu_percent = @min(100.0, @as(f64, @floatFromInt(events_written)) / 100.0);
-
-        std.debug.print("PERFORMANCE_TEST events={d} duration_ms={d} events_per_sec={d} avg_latency={d:.2}ms max_latency={d}ms mem={d:.2}MB cpu={d:.1}%\n", .{ events_written, actual_duration_ms, events_per_second, avg_latency_ms, max_latency, memory_used, cpu_percent });
-
-        return .{
-            .events_per_second = events_per_second,
-            .avg_latency_ms = avg_latency_ms,
-            .max_latency_ms = @as(f64, @floatFromInt(max_latency)),
-            .memory_used_mb = memory_used,
-            .cpu_percent = cpu_percent,
-        };
-    }
-
-    /// Memory usage profiling with real memory tracking
-    pub fn memoryUsageTest(self: *AuditLogger, allocator: std.mem.Allocator) !struct {
-        baseline_mb: f64,
-        peak_mb: f64,
-        current_mb: f64,
-        leak_detected: bool,
-    } {
-        // Get baseline memory usage - simplified for now
-        const baseline_rss: usize = 100 * 1024 * 1024; // 100MB baseline estimate
-        const baseline_mb = @as(f64, @floatFromInt(baseline_rss)) / (1024.0 * 1024.0);
-
-        // Track allocations for leak detection
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
-        const arena_alloc = arena.allocator();
-
-        // Simulate various operations that use memory
-        var peak_rss = baseline_rss;
-
-        // Test 1: Batch event logging
-        var event_batch = try arena_alloc.alloc(AuditEvent, 1000);
-        for (0..1000) |i| {
-            event_batch[i] = AuditEvent{
-                .timestamp = compat_milliTimestamp() + @as(i64, @intCast(i)),
-                .event_type = .access_granted,
-                .severity = .info,
-                .user_id = @intCast(i % 100),
-                .tenant_id = "memory_test_tenant",
-                .resource = .{ .type = "table", .id = "test", .name = "memory_test", .graph = null, .table = null },
-                .action = "SELECT",
-                .result = .success,
-                .policy_id = null,
-                .reason = null,
-                .ip_address = "127.0.0.1",
-                .session_id = "mem-test",
-                .query_hash = @intCast(i * 0xDEADBEEF),
-                .additional_context = null,
-                .details = null,
-            };
-        }
-
-        // Log all events
-        for (event_batch) |event| {
-            try self.logEvent(event);
-        }
-
-        // Check peak after batch operation - simplified for now
-        const after_batch_rss: usize = 120 * 1024 * 1024; // 120MB estimate after batch
-        if (after_batch_rss > peak_rss) {
-            peak_rss = after_batch_rss;
-        }
-
-        // Test 2: Large string allocations
-        var large_strings = try arena_alloc.alloc([]u8, 100);
-        for (0..100) |i| {
-            large_strings[i] = try arena_alloc.alloc(u8, 10240); // 10KB each
-            @memset(large_strings[i], @intCast(i % 256));
-        }
-
-        // Check peak after string allocations - simplified for now
-        const after_strings_rss: usize = 130 * 1024 * 1024; // 130MB estimate after strings
-        if (after_strings_rss > peak_rss) {
-            peak_rss = after_strings_rss;
-        }
-
-        // Test 3: Hash table simulation
-        var hash_map = std.hash_map.HashMap(u64, []const u8, std.hash_map.AutoContext(u64), 80).init(arena_alloc);
-        defer hash_map.deinit();
-
-        for (0..500) |i| {
-            const key = i * 0x123456;
-            const value = try std.fmt.allocPrint(arena_alloc, "value_{d}", .{i});
-            try hash_map.put(key, value);
-        }
-
-        // Final memory check - simplified for now
-        const current_rss: usize = 125 * 1024 * 1024; // 125MB current estimate
-        if (current_rss > peak_rss) {
-            peak_rss = current_rss;
-        }
-
-        const peak_mb = @as(f64, @floatFromInt(peak_rss)) / (1024.0 * 1024.0);
-        const current_mb = @as(f64, @floatFromInt(current_rss)) / (1024.0 * 1024.0);
-
-        // Simple leak detection: if current is significantly higher than baseline after cleanup
-        const leak_threshold_mb = 10.0; // 10MB threshold
-        const leak_detected = (current_mb - baseline_mb) > leak_threshold_mb;
-
-        std.debug.print("MEMORY_TEST baseline={d:.2}MB peak={d:.2}MB current={d:.2}MB leak={}\n", .{ baseline_mb, peak_mb, current_mb, leak_detected });
-
-        return .{
-            .baseline_mb = baseline_mb,
-            .peak_mb = peak_mb,
-            .current_mb = current_mb,
-            .leak_detected = leak_detected,
-        };
-    }
-
-    /// Concurrent access testing with real thread synchronization
-    pub fn concurrentAccessTest(self: *AuditLogger, _: std.mem.Allocator) !struct {
-        threads_tested: u32,
-        race_conditions: u32,
-        deadlocks: u32,
-        successful_ops: u64,
-    } {
-        const ThreadContext = struct {
-            logger: *AuditLogger,
-            thread_id: u32,
-            iterations: u32,
-            // Use u32 for atomic counter to support 32-bit ARM platforms
-            success_count: *std.atomic.Value(u32),
-            race_count: *std.atomic.Value(u32),
-        };
-
-        // Shared counters for thread coordination
-        // Use u32 for atomic counter to support 32-bit ARM platforms
-        var success_count = std.atomic.Value(u32).init(0);
-        var race_count = std.atomic.Value(u32).init(0);
-
-        // Thread worker function
-        const threadWorker = struct {
-            fn run(ctx: ThreadContext) void {
-                for (0..ctx.iterations) |i| {
-                    const event = AuditEvent{
-                        .timestamp = compat_milliTimestamp(),
-                        .event_type = .data_export, // Using existing event type for concurrent test
-                        .severity = .info,
-                        .user_id = ctx.thread_id,
-                        .tenant_id = "concurrent_test_tenant",
-                        .resource = .{ .type = "table", .id = "concurrent", .name = "concurrent_resource", .graph = null, .table = null },
-                        .action = "CONCURRENT_OP",
-                        .result = .success,
-                        .policy_id = null,
-                        .reason = null,
-                        .ip_address = "127.0.0.1",
-                        .session_id = "thread-test",
-                        .query_hash = ctx.thread_id * 0x1000 + @as(u64, @intCast(i)),
-                        .additional_context = null,
-                        .details = null,
-                    };
-
-                    // Try to log event - this tests thread safety
-                    ctx.logger.logEvent(event) catch {
-                        // Count potential race conditions
-                        _ = ctx.race_count.fetchAdd(1, .monotonic);
-                        continue;
-                    };
-
-                    _ = ctx.success_count.fetchAdd(1, .monotonic);
-
-                    // Add some contention
-                    {
-                        const req = std.os.linux.timespec{ .sec = 0, .nsec = 1_000_000 };
-                        std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
-                    }
-                }
-            }
-        }.run;
-        const runThreadWorker = struct {
-            fn run(ctx_ptr: *anyopaque, runtime: *pooled.TaskContext) void {
-                _ = runtime;
-                const ctx: *ThreadContext = @ptrCast(@alignCast(ctx_ptr));
-                threadWorker(ctx.*);
-            }
-        }.run;
-
-        // Create and run threads
-        const num_threads: u32 = 4;
-        const iterations_per_thread: u32 = 25;
-        const pool = try pooled.ThreadPool.init(self.allocator, .{
-            .num_threads = num_threads,
-            .queue_capacity = 16,
-        });
-        defer pool.deinit();
-        var wg = pool.waitGroup();
-        var contexts: [4]ThreadContext = undefined;
-
-        for (0..num_threads) |i| {
-            contexts[i] = .{
-                .logger = self,
-                .thread_id = @intCast(i),
-                .iterations = iterations_per_thread,
-                .success_count = &success_count,
-                .race_count = &race_count,
-            };
-            _ = try pool.submitTask(runThreadWorker, @ptrCast(&contexts[i]), .{
-                .wait_group = &wg,
-                .backpressure = .block,
-                .lane = .blocking,
-            });
-        }
-        wg.wait();
-
-        const successful_ops = success_count.load(.monotonic);
-        const race_conditions = race_count.load(.monotonic);
-
-        std.debug.print("CONCURRENT_TEST threads={d} successful_ops={d} race_conditions={d}\n", .{ num_threads, successful_ops, race_conditions });
-
-        return .{
-            .threads_tested = num_threads,
-            .race_conditions = race_conditions,
-            .deadlocks = 0, // No deadlocks in this implementation
-            .successful_ops = successful_ops,
-        };
-    }
-
-    /// Test disk space handling with real filesystem checks
-    pub fn testDiskSpaceHandling(self: *AuditLogger, allocator: std.mem.Allocator) !struct {
-        disk_full_handled: bool,
-        fallback_used: bool,
-        events_dropped: u32,
-        compression_enabled: bool,
-    } {
-        _ = allocator;
-
-        // Simulate disk space check - in production would use system calls
-        _ = std.Io.Dir.cwd();
-
-        // Simulate disk usage percentage (80% used for testing)
-        const used_percent: u64 = 80;
-
-        // Simulate available and total bytes for testing
-        const available_bytes: u64 = 1024 * 1024 * 1024 * 20; // 20GB
-        const total_bytes: u64 = 1024 * 1024 * 1024 * 100; // 100GB
-
-        std.debug.print("DISK_SPACE available={d}MB total={d}MB used={d}%\n", .{ available_bytes / (1024 * 1024), total_bytes / (1024 * 1024), used_percent });
-
-        var disk_full_handled = false;
-        var fallback_used = false;
-        var events_dropped: u32 = 0;
-        var compression_enabled = false;
-
-        // Test various disk space scenarios
-        const threshold_bytes: u64 = 10 * 1024 * 1024; // 10MB threshold
-
-        if (available_bytes < threshold_bytes) {
-            // Low disk space scenario
-            disk_full_handled = true;
-
-            // Try compression first
-            if (self.file) |f| {
-                f.close();
-                self.file = null;
-
-                // Simulate compression by creating a new compressed file
-                const compressed_file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), "audit_compressed.gz", .{}) catch {
-                    // Can't create compressed file, use fallback
-                    fallback_used = true;
-                    events_dropped = 5; // Simulate dropping some events
-                    return .{
-                        .disk_full_handled = disk_full_handled,
-                        .fallback_used = fallback_used,
-                        .events_dropped = events_dropped,
-                        .compression_enabled = compression_enabled,
-                    };
-                };
-                compressed_file.close();
-                compression_enabled = true;
-            }
-        } else {
-            // Normal disk space - test handling of sudden fill
-            const test_file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), "disk_test.tmp", .{ .truncate = true }) catch |err| {
-                disk_full_handled = true;
-                fallback_used = true;
-                std.debug.print("DISK_TEST create failed: {}\n", .{err});
-                return .{
-                    .disk_full_handled = disk_full_handled,
-                    .fallback_used = fallback_used,
-                    .events_dropped = 1,
-                    .compression_enabled = false,
-                };
-            };
-            const io_df = std.Io.Threaded.global_single_threaded.io();
-            defer test_file.close(io_df);
-            // error-policy: A — best-effort cleanup of a diagnostic temp file;
-            // a leftover disk_test.tmp affects nothing but disk hygiene.
-            defer std.Io.Dir.cwd().deleteFile(io_df, "disk_test.tmp") catch {};
-
-            // Try to write large amount of data
-            const large_buffer = [_]u8{'A'} ** (1024 * 1024); // 1MB
-            var df_offset: u64 = 0;
-            for (0..10) |_| {
-                test_file.writePositionalAll(io_df, &large_buffer, df_offset) catch {
-                    disk_full_handled = true;
-                    compression_enabled = true; // Would enable compression
-                    break;
-                };
-                df_offset += large_buffer.len;
-            }
-        }
-
-        // Test event logging under low disk conditions
-        for (0..10) |i| {
-            const test_event = AuditEvent{
-                .timestamp = compat_milliTimestamp() + @as(i64, @intCast(i)),
-                .event_type = .data_export, // Using existing event type for disk test
-                .severity = .info,
-                .user_id = @intCast(9000 + i),
-                .tenant_id = "disk_test_tenant",
-                .resource = .{ .type = "table", .id = "disk", .name = "disk_test", .graph = null, .table = null },
-                .action = "WRITE",
-                .result = .success,
-                .policy_id = null,
-                .reason = null,
-                .ip_address = "127.0.0.1",
-                .session_id = "disk-test",
-                .query_hash = 0xD1530000 + i, // Fixed hex literal
-                .additional_context = null,
-                .details = null,
-            };
-
-            self.logEvent(test_event) catch {
-                events_dropped += 1;
-                if (!fallback_used) {
-                    // First failure, try fallback
-                    fallback_used = true;
-                    disk_full_handled = true;
-                }
-            };
-        }
-
-        std.debug.print("DISK_HANDLING handled={} fallback={} dropped={d} compressed={}\n", .{ disk_full_handled, fallback_used, events_dropped, compression_enabled });
-
-        return .{
-            .disk_full_handled = disk_full_handled,
-            .fallback_used = fallback_used,
-            .events_dropped = events_dropped,
-            .compression_enabled = compression_enabled,
-        };
-    }
-
-    /// Test corruption handling with real error recovery
-    pub fn testCorruptionHandling(_: *AuditLogger, allocator: std.mem.Allocator) !struct {
-        corruption_detected: bool,
-        recovery_attempted: bool,
-        recovery_successful: bool,
-        data_loss: u32,
-    } {
-        var corruption_detected = false;
-        var recovery_attempted = false;
-        var recovery_successful = false;
-        var data_loss: u32 = 0;
-
-        // Create a test file with valid data
-        const test_file_path = "corruption_test.jsonl";
-        {
-            const io_ct = std.Io.Threaded.global_single_threaded.io();
-            const file = try std.Io.Dir.cwd().createFile(io_ct, test_file_path, .{});
-            defer file.close(io_ct);
-
-            // Write some valid audit events
-            var ct_offset: u64 = 0;
-            for (0..5) |i| {
-                var buffer: [512]u8 = undefined;
-                const json = try std.fmt.bufPrint(&buffer, "{{\"id\":{d},\"type\":\"valid\",\"checksum\":{d}}}\n", .{ i, i * 0x1234 });
-                try file.writePositionalAll(io_ct, json, ct_offset);
-                ct_offset += json.len;
-            }
-
-            // Inject corruption - invalid JSON
-            const corrupt = "{\"id\":5,\"type\":\"corrupted\",INVALID_JSON\n";
-            try file.writePositionalAll(io_ct, corrupt, ct_offset);
-            ct_offset += corrupt.len;
-
-            // More valid data
-            for (6..10) |i| {
-                var buffer: [512]u8 = undefined;
-                const json = try std.fmt.bufPrint(&buffer, "{{\"id\":{d},\"type\":\"valid\",\"checksum\":{d}}}\n", .{ i, i * 0x1234 });
-                try file.writePositionalAll(io_ct, json, ct_offset);
-                ct_offset += json.len;
-            }
-        }
-        const io_val = std.Io.Threaded.global_single_threaded.io();
-        // error-policy: A — best-effort cleanup of a diagnostic temp file.
-        defer std.Io.Dir.cwd().deleteFile(io_val, test_file_path) catch {};
-
-        // Try to read and validate the file
-        const file = try std.Io.Dir.cwd().openFile(io_val, test_file_path, .{});
-        defer file.close(io_val);
-
-        // Read entire file
-        const file_stat = try file.stat(io_val);
-        const file_size = file_stat.size;
-        // Convert u64 to usize for 32-bit platforms
-        if (file_size > std.math.maxInt(usize)) {
-            return error.FileTooLarge;
-        }
-        const content = try allocator.alloc(u8, @as(usize, @intCast(file_size)));
-        defer allocator.free(content);
-        _ = try file.readPositionalAll(io_val, content, 0);
-
-        // Parse line by line
-        var line_num: u32 = 0;
-        var valid_lines: u32 = 0;
-        var i: usize = 0;
-        while (i < content.len) {
-            // Find end of line
-            var line_end = i;
-            while (line_end < content.len and content[line_end] != '\n') : (line_end += 1) {}
-
-            const line = content[i..line_end];
-            line_num += 1;
-
-            // Simple JSON validation (check for balanced braces)
-            var brace_count: i32 = 0;
-            var in_string = false;
-            var escape_next = false;
-
-            for (line) |ch| {
-                if (escape_next) {
-                    escape_next = false;
-                    continue;
-                }
-                if (ch == '\\') {
-                    escape_next = true;
-                    continue;
-                }
-                if (ch == '"' and !in_string) {
-                    in_string = true;
-                } else if (ch == '"' and in_string) {
-                    in_string = false;
-                }
-                if (!in_string) {
-                    if (ch == '{') brace_count += 1;
-                    if (ch == '}') brace_count -= 1;
-                }
-            }
-
-            if (brace_count != 0 or in_string) {
-                // Corruption detected!
-                corruption_detected = true;
-                std.debug.print("CORRUPTION detected at line {d}: invalid JSON structure\n", .{line_num});
-
-                // Attempt recovery
-                recovery_attempted = true;
-
-                // Skip this line (data loss)
-                data_loss += 1;
-
-                // Move to next line before continuing
-                i = line_end + 1;
-                continue;
-            }
-
-            // Verify checksum if present
-            if (std.mem.indexOf(u8, line, "\"checksum\":")) |_| {
-                // Simple checksum validation (would be more complex in production)
-                if (std.mem.indexOf(u8, line, "\"id\":")) |id_pos| {
-                    // Extract ID and verify checksum matches expected value
-                    _ = id_pos;
-                    valid_lines += 1;
-                }
-            } else {
-                valid_lines += 1;
-            }
-
-            // Move to next line
-            i = line_end + 1;
-        }
-
-        // Recovery is successful if we recovered most of the data
-        const total_expected: u32 = 10;
-        const recovered = valid_lines;
-        recovery_successful = recovered >= (total_expected - 2); // Allow up to 2 lost records
-
-        // Create backup of recovered data
-        if (corruption_detected and recovery_successful) {
-            const backup_path = "corruption_test.recovered";
-            const io_bk = std.Io.Threaded.global_single_threaded.io();
-            const backup_file = try std.Io.Dir.cwd().createFile(io_bk, backup_path, .{});
-            defer backup_file.close(io_bk);
-
-            var recovery_buf: [256]u8 = undefined;
-            const recovery_info = try std.fmt.bufPrint(&recovery_buf, "{{\"recovery_timestamp\":{d},\"original_lines\":{d},\"recovered_lines\":{d},\"data_loss\":{d}}}\n", .{ compat_milliTimestamp(), total_expected, recovered, data_loss });
-            try backup_file.writePositionalAll(io_bk, recovery_info, 0);
-
-            // error-policy: A — best-effort cleanup of a diagnostic recovery file.
-            std.Io.Dir.cwd().deleteFile(io_bk, backup_path) catch {};
-        }
-
-        std.debug.print("CORRUPTION_HANDLING detected={} attempted={} successful={} data_loss={d}\n", .{ corruption_detected, recovery_attempted, recovery_successful, data_loss });
-
-        return .{
-            .corruption_detected = corruption_detected,
-            .recovery_attempted = recovery_attempted,
-            .recovery_successful = recovery_successful,
-            .data_loss = data_loss,
-        };
-    }
-
-    /// Test invalid configuration handling with validation
-    pub fn testInvalidConfig(self: *AuditLogger, _: std.mem.Allocator) !struct {
-        config_validated: bool,
-        errors_found: u32,
-        warnings_found: u32,
-        auto_fixed: u32,
-    } {
-        _ = self;
-
-        const config_validated = true;
-        var errors_found: u32 = 0;
-        var warnings_found: u32 = 0;
-        var auto_fixed: u32 = 0;
-
-        // Test various configuration scenarios
-        const test_configs = [_]struct {
-            name: []const u8,
-            value: []const u8,
-            valid: bool,
-            can_autofix: bool,
-        }{
-            .{ .name = "file_path", .value = "/invalid/../../path", .valid = false, .can_autofix = true },
-            .{ .name = "max_file_size", .value = "-100", .valid = false, .can_autofix = true },
-            .{ .name = "rotation_interval", .value = "abc", .valid = false, .can_autofix = false },
-            .{ .name = "compression", .value = "yes", .valid = false, .can_autofix = true },
-            .{ .name = "retention_days", .value = "99999", .valid = false, .can_autofix = true },
-            .{ .name = "buffer_size", .value = "0", .valid = false, .can_autofix = true },
-            .{ .name = "encoding", .value = "UTF-64", .valid = false, .can_autofix = false },
-            .{ .name = "timestamp_format", .value = "invalid", .valid = false, .can_autofix = true },
-        };
-
-        for (test_configs) |config| {
-            // Validate configuration value
-            if (!config.valid) {
-                errors_found += 1;
-                std.debug.print("CONFIG_ERROR: {s} = '{s}' is invalid\n", .{ config.name, config.value });
-
-                if (config.can_autofix) {
-                    // Attempt to auto-fix
-                    const fixed_value: ?[]const u8 = if (std.mem.eql(u8, config.name, "file_path"))
-                        "audit.log"
-                    else if (std.mem.eql(u8, config.name, "max_file_size"))
-                        "104857600" // 100MB
-                    else if (std.mem.eql(u8, config.name, "compression"))
-                        "true"
-                    else if (std.mem.eql(u8, config.name, "retention_days"))
-                        "90"
-                    else if (std.mem.eql(u8, config.name, "buffer_size"))
-                        "8192"
-                    else if (std.mem.eql(u8, config.name, "timestamp_format"))
-                        "ISO8601"
-                    else
-                        null;
-
-                    if (fixed_value) |val| {
-                        std.debug.print("CONFIG_AUTOFIX: {s} = '{s}' -> '{s}'\n", .{ config.name, config.value, val });
-                        auto_fixed += 1;
-                    }
-                }
-            }
-        }
-
-        // Check for configuration warnings
-        const warning_checks = [_]struct {
-            condition: bool,
-            message: []const u8,
-        }{
-            .{ .condition = true, .message = "Audit logging to network path may impact performance" },
-            .{ .condition = true, .message = "Retention period exceeds recommended maximum" },
-            .{ .condition = false, .message = "Compression disabled, disk usage may be high" },
-        };
-
-        for (warning_checks) |check| {
-            if (check.condition) {
-                warnings_found += 1;
-                std.debug.print("CONFIG_WARNING: {s}\n", .{check.message});
-            }
-        }
-
-        // Write configuration validation report
-        const io_rep = std.Io.Threaded.global_single_threaded.io();
-        const report_file = try std.Io.Dir.cwd().createFile(io_rep, "config_validation.json", .{});
-        defer report_file.close(io_rep);
-
-        var buffer: [512]u8 = undefined;
-        const report = try std.fmt.bufPrint(&buffer, "{{\"timestamp\":{d},\"validated\":{},\"errors\":{d},\"warnings\":{d},\"auto_fixed\":{d}}}\n", .{ compat_milliTimestamp(), config_validated, errors_found, warnings_found, auto_fixed });
-        try report_file.writePositionalAll(io_rep, report, 0);
-
-        // error-policy: A — best-effort cleanup of a diagnostic report file.
-        std.Io.Dir.cwd().deleteFile(io_rep, "config_validation.json") catch {};
-
-        std.debug.print("CONFIG_VALIDATION validated={} errors={d} warnings={d} auto_fixed={d}\n", .{ config_validated, errors_found, warnings_found, auto_fixed });
-
-        return .{
-            .config_validated = config_validated,
-            .errors_found = errors_found,
-            .warnings_found = warnings_found,
-            .auto_fixed = auto_fixed,
-        };
-    }
-
-    /// Phase 5: Compliance - Generate comprehensive compliance report
-    pub fn generateComplianceReport(_: *AuditLogger, allocator: std.mem.Allocator, start_time: i64, end_time: i64) !struct {
-        total_events: u64,
-        violations: u64,
-        compliant: u64,
-        report_path: []const u8,
-    } {
-        // Collect all audit events in time range
-        var event_count: u64 = 0;
-        var violation_count: u64 = 0;
-        var compliant_count: u64 = 0;
-
-        // Analyze events for compliance
-        const current_time = compat_milliTimestamp();
-
-        // Simulate event analysis
-        for (0..1000) |i| {
-            const event_time = start_time + @as(i64, @intCast(i)) * ((end_time - start_time) / 1000);
-            if (event_time < current_time) {
-                event_count += 1;
-
-                // Check compliance based on event type (30% violations)
-                if (i % 10 < 3) {
-                    violation_count += 1;
-                } else {
-                    compliant_count += 1;
-                }
-            }
-        }
-
-        // Generate report file
-        const report_path = try allocator.dupe(u8, "compliance_report.json");
-        const report_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), report_path, .{});
-        defer report_file.close();
-
-        // Write JSON report using type-safe encoding
-        const report = ComplianceReportJson{
-            .report_date = current_time,
-            .start_time = start_time,
-            .end_time = end_time,
-            .total_events = event_count,
-            .violations = violation_count,
-            .compliant = compliant_count,
-            .compliance_rate = if (event_count > 0) @as(f64, @floatFromInt(compliant_count)) * 100.0 / @as(f64, @floatFromInt(event_count)) else 100.0,
-        };
-        const json_str = try json_lib.encode(allocator, report, .{});
-        defer allocator.free(json_str);
-        try report_file.writeAll(json_str);
-        try report_file.writeAll("\n");
-
-        return .{
-            .total_events = event_count,
-            .violations = violation_count,
-            .compliant = compliant_count,
-            .report_path = report_path,
-        };
-    }
-
-    /// Prepare forensic package with all audit data
-    pub fn prepareForensicPackage(self: *AuditLogger, allocator: std.mem.Allocator) !struct {
-        package_path: []const u8,
-        size_bytes: u64,
-        hash: []const u8,
-        entries: u64,
-    } {
-        // Create forensic package directory
-        const package_path = try allocator.dupe(u8, "forensic_package.tar");
-
-        // Collect all audit files
-        var total_size: u64 = 0;
-        var entry_count: u64 = 0;
-
-        // Open audit log if available
-        if (self.file) |f| {
-            const stat = try f.stat();
-            total_size += stat.size;
-            entry_count += 1;
-        }
-
-        // Add additional forensic data using type-safe JSON encoding
-        const forensic_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), "forensic_metadata.json", .{});
-        defer forensic_file.close();
-
-        const metadata = ForensicMetadataJson{
-            .timestamp = compat_milliTimestamp(),
-            .audit_enabled = self.enabled,
-        };
-        const json_str = try json_lib.encode(allocator, metadata, .{});
-        defer allocator.free(json_str);
-        try forensic_file.writeAll(json_str);
-        try forensic_file.writeAll("\n");
-
-        total_size += 256; // Metadata size estimate
-        entry_count += 1;
-
-        // Calculate hash (simplified)
-        var hash_bytes: [32]u8 = undefined;
-        _ = try cb.Hash.digest(.sha256, &([_]u8{0} ** 32), &hash_bytes);
-        const hash_hex = std.fmt.bytesToHex(hash_bytes, .lower);
-        const hash = try allocator.dupe(u8, &hash_hex);
-
-        return .{
-            .package_path = package_path,
-            .size_bytes = total_size,
-            .hash = hash,
-            .entries = entry_count,
-        };
-    }
-
-    /// Export audit data for external verification
-    pub fn exportForVerification(self: *AuditLogger, allocator: std.mem.Allocator, format: []const u8) !struct {
-        export_path: []const u8,
-        format: []const u8,
-        checksum: []const u8,
-        records_exported: u64,
-    } {
-        _ = self;
-
-        // Determine export format and path
-        const export_path = if (std.mem.eql(u8, format, "csv"))
-            try allocator.dupe(u8, "audit_export.csv")
-        else if (std.mem.eql(u8, format, "xml"))
-            try allocator.dupe(u8, "audit_export.xml")
-        else
-            try allocator.dupe(u8, "audit_export.json");
-
-        // Create export file
-        const export_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), export_path, .{});
-        defer export_file.close();
-
-        var records_exported: u64 = 0;
-        const writer = export_file.writer();
-
-        if (std.mem.eql(u8, format, "csv")) {
-            // CSV header
-            try writer.print("timestamp,event_type,user_id,resource,action\n", .{});
-
-            // Export sample records
-            for (0..100) |i| {
-                try writer.print("{},{},{},{},{}\n", .{ compat_milliTimestamp() + @as(i64, @intCast(i)), "access_granted", i % 10, "resource", "SELECT" });
-                records_exported += 1;
-            }
-        } else if (std.mem.eql(u8, format, "xml")) {
-            // XML format
-            try writer.print("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n", .{});
-            try writer.print("<audit_export>\n", .{});
-
-            for (0..100) |i| {
-                try writer.print("  <event>\n", .{});
-                try writer.print("    <timestamp>{}</timestamp>\n", .{compat_milliTimestamp() + @as(i64, @intCast(i))});
-                try writer.print("    <type>access_granted</type>\n", .{});
-                try writer.print("    <user_id>{}</user_id>\n", .{i % 10});
-                try writer.print("  </event>\n", .{});
-                records_exported += 1;
-            }
-
-            try writer.print("</audit_export>\n", .{});
-        } else {
-            // JSON format (default) - using type-safe encoding
-            try writer.print("[\n", .{});
-
-            for (0..100) |i| {
-                if (i > 0) try writer.print(",\n", .{});
-                const event = ExportEventJson{
-                    .timestamp = compat_milliTimestamp() + @as(i64, @intCast(i)),
-                    .user_id = i % 10,
-                };
-                const event_json = try json_lib.encode(allocator, event, .{});
-                defer allocator.free(event_json);
-                try writer.print("  {s}", .{event_json});
-                records_exported += 1;
-            }
-
-            try writer.print("\n]\n", .{});
-        }
-
-        // Calculate checksum using SHA-256 (replacing MD5 per security audit #437)
-        var checksum_bytes: [32]u8 = undefined;
-        _ = try cb.Hash.digest(.sha256, &([_]u8{0} ** 32), &checksum_bytes);
-        const checksum_hex = std.fmt.bytesToHex(checksum_bytes, .lower);
-        const checksum = try allocator.dupe(u8, &checksum_hex);
-
-        return .{
-            .export_path = export_path,
-            .format = try allocator.dupe(u8, format),
-            .checksum = checksum,
-            .records_exported = records_exported,
-        };
-    }
-
-    /// Verify compliance with regulations
-    pub fn complianceVerification(self: *AuditLogger, allocator: std.mem.Allocator) !struct {
-        gdpr_compliant: bool,
-        sox_compliant: bool,
-        hipaa_compliant: bool,
-        pci_compliant: bool,
-        issues_found: u32,
-    } {
-        _ = allocator;
-
-        var issues: u32 = 0;
-
-        // Check GDPR compliance
-        var gdpr_compliant = true;
-        if (!self.enabled) {
-            gdpr_compliant = false;
-            issues += 1;
-        }
-        // Check data retention (must be configurable)
-        if (self.retention_days == 0 or self.retention_days > 2555) { // 7 years max
-            gdpr_compliant = false;
-            issues += 1;
-        }
-
-        // Check SOX compliance
-        var sox_compliant = true;
-        if (self.retention_days < 2555) { // SOX requires 7 years
-            sox_compliant = false;
-            issues += 1;
-        }
-        // Check tamper protection
-        if (!self.tamper_protected) {
-            sox_compliant = false;
-            issues += 1;
-        }
-
-        // Check HIPAA compliance
-        var hipaa_compliant = true;
-        if (!self.enabled) {
-            hipaa_compliant = false;
-            issues += 1;
-        }
-        // Check encryption
-        if (!self.encrypted) {
-            hipaa_compliant = false;
-            issues += 1;
-        }
-
-        // Check PCI compliance
-        var pci_compliant = true;
-        if (!self.enabled) {
-            pci_compliant = false;
-            issues += 1;
-        }
-        // Check access logging
-        if (!self.log_access_events) {
-            pci_compliant = false;
-            issues += 1;
-        }
-
-        return .{
-            .gdpr_compliant = gdpr_compliant,
-            .sox_compliant = sox_compliant,
-            .hipaa_compliant = hipaa_compliant,
-            .pci_compliant = pci_compliant,
-            .issues_found = issues,
-        };
-    }
-
-    /// CANARY: REQ=REQ-AUDIT-PWSH-001; FEATURE="PowerShell Compatibility"; ASPECT=PlatformDetection; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-13
-    /// GAP-0152 RESOLVED: Replaced random simulation with deterministic platform-based behavior
-    ///
-    /// Test PowerShell compatibility for Windows integration.
-    /// On non-Windows platforms, returns a deterministic "not available" result.
-    /// On Windows, returns cmdlet compatibility information based on available PowerShell features.
-    ///
-    /// NOTE: Actual PowerShell cmdlet execution requires Geode PowerShell module installation.
-    /// This function validates the environment readiness for PowerShell integration.
-    pub fn testPowershellCompatibility(self: *AuditLogger, allocator: std.mem.Allocator) !struct {
-        compatible: bool,
-        cmdlets_tested: u32,
-        failures: u32,
-        platform_supported: bool,
-        output: []const u8,
-    } {
-        _ = self;
-
-        var output_buf: std.Io.Writer.Allocating = try .initCapacity(allocator, 1024);
-        defer output_buf.deinit();
-        const writer = &output_buf.writer;
-
-        const is_windows = @import("builtin").os.tag == .windows;
-
-        if (!is_windows) {
-            // Non-Windows platform: return deterministic "not supported" result
-            try writer.print("PowerShell Integration Status\n", .{});
-            try writer.print("=============================\n", .{});
-            try writer.print("Platform: {s}\n", .{@tagName(@import("builtin").os.tag)});
-            try writer.print("PowerShell Available: No (Windows-only feature)\n", .{});
-            try writer.print("\nTo use PowerShell integration:\n", .{});
-            try writer.print("  1. Run Geode on Windows Server 2019+ or Windows 10+\n", .{});
-            try writer.print("  2. Install Geode PowerShell module: Install-Module GeodeAudit\n", .{});
-            try writer.print("  3. Import module: Import-Module GeodeAudit\n", .{});
-
-            return .{
-                .compatible = false,
-                .cmdlets_tested = 0,
-                .failures = 0,
-                .platform_supported = false,
-                .output = try output_buf.toOwnedSlice(),
-            };
-        }
-
-        // Windows platform: report available cmdlets (deterministic)
-        const cmdlets = [_][]const u8{ "Get-AuditLog", "Export-AuditData", "Test-Compliance", "New-ForensicPackage", "Invoke-SecurityScan" };
-        var cmdlets_tested: u32 = 0;
-
-        try writer.print("PowerShell Integration Status\n", .{});
-        try writer.print("=============================\n", .{});
-        try writer.print("Platform: Windows\n", .{});
-        try writer.print("PowerShell Available: Yes\n", .{});
-        try writer.print("\nAvailable Cmdlets:\n", .{});
-
-        for (cmdlets) |cmdlet| {
-            cmdlets_tested += 1;
-            try writer.print("  {s}: Available\n", .{cmdlet});
-        }
-
-        try writer.print("\nSupported Parameters:\n", .{});
-        try writer.print("  -StartDate: DateTime filter\n", .{});
-        try writer.print("  -EndDate: DateTime filter\n", .{});
-        try writer.print("  -Format: Output format (JSON, CSV, XML)\n", .{});
-        try writer.print("  -OutputPath: File output path\n", .{});
-        try writer.print("\nNote: Install GeodeAudit module for full functionality\n", .{});
-
-        return .{
-            .compatible = true,
-            .cmdlets_tested = cmdlets_tested,
-            .failures = 0,
-            .platform_supported = true,
-            .output = try output_buf.toOwnedSlice(),
-        };
-    }
 };
-
-// Unit tests for audit module
-// CANARY: REQ=REQ-AUDIT-TEST-001; FEATURE="Audit Unit Tests"; ASPECT=UnitTests; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_compliance_v2.yml; OWNER=security; UPDATED=2026-01-13
-
-test "TestCANARY_REQ_AUDIT_PWSH_001_PowerShellDeterminism" {
-    // GAP-0152: Verify PowerShell compatibility test is deterministic
-    const allocator = std.testing.allocator;
-
-    // Use the proper constructor — testPowershellCompatibility ignores self
-    var logger = try AuditLogger.init(allocator, .{ .enabled = false });
-    defer logger.deinit();
-
-    // Run test twice - results must be identical
-    const result1 = try logger.testPowershellCompatibility(allocator);
-    defer allocator.free(result1.output);
-
-    const result2 = try logger.testPowershellCompatibility(allocator);
-    defer allocator.free(result2.output);
-
-    // Verify deterministic behavior
-    try std.testing.expectEqual(result1.compatible, result2.compatible);
-    try std.testing.expectEqual(result1.cmdlets_tested, result2.cmdlets_tested);
-    try std.testing.expectEqual(result1.failures, result2.failures);
-    try std.testing.expectEqual(result1.platform_supported, result2.platform_supported);
-    try std.testing.expectEqualStrings(result1.output, result2.output);
-
-    // Verify platform detection on Linux
-    const is_windows = @import("builtin").os.tag == .windows;
-    try std.testing.expectEqual(is_windows, result1.platform_supported);
-
-    // On non-Windows, should have 0 cmdlets tested and failures
-    if (!is_windows) {
-        try std.testing.expectEqual(@as(u32, 0), result1.cmdlets_tested);
-        try std.testing.expectEqual(@as(u32, 0), result1.failures);
-        try std.testing.expectEqual(false, result1.compatible);
-    }
-}

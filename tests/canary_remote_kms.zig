@@ -5,6 +5,9 @@ const kms = @import("security/kms_remote");
 // SONNY-2394 review: a private certificate pair per server -- the aggregate
 // runs the KMS test binaries concurrently, and they used to race on ./certs.
 const kms_tls = @import("kms_test_tls.zig");
+// SONNY-6332: every server starts on port 0 and clients dial `server.port`
+// (the bound port). The fixed ports 8876-8880 were shared with any other run
+// on the host, and the QUIC socket's SO_REUSEADDR let both bind them.
 
 // CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=TEST; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate; OWNER=security; UPDATED=2025-09-26
 // CANARY: REQ=REQ-GQL-TDE-ATTEST-001; FEATURE="RemoteKmsAttestation"; ASPECT=TEST; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub; OWNER=security; UPDATED=2025-09-26
@@ -29,7 +32,7 @@ test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate" {
     var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0xBEEFCAFE);
     var tls = try kms_tls.TestTls.init(gpa.allocator());
     defer tls.deinit(gpa.allocator());
-    try server.startWithOptions(8876, tls.startOptions());
+    try server.startWithOptions(0, tls.startOptions());
     try server.server.setAuthToken("TOKEN123");
 
     // Spawn a thread to process a few requests sequentially
@@ -41,7 +44,8 @@ test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate" {
     defer t.join();
 
     var client = kms.RemoteKmsClient.init(gpa.allocator());
-    try client.connect("127.0.0.1", 8876);
+    client.ca_cert_path = tls.caPath(); // SONNY-6442: verify the server
+    try client.connect("127.0.0.1", server.port);
     client.setAuthToken("TOKEN123");
     const env = try client.generate();
     _ = env; // For now just ensure parse succeeded
@@ -59,7 +63,7 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub" {
     var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0xABCD1234);
     var tls = try kms_tls.TestTls.init(gpa.allocator());
     defer tls.deinit(gpa.allocator());
-    try server.startWithOptions(8877, tls.startOptions());
+    try server.startWithOptions(0, tls.startOptions());
     try server.server.setAuthToken("TOKEN123");
     var t = try std.Thread.spawn(.{}, struct {
         fn run(s: *kms.RemoteKmsServer) void {
@@ -68,10 +72,13 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub" {
     }.run, .{&server});
     defer t.join();
     var client = kms.RemoteKmsClient.init(gpa.allocator());
-    try client.connect("127.0.0.1", 8877);
+    client.ca_cert_path = tls.caPath(); // SONNY-6442: verify the server
+    try client.connect("127.0.0.1", server.port);
     client.setAuthToken("TOKEN123");
+    // SONNY-6435: the client trusts only a pinned attestation key.
+    client.pinAttestationKey(try server.server.attestationPublicKey());
     const hash = try client.attest();
-    try std.testing.expect(hash.len == 32);
+    try std.testing.expectEqualSlices(u8, &server.server.attestation_hash, &hash);
 }
 
 test "TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap" {
@@ -86,7 +93,7 @@ test "TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap" {
     var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0x11223344);
     var tls = try kms_tls.TestTls.init(gpa.allocator());
     defer tls.deinit(gpa.allocator());
-    try server.startWithOptions(8878, tls.startOptions());
+    try server.startWithOptions(0, tls.startOptions());
     try server.server.setAuthToken("TOKEN123");
     var t = try std.Thread.spawn(.{}, struct {
         fn run(s: *kms.RemoteKmsServer) void {
@@ -95,7 +102,8 @@ test "TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap" {
     }.run, .{&server});
     defer t.join();
     var client = kms.RemoteKmsClient.init(gpa.allocator());
-    try client.connect("127.0.0.1", 8878);
+    client.ca_cert_path = tls.caPath(); // SONNY-6442: verify the server
+    try client.connect("127.0.0.1", server.port);
     client.setAuthToken("TOKEN123");
     const env = try client.generate();
     const plain = try client.privUnwrap(env);
@@ -118,7 +126,7 @@ test "QuicClient.connect normalizes localhost to 127.0.0.1 (GAP-0514 P3)" {
     var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0x10CA1057);
     var tls = try kms_tls.TestTls.init(gpa.allocator());
     defer tls.deinit(gpa.allocator());
-    try server.startWithOptions(8879, tls.startOptions());
+    try server.startWithOptions(0, tls.startOptions());
     try server.server.setAuthToken("TOKEN123");
     var t = try std.Thread.spawn(.{}, struct {
         fn run(s: *kms.RemoteKmsServer) void {
@@ -128,8 +136,9 @@ test "QuicClient.connect normalizes localhost to 127.0.0.1 (GAP-0514 P3)" {
     defer t.join();
 
     var client = kms.RemoteKmsClient.init(gpa.allocator());
+    client.ca_cert_path = tls.caPath(); // SONNY-6442: verify the server
     // Connect via the DNS name: only works if normalization rewrites it.
-    try client.connect("localhost", 8879);
+    try client.connect("localhost", server.port);
     client.setAuthToken("TOKEN123");
     const env = try client.generate();
     _ = env;
@@ -149,7 +158,7 @@ test "QuicClientStream.readLine: WouldBlock on quiet stream, Interrupted with ar
     var server = try kms.RemoteKmsServer.init(gpa.allocator(), 0x0DDB17E5);
     var tls = try kms_tls.TestTls.init(gpa.allocator());
     defer tls.deinit(gpa.allocator());
-    try server.startWithOptions(8880, tls.startOptions());
+    try server.startWithOptions(0, tls.startOptions());
     try server.server.setAuthToken("TOKEN123");
     var t = try std.Thread.spawn(.{}, struct {
         fn run(s: *kms.RemoteKmsServer) void {
@@ -159,7 +168,8 @@ test "QuicClientStream.readLine: WouldBlock on quiet stream, Interrupted with ar
     defer t.join();
 
     var client = kms.RemoteKmsClient.init(gpa.allocator());
-    try client.connect("127.0.0.1", 8880);
+    client.ca_cert_path = tls.caPath(); // SONNY-6442: verify the server
+    try client.connect("127.0.0.1", server.port);
 
     var stream = try client.quic_client.?.getStream();
     defer stream.close();

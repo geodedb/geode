@@ -28,6 +28,10 @@ const CompatTimer = struct {
 };
 const builtin = @import("builtin");
 const repl_errors = @import("repl_errors.zig");
+/// SONNY-6544: \connect prints its address through dsn_credentials.redacted.
+const dsn_credentials = @import("../dsn_credentials.zig");
+/// SONNY-6589: a refused \connect prints the shared endpoint message.
+const zig_quic_bridge = @import("../zig_quic_bridge.zig");
 const repl_render = @import("repl_render.zig");
 const platform = @import("platform.zig");
 const spinner_mod = @import("spinner.zig");
@@ -92,6 +96,15 @@ fn isValidGraphName(name: []const u8) bool {
         if (!valid) return false;
     }
     return true;
+}
+
+/// SONNY-6494: write a formatted reply sized to its text. The replies that
+/// echo user text were formatted into fixed stack buffers, so long text made
+/// the command fail with NoSpaceLeft (or, with `catch return`, do nothing).
+fn writeFmt(file: std.Io.File, allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
+    const msg = try std.fmt.allocPrint(allocator, fmt, args);
+    defer allocator.free(msg);
+    try file.writeStreamingAll(replIo(), msg);
 }
 
 fn clearSessionLastResponse(session: *ClientSession) void {
@@ -166,7 +179,7 @@ const LastPayloadKind = enum {
     @"error",
 };
 
-// CANARY: REQ=REQ-SHELL-INTERRUPT-003; FEATURE="SourceInterrupt"; ASPECT=CheckFunction; STATUS=TESTED; TEST=tests/test_repl.zig; OWNER=cli; UPDATED=2026-01-30
+// CANARY: REQ=REQ-SHELL-INTERRUPT-003; FEATURE="SourceInterrupt"; ASPECT=CheckFunction; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-11-12
 // Issue #390: Helper function to check for Ctrl+C (ASCII 3) in stdin without blocking
 // Made public so it can be used by other modules for interrupt handling
 // In raw terminal mode, Ctrl+C generates ASCII 3 which we poll for
@@ -208,7 +221,7 @@ pub fn checkForInterrupt() bool {
     return false;
 }
 
-// CANARY: REQ=REQ-REPL-QUIC-001; FEATURE="REPL QUIC Integration"; ASPECT=ClientSession; STATUS=TESTED; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=repl; UPDATED=2026-01-15
+// CANARY: REQ=REQ-REPL-QUIC-001; FEATURE="REPL QUIC Integration"; ASPECT=ClientSession; STATUS=IMPL; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=repl; UPDATED=2026-11-14
 
 // Transport interface - implemented by CLI layer to avoid module conflicts
 
@@ -1143,7 +1156,7 @@ pub const ClientSession = struct {
     }
 
     /// GAP-0150: Authenticated HELLO handshake for CLI authentication
-    /// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=AuthenticatedHello; STATUS=TESTED; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=security; UPDATED=2026-01-15
+    /// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=AuthenticatedHello; STATUS=IMPL; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=security; UPDATED=2026-11-14
     pub const AuthHelloResult = struct {
         success: bool,
         session_token: ?[]const u8,
@@ -2015,8 +2028,13 @@ pub fn promptTransactionRecovery(pending_state: *const PendingTransactionState) 
     try stdout.writeStreamingAll(replIo(), stmt_msg);
 
     if (pending_state.current_graph) |graph| {
-        const graph_msg = std.fmt.bufPrint(&buf, "║ Graph context: {s:<45} ║\r\n", .{graph}) catch "";
-        try stdout.writeStreamingAll(replIo(), graph_msg);
+        // SONNY-6494: written in parts; a name longer than the 256-byte
+        // buffer it was formatted into was dropped without a word.
+        try stdout.writeStreamingAll(replIo(), "║ Graph context: ");
+        try stdout.writeStreamingAll(replIo(), graph);
+        const pad = "                                             "; // 45
+        if (graph.len < pad.len) try stdout.writeStreamingAll(replIo(), pad[graph.len..]);
+        try stdout.writeStreamingAll(replIo(), " ║\r\n");
     } else {
         try stdout.writeStreamingAll(replIo(), "║ Graph context: (default)                                     ║\r\n");
     }
@@ -2324,24 +2342,58 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
                 0;
 
             for (state.history.entries.items[start..], start..) |entry, i| {
-                var buf: [1024]u8 = undefined;
-                const line = try std.fmt.bufPrint(&buf, "{d:4}: {s}\r\n", .{ i + 1, entry });
-                try stdout.writeStreamingAll(replIo(), line);
+                try writeFmt(stdout, state.allocator, "{d:4}: {s}\r\n", .{ i + 1, entry });
             }
         }
     } else if (std.mem.eql(u8, cmd, "clear")) {
         try stdout.writeStreamingAll(replIo(), "\x1b[2J\x1b[H"); // Clear screen and home cursor
     } else if (std.mem.eql(u8, cmd, "connect")) {
         if (args.len > 0) {
-            // Save the current transport before deinit
+            // CANARY: REQ=REQ-SONNY-6589-CLI-ADDRESS-MESSAGES; FEATURE="CLI"; ASPECT=RefusedConnectKeepsSession; STATUS=TESTED; TEST=tests/test_sonny6589_cli_messages.zig; OWNER=cli; UPDATED=2026-11-15
+            // SONNY-6589 (4): the new session is connected before the
+            // current one is replaced, so a refused \connect leaves the
+            // shell where it was; the refusal is the endpoint message
+            // (`zig_quic_bridge.endpointErrorMessage`), never the address,
+            // which may carry a password. It reached the user as a bare
+            // error name, with the working session already torn down.
             const current_transport = state.session.transport orelse return error.NoTransport;
+            var next = try ClientSession.init(state.allocator, args, current_transport);
+            // CANARY: REQ=REQ-SONNY-6606-REPL-CONNECT-CREDENTIALS; FEATURE="CLI"; ASPECT=ConnectAuthenticates; STATUS=TESTED; TEST=tests/test_sonny6606_repl_connect_credentials.zig; OWNER=cli; UPDATED=2026-11-15
+            // SONNY-6606 (5): the HELLO carries the credentials the shell
+            // logged in with, as its automatic reconnect does; it carried
+            // none, so a server with authentication on (the default) refused
+            // every \connect ("AuthenticationRequired").
+            var refusal: ?[]const u8 = null;
+            defer if (refusal) |r| state.allocator.free(r);
+            const connected: ?anyerror = blk: {
+                next.connect() catch |err| break :blk err;
+                const user = state.session.cached_username orelse {
+                    next.hello() catch |err| break :blk err;
+                    break :blk null;
+                };
+                const password = state.session.cached_password orelse "";
+                const auth = next.helloWithAuth(user, password) catch |err| break :blk err;
+                if (auth.session_token) |t| state.allocator.free(t);
+                if (!auth.success) {
+                    refusal = auth.error_message;
+                    break :blk error.AuthenticationFailed;
+                }
+                if (auth.error_message) |m| state.allocator.free(m);
+                next.cacheCredentials(user, password) catch |err| break :blk err;
+                break :blk null;
+            };
+            if (connected) |err| {
+                next.deinit();
+                const why = refusal orelse zig_quic_bridge.endpointErrorMessage(err) orelse @errorName(err);
+                const stderr = platform.getStderrHandle();
+                const msg = try std.fmt.allocPrint(state.allocator, "Error [GEODE-E2002]: \\connect failed: {s}; still connected to the previous server\r\n", .{why});
+                defer state.allocator.free(msg);
+                try stderr.writeStreamingAll(replIo(), msg);
+                return;
+            }
             state.session.deinit();
-            state.session.* = try ClientSession.init(state.allocator, args, current_transport);
-            try state.session.connect();
-            try state.session.hello();
-            var buf: [256]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&buf, "Connected to {s}\r\n", .{args});
-            try stdout.writeStreamingAll(replIo(), msg);
+            state.session.* = next;
+            try writeFmt(stdout, state.allocator, "Connected to {f}\r\n", .{dsn_credentials.redacted(args)});
         } else {
             const stderr = platform.getStderrHandle();
             var buf: [512]u8 = undefined;
@@ -2380,9 +2432,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
             // Sync session graph for HELLO on reconnect
             if (state.session.graph) |old_graph| state.allocator.free(old_graph);
             state.session.graph = try state.allocator.dupe(u8, graph_name);
-            var buf: [256]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&buf, "Switched to graph: {s}\r\n", .{graph_name});
-            try stdout.writeStreamingAll(replIo(), msg);
+            try writeFmt(stdout, state.allocator, "Switched to graph: {s}\r\n", .{graph_name});
         } else {
             const stderr = platform.getStderrHandle();
             try stderr.writeStreamingAll(replIo(), "Error [GEODE-E2002]: Usage: \\use <graph_name>\r\n");
@@ -2390,9 +2440,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
     } else if (std.mem.eql(u8, cmd, "graph")) {
         // \graph - Show current graph
         if (state.current_graph) |graph| {
-            var buf: [256]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&buf, "Current graph: {s}\r\n", .{graph});
-            try stdout.writeStreamingAll(replIo(), msg);
+            try writeFmt(stdout, state.allocator, "Current graph: {s}\r\n", .{graph});
         } else {
             try stdout.writeStreamingAll(replIo(), "No graph selected (using default)\r\n");
         }
@@ -2461,14 +2509,10 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
                 try stderr.writeStreamingAll(replIo(), msg);
             }
         } else {
-            var buf: [256]u8 = undefined;
-            const msg = try std.fmt.bufPrint(&buf, "Unknown option: {s}\r\n", .{parts[0]});
-            try stdout.writeStreamingAll(replIo(), msg);
+            try writeFmt(stdout, state.allocator, "Unknown option: {s}\r\n", .{parts[0]});
         }
     } else if (std.mem.eql(u8, cmd, "echo")) {
-        var buf: [512]u8 = undefined;
-        const msg = try std.fmt.bufPrint(&buf, "{s}\r\n", .{args});
-        try stdout.writeStreamingAll(replIo(), msg);
+        try writeFmt(stdout, state.allocator, "{s}\r\n", .{args});
     } else if (std.mem.eql(u8, cmd, "source")) {
         // \source <file> - Execute commands from a GQL file
         if (args.len > 0) {
@@ -2482,9 +2526,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         try stderr.writeStreamingAll(replIo(), "Error [GEODE-E2001]: Unknown command '\\connet'. Did you mean '\\connect'?\r\n");
     } else {
         const stderr = platform.getStderrHandle();
-        var buf: [256]u8 = undefined;
-        const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2001]: Unknown command '\\{s}'\r\n", .{cmd});
-        try stderr.writeStreamingAll(replIo(), msg);
+        try writeFmt(stderr, state.allocator, "Error [GEODE-E2001]: Unknown command '\\{s}'\r\n", .{cmd});
     }
 }
 
@@ -2744,9 +2786,9 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
 
     // Open the file
     const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), resolved_path, .{}) catch |err| {
-        var buf: [512]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "Error [GEODE-E2005]: Cannot open file '{s}': {s}\r\n", .{ resolved_path, @errorName(err) }) catch return;
-        try stderr.writeStreamingAll(replIo(), msg);
+        // SONNY-6494: a path over ~480 bytes did not fit a 512-byte buffer
+        // and the command returned without a word.
+        try writeFmt(stderr, state.allocator, "Error [GEODE-E2005]: Cannot open file '{s}': {s}\r\n", .{ resolved_path, @errorName(err) });
         return;
     };
     const repl_io = std.Io.Threaded.global_single_threaded.io();
@@ -2810,11 +2852,9 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     }
 
     // Display source file info
-    var info_buf: [512]u8 = undefined;
-    const info_msg = std.fmt.bufPrint(&info_buf, "Sourcing: {s}\r\n", .{resolved_path}) catch return;
-    try stdout.writeStreamingAll(replIo(), info_msg);
+    try writeFmt(stdout, state.allocator, "Sourcing: {s}\r\n", .{resolved_path});
 
-    // CANARY: REQ=REQ-SHELL-SPINNER-003; FEATURE="ShellProcessingIndicator"; ASPECT=SourceFileSpinner; STATUS=TESTED; TEST=tests/test_spinner.zig; OWNER=cli; UPDATED=2026-01-30
+    // CANARY: REQ=REQ-SHELL-SPINNER-003; FEATURE="ShellProcessingIndicator"; ASPECT=SourceFileSpinner; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig:"executeSourceFile: small batch path, re-source tracking, error extraction"; OWNER=cli; UPDATED=2026-11-12
     // Initialize spinner with background thread for visual feedback during long-running source operations
     // Using startBackground() ensures animation continues during blocking server calls
     var progress_spinner = spinner_mod.Spinner.init(state.allocator, "Parsing file...");
@@ -3174,7 +3214,7 @@ const MetaCommand = struct {
     position: usize, // Statement position where this command appears
 };
 
-/// CANARY: REQ=REQ-SHELL-SOURCE-ERROR-003; FEATURE="SourceFileErrorDetails"; ASPECT=ErrorExtraction; STATUS=TESTED; TEST=tests/test_repl.zig; OWNER=cli; UPDATED=2026-01-30
+/// CANARY: REQ=REQ-SHELL-SOURCE-ERROR-003; FEATURE="SourceFileErrorDetails"; ASPECT=ErrorExtraction; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=cli; UPDATED=2026-11-12
 /// Extract the error message from a server response for user-friendly display
 pub fn extractServerErrorMessage(allocator: std.mem.Allocator, response: []const u8) ?[]const u8 {
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, response, .{}) catch {
@@ -3256,53 +3296,11 @@ fn executeMetaCommand(state: anytype, mc: MetaCommand, stdout: anytype) void {
     }
 }
 
-/// CANARY: REQ=REQ-SOURCE-PERF-011; FEATURE="SourceFilePerformance"; ASPECT=TransactionDetection; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
-/// Check if a batch of GQL statements contains explicit transaction commands
-/// Returns true if BEGIN, COMMIT, or ROLLBACK statements are found
-/// This is used to avoid auto-wrapping files that manage their own transactions
-pub fn containsTransactionCommands(batch: []const u8) bool {
-    // Transaction keywords to detect (case-insensitive matching)
-    const txn_keywords = [_][]const u8{ "BEGIN", "COMMIT", "ROLLBACK", "begin", "commit", "rollback", "Begin", "Commit", "Rollback" };
-
-    var i: usize = 0;
-    while (i < batch.len) {
-        // Skip whitespace
-        while (i < batch.len and (batch[i] == ' ' or batch[i] == '\t' or batch[i] == '\n' or batch[i] == '\r')) {
-            i += 1;
-        }
-        if (i >= batch.len) break;
-
-        // Check for transaction keywords at word boundary
-        for (txn_keywords) |keyword| {
-            if (i + keyword.len <= batch.len) {
-                const slice = batch[i .. i + keyword.len];
-                if (std.mem.eql(u8, slice, keyword)) {
-                    // Verify it's at a word boundary (not part of a larger identifier)
-                    const at_end = (i + keyword.len >= batch.len);
-                    const next_is_boundary = at_end or !isIdentifierChar(batch[i + keyword.len]);
-                    if (next_is_boundary) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        // Skip to next potential word boundary
-        while (i < batch.len and batch[i] != ' ' and batch[i] != '\t' and batch[i] != '\n' and batch[i] != '\r' and batch[i] != ';') {
-            i += 1;
-        }
-        // Skip past semicolon if present
-        if (i < batch.len and batch[i] == ';') {
-            i += 1;
-        }
-    }
-    return false;
-}
-
-/// Helper to check if a character is part of an identifier
-fn isIdentifierChar(c: u8) bool {
-    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_';
-}
+// SONNY-6511: containsTransactionCommands (and its isIdentifierChar helper)
+// deleted. It decided whether \source wrapped a file in a transaction;
+// that wrapping was removed in 882bccfc8 (2026-01-30) and nothing called it
+// since. It also matched only three casings of each keyword and keywords
+// used as identifiers.
 
 /// Extract the result from a response and display it appropriately
 /// Returns true if an error was found and displayed
@@ -4154,19 +4152,19 @@ fn scriptedTransportStubConnect(_: std.mem.Allocator, _: []const u8) anyerror!*T
     return error.NotConnected;
 }
 
-test "TestShellAuthDetection_AuthenticationRequiredInResponse" {
+test "repl_dispatch: TestShellAuthDetection_AuthenticationRequiredInResponse" {
     // Issue #387: Test that "Authentication required" is detected in server response
     const auth_required_response = "{\"status_class\":\"42000\",\"type\":\"ERROR\",\"message\":\"Authentication required\"}";
     try testing.expect(std.mem.indexOf(u8, auth_required_response, "Authentication required") != null);
 }
 
-test "TestShellAuthDetection_NoAuthInSuccessResponse" {
+test "repl_dispatch: TestShellAuthDetection_NoAuthInSuccessResponse" {
     // Issue #387: Test that success response doesn't trigger auth required
     const success_response = "{\"type\":\"HELLO\",\"server_name\":\"geode\",\"server_ver\":\"0.18.0\"}";
     try testing.expect(std.mem.indexOf(u8, success_response, "Authentication required") == null);
 }
 
-test "TestShellAuthDetection_ErrorMessageExtraction" {
+test "repl_dispatch: TestShellAuthDetection_ErrorMessageExtraction" {
     // Issue #387: Test error message parsing from auth failure
     const error_response = "{\"status_class\":\"42000\",\"type\":\"ERROR\",\"message\":\"Invalid credentials\"}";
     try testing.expect(std.mem.indexOf(u8, error_response, "Invalid credentials") != null);
@@ -4175,7 +4173,7 @@ test "TestShellAuthDetection_ErrorMessageExtraction" {
 // CANARY: REQ=REQ-SOURCE-PERF-003; FEATURE="SourceFilePerformance"; ASPECT=UnitTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
 // Issue #391/#392: Unit tests for source file hash caching
 
-test "TestFileHashContent_DeterministicHash" {
+test "repl_dispatch: TestFileHashContent_DeterministicHash" {
     // Issue #391/#392: Test that identical content produces identical hash
     const content1 = "CREATE (n:Person {name: 'Alice'});";
     const content2 = "CREATE (n:Person {name: 'Alice'});";
@@ -4184,7 +4182,7 @@ test "TestFileHashContent_DeterministicHash" {
     try testing.expectEqual(hash1, hash2);
 }
 
-test "TestFileHashContent_DifferentContentDifferentHash" {
+test "repl_dispatch: TestFileHashContent_DifferentContentDifferentHash" {
     // Issue #391/#392: Test that different content produces different hash
     const content1 = "CREATE (n:Person {name: 'Alice'});";
     const content2 = "CREATE (n:Person {name: 'Bob'});";
@@ -4193,7 +4191,7 @@ test "TestFileHashContent_DifferentContentDifferentHash" {
     try testing.expect(hash1 != hash2);
 }
 
-test "TestFileHashContent_EmptyContent" {
+test "repl_dispatch: TestFileHashContent_EmptyContent" {
     // Issue #391/#392: Test hash of empty content
     const content = "";
     const hash = hashFileContent(content);
@@ -4201,7 +4199,7 @@ test "TestFileHashContent_EmptyContent" {
     try testing.expectEqual(@as(u64, 5381), hash);
 }
 
-test "TestFileHashContent_LargeContent" {
+test "repl_dispatch: TestFileHashContent_LargeContent" {
     // Issue #391/#392: Test hash of larger content (simulate a source file)
     const content =
         \\-- Sample GQL source file
@@ -4217,341 +4215,7 @@ test "TestFileHashContent_LargeContent" {
     try testing.expect(hash != 5381); // Not the empty string hash
 }
 
-// =============================================================================
-// Issue #400: /source batch execution unit tests
-// CANARY: REQ=REQ-SOURCE-PERF-006; FEATURE="SourceBatchTests"; ASPECT=UnitTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
-// =============================================================================
-
-test "TestSourceBatch_ParseSimpleStatements" {
-    // Test parsing simple GQL statements into batch
-    const allocator = testing.allocator;
-    const content =
-        \\CREATE (a:Person {name: 'Alice'});
-        \\CREATE (b:Person {name: 'Bob'});
-        \\MATCH (n) RETURN n;
-    ;
-
-    var batch = std.ArrayList(u8).init(allocator);
-    defer batch.deinit();
-
-    var stmt_count: usize = 0;
-    var current = std.ArrayList(u8).init(allocator);
-    defer current.deinit();
-
-    var lines = std.mem.splitSequence(u8, content, "\n");
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0) continue;
-
-        if (current.items.len > 0) {
-            try current.append(' ');
-        }
-        try current.appendSlice(trimmed);
-
-        if (std.mem.endsWith(u8, trimmed, ";")) {
-            if (batch.items.len > 0) {
-                try batch.append(' ');
-            }
-            try batch.appendSlice(current.items);
-            stmt_count += 1;
-            current.clearRetainingCapacity();
-        }
-    }
-
-    try testing.expectEqual(@as(usize, 3), stmt_count);
-    try testing.expect(std.mem.indexOf(u8, batch.items, "CREATE (a:Person") != null);
-    try testing.expect(std.mem.indexOf(u8, batch.items, "CREATE (b:Person") != null);
-    try testing.expect(std.mem.indexOf(u8, batch.items, "MATCH (n) RETURN n") != null);
-}
-
-test "TestSourceBatch_SkipComments" {
-    // Test that comments are properly skipped during batch parsing
-    const content =
-        \\-- This is a comment
-        \\CREATE (a:Person);
-        \\# Another comment style
-        \\CREATE (b:Person);
-        \\-- Final comment
-    ;
-
-    var stmt_count: usize = 0;
-    var lines = std.mem.splitSequence(u8, content, "\n");
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0) continue;
-        if (std.mem.startsWith(u8, trimmed, "--")) continue;
-        if (std.mem.startsWith(u8, trimmed, "#")) continue;
-
-        if (std.mem.endsWith(u8, trimmed, ";")) {
-            stmt_count += 1;
-        }
-    }
-
-    try testing.expectEqual(@as(usize, 2), stmt_count);
-}
-
-test "TestSourceBatch_MultiLineStatements" {
-    // Test parsing multi-line statements
-    const allocator = testing.allocator;
-    const content =
-        \\CREATE (a:Person {
-        \\  name: 'Alice',
-        \\  age: 30
-        \\});
-        \\MATCH (n)
-        \\WHERE n.age > 25
-        \\RETURN n;
-    ;
-
-    var batch = std.ArrayList(u8).init(allocator);
-    defer batch.deinit();
-
-    var stmt_count: usize = 0;
-    var current = std.ArrayList(u8).init(allocator);
-    defer current.deinit();
-
-    var lines = std.mem.splitSequence(u8, content, "\n");
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0) continue;
-
-        if (current.items.len > 0) {
-            try current.append(' ');
-        }
-        try current.appendSlice(trimmed);
-
-        if (std.mem.endsWith(u8, trimmed, ";")) {
-            if (batch.items.len > 0) {
-                try batch.append(' ');
-            }
-            try batch.appendSlice(current.items);
-            stmt_count += 1;
-            current.clearRetainingCapacity();
-        }
-    }
-
-    try testing.expectEqual(@as(usize, 2), stmt_count);
-    // Verify statements are properly joined
-    try testing.expect(std.mem.indexOf(u8, batch.items, "name: 'Alice', age: 30") != null);
-    try testing.expect(std.mem.indexOf(u8, batch.items, "WHERE n.age > 25 RETURN n") != null);
-}
-
-test "TestSourceBatch_MetaCommandConversion" {
-    // Test that \use is converted to USE GRAPH statement
-    const allocator = testing.allocator;
-
-    var batch = std.ArrayList(u8).init(allocator);
-    defer batch.deinit();
-
-    // Simulate \use conversion
-    const use_cmd = "\\use my_graph";
-    if (std.mem.startsWith(u8, use_cmd, "\\use")) {
-        const args = std.mem.trim(u8, use_cmd[4..], " \t;");
-        const use_stmt = try std.fmt.allocPrint(allocator, "USE GRAPH {s};", .{args});
-        defer allocator.free(use_stmt);
-        try batch.appendSlice(use_stmt);
-    }
-
-    try testing.expect(std.mem.eql(u8, batch.items, "USE GRAPH my_graph;"));
-}
-
-test "TestSourceBatch_EmptyFile" {
-    // Test handling of empty file
-    const content = "";
-    var lines = std.mem.splitSequence(u8, content, "\n");
-    var stmt_count: usize = 0;
-
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0) continue;
-        if (std.mem.endsWith(u8, trimmed, ";")) {
-            stmt_count += 1;
-        }
-    }
-
-    try testing.expectEqual(@as(usize, 0), stmt_count);
-}
-
-test "TestSourceBatch_OnlyComments" {
-    // Test file with only comments
-    const content =
-        \\-- Comment 1
-        \\# Comment 2
-        \\-- Comment 3
-    ;
-
-    var stmt_count: usize = 0;
-    var lines = std.mem.splitSequence(u8, content, "\n");
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0) continue;
-        if (std.mem.startsWith(u8, trimmed, "--")) continue;
-        if (std.mem.startsWith(u8, trimmed, "#")) continue;
-        if (std.mem.endsWith(u8, trimmed, ";")) {
-            stmt_count += 1;
-        }
-    }
-
-    try testing.expectEqual(@as(usize, 0), stmt_count);
-}
-
-test "TestSourceBatch_MixedContentWithComments" {
-    // Test mixed content with interleaved comments
-    const allocator = testing.allocator;
-    const content =
-        \\-- Setup section
-        \\CREATE GRAPH test;
-        \\# Switch to graph
-        \\USE GRAPH test;
-        \\-- Create nodes
-        \\CREATE (a:Node);
-        \\CREATE (b:Node);
-        \\-- Done
-    ;
-
-    var batch = std.ArrayList(u8).init(allocator);
-    defer batch.deinit();
-
-    var stmt_count: usize = 0;
-    var current = std.ArrayList(u8).init(allocator);
-    defer current.deinit();
-
-    var lines = std.mem.splitSequence(u8, content, "\n");
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0) continue;
-        if (std.mem.startsWith(u8, trimmed, "--")) continue;
-        if (std.mem.startsWith(u8, trimmed, "#")) continue;
-
-        if (current.items.len > 0) {
-            try current.append(' ');
-        }
-        try current.appendSlice(trimmed);
-
-        if (std.mem.endsWith(u8, trimmed, ";")) {
-            if (batch.items.len > 0) {
-                try batch.append(' ');
-            }
-            try batch.appendSlice(current.items);
-            stmt_count += 1;
-            current.clearRetainingCapacity();
-        }
-    }
-
-    try testing.expectEqual(@as(usize, 4), stmt_count);
-}
-
-test "TestSourceBatch_WindowsLineEndings" {
-    // Test handling of Windows-style line endings (\r\n)
-    const content = "CREATE (a:Node);\r\nCREATE (b:Node);\r\nRETURN 1;\r\n";
-
-    var stmt_count: usize = 0;
-    var lines = std.mem.splitSequence(u8, content, "\n");
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, std.mem.trimEnd(u8, line, "\r"), " \t");
-        if (trimmed.len == 0) continue;
-        if (std.mem.endsWith(u8, trimmed, ";")) {
-            stmt_count += 1;
-        }
-    }
-
-    try testing.expectEqual(@as(usize, 3), stmt_count);
-}
-
-test "TestSourceBatch_NestedSourceCommandSkipped" {
-    // Test that nested \source commands are properly skipped
-    const content =
-        \\CREATE (a:Node);
-        \\\source other.gql
-        \\CREATE (b:Node);
-    ;
-
-    var stmt_count: usize = 0;
-    var skipped_source: bool = false;
-
-    var lines = std.mem.splitSequence(u8, content, "\n");
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0) continue;
-
-        if (trimmed[0] == '\\' or trimmed[0] == '/') {
-            const cmd_end = std.mem.indexOf(u8, trimmed[1..], " ") orelse (trimmed.len - 1);
-            const cmd_name = trimmed[1 .. cmd_end + 1];
-            if (std.mem.eql(u8, cmd_name, "source")) {
-                skipped_source = true;
-                continue;
-            }
-        }
-
-        if (std.mem.endsWith(u8, trimmed, ";")) {
-            stmt_count += 1;
-        }
-    }
-
-    try testing.expectEqual(@as(usize, 2), stmt_count);
-    try testing.expect(skipped_source);
-}
-
-test "TestSourceBatch_LargeStatementCount" {
-    // Test handling of many statements
-    const allocator = testing.allocator;
-
-    var content = std.ArrayList(u8).init(allocator);
-    defer content.deinit();
-
-    // Generate 100 statements
-    for (0..100) |i| {
-        const stmt = try std.fmt.allocPrint(allocator, "CREATE (n{d}:Node {{id: {d}}});\n", .{ i, i });
-        defer allocator.free(stmt);
-        try content.appendSlice(stmt);
-    }
-
-    var stmt_count: usize = 0;
-    var lines = std.mem.splitSequence(u8, content.items, "\n");
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0) continue;
-        if (std.mem.endsWith(u8, trimmed, ";")) {
-            stmt_count += 1;
-        }
-    }
-
-    try testing.expectEqual(@as(usize, 100), stmt_count);
-}
-
-test "TestSourceBatch_IncompleteStatement" {
-    // Test detection of incomplete statement at end of file
-    const content =
-        \\CREATE (a:Node);
-        \\CREATE (b:Node
-    ;
-
-    var complete_count: usize = 0;
-    var has_incomplete: bool = false;
-    var current_len: usize = 0;
-
-    var lines = std.mem.splitSequence(u8, content, "\n");
-    while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, line, " \t\r");
-        if (trimmed.len == 0) continue;
-
-        current_len += trimmed.len;
-
-        if (std.mem.endsWith(u8, trimmed, ";")) {
-            complete_count += 1;
-            current_len = 0;
-        }
-    }
-
-    if (current_len > 0) {
-        has_incomplete = true;
-    }
-
-    try testing.expectEqual(@as(usize, 1), complete_count);
-    try testing.expect(has_incomplete);
-}
-
-test "TestMetaCommand_EchoType" {
+test "repl_dispatch: TestMetaCommand_EchoType" {
     // Test MetaCommand echo type
     const mc = MetaCommand{ .cmd = .echo, .args = "Hello, World!", .position = 0 };
     try testing.expectEqual(MetaCommandType.echo, mc.cmd);
@@ -4559,179 +4223,29 @@ test "TestMetaCommand_EchoType" {
     try testing.expect(std.mem.eql(u8, mc.args.?, "Hello, World!"));
 }
 
-test "TestMetaCommand_TimingType" {
+test "repl_dispatch: TestMetaCommand_TimingType" {
     // Test MetaCommand timing type
     const mc = MetaCommand{ .cmd = .timing, .args = "on", .position = 5 };
     try testing.expectEqual(MetaCommandType.timing, mc.cmd);
     try testing.expectEqual(@as(usize, 5), mc.position);
 }
 
-// CANARY: REQ=REQ-SOURCE-PERF-012; FEATURE="SourceFilePerformance"; ASPECT=TransactionDetectionTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
-// Unit tests for containsTransactionCommands function
-
-test "TestContainsTransactionCommands_NoTransaction" {
-    // Test batch with no transaction commands
-    const batch = "CREATE (n:Person {name: 'Alice'}); MATCH (n) RETURN n;";
-    try testing.expect(!containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_BeginUppercase" {
-    // Test detection of BEGIN (uppercase)
-    const batch = "BEGIN; CREATE (n:Person); COMMIT;";
-    try testing.expect(containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_BeginLowercase" {
-    // Test detection of begin (lowercase)
-    const batch = "begin; CREATE (n:Person); commit;";
-    try testing.expect(containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_CommitOnly" {
-    // Test detection of standalone COMMIT
-    const batch = "CREATE (n:Person); COMMIT;";
-    try testing.expect(containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_RollbackOnly" {
-    // Test detection of standalone ROLLBACK
-    const batch = "CREATE (n:Person); ROLLBACK;";
-    try testing.expect(containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_MixedCase" {
-    // Test detection with mixed case
-    const batch = "Begin; CREATE (n:Person); Commit;";
-    try testing.expect(containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_BeginInMiddle" {
-    // Test detection when BEGIN is in the middle of the batch
-    const batch = "USE GRAPH test; BEGIN; CREATE (n:Person); COMMIT;";
-    try testing.expect(containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_NotPartOfIdentifier" {
-    // Test that BEGINNING is not detected as BEGIN (word boundary check)
-    const batch = "CREATE (n:BEGINNING {name: 'test'});";
-    try testing.expect(!containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_NotPartOfIdentifier_Commit" {
-    // Test that COMMITTED is not detected as COMMIT
-    const batch = "CREATE (n:COMMITTED_CHANGE {status: 'done'});";
-    try testing.expect(!containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_NotPartOfIdentifier_Rollback" {
-    // Test that ROLLBACKED is not detected as ROLLBACK
-    const batch = "CREATE (n:ROLLBACKED_TXN {status: 'failed'});";
-    try testing.expect(!containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_WithWhitespace" {
-    // Test detection with various whitespace
-    const batch = "  \n  BEGIN  \n  ; CREATE (n); \t COMMIT \n ;";
-    try testing.expect(containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_EmptyBatch" {
-    // Test empty batch
-    const batch = "";
-    try testing.expect(!containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_WhitespaceOnly" {
-    // Test batch with only whitespace
-    const batch = "   \n\t\r\n   ";
-    try testing.expect(!containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_BeginAtStart" {
-    // Test BEGIN at the very start of the batch
-    const batch = "BEGIN; CREATE (n);";
-    try testing.expect(containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_CommitAtEnd" {
-    // Test COMMIT at the very end of the batch
-    const batch = "CREATE (n); COMMIT";
-    try testing.expect(containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_RollbackAtEnd" {
-    // Test ROLLBACK at the very end (no semicolon)
-    const batch = "CREATE (n); ROLLBACK";
-    try testing.expect(containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_MultipleTransactions" {
-    // Test multiple transaction blocks
-    const batch = "BEGIN; CREATE (a); COMMIT; BEGIN; CREATE (b); COMMIT;";
-    try testing.expect(containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_NestedLikePattern" {
-    // Test pattern that looks like but isn't a transaction command
-    const batch = "MATCH (n) WHERE n.status = 'BEGINNING' RETURN n;";
-    try testing.expect(!containsTransactionCommands(batch));
-}
-
-test "TestContainsTransactionCommands_StringLiteral" {
-    // Note: This is a limitation - we do basic word boundary detection
-    // In a string literal like 'BEGIN', we might still detect it
-    // This test documents current behavior
-    const batch = "CREATE (n {msg: 'BEGIN transaction'});";
-    // Current implementation will detect BEGIN even in strings
-    // This is acceptable for the use case (erring on side of caution)
-    try testing.expect(containsTransactionCommands(batch));
-}
-
-test "TestIsIdentifierChar_Letters" {
-    // Test identifier character detection for letters
-    try testing.expect(isIdentifierChar('a'));
-    try testing.expect(isIdentifierChar('z'));
-    try testing.expect(isIdentifierChar('A'));
-    try testing.expect(isIdentifierChar('Z'));
-}
-
-test "TestIsIdentifierChar_Numbers" {
-    // Test identifier character detection for numbers
-    try testing.expect(isIdentifierChar('0'));
-    try testing.expect(isIdentifierChar('9'));
-}
-
-test "TestIsIdentifierChar_Underscore" {
-    // Test identifier character detection for underscore
-    try testing.expect(isIdentifierChar('_'));
-}
-
-test "TestIsIdentifierChar_NonIdentifier" {
-    // Test non-identifier characters
-    try testing.expect(!isIdentifierChar(' '));
-    try testing.expect(!isIdentifierChar(';'));
-    try testing.expect(!isIdentifierChar('\n'));
-    try testing.expect(!isIdentifierChar('('));
-    try testing.expect(!isIdentifierChar(')'));
-    try testing.expect(!isIdentifierChar(':'));
-}
-
-test "TestGqlStartsWithUseGraph_LeadingWhitespace" {
+test "repl_dispatch: TestGqlStartsWithUseGraph_LeadingWhitespace" {
     try testing.expect(query_scope.startsWithUseGraph("  \n\tUSE GRAPH test_graph_ctx; MATCH (n) RETURN COUNT(n);"));
 }
 
-test "TestGqlStartsWithUseGraph_CaseInsensitive" {
+test "repl_dispatch: TestGqlStartsWithUseGraph_CaseInsensitive" {
     try testing.expect(query_scope.startsWithUseGraph("use graph test_graph_ctx;"));
 }
 
-test "TestGqlStartsWithUseGraph_OtherStatement" {
+test "repl_dispatch: TestGqlStartsWithUseGraph_OtherStatement" {
     try testing.expect(!query_scope.startsWithUseGraph("MATCH (n) RETURN COUNT(n);"));
 }
 
 // CANARY: REQ=REQ-SHELL-RECONNECT-015; FEATURE="ShellAutoReconnect"; ASPECT=UnitTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
 // Unit tests for automatic reconnection functionality
 
-test "TestReconnectionConfig_DefaultValues" {
+test "repl_dispatch: TestReconnectionConfig_DefaultValues" {
     // Test default reconnection configuration values
     const config = ReconnectionConfig{};
     try testing.expectEqual(@as(u32, 5), config.max_attempts);
@@ -4741,7 +4255,7 @@ test "TestReconnectionConfig_DefaultValues" {
     try testing.expect(config.prompt_for_txn_recovery);
 }
 
-test "TestReconnectionConfig_CustomValues" {
+test "repl_dispatch: TestReconnectionConfig_CustomValues" {
     // Test custom reconnection configuration
     const config = ReconnectionConfig{
         .max_attempts = 10,
@@ -4757,7 +4271,7 @@ test "TestReconnectionConfig_CustomValues" {
     try testing.expect(!config.prompt_for_txn_recovery);
 }
 
-test "TestReconnectionConfig_DisabledReconnection" {
+test "repl_dispatch: TestReconnectionConfig_DisabledReconnection" {
     // Test disabled reconnection (max_attempts = 0)
     const config = ReconnectionConfig{
         .max_attempts = 0,
@@ -4765,7 +4279,7 @@ test "TestReconnectionConfig_DisabledReconnection" {
     try testing.expectEqual(@as(u32, 0), config.max_attempts);
 }
 
-test "TestPendingTransactionState_DefaultValues" {
+test "repl_dispatch: TestPendingTransactionState_DefaultValues" {
     // Test default pending transaction state
     const state = PendingTransactionState{};
     try testing.expect(!state.had_active_transaction);
@@ -4773,7 +4287,7 @@ test "TestPendingTransactionState_DefaultValues" {
     try testing.expectEqual(@as(usize, 0), state.statements_in_txn);
 }
 
-test "TestPendingTransactionState_Reset" {
+test "repl_dispatch: TestPendingTransactionState_Reset" {
     // Test reset functionality
     var state = PendingTransactionState{
         .had_active_transaction = true,
@@ -4786,7 +4300,7 @@ test "TestPendingTransactionState_Reset" {
     try testing.expectEqual(@as(usize, 0), state.statements_in_txn);
 }
 
-test "TestTransactionRecoveryChoice_Values" {
+test "repl_dispatch: TestTransactionRecoveryChoice_Values" {
     // Test transaction recovery choice enum values
     const resume_choice = TransactionRecoveryChoice.resume_transaction;
     const cancel_choice = TransactionRecoveryChoice.cancel_transaction;
@@ -4797,58 +4311,58 @@ test "TestTransactionRecoveryChoice_Values" {
     try testing.expect(resume_choice != abort_choice);
 }
 
-test "TestClientSession_IsConnectionError_BrokenPipe" {
+test "repl_dispatch: TestClientSession_IsConnectionError_BrokenPipe" {
     // Test BrokenPipe is detected as connection error
     try testing.expect(ClientSession.isConnectionError(error.BrokenPipe));
 }
 
-test "TestClientSession_IsConnectionError_ConnectionResetByPeer" {
+test "repl_dispatch: TestClientSession_IsConnectionError_ConnectionResetByPeer" {
     // Test ConnectionResetByPeer is detected as connection error
     try testing.expect(ClientSession.isConnectionError(error.ConnectionResetByPeer));
 }
 
-test "TestClientSession_IsConnectionError_ConnectionRefused" {
+test "repl_dispatch: TestClientSession_IsConnectionError_ConnectionRefused" {
     // Test ConnectionRefused is detected as connection error
     try testing.expect(ClientSession.isConnectionError(error.ConnectionRefused));
 }
 
-test "TestClientSession_IsConnectionError_ConnectionTimedOut" {
+test "repl_dispatch: TestClientSession_IsConnectionError_ConnectionTimedOut" {
     // Test ConnectionTimedOut is detected as connection error
     try testing.expect(ClientSession.isConnectionError(error.ConnectionTimedOut));
 }
 
-test "TestClientSession_IsConnectionError_NetworkUnreachable" {
+test "repl_dispatch: TestClientSession_IsConnectionError_NetworkUnreachable" {
     // Test NetworkUnreachable is detected as connection error
     try testing.expect(ClientSession.isConnectionError(error.NetworkUnreachable));
 }
 
-test "TestClientSession_IsConnectionError_HostUnreachable" {
+test "repl_dispatch: TestClientSession_IsConnectionError_HostUnreachable" {
     // Test HostUnreachable is detected as connection error
     try testing.expect(ClientSession.isConnectionError(error.HostUnreachable));
 }
 
-test "TestClientSession_IsConnectionError_NotConnected" {
+test "repl_dispatch: TestClientSession_IsConnectionError_NotConnected" {
     // Test NotConnected is detected as connection error
     try testing.expect(ClientSession.isConnectionError(error.NotConnected));
 }
 
-test "TestClientSession_IsConnectionError_EndOfStream" {
+test "repl_dispatch: TestClientSession_IsConnectionError_EndOfStream" {
     // Test EndOfStream is detected as connection error
     try testing.expect(ClientSession.isConnectionError(error.EndOfStream));
 }
 
-test "TestClientSession_IsConnectionError_InputOutput" {
+test "repl_dispatch: TestClientSession_IsConnectionError_InputOutput" {
     // Test InputOutput is detected as connection error
     try testing.expect(ClientSession.isConnectionError(error.InputOutput));
 }
 
-test "TestClientSession_IsConnectionError_NonConnectionError" {
+test "repl_dispatch: TestClientSession_IsConnectionError_NonConnectionError" {
     // Test that non-connection errors return false
     try testing.expect(!ClientSession.isConnectionError(error.OutOfMemory));
     try testing.expect(!ClientSession.isConnectionError(error.InvalidCharacter));
 }
 
-test "TestClientSession_InitialReconnectCount" {
+test "repl_dispatch: TestClientSession_InitialReconnectCount" {
     // Test that reconnect count starts at 0
     const allocator = testing.allocator;
     const Dummy = struct {
@@ -4862,7 +4376,7 @@ test "TestClientSession_InitialReconnectCount" {
     try testing.expectEqual(@as(u32, 0), session.reconnect_count);
 }
 
-test "TestClientSession_InitialPendingTxnState" {
+test "repl_dispatch: TestClientSession_InitialPendingTxnState" {
     // Test that pending transaction state is initialized properly
     const allocator = testing.allocator;
     const Dummy = struct {
@@ -4878,7 +4392,7 @@ test "TestClientSession_InitialPendingTxnState" {
     try testing.expectEqual(@as(usize, 0), session.pending_txn_state.statements_in_txn);
 }
 
-test "TestClientSession_SaveTransactionState" {
+test "repl_dispatch: TestClientSession_SaveTransactionState" {
     // Test saving transaction state
     const allocator = testing.allocator;
     const Dummy = struct {
@@ -4897,7 +4411,7 @@ test "TestClientSession_SaveTransactionState" {
     try testing.expectEqual(@as(usize, 5), session.pending_txn_state.statements_in_txn);
 }
 
-test "TestClientSession_SaveTransactionState_NoGraph" {
+test "repl_dispatch: TestClientSession_SaveTransactionState_NoGraph" {
     // Test saving transaction state without graph
     const allocator = testing.allocator;
     const Dummy = struct {
@@ -4916,7 +4430,7 @@ test "TestClientSession_SaveTransactionState_NoGraph" {
     try testing.expectEqual(@as(usize, 0), session.pending_txn_state.statements_in_txn);
 }
 
-test "TestClientSession_CacheCredentials" {
+test "repl_dispatch: TestClientSession_CacheCredentials" {
     // Test credential caching
     const allocator = testing.allocator;
     const Dummy = struct {
@@ -4936,7 +4450,7 @@ test "TestClientSession_CacheCredentials" {
     try testing.expect(std.mem.eql(u8, session.cached_password.?, "testpass"));
 }
 
-test "TestClientSession_CacheCredentials_Overwrite" {
+test "repl_dispatch: TestClientSession_CacheCredentials_Overwrite" {
     // Test overwriting cached credentials
     const allocator = testing.allocator;
     const Dummy = struct {
@@ -4955,7 +4469,7 @@ test "TestClientSession_CacheCredentials_Overwrite" {
     try testing.expect(std.mem.eql(u8, session.cached_password.?, "pass2"));
 }
 
-test "TestClientSession_DefaultReconnectConfig" {
+test "repl_dispatch: TestClientSession_DefaultReconnectConfig" {
     // Test default reconnect configuration in session
     const allocator = testing.allocator;
     const Dummy = struct {
@@ -4971,8 +4485,11 @@ test "TestClientSession_DefaultReconnectConfig" {
     try testing.expect(session.reconnect_config.prompt_for_txn_recovery);
 }
 
-test "TestClientSession_PullAll_MergesInlinePageWithPulledPages" {
+test "repl_dispatch: TestClientSession_PullAll_MergesInlinePageWithPulledPages" {
     const allocator = testing.allocator;
+    // runGql starts the process-wide background read pool with this
+    // allocator; the REPL tears it down at exit (SONNY-6494).
+    defer deinitBackgroundPool();
 
     const schema_msg = try buildSchemaResponseMessageForTest(allocator);
     const inline_msg = try buildExecutePageMessageForTest(allocator, &.{1}, false);
@@ -4999,8 +4516,11 @@ test "TestClientSession_PullAll_MergesInlinePageWithPulledPages" {
     try testing.expectEqual(@as(usize, 2), scripted.writes.items.len);
 }
 
-test "TestClientSession_PullAll_UsesFinalInlinePageWithoutPull" {
+test "repl_dispatch: TestClientSession_PullAll_UsesFinalInlinePageWithoutPull" {
     const allocator = testing.allocator;
+    // runGql starts the process-wide background read pool with this
+    // allocator; the REPL tears it down at exit (SONNY-6494).
+    defer deinitBackgroundPool();
 
     const schema_msg = try buildSchemaResponseMessageForTest(allocator);
     const inline_msg = try buildExecutePageMessageForTest(allocator, &.{ 1, 2 }, true);
@@ -5024,137 +4544,4 @@ test "TestClientSession_PullAll_UsesFinalInlinePageWithoutPull" {
 
     const scripted = ScriptedTransportConnection.get(conn);
     try testing.expectEqual(@as(usize, 1), scripted.writes.items.len);
-}
-
-// ============================================================================
-// Transaction Rollback Scaling Tests
-// CANARY: REQ=REQ-SHELL-INTERRUPT-030; FEATURE="SourceInterrupt"; ASPECT=RollbackScalingTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-30
-// ============================================================================
-
-test "TestRollbackTimeoutScaling_SmallTransaction" {
-    // Test that small transactions (< 500 statements) get base timeout
-    const statement_count: usize = 100;
-    const base_retries: usize = 200; // 10 seconds
-    const scaled_retries: usize = base_retries + (statement_count / 500) * 20;
-    const max_retries: usize = @min(scaled_retries, 600);
-
-    // 100 / 500 = 0, so scaled = 200 + 0 = 200
-    try testing.expectEqual(@as(usize, 200), max_retries);
-}
-
-test "TestRollbackTimeoutScaling_MediumTransaction" {
-    // Test that medium transactions (500-2000) get moderate scaling
-    const statement_count: usize = 1500;
-    const base_retries: usize = 200;
-    const scaled_retries: usize = base_retries + (statement_count / 500) * 20;
-    const max_retries: usize = @min(scaled_retries, 600);
-
-    // 1500 / 500 = 3, so scaled = 200 + 60 = 260
-    try testing.expectEqual(@as(usize, 260), max_retries);
-}
-
-test "TestRollbackTimeoutScaling_LargeTransaction" {
-    // Test that large transactions (2000-3000) get significant scaling
-    const statement_count: usize = 2877; // From user's actual use case
-    const base_retries: usize = 200;
-    const scaled_retries: usize = base_retries + (statement_count / 500) * 20;
-    const max_retries: usize = @min(scaled_retries, 600);
-
-    // 2877 / 500 = 5, so scaled = 200 + 100 = 300
-    try testing.expectEqual(@as(usize, 300), max_retries);
-}
-
-test "TestRollbackTimeoutScaling_VeryLargeTransaction" {
-    // Test that very large transactions are capped at 30 seconds
-    const statement_count: usize = 10000;
-    const base_retries: usize = 200;
-    const scaled_retries: usize = base_retries + (statement_count / 500) * 20;
-    const max_retries: usize = @min(scaled_retries, 600);
-
-    // 10000 / 500 = 20, so scaled = 200 + 400 = 600 (capped)
-    try testing.expectEqual(@as(usize, 600), max_retries);
-}
-
-test "TestRollbackTimeoutScaling_ExtremeTransaction" {
-    // Test that extreme transactions don't exceed cap
-    const statement_count: usize = 100000;
-    const base_retries: usize = 200;
-    const scaled_retries: usize = base_retries + (statement_count / 500) * 20;
-    const max_retries: usize = @min(scaled_retries, 600);
-
-    // Should be capped at 600
-    try testing.expectEqual(@as(usize, 600), max_retries);
-}
-
-test "TestRollbackTimeoutScaling_ZeroStatements" {
-    // Test edge case with zero statements
-    const statement_count: usize = 0;
-    const base_retries: usize = 200;
-    const scaled_retries: usize = base_retries + (statement_count / 500) * 20;
-    const max_retries: usize = @min(scaled_retries, 600);
-
-    // 0 / 500 = 0, so scaled = 200 + 0 = 200
-    try testing.expectEqual(@as(usize, 200), max_retries);
-}
-
-test "TestDrainLimitScaling_SmallTransaction" {
-    // Test drain limit for small transactions
-    const statement_count: usize = 20;
-    const drain_limit = @max(@as(usize, 100), statement_count * 2);
-
-    // 20 * 2 = 40, max(100, 40) = 100
-    try testing.expectEqual(@as(usize, 100), drain_limit);
-}
-
-test "TestDrainLimitScaling_MediumTransaction" {
-    // Test drain limit for medium transactions
-    const statement_count: usize = 500;
-    const drain_limit = @max(@as(usize, 100), statement_count * 2);
-
-    // 500 * 2 = 1000, max(100, 1000) = 1000
-    try testing.expectEqual(@as(usize, 1000), drain_limit);
-}
-
-test "TestDrainLimitScaling_LargeTransaction" {
-    // Test drain limit for large transactions (user's case: 2877 statements)
-    const statement_count: usize = 2877;
-    const drain_limit = @max(@as(usize, 100), statement_count * 2);
-
-    // 2877 * 2 = 5754
-    try testing.expectEqual(@as(usize, 5754), drain_limit);
-}
-
-test "TestRollbackTimeoutConversion_ToSeconds" {
-    // Test that retry counts convert to expected seconds
-    // Each retry is 50ms, so:
-    // 200 retries = 10 seconds
-    // 400 retries = 20 seconds
-    // 600 retries = 30 seconds
-
-    const retry_to_seconds = struct {
-        fn convert(retries: usize) usize {
-            return (retries * 50) / 1000;
-        }
-    }.convert;
-
-    try testing.expectEqual(@as(usize, 10), retry_to_seconds(200));
-    try testing.expectEqual(@as(usize, 20), retry_to_seconds(400));
-    try testing.expectEqual(@as(usize, 30), retry_to_seconds(600));
-}
-
-test "TestDrainBatchCalculation" {
-    // Test that batch calculation for drainForRollback is correct
-    const batch_size: usize = 50;
-
-    const calc_batches = struct {
-        fn calculate(drain_limit: usize, bs: usize) usize {
-            return (drain_limit + bs - 1) / bs;
-        }
-    }.calculate;
-
-    // 100 messages / 50 batch = 2 batches
-    try testing.expectEqual(@as(usize, 2), calc_batches(100, batch_size));
-
-    // 5754 messages / 50 batch = 116 batches (rounded up)
-    try testing.expectEqual(@as(usize, 116), calc_batches(5754, batch_size));
 }

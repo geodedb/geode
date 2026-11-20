@@ -417,7 +417,8 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
     return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
 }
 
-// Local mirror of graph_store.isLikelyFleEnvelope (private). Positively
+// The FLE envelope shape (the store's old isLikelyFleEnvelope, removed by
+// SONNY-6347: a shape is not proof; the store now authenticates). Positively
 // asserts a stored value really became an FLE envelope (alg id 1-3 +
 // matching length prefix), so the regression cannot pass vacuously with the
 // encrypt path skipped.
@@ -454,9 +455,9 @@ test "PERF-C / GAP-0863b: FLE-encrypted property write keeps the index correct a
     _ = setenv("GEODE_MASTER_KEY", TEST_MASTER_KEY_HEX, 1);
 
     // Isolate the PERSISTED FLE catalog to a per-test temp dir so configuring
-    // ('User','email') below never writes the process-shared
-    // `{GEODE_DATA_DIR or /tmp}/geode_fle_catalog.dat` (the contamination
-    // vector this regression exists to pin down).
+    // ('User','email') below never writes a shared geode_fle_catalog.dat
+    // (the contamination vector this regression exists to pin down; before
+    // SONNY-6274 the catalog fell back to /tmp when no data dir was set).
     var catalog_tmp = std.testing.tmpDir(.{});
     defer catalog_tmp.cleanup();
     const data_dir = try tmpDirRealpathAlloc(allocator, &catalog_tmp.sub_path);

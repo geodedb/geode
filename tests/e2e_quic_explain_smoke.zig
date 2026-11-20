@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const cli_test_util = @import("cli_test_util.zig");
 const util = @import("proto_test_util.zig");
 
@@ -7,11 +9,13 @@ fn run(allocator: std.mem.Allocator, addr: []const u8, args: []const []const u8)
 }
 
 test "quic: EXPLAIN schema then explain (smoke)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     util.testStart("EXPLAIN schema then explain (smoke)");
     errdefer util.testFail();
 
     const allocator = std.testing.allocator;
-    const geode = "./zig-out/bin/geode";
+    const geode = geode_test_bin.geode_exe;
 
     var server = try util.spawnServerRandom(allocator, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();

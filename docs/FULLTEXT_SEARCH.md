@@ -6,7 +6,7 @@
 > function, and not Cypher's `UNWIND … YIELD`).
 
 **Status:** Implemented — backed by the external **`fts-storage`** LSM library (PRIMARY backing store)
-**Dependency:** `.fts_storage` v0.1.1 in `build.zig.zon` (commit `908c1f54`)
+**Dependency:** `.fts_storage` v0.1.6 in `build.zig.zon` (commit `e4724290`)
 **Modules:**
 
 - `src/storage/fts_storage_adapter.zig` — per-graph registry of `fts_storage.Engine`s
@@ -73,7 +73,7 @@ You may index multiple properties on a single index: `ON (d.title, d.body)`.
 
 ### `CREATE INDEX … USING fulltext`
 
-```gql
+```text
 CREATE INDEX <name> FOR (n:Label) ON (n.prop[, n.prop2]) USING fulltext;
 ```
 
@@ -82,7 +82,7 @@ Creates a fulltext index over the named string properties of `:Label` nodes and
 
 ### `CALL geode.fts.search`
 
-```gql
+```text
 CALL geode.fts.search('<index>', '<query>'[, <max>]);
 ```
 
@@ -97,7 +97,7 @@ over the QUIC wire because results ride the generic GQL Execute+rows protocol �
 
 ### `CALL geode.fts.phrase` (GAP-0869)
 
-```gql
+```text
 CALL geode.fts.phrase('<index>', '<phrase>'[, <max>]);
 ```
 
@@ -113,7 +113,7 @@ of the constituent terms' BM25 scores.
 
 ### `CALL geode.fts.proximity` (GAP-0869)
 
-```gql
+```text
 CALL geode.fts.proximity('<index>', '<terms>', <distance>[, <max>]);
 ```
 
@@ -148,11 +148,14 @@ is not guaranteed for all letters. This applies equally to `search`, `phrase`,
 
 ### `DROP INDEX`
 
-```gql
+```text
 DROP INDEX <name>;
 ```
 
-Drops the fulltext index. The server stays alive during the drop: the
+Drops the fulltext index, from a session on the default graph (from
+another graph: `USE GRAPH default; DROP INDEX <name>`; a bare `DROP INDEX`
+there is refused with 0A000, SONNY-6294). The server stays alive during the
+drop: the
 `fts-storage` 0.1.1 single-writer thread-check fix
 (`EngineConfig.single_writer_thread_check`) makes a cross-worker-thread `DROP`
 safe.
@@ -177,7 +180,7 @@ graph dir
 | `FtsStorageAdapter` | `src/storage/fts_storage_adapter.zig` | Per-graph registry of `fts_storage.Engine`s; create / search / drop / live-maintenance |
 | `FullTextIndex` | `src/index/fulltext.zig` | Facade — delegates to the adapter |
 | `Tokenizer` | `src/index/fts_tokenizer.zig` | Text → terms |
-| `fts-storage` (external) | `build.zig.zon` `.fts_storage` v0.1.1 | LSM engine: BM25 ranking, WAL, segments, manifest, durability |
+| `fts-storage` (external) | `build.zig.zon` `.fts_storage` v0.1.6 | LSM engine: BM25 ranking, WAL, segments, manifest, durability |
 
 ---
 
@@ -185,8 +188,29 @@ graph dir
 
 After an index exists, ordinary write paths keep it current automatically:
 
-- **Node create** — newly created nodes matching the index label/property are tokenized and indexed (including nodes inserted *after* the index was created).
-- **`SET`** — updating an indexed property re-indexes the node.
+- **Node create** — newly created nodes matching the index label/property are tokenized and indexed (including nodes inserted *after* the index was created). This includes the QUIC write fast path for a single-statement `CREATE (n:L {k: v})` with no RETURN (`executeBulkSimpleCreate`), which indexed nothing before SONNY-6591.
+- **`SET`** — updating an indexed property re-indexes the node. A `SET`
+  that replaces a non-empty indexed string (with another value, a
+  non-string, or by `SET n = {map}` dropping or changing it) queues every
+  covering index for a rebuild at the end of the statement, as `REMOVE
+  n.prop` does, so the node is no longer found by the old words
+  (SONNY-6421). Cost: one O(nodes of the label) rebuild per index per
+  statement that replaces indexed text.
+- **`SET n:L`** — a node given a label joins the label's fulltext (and
+  vector) indexes with the properties it holds (SONNY-6368).
+- **`REMOVE n.prop`** — removing an indexed text property rebuilds every
+  fulltext index covering it from the store at the end of the statement
+  (once per index, however many rows the statement removed from): the
+  engine cannot take one property's postings out of a document, and a
+  tombstone would hide the node for good (SONNY-6368). Cost: an O(nodes of
+  the label) rebuild per statement that removes indexed text.
+- **`REMOVE n:L`** — a node that leaves a label leaves the label's
+  fulltext and vector indexes: a fulltext index holding text of the node is
+  rebuilt at the end of the statement and the vector indexes on the label
+  are rebuilt (SONNY-6421). Search, phrase and proximity answer only nodes
+  that carry the index's label, so a label removed by a path that does no
+  index maintenance (an undo of `SET n:L`, a replicated apply) does not
+  surface the node either.
 - **Delete** — deleting a node removes it from the index.
 - **Bulk-MERGE fast path** — `MERGE` statements shaped for the connection-thread
   fast path (`executeBulkSimpleMerge` in `quic_connection_handler.zig`, and its
@@ -196,16 +220,31 @@ After an index exists, ordinary write paths keep it current automatically:
   thread — never a group-commit worker thread — satisfying the fts engine's
   single-writer-thread contract. Bulk-MERGE'd nodes are searchable
   **immediately**, no rebuild required.
+- **After a restart** — the hooks find an index through a label -> index
+  registry held in memory. The first hook on a graph after a restart fills
+  it from the catalog's fulltext rows (written by CREATE INDEX, removed by
+  DROP INDEX) and opens their engines, so every path above keeps working
+  after a clean restart or a crash (SONNY-6591). Before that fix the
+  registry stayed empty after any restart: search answered what was
+  indexed before it, and no later write reached the index until
+  `CALL geode.fts.rebuild`.
+
+Regression for every path above, over QUIC and gRPC, with and without TDE,
+right after the write and after SIGKILL and SIGTERM restarts:
+`zig build test-sonny6591-fts-write-paths`.
 
 > **Graph scope:** `CALL geode.fts.*` operates on the default graph — a node
 > bulk-MERGE'd into a non-default graph is maintained into *that* graph's own
 > fulltext index, which `geode.fts.search`/`phrase`/`proximity`/`rebuild`
 > cannot currently query.
 >
-> By design, `CREATE INDEX ... USING fulltext`, `DROP INDEX` and every
-> `CALL geode.fts.*` run on the default graph, whatever the session's graph
-> (SONNY-2790). The server takes the default graph's lock for them. A request
-> that also changes another graph is refused (0A000); send it on its own.
+> By design, `CREATE INDEX ... USING fulltext` and every `CALL geode.fts.*`
+> run on the default graph, whatever the session's graph (SONNY-2790). The
+> server takes the default graph's lock for them. A request that also
+> changes another graph is refused (0A000); send it on its own. `DROP INDEX`
+> runs on the session's graph and takes its lock (SONNY-6294), so a
+> fulltext index is dropped from the default graph:
+> `USE GRAPH default; DROP INDEX <name>`.
 
 ### Recovery: `CALL geode.fts.rebuild`
 
@@ -244,12 +283,34 @@ cannot be resolved against the live store — so correctness at query time is
 preserved. A second `CALL geode.fts.rebuild` on the SAME index while one is
 already in flight is refused (`RebuildInProgress`) rather than racing two
 drop→create sequences. Regression: `tests/test_fts_rebuild.zig` (`zig build
-test-fts-rebuild`).
+test-fts-rebuild`). An undo repair or a statement-end rebuild after a REMOVE
+(below) that finds a rebuild of the index running is not refused: that
+rebuild runs again from the store after its pass
+(`FtsStorageAdapter.requestRebuildAgain`, SONNY-6368).
+
+**Undo rebuilds the indexes it touched (SONNY-3381):** a statement that fails
+and a `ROLLBACK` (or rollback to a savepoint) undo their changes through the
+graph store, which the fulltext engine cannot follow: it is append-only, a
+SET's old postings stay, and a tombstoned document is never searchable again.
+After such an undo every fulltext index (and every vector or other advanced
+index) covering a property, label or node it reverted is rebuilt from the
+store as the undo left it (`execution/undo_index_repair.zig`, through
+`rebuildFulltextIndex` above), so a search no longer finds a node by a word
+an undone SET wrote, and finds a node whose DELETE was undone. The rebuild is
+O(nodes of the label) and runs only for such an undo. If a rebuild of the
+same index is already running (its backfill may have read the undone value),
+that rebuild runs again after its pass instead of the repair being dropped
+(SONNY-6368). Regression: `zig build test-sonny3381-undo-index-entries`,
+`zig build test-sonny6368-index-maintenance`.
 
 **Ingestion invariant:** after any bulk-ingestion run, verify FTS visibility
 with a canary query (`CALL geode.fts.search(index, term)` for a term known to
 be present) before marking ingestion ready — cheap insurance, and the primary
-signal that recovery via `CALL geode.fts.rebuild` is needed.
+signal that recovery via `CALL geode.fts.rebuild` is needed. Use a term from a
+node written LAST, and after the server's latest restart: a term written
+earlier says nothing about later writes. Data written by a binary without the
+SONNY-6591 fix needs one `CALL geode.fts.rebuild` per index if it was written
+by a single-statement QUIC `CREATE` or after a restart.
 
 ### Cluster Mode (2026-06-10)
 
@@ -258,9 +319,12 @@ signal that recovery via `CALL geode.fts.rebuild` is needed.
   followers via a callback seam, and snapshot install rebuilds FTS indexes from
   the installed graph data (seam-level — production `reportSnapshot` wiring is
   pending). Test: `tests/test_fts_apply_symmetry.zig`.
-- **Stale-posting residual on `SET` is symmetric:** a re-indexed node can leave
-  a stale posting for the old term (engine tombstone permanence in
-  `fts-storage`), but leader and follower behave identically — no divergence.
+- **`SET` / `REMOVE` on a follower:** applying a replicated SET that
+  replaces indexed text, a REMOVE of it, or a MERGE's ON MATCH SET queues
+  the covering indexes for a rebuild at the end of the applied entry, as
+  the leader's statement does (SONNY-6421 executor, SONNY-6433 apply), so a
+  follower stops answering for the old words. The rebuild runs on the apply
+  thread, a follower's only writer.
 - **`CREATE INDEX` / `DROP INDEX` are refused in cluster mode** (fail-closed
   DDL — no Raft replication slice for index DDL yet): follower →
   `ClusterNotLeader`, leader → `ClusterWriteNotReplicable`. Standalone mode is
@@ -310,6 +374,6 @@ FTS is held to graph-storage parity:
 
 - [API_REFERENCE.md](API_REFERENCE.md) — API reference
 - [optimizing-fts-storage.md](optimizing-fts-storage.md) — design/tuning notes for `fts-storage` against Geode's access patterns
-- [BM25_INDEX_OPTIMIZER_INTEGRATION.md](BM25_INDEX_OPTIMIZER_INTEGRATION.md) — index optimizer integration
+- [BM25_INDEX_OPTIMIZER_INTEGRATION.md](BM25_INDEX_OPTIMIZER_INTEGRATION.md) — status note: no index optimizer integration exists
 - [rag/RAG_INTEGRATION_GUIDE.md](rag/RAG_INTEGRATION_GUIDE.md) — operational notes for using `geode.fts.*` as a RAG orchestrator's full-text channel (row visibility, bulk-MERGE live maintenance, `geode.fts.rebuild` recovery, canary-query habit)
 - [rag/GEODE_RAG_ORCHESTRATOR_PROMPT.md](rag/GEODE_RAG_ORCHESTRATOR_PROMPT.md) — production RAG orchestrator system prompt

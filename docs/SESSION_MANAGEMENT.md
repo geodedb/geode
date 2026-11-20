@@ -2,6 +2,14 @@
 
 This document describes the session management features in Geode, including session parameters and transaction handling.
 
+A GQL session lives exactly as long as its connection. geode servers have
+no session tokens: a connection authenticates with a user name and
+password in its HELLO, no server keeps the session ids it issues, and a
+session cannot be resumed, validated, rotated or invalidated from another
+connection. The CLI's `geode session validate|rotate|invalidate-all|check-idle`
+and `geode auth validate` are refused as not supported by this server
+(SONNY-6554; docs/USER_AUTH.md, "Session and API-key commands").
+
 ## The session graph
 
 A session's graph is the graph its statements read and write. Every session
@@ -9,11 +17,11 @@ starts on the graph its connection names, or on `default`. These statements
 move it, and they all go through the same checks (SONNY-2775):
 
 ```gql
-USE GRAPH hr
-SESSION SET GRAPH hr
-SESSION SET PROPERTY GRAPH hr
-SESSION RESET              -- also SESSION RESET GRAPH, SESSION RESET ALL CHARACTERISTICS
-SESSION CLOSE
+USE GRAPH hr;
+SESSION SET GRAPH hr;
+SESSION SET PROPERTY GRAPH hr;
+SESSION RESET;             -- also SESSION RESET GRAPH, SESSION RESET ALL CHARACTERISTICS
+SESSION CLOSE;
 ```
 
 - **Permission:** the user must be allowed to bind the graph (`bind_graph`:
@@ -47,7 +55,7 @@ Graph parameters store references to graphs for use in graph pattern queries.
 
 **Syntax:**
 
-```gql
+```text
 SESSION SET GRAPH [$param_name] = <graph_expression> [IF NOT EXISTS]
 ```
 
@@ -59,8 +67,11 @@ SESSION SET GRAPH $my_graph = CURRENT_GRAPH
 
 -- Set graph with IF NOT EXISTS
 SESSION SET GRAPH IF NOT EXISTS $default_graph = G1
+```
 
--- Reference graph parameter in queries (future enhancement)
+Not supported yet: a graph parameter after `USE GRAPH` (a syntax error).
+
+```text
 USE GRAPH $my_graph
 ```
 
@@ -70,7 +81,7 @@ Value parameters store scalar values (integers, strings, booleans, etc.) for use
 
 **Syntax:**
 
-```gql
+```text
 SESSION SET VALUE [$param_name] = <expression> [IF NOT EXISTS]
 ```
 
@@ -96,7 +107,7 @@ Binding table parameters store references to binding tables for use in queries.
 
 **Syntax:**
 
-```gql
+```text
 SESSION SET [BINDING] TABLE [$param_name] = <binding_table_ref> [IF NOT EXISTS]
 ```
 
@@ -116,7 +127,7 @@ The `SESSION RESET` command allows you to clear session state, including paramet
 
 **Syntax:**
 
-```gql
+```text
 SESSION RESET [ALL] PARAMETERS      -- Reset all parameters
 SESSION RESET PARAMETERS             -- Same as ALL PARAMETERS
 SESSION RESET PARAMETER $name        -- Reset specific parameter
@@ -129,17 +140,17 @@ SESSION RESET                        -- Reset all session state
 
 ```gql
 -- Reset all parameters
-SESSION RESET ALL PARAMETERS
+SESSION RESET ALL PARAMETERS;
 
 -- Reset specific parameter
-SESSION SET VALUE $temp = 123
-SESSION RESET PARAMETER $temp
+SESSION SET VALUE $temp = 123;
+SESSION RESET PARAMETER $temp;
 
 -- Reset graph setting
-SESSION RESET GRAPH
+SESSION RESET GRAPH;
 
 -- Reset everything
-SESSION RESET
+SESSION RESET;
 ```
 
 ## Implementation Details

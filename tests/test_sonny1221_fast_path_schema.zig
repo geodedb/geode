@@ -33,9 +33,14 @@
 // when a stream is dropped or rewound with prefetched rows pending; and a
 // bare-node column's node moving with its row.
 //
+// SONNY-6562: the executor now types a column from all its rows (the 22.18 /
+// 22.19 combination), and a stream whose sample does not exhaust it declares
+// ANY: it has not read the rows after the sample when it sends the frame.
+//
 // CANARY: REQ=REQ-SONNY-1221-FAST-PATH-SCHEMA; FEATURE="EngineDirectProjectionSchema"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny1221_fast_path_schema.zig; OWNER=engine; UPDATED=2026-09-24
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const schema = @import("schema");
 const protobuf = @import("protobuf");
@@ -227,7 +232,7 @@ test "SONNY-1221: QUIC fast-path schema frame reports the executor's column type
     defer allocator.free(addr);
 
     // `--data-dir` makes it a persisted deployment, so the fast path is live.
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, null);
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir }, null);
     defer server.deinit();
     try util.waitForServerReady(allocator, addr, 120_000);
 
@@ -286,7 +291,12 @@ test "SONNY-1221: rows prefetched for the schema frame are served once, in order
     try testing.expectEqual(many, baseline.len);
     try expectDistinct(baseline);
 
-    const executor_types = try h.executorTypes(many_query);
+    // SONNY-6562: the executor reads all 25 rows and declares their combined
+    // types; the stream's frame is sent after only its 10-row sample, and a
+    // property may hold any type in the rows it has not read, so it declares
+    // ANY (a stream its sample exhausts declares the executor's types: the
+    // QUIC and gRPC tests above).
+    try expectTypes(&.{ "STRING", "INTEGER" }, try h.executorTypes(many_query));
     // 1..3: the sample spans several pages; 10: exactly one page; 11: the
     // sample plus one scanned row; 0: the default page size, everything at once.
     for ([_]usize{ 1, 2, 3, 7, 10, 11, 0 }) |page_size| {
@@ -294,7 +304,7 @@ test "SONNY-1221: rows prefetched for the schema frame are served once, in order
         defer stream.deinit();
         try stream.prefetchSchemaSample(allocator);
         try testing.expect(stream.hasRemaining());
-        try expectTypes(executor_types, try schemaTypes(qa.allocator(), try stream.buildSchema(qa.allocator())));
+        try expectTypes(&.{ "ANY", "ANY" }, try schemaTypes(qa.allocator(), try stream.buildSchema(qa.allocator())));
 
         const got = try drainColumn0(&stream, allocator, page_size);
         defer freeStrings(allocator, got);
@@ -373,7 +383,9 @@ test "SONNY-1221: a prefetched row's bare node moves with the row" {
     var stream = try openStream(&h, allocator, &qa, "MATCH (n:M) RETURN n, n.s");
     defer stream.deinit();
     try stream.prefetchSchemaSample(allocator);
-    try expectTypes(&.{ "NODE", "STRING" }, try schemaTypes(qa.allocator(), try stream.buildSchema(qa.allocator())));
+    // SONNY-6562: the node column is a NODE in every row; the property
+    // column is ANY until the rows after the sample are read.
+    try expectTypes(&.{ "NODE", "ANY" }, try schemaTypes(qa.allocator(), try stream.buildSchema(qa.allocator())));
 
     var seen: usize = 0;
     var pages: usize = 0;

@@ -14,7 +14,8 @@
 // and push it as the scratch allocator for the materialize call, tearing it down
 // after the rows are consumed:
 //   * `src/query/materialized_views.zig` (view-refresh thread), and
-//   * `src/distributed/query_coordinator.zig` (local federation fragment).
+//   * `src/distributed/query_coordinator.zig` (local federation fragment;
+//     never compiled, removed in SONNY-6279).
 // Materialize semantics are UNCHANGED (dupe into scratch), so the read-budget
 // and restart paths are unaffected; the interior simply drops with the caller's
 // arena.
@@ -91,7 +92,7 @@ const Harness = struct {
     }
 
     /// EXACT mirror of query/materialized_views.zig:711 and
-    /// distributed/query_coordinator.zig:375: parse, then
+    /// the since-removed distributed/query_coordinator.zig:375: parse, then
     /// `executeProgramWithContext(self.allocator, ...)` with NO
     /// `pushScratchAllocator` anywhere. Whatever the read path allocates and
     /// does not release is a real production leak on those two threads.
@@ -167,7 +168,7 @@ test "materializeNode interior is fully reclaimed by a scoped scratch arena" {
 // ===========================================================================
 // 2. The production-caller mirror: whole node rows read through
 //    `executeProgramWithContext`, with a scoped scratch arena installed exactly
-//    as materialized_views.zig / query_coordinator.zig now do it. The arena
+//    as materialized_views.zig now does it. The arena
 //    reclaims the per-row interior.
 // ===========================================================================
 test "scoped-arena executeProgramWithContext reclaims every materialized node row interior" {

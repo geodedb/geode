@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 const protobuf = @import("protobuf");
@@ -36,6 +37,8 @@ test "repl loop options - transport integration" {
 }
 
 test "client session lifecycle" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var server = try repl_util.startServer(allocator);
     defer server.deinit();
@@ -177,6 +180,8 @@ test "protocol messages - format validation" {
 }
 
 test "end-to-end repl workflow simulation" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var server = try repl_util.startServer(allocator);
     defer server.deinit();
@@ -218,6 +223,8 @@ test "repl error handling - network issues" {
 }
 
 test "repl session state management" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var server = try repl_util.startServer(allocator);
     defer server.deinit();

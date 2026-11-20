@@ -26,6 +26,7 @@
 // open). GREEN (post-fix): the rebuild is deferred to the first lookup.
 
 const std = @import("std");
+const exact_index_read = @import("exact_index_read.zig");
 const testing = std.testing;
 const geode = @import("geode");
 
@@ -53,7 +54,8 @@ fn querySorted(
     key: []const u8,
     value: PropertyValue,
 ) ![]u64 {
-    const got = try adapter.getCandidateNodesByLabelAndProperty(graph, label, key, value, allocator);
+    // SONNY-6827: may meet a reopen's background rebuild (ExactIndexBusy).
+    const got = try exact_index_read.candidates(adapter, graph, label, key, value, allocator);
     std.mem.sort(u64, got, {}, std.sort.asc(u64));
     return got;
 }

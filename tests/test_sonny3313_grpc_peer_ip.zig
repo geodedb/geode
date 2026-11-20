@@ -12,7 +12,7 @@
 //
 // Here: `formatPeerIp` on IPv4, IPv6 and IPv4-mapped addresses; and the real
 // Handshake handler serving real accepted TCP sockets from two peer
-// addresses (127.0.0.2 and 127.0.0.3, both loopback on Linux, bound as the
+// addresses (127.0.0.43 and 127.0.0.44, both loopback on Linux, bound as the
 // clients' source addresses; macOS uses 127.0.0.1 and ::1, its configured
 // loopback addresses): at the cap,
 // one peer's Handshake is refused while the other's is served.
@@ -146,9 +146,9 @@ test "SONNY-3313: over real sockets, anonymous Handshakes from two peer addresse
     }
 
     // Peer A: two sessions, each in an open transaction.
-    const peer_a = if (ipv6_peer_b) "127.0.0.1" else "127.0.0.2";
+    const peer_a = if (ipv6_peer_b) "127.0.0.1" else "127.0.0.43";
     const principal_a = "anonymous@" ++ peer_a;
-    var src_a = v4(127, 0, 0, if (ipv6_peer_b) 1 else 2, 0);
+    var src_a = v4(127, 0, 0, if (ipv6_peer_b) 1 else 43, 0);
     var a_sessions: [2][]const u8 = undefined;
     for (&a_sessions) |*sess| {
         const conn = try connectFrom(libc.AF.INET, &src_a, &dst, @sizeOf(posix.sockaddr.in), l.fd);
@@ -175,11 +175,11 @@ test "SONNY-3313: over real sockets, anonymous Handshakes from two peer addresse
     }
     // Peer B: served; A's cap is A's alone. macOS configures only one
     // IPv4 loopback address, so require a second real peer over IPv6 there.
-    const peer_b = if (ipv6_peer_b) "0000:0000:0000:0000:0000:0000:0000:0001" else "127.0.0.3";
+    const peer_b = if (ipv6_peer_b) "0000:0000:0000:0000:0000:0000:0000:0001" else "127.0.0.44";
     var src_b = if (ipv6_peer_b)
         v6(.{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, 0)
     else
-        v4(127, 0, 0, 3, 0);
+        v4(127, 0, 0, 44, 0);
     {
         const family = if (ipv6_peer_b) libc.AF.INET6 else libc.AF.INET;
         const len = if (ipv6_peer_b) @sizeOf(posix.sockaddr.in6) else @sizeOf(posix.sockaddr.in);
@@ -218,4 +218,60 @@ test "SONNY-3313: over real sockets, anonymous Handshakes from two peer addresse
         try testing.expectEqual(@as(usize, 1), store.principalSessionCount("anonymous@0000:0000:0000:0000:0000:0000:0000:0001"));
     }
     for (a_sessions) |sess| try testing.expect(try fx.commit(ga, sess));
+}
+
+// SONNY-6645: a gRPC Handshake past the tenant's connection quota is refused
+// as QUIC refuses it: the quota is a resource limit, 53300 (class 53,
+// implementation-defined; ISO/IEC 39075 Table 8 has no resource class). The
+// Handshake answered a bare internal error (`error.OutOfMemory`, raised for
+// the quota) with no SQLSTATE, and QUIC sent 42000.
+fn handshakeTenant(ga: std.mem.Allocator, server: i32, tenant: []const u8) !schema.HelloResponse {
+    var trans: grpc.GrpcTransport = .{
+        .stream = .{ .socket = .{ .handle = server, .address = undefined } },
+        .io = std.Io.Threaded.global_single_threaded.io(),
+        .allocator = ga,
+        .last_stream_id = 1,
+    };
+    const req = try fx.encodeProto(ga, schema.HelloRequest{ .username = "", .password = "", .client_name = "sonny6645", .tenant_id = tenant });
+    return fx.decodeProto(schema.HelloResponse, ga, try grpc.handleHandshake(req, &trans, ga));
+}
+
+test "SONNY-6645: a gRPC Handshake past the tenant's connection quota is refused with 53300, as QUIC refuses it" {
+    var f: fx.Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    const ga = f.ga();
+    var qm = geode.tenant_quota.TenantQuotaManager.init(testing.allocator);
+    defer qm.deinit();
+    try qm.setQuota("tenant-6645", .{ .max_connections = 1 });
+    const prev = geode.tenant_quota.getGlobalQuotaManager();
+    geode.tenant_quota.setGlobalQuotaManager(&qm);
+    defer geode.tenant_quota.setGlobalQuotaManager(prev);
+
+    var any = v4(127, 0, 0, 1, 0);
+    const l = try listenOn(libc.AF.INET, &any, @sizeOf(posix.sockaddr.in));
+    defer _ = libc.close(l.fd);
+    var dst = l.addr;
+    var src = v4(127, 0, 0, 1, 0);
+    var fds: std.ArrayList(i32) = .empty;
+    defer {
+        for (fds.items) |fd| _ = libc.close(fd);
+        fds.deinit(testing.allocator);
+    }
+
+    const first_conn = try connectFrom(libc.AF.INET, &src, &dst, @sizeOf(posix.sockaddr.in), l.fd);
+    try fds.appendSlice(testing.allocator, &.{ first_conn.client, first_conn.server });
+    const first = try handshakeTenant(ga, first_conn.server, "tenant-6645");
+    if (!first.success) std.debug.print("first: {s}\n", .{first.error_message});
+    try testing.expect(first.success);
+    try testing.expectEqual(@as(u32, 1), qm.getUsage("tenant-6645").connections);
+
+    const second_conn = try connectFrom(libc.AF.INET, &src, &dst, @sizeOf(posix.sockaddr.in), l.fd);
+    try fds.appendSlice(testing.allocator, &.{ second_conn.client, second_conn.server });
+    const second = try handshakeTenant(ga, second_conn.server, "tenant-6645");
+    try testing.expect(!second.success);
+    try testing.expectEqualStrings("53300: Connection quota exceeded for tenant", second.error_message);
+    try testing.expectEqualStrings("53300", geode.proto_util.mapError(error.TenantConnectionQuotaExceeded).code);
+    // The refused Handshake holds none of the quota.
+    try testing.expectEqual(@as(u32, 1), qm.getUsage("tenant-6645").connections);
 }

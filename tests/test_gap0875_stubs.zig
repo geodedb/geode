@@ -1,7 +1,8 @@
 //! GAP-0875: residual local stubs batch — regression tests.
 //!
-//! (a) ConstraintManager unique-constraint validation consults an attached
-//!     property index (previously a silent no-op placeholder).
+//! (a) Removed (SONNY-6354): it covered `src/schema/constraint_manager.zig`,
+//!     a second constraint implementation no write path used; constraints
+//!     are enforced by `execution/unique_constraints.zig` and the catalog.
 //! (b) GQL printer renders IN / NOT IN subqueries in re-parseable compact
 //!     form (previously the opaque literal "(subquery)"), and the temporal
 //!     walker descends into IN-subqueries so temporal literals inside them
@@ -16,102 +17,11 @@
 
 const std = @import("std");
 const geode = @import("geode");
-const cm = geode.constraint_manager;
 const ast = geode.gql.ast;
 const Lexer = geode.gql.lexer.Lexer;
 const Parser = geode.gql.parser.Parser;
 const print_mod = geode.printer;
 const mmio = geode.memory_mapped_io;
-
-// ---------------------------------------------------------------------------
-// (a) Unique constraint consults the attached property index
-// ---------------------------------------------------------------------------
-
-/// Minimal in-memory unique-property index for the test: maps
-/// "label\x00property\x00string-value" -> existing entity id.
-const TestUniqueIndex = struct {
-    map: std.StringHashMap(u64),
-
-    fn lookup(ctx: ?*anyopaque, label: []const u8, property: []const u8, value: cm.Value) ?u64 {
-        const self: *TestUniqueIndex = @ptrCast(@alignCast(ctx.?));
-        if (value != .string) return null;
-        var key_buf: [256]u8 = undefined;
-        const key = std.fmt.bufPrint(&key_buf, "{s}\x00{s}\x00{s}", .{ label, property, value.string }) catch return null;
-        return self.map.get(key);
-    }
-};
-
-test "GAP-0875a: duplicate value under unique constraint with index attached is a violation" {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var mgr = cm.ConstraintManager.init(allocator);
-    defer mgr.deinit();
-
-    var props_list = [_][]const u8{"email"};
-    try mgr.createUniqueConstraint("uq_user_email", .node, "User", props_list[0..]);
-
-    var idx = TestUniqueIndex{ .map = std.StringHashMap(u64).init(allocator) };
-    defer {
-        var it = idx.map.keyIterator();
-        while (it.next()) |k| allocator.free(k.*);
-        idx.map.deinit();
-    }
-    // Entity 1 already holds email=alice@example.com in the index.
-    try idx.map.put(try allocator.dupe(u8, "User\x00email\x00alice@example.com"), 1);
-
-    mgr.attachUniqueIndex(.{ .ctx = &idx, .lookup = TestUniqueIndex.lookup });
-
-    // Inserting the SAME value as a DIFFERENT entity violates the constraint.
-    var node_props = std.StringHashMap(cm.Value).init(allocator);
-    defer node_props.deinit();
-    try node_props.put("email", .{ .string = "alice@example.com" });
-
-    const errs = try mgr.validateNode(2, "User", node_props);
-    defer {
-        for (errs) |e| allocator.free(e.message);
-        allocator.free(errs);
-    }
-    try std.testing.expectEqual(@as(usize, 1), errs.len);
-    try std.testing.expectEqual(cm.ConstraintType.unique, errs[0].constraint_type);
-    try std.testing.expectEqual(@as(u64, 2), errs[0].entity_id);
-    try std.testing.expect(errs[0].property != null);
-    try std.testing.expectEqualStrings("email", errs[0].property.?);
-
-    // The owning entity re-validating its own value is NOT a violation.
-    const errs_self = try mgr.validateNode(1, "User", node_props);
-    defer allocator.free(errs_self);
-    try std.testing.expectEqual(@as(usize, 0), errs_self.len);
-
-    // A distinct value is NOT a violation.
-    var node_props2 = std.StringHashMap(cm.Value).init(allocator);
-    defer node_props2.deinit();
-    try node_props2.put("email", .{ .string = "bob@example.com" });
-    const errs2 = try mgr.validateNode(3, "User", node_props2);
-    defer allocator.free(errs2);
-    try std.testing.expectEqual(@as(usize, 0), errs2.len);
-}
-
-test "GAP-0875a: without an attached index unique validation reports nothing (documented residual)" {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    var mgr = cm.ConstraintManager.init(allocator);
-    defer mgr.deinit();
-
-    var props_list = [_][]const u8{"email"};
-    try mgr.createUniqueConstraint("uq_user_email", .node, "User", props_list[0..]);
-
-    var node_props = std.StringHashMap(cm.Value).init(allocator);
-    defer node_props.deinit();
-    try node_props.put("email", .{ .string = "alice@example.com" });
-
-    const errs = try mgr.validateNode(2, "User", node_props);
-    defer allocator.free(errs);
-    try std.testing.expectEqual(@as(usize, 0), errs.len);
-}
 
 // ---------------------------------------------------------------------------
 // (b) Printer renders IN / NOT IN subqueries re-parseably
@@ -231,7 +141,12 @@ test "GAP-0875: benchmarkMemoryMappedIO write numbers are measured, not copied f
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const res = try mmio.benchmarkMemoryMappedIO(allocator, 64 * 1024, 3);
+    // SONNY-6517 item 5: the scratch file in a temporary directory.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}/benchmark_mmap_test.dat", .{tmp.sub_path});
+    defer allocator.free(path);
+    const res = try mmio.benchmarkMemoryMappedIO(allocator, path, 64 * 1024, 3);
     try std.testing.expect(res.mmap_read_ns > 0);
     try std.testing.expect(res.regular_read_ns > 0);
     try std.testing.expect(res.mmap_write_ns > 0);

@@ -33,17 +33,6 @@ fn compat_timestamp() i64 {
     }
     return @as(i64, ts.sec);
 }
-fn compat_microTimestamp() i64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime @import("builtin").os.tag == .linux) {
-        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
-        if (rc != 0) return 0;
-    } else {
-        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
-        if (rc != 0) return 0;
-    }
-    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
-}
 const flags_mod = @import("feature_flags");
 const key_manager = @import("tde_key_manager.zig");
 const nonce_gen = @import("tde_nonce_gen.zig");
@@ -53,7 +42,7 @@ const Attr = logging.Attr;
 
 // Transparent Data Encryption (TDE) minimal AES-256-GCM implementation.
 // Runtime gated by GEODE_ENABLE_TDE.
-// CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE baseline"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/e2e_security_tde_mfa.zig:1|tests/test_tde_integration.zig:1; OWNER=security; UPDATED=2025-11-12
+// CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE baseline"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/e2e_security_tde_mfa.zig; OWNER=security; UPDATED=2026-11-12
 
 pub const KeyStatus = key_manager.KeyStatus;
 
@@ -133,315 +122,14 @@ pub fn status() KeyStatus {
     return ks;
 }
 
-// Global rotation state (added to fix undeclared identifier usage in evaluation and cleanup functions)
-const RotationState = struct {
-    current_generation: i64,
-    last_rotation_time: i64,
-    rotation_in_progress: bool,
-    scheduled_rotation: ?i64,
-};
-var rotation_state: RotationState = .{
-    .current_generation = 1,
-    .last_rotation_time = 0, // Initialize to 0, will be set on first use
-    .rotation_in_progress = false,
-    .scheduled_rotation = null,
-};
-
 // Phase 6: TDE Core Functions
-
-/// Initialize key hierarchy with master/data/backup keys
-pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !key_manager.KeyHierarchyResult {
-    return try key_manager.initializeKeyHierarchy(allocator);
-}
-
-/// Rotate encryption keys with zero-downtime migration
-pub fn rotateKeys(allocator: std.mem.Allocator) !key_manager.RotateKeysResult {
-    return key_manager.rotateKeys(allocator);
-}
-
-/// Get comprehensive encryption status across all components
-pub fn getEncryptionStatus(allocator: std.mem.Allocator) !key_manager.EncryptionStatusResult {
-    return key_manager.getEncryptionStatus(allocator, enabled());
-}
 
 /// Configure KMS integration for key management
 pub fn configureKMS(allocator: std.mem.Allocator, provider: []const u8) !key_manager.ConfigureKMSResult {
     return key_manager.configureKMS(allocator, provider);
 }
 
-/// Verify that all data is properly encrypted
-pub fn verifyEncryptedState(_: std.mem.Allocator) !struct {
-    all_encrypted: bool,
-    data_files_checked: u32,
-    unencrypted_files: u32,
-    verification_time_ms: u64,
-} {
-    const start_time = compat_milliTimestamp();
-
-    var data_files_checked: u32 = 0;
-    var unencrypted_files: u32 = 0;
-    const tde_file = @import("../storage/tde_file_encryption.zig");
-
-    // Check data files for encryption markers
-    const data_dir = std.Io.Dir.cwd().openDir(".", .{ .iterate = true }) catch {
-        // If directory doesn't exist, consider it verified
-        return .{
-            .all_encrypted = true,
-            .data_files_checked = 0,
-            .unencrypted_files = 0,
-            .verification_time_ms = 0,
-        };
-    };
-    var data_iter = data_dir.iterate();
-
-    while (try data_iter.next()) |entry| {
-        if (entry.kind != .file) continue;
-
-        // Check graph store and backup files for TDE file-level magic
-        if (std.mem.endsWith(u8, entry.name, ".dat") or std.mem.endsWith(u8, entry.name, ".backup")) {
-            data_files_checked += 1;
-
-            // Check for encryption header (in production)
-            // For now, simulate by checking file exists
-            const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), entry.name, .{}) catch {
-                unencrypted_files += 1;
-                continue;
-            };
-            defer file.close();
-
-            // Read header for encryption marker
-            var header: [tde_file.MAGIC.len]u8 = undefined;
-            _ = file.read(&header) catch {
-                unencrypted_files += 1;
-                continue;
-            };
-
-            if (!std.mem.eql(u8, &header, &tde_file.MAGIC)) {
-                unencrypted_files += 1;
-            }
-        }
-    }
-
-    const verification_time_ms: u64 = @intCast(compat_milliTimestamp() - start_time);
-    const all_encrypted = unencrypted_files == 0 and data_files_checked > 0;
-
-    return .{
-        .all_encrypted = all_encrypted,
-        .data_files_checked = data_files_checked,
-        .unencrypted_files = unencrypted_files,
-        .verification_time_ms = verification_time_ms,
-    };
-}
 // Phase 7: TDE Advanced Functions
-
-/// Benchmark encryption performance with various data sizes
-pub fn benchmarkEncryption(allocator: std.mem.Allocator) !struct {
-    throughput_mbps: f64,
-    avg_latency_us: f64,
-    operations_tested: u32,
-    encryption_mode: []const u8,
-} {
-    if (!enabled()) return error.FeatureDisabled;
-
-    const iterations: u32 = 1000;
-    var total_bytes: u64 = 0;
-    var total_time_us: u64 = 0;
-
-    // Test with different data sizes
-    const sizes = [_]usize{ 64, 256, 1024, 4096, 16384, 65536 };
-
-    for (sizes) |size| {
-        const test_data = try allocator.alloc(u8, size);
-        defer allocator.free(test_data);
-
-        // Fill with random data
-        // fips-exempt: non-security test-plaintext fill
-        compat_fillRandom(test_data);
-
-        const start = compat_microTimestamp();
-
-        // Perform encryption operations
-        var i: u32 = 0;
-        while (i < iterations / sizes.len) : (i += 1) {
-            const ciphertext = try encrypt(allocator, test_data, "benchmark");
-            defer allocator.free(ciphertext.data);
-
-            const plaintext = try decrypt(allocator, ciphertext, "benchmark");
-            allocator.free(plaintext);
-
-            total_bytes += size * 2; // Count both encrypt and decrypt
-        }
-
-        total_time_us += @intCast(compat_microTimestamp() - start);
-    }
-
-    const throughput_mbps = @as(f64, @floatFromInt(total_bytes)) / @as(f64, @floatFromInt(total_time_us));
-    const avg_latency_us = @as(f64, @floatFromInt(total_time_us)) / @as(f64, @floatFromInt(iterations));
-
-    return .{
-        .throughput_mbps = throughput_mbps,
-        .avg_latency_us = avg_latency_us,
-        .operations_tested = iterations,
-        .encryption_mode = try allocator.dupe(u8, "AES-256-GCM"),
-    };
-}
-
-/// Perform encrypted backup with compression and verification
-pub fn backupEncrypted(allocator: std.mem.Allocator, backup_path: []const u8) !struct {
-    backup_size_bytes: u64,
-    compression_ratio: f64,
-    files_backed_up: u32,
-    backup_hash: []const u8,
-} {
-    if (!enabled()) return error.FeatureDisabled;
-
-    var backup_size: u64 = 0;
-    var original_size: u64 = 0;
-    var files_backed_up: u32 = 0;
-
-    // Create backup file
-    const backup_file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), backup_path, .{}) catch |err| {
-        // If file exists, try again with .bak extension
-        const alt_path = try std.fmt.allocPrint(allocator, "{s}.bak", .{backup_path});
-        defer allocator.free(alt_path);
-        return std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), alt_path, .{}) catch err;
-    };
-    defer backup_file.close();
-
-    // Simulate backing up database files
-    const db_files = [_][]const u8{ "nodes.db", "edges.db", "properties.db", "indexes.db" };
-
-    for (db_files) |db_file| {
-        // Generate simulated data for each file
-        const file_data = try allocator.alloc(u8, 10240); // 10KB per file
-        defer allocator.free(file_data);
-        // fips-exempt: non-security test-plaintext fill
-        compat_fillRandom(file_data);
-
-        original_size += file_data.len;
-
-        // Compress using simple RLE simulation
-        var compressed = try allocator.alloc(u8, file_data.len / 2);
-        defer allocator.free(compressed);
-
-        var compressed_len: usize = 0;
-        var i: usize = 0;
-        while (i < file_data.len) : (i += 2) {
-            compressed[compressed_len] = file_data[i];
-            compressed_len += 1;
-        }
-
-        // Encrypt compressed data
-        const encrypted = try encrypt(allocator, compressed[0..compressed_len], db_file);
-        defer allocator.free(encrypted.data);
-
-        // Write to backup file
-        try backup_file.writeAll(&encrypted.nonce);
-        try backup_file.writeAll(&encrypted.tag);
-        try backup_file.writeAll(encrypted.data);
-
-        backup_size += encrypted.nonce.len + encrypted.tag.len + encrypted.data.len;
-        files_backed_up += 1;
-    }
-
-    // Calculate backup hash
-    var hash_bytes: [32]u8 = undefined;
-    _ = try cb.Hash.digest(.sha256, &([_]u8{0} ** 32), &hash_bytes);
-    const hex_array = std.fmt.bytesToHex(hash_bytes, .lower);
-    const hash_str = try allocator.dupe(u8, &hex_array);
-
-    return .{
-        .backup_size_bytes = backup_size,
-        .compression_ratio = @as(f64, @floatFromInt(original_size)) / @as(f64, @floatFromInt(backup_size)),
-        .files_backed_up = files_backed_up,
-        .backup_hash = hash_str,
-    };
-}
-
-/// Configure cloud key provider for TDE
-/// GAP-0212 SECURITY FIX: Implement real KMS connection testing
-/// CANARY: REQ=REQ-GQL-TDE-KMS-CONN-001; FEATURE="RealKMSConnectionTest"; ASPECT=SECURITY; STATUS=TESTED; TEST=test_gap_0212_kms_connection; OWNER=security; UPDATED=2026-01-16
-pub fn configureKeyProvider(allocator: std.mem.Allocator, provider: []const u8) !struct {
-    provider_type: []const u8,
-    configured: bool,
-    connection_tested: bool,
-    latency_ms: u32,
-} {
-    const start = compat_milliTimestamp();
-
-    // Parse and validate provider configuration
-    const provider_type = if (std.mem.eql(u8, provider, "aws"))
-        try allocator.dupe(u8, "AWS KMS")
-    else if (std.mem.eql(u8, provider, "azure"))
-        try allocator.dupe(u8, "Azure Key Vault")
-    else if (std.mem.eql(u8, provider, "gcp"))
-        try allocator.dupe(u8, "Google Cloud KMS")
-    else if (std.mem.eql(u8, provider, "local") or std.mem.eql(u8, provider, "hsm"))
-        try allocator.dupe(u8, "Local HSM")
-    else
-        try allocator.dupe(u8, "LocalSimulated");
-
-    // GAP-0212 FIX: Real connection test via cryptographic operation verification
-    // This tests the KMS provider by performing actual wrap/unwrap operations
-    var connection_tested = false;
-
-    // Test cryptographic operations to verify KMS is functional
-    const test_key = [_]u8{0xAB} ** 32; // Test data encryption key
-    const test_context = "connection_test_context";
-
-    // Wrap a test key
-    const wrapped = encrypt(allocator, &test_key, test_context) catch |err| {
-        log.err("KMS connection test failed: wrap operation error", &.{
-            Attr.string("error", @errorName(err)),
-        });
-        allocator.free(provider_type);
-        return error.KmsConnectionFailed;
-    };
-    defer allocator.free(wrapped.data);
-
-    // Unwrap the test key and verify it matches
-    const unwrapped = decrypt(allocator, wrapped, test_context) catch |err| {
-        log.err("KMS connection test failed: unwrap operation error", &.{
-            Attr.string("error", @errorName(err)),
-        });
-        allocator.free(provider_type);
-        return error.KmsConnectionFailed;
-    };
-    defer allocator.free(unwrapped);
-
-    // Verify cryptographic round-trip integrity
-    if (!std.mem.eql(u8, &test_key, unwrapped)) {
-        log.err("KMS connection test failed: data integrity check failed", &.{});
-        allocator.free(provider_type);
-        return error.KmsIntegrityCheckFailed;
-    }
-
-    // Connection test passed - KMS can successfully wrap/unwrap keys
-    connection_tested = true;
-    const latency_ms: u32 = @intCast(compat_milliTimestamp() - start);
-
-    log.info("KMS connection test passed", &.{
-        Attr.string("provider", provider_type),
-        Attr.int("latency_ms", @intCast(latency_ms)),
-    });
-
-    return .{
-        .provider_type = provider_type,
-        .configured = true,
-        .connection_tested = connection_tested,
-        .latency_ms = latency_ms,
-    };
-}
-
-/// Derive data encryption key from master key
-pub fn deriveDataKey(allocator: std.mem.Allocator, key_id: u32) !key_manager.DeriveDataKeyResult {
-    return key_manager.deriveDataKey(allocator, key_id);
-}
-
-/// Derive backup encryption key from master key
-pub fn deriveBackupKey(allocator: std.mem.Allocator, key_id: u32) !key_manager.DeriveDataKeyResult {
-    return key_manager.deriveBackupKey(allocator, key_id);
-}
 
 // =============================================================================
 // Per-Tenant TDE Encryption (GAP-0290)
@@ -706,7 +394,6 @@ pub fn testKeyEscrow(allocator: std.mem.Allocator) !struct {
 pub fn testTransparentEncryption(allocator: std.mem.Allocator) !struct {
     types_tested: u32,
     all_transparent: bool,
-    performance_impact_pct: f64,
     errors_encountered: u32,
 } {
     if (!enabled()) return error.FeatureDisabled;
@@ -723,8 +410,9 @@ pub fn testTransparentEncryption(allocator: std.mem.Allocator) !struct {
         .{ .name = "VECTOR", .size = 512 },
     };
 
-    const baseline_time = compat_microTimestamp();
-
+    // SONNY-6448: no performance figure. One compared these AEAD round trips
+    // with plain copies of the same buffers, which says nothing about TDE
+    // overhead; the measurement is `zig build test-sonny6435-tde-overhead`.
     for (test_types) |test_type| {
         const data = try allocator.alloc(u8, test_type.size);
         defer allocator.free(data);
@@ -753,14 +441,9 @@ pub fn testTransparentEncryption(allocator: std.mem.Allocator) !struct {
         types_tested += 1;
     }
 
-    const elapsed_time: u64 = @intCast(compat_microTimestamp() - baseline_time);
-    const baseline_estimate: u64 = 1000; // Estimated unencrypted time in microseconds
-    const performance_impact = (@as(f64, @floatFromInt(elapsed_time)) / @as(f64, @floatFromInt(baseline_estimate)) - 1.0) * 100.0;
-
     return .{
         .types_tested = types_tested,
         .all_transparent = errors == 0,
-        .performance_impact_pct = performance_impact,
         .errors_encountered = errors,
     };
 }
@@ -768,23 +451,11 @@ pub fn testTransparentEncryption(allocator: std.mem.Allocator) !struct {
 // ========== TDE TEST PROCEDURES - REAL IMPLEMENTATIONS ==========
 // CANARY: REQ=REQ-TDE-TEST-IMPL; FEATURE="TDETestImplementations"; ASPECT=RealFunctionality; STATUS=EXEMPT; OWNER=tde; UPDATED=2025-11-12
 
-/// Key provider types
-pub const KeyProvider = key_manager.KeyProvider;
-
-/// Configure key provider
-pub fn configureProvider(allocator: std.mem.Allocator, provider_type: []const u8) !key_manager.ConfigureProviderResult {
-    return key_manager.configureProvider(allocator, provider_type);
-}
-
-/// Get current rotation state
-pub fn getRotationState(allocator: std.mem.Allocator) !key_manager.GetRotationStateResult {
-    return key_manager.getRotationState(allocator);
-}
-
-/// Configure key rotation schedule
-pub fn configureRotation(allocator: std.mem.Allocator, max_age_hours: u32) !key_manager.ConfigureRotationResult {
-    return key_manager.configureRotation(allocator, max_age_hours);
-}
+// SONNY-6348: the page and backup self tests reported id 1 on every run.
+// Each run now gets its own sequence number (per process, from 1), which
+// identifies the synthetic page or backup payload that run encrypted.
+var page_test_seq = std.atomic.Value(i64).init(0);
+var backup_test_seq = std.atomic.Value(i64).init(0);
 
 /// Test block-level encryption
 pub fn encryptPageTest(allocator: std.mem.Allocator) !struct {
@@ -811,7 +482,7 @@ pub fn encryptPageTest(allocator: std.mem.Allocator) !struct {
     const integrity_ok = std.mem.eql(u8, page_data, decrypted);
 
     return .{
-        .page_id = 1,
+        .page_id = page_test_seq.fetchAdd(1, .monotonic) + 1,
         .encryption_status = try allocator.dupe(u8, if (integrity_ok) "encrypted" else "failed"),
         .page_size_encrypted = @intCast(encrypted.data.len),
         .integrity_check = integrity_ok,
@@ -843,7 +514,7 @@ pub fn encryptBackupTest(allocator: std.mem.Allocator) !struct {
     const integrity_ok = std.mem.eql(u8, backup_data, decrypted);
 
     return .{
-        .backup_id = 1,
+        .backup_id = backup_test_seq.fetchAdd(1, .monotonic) + 1,
         .encryption_status = try allocator.dupe(u8, if (integrity_ok) "encrypted" else "failed"),
         .backup_size = @intCast(encrypted.data.len),
         .integrity_verified = integrity_ok,
@@ -873,275 +544,132 @@ pub fn roundtripTest(allocator: std.mem.Allocator, test_data: []const u8) !struc
     };
 }
 
-/// Create encrypted backup
-pub fn createEncryptedBackup(allocator: std.mem.Allocator, backup_path: []const u8) !struct {
-    backup_path: []const u8,
-    encryption_key_id: []const u8,
-    backup_size: i64,
-    integrity_hash: []const u8,
-} {
-    if (!enabled()) return error.FeatureDisabled;
+/// The most concurrent transactions `simulateOLTPWorkload` runs (one
+/// thread each); more is refused with error.InvalidArgs (SONNY-6348).
+pub const max_oltp_concurrency: u32 = 64;
 
-    // Load current key
-    const key = try loadRawKey(allocator) orelse return error.KeyNotLoaded;
-
-    // Generate key ID
-    var key_hash: [32]u8 = undefined;
-    _ = try cb.Hash.digest(.sha256, &key, &key_hash);
-    const key_id = try std.fmt.allocPrint(allocator, "mek-{x:0>8}", .{std.mem.readInt(u32, key_hash[0..4], .little)});
-
-    // Simulate backup data
-    const backup_data = try allocator.alloc(u8, 1048576); // 1MB
-    defer allocator.free(backup_data);
-    // fips-exempt: non-security test-plaintext fill
-    compat_fillRandom(backup_data);
-
-    // Actually encrypt backup
-    const encrypted = try encrypt(allocator, backup_data, "backup");
-    defer allocator.free(encrypted.data);
-
-    // Calculate integrity hash
-    var integrity: [32]u8 = undefined;
-    _ = try cb.Hash.digest(.sha256, encrypted.data, &integrity);
-    const hash_str = try std.fmt.allocPrint(allocator, "sha256:{x}", .{integrity[0..8].*});
-
-    return .{
-        .backup_path = try allocator.dupe(u8, backup_path),
-        .encryption_key_id = key_id,
-        .backup_size = @intCast(encrypted.data.len),
-        .integrity_hash = hash_str,
-    };
-}
-
-/// Restore from encrypted backup with keys
-pub fn restoreWithKeys(allocator: std.mem.Allocator, backup_path: []const u8, manifest_path: []const u8) !struct {
-    restore_status: []const u8,
-    records_restored: i64,
-    keys_verified: bool,
-} {
-    if (!enabled()) return error.FeatureDisabled;
-
-    _ = backup_path;
-    _ = manifest_path;
-
-    // Simulate actual restore process
-    const test_data = try allocator.alloc(u8, 1000);
-    defer allocator.free(test_data);
-    // fips-exempt: non-security test-plaintext fill
-    compat_fillRandom(test_data);
-
-    // Verify keys work
-    const encrypted = try encrypt(allocator, test_data, "restore_test");
-    defer allocator.free(encrypted.data);
-
-    const decrypted = try decrypt(allocator, encrypted, "restore_test");
-    defer allocator.free(decrypted);
-
-    const keys_ok = std.mem.eql(u8, test_data, decrypted);
-
-    return .{
-        .restore_status = try allocator.dupe(u8, if (keys_ok) "success" else "failed"),
-        .records_restored = 1000,
-        .keys_verified = keys_ok,
-    };
-}
-
-/// Measure encryption overhead
-pub fn measureOverhead(allocator: std.mem.Allocator) !struct {
-    baseline_ops_per_sec: i64,
-    encrypted_ops_per_sec: i64,
-    overhead_percentage: f64,
-    passes_threshold: bool,
-} {
-    if (!enabled()) return error.FeatureDisabled;
-
-    const iterations: usize = 1000;
-    const test_data = try allocator.alloc(u8, 1024);
-    defer allocator.free(test_data);
-    // fips-exempt: non-security test-plaintext fill
-    compat_fillRandom(test_data);
-
-    // Baseline (no encryption)
-    const baseline_start = compat_microTimestamp();
-    for (0..iterations) |_| {
-        const copy = try allocator.alloc(u8, test_data.len);
-        @memcpy(copy, test_data);
-        allocator.free(copy);
+fn monoNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
     }
-    const baseline_time = compat_microTimestamp() - baseline_start;
-
-    // With encryption
-    const encrypted_start = compat_microTimestamp();
-    for (0..iterations) |_| {
-        const enc = try encrypt(allocator, test_data, "overhead_test");
-        allocator.free(enc.data);
-    }
-    const encrypted_time = compat_microTimestamp() - encrypted_start;
-
-    // Calculate ops/sec. SONNY-2739: a loop timed at 0 us made the rate
-    // infinite and `@intFromFloat` aborted the server; time at least 1 us.
-    const baseline_ops = (@as(f64, iterations) / @as(f64, @floatFromInt(@max(baseline_time, 1)))) * 1000000.0;
-    const encrypted_ops = (@as(f64, iterations) / @as(f64, @floatFromInt(@max(encrypted_time, 1)))) * 1000000.0;
-    const overhead = ((baseline_ops - encrypted_ops) / baseline_ops) * 100.0;
-
-    return .{
-        .baseline_ops_per_sec = std.math.lossyCast(i64, baseline_ops),
-        .encrypted_ops_per_sec = std.math.lossyCast(i64, encrypted_ops),
-        .overhead_percentage = overhead,
-        .passes_threshold = overhead < 5.0, // <5% overhead threshold
-    };
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }
 
-/// Simulate OLTP workload with encryption
+const OltpWorker = struct {
+    transactions: u64,
+    encrypt: bool,
+    elapsed_ns: u64 = 0,
+    err: ?anyerror = null,
+
+    fn run(self: *OltpWorker) void {
+        self.runInner() catch |e| {
+            self.err = e;
+        };
+    }
+
+    fn runInner(self: *OltpWorker) !void {
+        // smp_allocator: the workers run concurrently, and the caller's
+        // allocator (often a per-query arena) is not thread-safe.
+        const a = std.heap.smp_allocator;
+        var data: [256]u8 = undefined;
+        // fips-exempt: non-security test-plaintext fill
+        compat_fillRandom(&data);
+        const start = monoNs();
+        for (0..self.transactions) |_| {
+            if (self.encrypt) {
+                const enc = try encrypt(a, &data, "oltp_test");
+                defer a.free(enc.data);
+                const dec = try decrypt(a, enc, "oltp_test");
+                a.free(dec);
+            } else {
+                const copy = try a.alloc(u8, data.len);
+                @memcpy(copy, &data);
+                std.mem.doNotOptimizeAway(copy.ptr);
+                a.free(copy);
+            }
+        }
+        self.elapsed_ns = monoNs() - start;
+    }
+};
+
+/// Run `transactions` transactions split across `workers` concurrent threads
+/// and return the wall time in ns and the summed per-worker busy time.
+fn runOltpPhase(workers: []OltpWorker, threads: []std.Thread, total: u64, encrypt_phase: bool) !struct { wall_ns: u64, busy_ns: u64 } {
+    const n: u64 = workers.len;
+    for (workers, 0..) |*w, i| {
+        // Spread the remainder over the first workers.
+        w.* = .{ .transactions = total / n + @intFromBool(i < total % n), .encrypt = encrypt_phase };
+    }
+    var spawned: usize = 0;
+    const start = monoNs();
+    errdefer for (threads[0..spawned]) |t| t.join();
+    for (workers, 0..) |*w, i| {
+        threads[i] = try std.Thread.spawn(.{}, OltpWorker.run, .{w});
+        spawned += 1;
+    }
+    for (threads[0..spawned]) |t| t.join();
+    spawned = 0;
+    const wall = monoNs() - start;
+    var busy: u64 = 0;
+    for (workers) |w| {
+        if (w.err) |e| return e;
+        busy += w.elapsed_ns;
+    }
+    return .{ .wall_ns = @max(wall, 1), .busy_ns = busy };
+}
+
+/// Simulate an OLTP workload with encryption: `duration_seconds * 10`
+/// transactions (a 256-byte encrypt + decrypt each), run by
+/// `concurrent_transactions` threads at once, against the same workload of
+/// plain copies.
+///
+/// SONNY-6348: `concurrent_transactions` was ignored (every transaction ran
+/// on the caller's thread). It is now the number of concurrent workers,
+/// 1..max_oltp_concurrency (anything else is error.InvalidArgs), and is
+/// reported back with the number of transactions run.
 pub fn simulateOLTPWorkload(allocator: std.mem.Allocator, duration_seconds: u32, concurrent_transactions: u32) !struct {
     avg_transaction_time_ms: f64,
     tps_with_encryption: i64,
     tps_without_encryption: i64,
     degradation_percentage: f64,
+    concurrent_transactions: u32,
+    transactions: u64,
 } {
     if (!enabled()) return error.FeatureDisabled;
-
-    _ = concurrent_transactions;
-
-    const test_data = try allocator.alloc(u8, 256);
-    defer allocator.free(test_data);
-    // fips-exempt: non-security test-plaintext fill
-    compat_fillRandom(test_data);
+    if (concurrent_transactions == 0 or concurrent_transactions > max_oltp_concurrency) return error.InvalidArgs;
 
     // SONNY-2739: u64, so a large duration cannot overflow the product.
-    const iterations = @as(u64, duration_seconds) * 10; // Simulate transactions
+    const total = @as(u64, duration_seconds) * 10;
+    // More workers than transactions would leave workers with nothing to do.
+    const n: usize = @intCast(@max(@min(@as(u64, concurrent_transactions), total), 1));
 
-    // Without encryption
-    const unencrypted_start = compat_milliTimestamp();
-    for (0..iterations) |_| {
-        const copy = try allocator.alloc(u8, test_data.len);
-        @memcpy(copy, test_data);
-        allocator.free(copy);
-    }
-    const unencrypted_time = compat_milliTimestamp() - unencrypted_start;
+    const workers = try allocator.alloc(OltpWorker, n);
+    defer allocator.free(workers);
+    const threads = try allocator.alloc(std.Thread, n);
+    defer allocator.free(threads);
 
-    // With encryption
-    const encrypted_start = compat_milliTimestamp();
-    for (0..iterations) |_| {
-        const enc = try encrypt(allocator, test_data, "oltp_test");
-        const dec = try decrypt(allocator, enc, "oltp_test");
-        allocator.free(enc.data);
-        allocator.free(dec);
-    }
-    const encrypted_time = compat_milliTimestamp() - encrypted_start;
+    const plain = try runOltpPhase(workers, threads, total, false);
+    const enc = try runOltpPhase(workers, threads, total, true);
 
-    // SONNY-2739: a loop timed at 0 ms made the rate infinite; see above.
-    const tps_unencrypted = (@as(f64, @floatFromInt(iterations)) / @as(f64, @floatFromInt(@max(unencrypted_time, 1)))) * 1000.0;
-    const tps_encrypted = (@as(f64, @floatFromInt(iterations)) / @as(f64, @floatFromInt(@max(encrypted_time, 1)))) * 1000.0;
-    const avg_time = @as(f64, @floatFromInt(encrypted_time)) / @as(f64, @floatFromInt(iterations));
-    const degradation = ((tps_unencrypted - tps_encrypted) / tps_unencrypted) * 100.0;
+    const ns_per_s: f64 = @floatFromInt(std.time.ns_per_s);
+    const total_f: f64 = @floatFromInt(total);
+    const tps_unencrypted = total_f / (@as(f64, @floatFromInt(plain.wall_ns)) / ns_per_s);
+    const tps_encrypted = total_f / (@as(f64, @floatFromInt(enc.wall_ns)) / ns_per_s);
+    // Mean latency of one transaction: the workers' busy time over the
+    // transactions they ran.
+    const avg_time_ms = if (total == 0) 0.0 else @as(f64, @floatFromInt(enc.busy_ns)) / total_f / 1_000_000.0;
+    const degradation = if (total == 0) 0.0 else ((tps_unencrypted - tps_encrypted) / tps_unencrypted) * 100.0;
 
     return .{
-        .avg_transaction_time_ms = avg_time,
+        .avg_transaction_time_ms = avg_time_ms,
         .tps_with_encryption = std.math.lossyCast(i64, tps_encrypted),
         .tps_without_encryption = std.math.lossyCast(i64, tps_unencrypted),
         .degradation_percentage = degradation,
-    };
-}
-
-/// Test key zeroization
-pub fn testKeyZeroization(allocator: std.mem.Allocator) !struct {
-    keys_zeroized: i64,
-    memory_cleared: bool,
-    secure_cleanup_verified: bool,
-} {
-    _ = allocator;
-
-    // Create test keys
-    var keys: [5][32]u8 = undefined;
-    for (&keys) |*key| {
-        // fips-exempt: non-security test-key fill for zeroization-verification (test-only)
-        compat_fillRandom(key);
-    }
-
-    // Zeroize keys using crypto-safe wipe (compiler cannot elide)
-    for (&keys) |*key| {
-        cb.secureZero(key);
-    }
-
-    // Verify zeroization
-    var all_zeroed = true;
-    for (keys) |key| {
-        for (key) |byte| {
-            if (byte != 0) {
-                all_zeroed = false;
-                break;
-            }
-        }
-    }
-
-    return .{
-        .keys_zeroized = 5,
-        .memory_cleared = all_zeroed,
-        .secure_cleanup_verified = all_zeroed,
-    };
-}
-
-/// Audit for plaintext keys
-pub fn auditPlaintextKeys(allocator: std.mem.Allocator) !struct {
-    plaintext_keys_found: i64,
-    encrypted_keys_count: i64,
-    security_violation: bool,
-} {
-    // Check if keys are stored encrypted
-    const key_opt = try loadRawKey(allocator);
-    const encrypted_count: i64 = if (key_opt != null) 5 else 0;
-
-    return .{
-        .plaintext_keys_found = 0,
-        .encrypted_keys_count = encrypted_count,
-        .security_violation = false,
-    };
-}
-
-/// Test key access control
-pub fn testKeyAccessControl(allocator: std.mem.Allocator) !struct {
-    authorized_access: i64,
-    unauthorized_attempts: i64,
-    access_denied_count: i64,
-} {
-    _ = allocator;
-
-    // Simulate access control tests
-    var authorized: i64 = 0;
-    var unauthorized: i64 = 0;
-    var denied: i64 = 0;
-
-    // Test authorized access
-    for (0..10) |_| {
-        authorized += 1;
-    }
-
-    // Test unauthorized access (should be denied)
-    for (0..5) |_| {
-        unauthorized += 1;
-        denied += 1;
-    }
-
-    return .{
-        .authorized_access = authorized,
-        .unauthorized_attempts = unauthorized,
-        .access_denied_count = denied,
-    };
-}
-
-/// Configure external KMS
-pub fn configureExternalKms(allocator: std.mem.Allocator, endpoint: []const u8, region: []const u8) !struct {
-    status: []const u8,
-    endpoint: []const u8,
-    connection_verified: bool,
-} {
-    _ = region;
-
-    return .{
-        .status = try allocator.dupe(u8, "configured"),
-        .endpoint = try allocator.dupe(u8, endpoint),
-        .connection_verified = true,
+        .concurrent_transactions = @intCast(n),
+        .transactions = total,
     };
 }
 
@@ -1266,243 +794,5 @@ pub fn testKmsAttestation(allocator: std.mem.Allocator) !struct {
         .signature_verified = attestation_valid,
         .ed25519_verification = ed25519_verification,
         .tamper_detected = tamper_detected,
-    };
-}
-
-/// Test privileged key unwrap with real RBAC privilege checking
-/// GAP-0213 SECURITY FIX: Implement actual RBAC privilege verification
-/// CANARY: REQ=REQ-GQL-TDE-PRIV-001; FEATURE="RealRBACPrivilegeCheck"; ASPECT=SECURITY; STATUS=TESTED; TEST=test_gap_0213_privilege_check; OWNER=security; UPDATED=2026-01-16
-pub fn testPrivilegedUnwrap(allocator: std.mem.Allocator) !struct {
-    privileged_access_granted: bool,
-    unwrap_successful: bool,
-    audit_logged: bool,
-} {
-    // GAP-0213 FIX: Inline RBAC implementation to avoid module dependency issues
-    // This implements real permission checking without importing auth module
-
-    // Define permission action enum locally (mirrors auth.Action)
-    const Action = enum { create, read, update, delete, execute, grant, revoke, all };
-    const UserId = u64;
-    const RoleId = u64;
-
-    // Simple permission record
-    const Permission = struct {
-        resource: []const u8,
-        action: Action,
-    };
-
-    // GAP-0213 FIX: Create real RBAC permission structures
-    // User 1 (admin) has role 1 which grants system.execute permission
-    const test_user_id: UserId = 1;
-    const admin_role_id: RoleId = 1;
-
-    // Define user->role mapping using AutoHashMap (managed version)
-    var user_roles = std.AutoHashMap(UserId, []const RoleId).init(allocator);
-    defer user_roles.deinit();
-
-    // Create role array for user
-    const user_role_array = try allocator.alloc(RoleId, 1);
-    defer allocator.free(user_role_array);
-    user_role_array[0] = admin_role_id;
-    try user_roles.put(test_user_id, user_role_array);
-
-    // Define role->permissions mapping
-    var role_permissions = std.AutoHashMap(RoleId, []const Permission).init(allocator);
-    defer role_permissions.deinit();
-
-    // Create permission array for admin role
-    const admin_perms = try allocator.alloc(Permission, 2);
-    defer allocator.free(admin_perms);
-    admin_perms[0] = .{ .resource = "system", .action = .execute };
-    admin_perms[1] = .{ .resource = "tde", .action = .all };
-    try role_permissions.put(admin_role_id, admin_perms);
-
-    // GAP-0213 FIX: Real RBAC permission check implementation
-    var access_granted = false;
-    if (user_roles.get(test_user_id)) |roles| {
-        for (roles) |rid| {
-            if (role_permissions.get(rid)) |perms| {
-                for (perms) |perm| {
-                    const resource_match = std.mem.eql(u8, perm.resource, "system") or
-                        std.mem.eql(u8, perm.resource, "tde");
-                    const action_match = perm.action == .execute or perm.action == .all;
-                    if (resource_match and action_match) {
-                        access_granted = true;
-                        break;
-                    }
-                }
-            }
-            if (access_granted) break;
-        }
-    }
-
-    // Only perform unwrap if permission granted
-    if (!enabled()) return error.FeatureDisabled;
-
-    var unwrap_ok = false;
-    if (access_granted) {
-        // Create test wrapped key and verify unwrap works
-        const test_key = [_]u8{0xDE} ** 32;
-        const encrypted = try encrypt(allocator, &test_key, "priv_test");
-        defer allocator.free(encrypted.data);
-
-        const decrypted = try decrypt(allocator, encrypted, "priv_test");
-        defer allocator.free(decrypted);
-
-        unwrap_ok = std.mem.eql(u8, &test_key, decrypted);
-    }
-
-    // GAP-0213 FIX: Log audit event for privileged operation
-    // Using structured logging for audit trail (compatible across all modules)
-    log.info("TDE audit: privileged key unwrap operation", &.{
-        Attr.int("user_id", @intCast(test_user_id)),
-        Attr.string("operation", "key_unwrap"),
-        Attr.string("permission_check", if (access_granted) "GRANTED" else "DENIED"),
-        Attr.string("unwrap_result", if (unwrap_ok) "SUCCESS" else "FAILED"),
-    });
-    const audit_logged = true;
-
-    return .{
-        .privileged_access_granted = access_granted,
-        .unwrap_successful = unwrap_ok,
-        .audit_logged = audit_logged,
-    };
-}
-
-/// Test key recovery
-pub fn testKeyRecovery(allocator: std.mem.Allocator) !struct {
-    recovery_initiated: bool,
-    master_key_recovered: bool,
-    data_accessible: bool,
-} {
-    if (!enabled()) return error.FeatureDisabled;
-
-    // Test recovery process
-    const test_data = try allocator.alloc(u8, 128);
-    defer allocator.free(test_data);
-    // fips-exempt: non-security test-plaintext fill
-    compat_fillRandom(test_data);
-
-    // Encrypt with current key
-    const encrypted = try encrypt(allocator, test_data, "recovery_test");
-    defer allocator.free(encrypted.data);
-
-    // Verify we can decrypt (recovery successful)
-    const decrypted = try decrypt(allocator, encrypted, "recovery_test");
-    defer allocator.free(decrypted);
-
-    const recovered = std.mem.eql(u8, test_data, decrypted);
-
-    return .{
-        .recovery_initiated = true,
-        .master_key_recovered = recovered,
-        .data_accessible = recovered,
-    };
-}
-
-/// Evaluate rotation schedule
-pub fn evaluateRotationSchedule(allocator: std.mem.Allocator) !struct {
-    should_rotate: bool,
-    next_check_time: []const u8,
-    rotation_reason: ?[]const u8,
-    age_hours: i64,
-} {
-    const now = compat_milliTimestamp();
-    const last_rotation = rotation_state.last_rotation_time;
-    const age_ms = now - last_rotation;
-    const age_hours_val = @divTrunc(age_ms, (1000 * 3600));
-
-    const should_rotate_now = age_hours_val > 168; // 7 days
-
-    const next_check = try std.fmt.allocPrint(allocator, "2025-11-{d:0>2}T00:00:00Z", .{1});
-    const reason = if (should_rotate_now) try allocator.dupe(u8, "age_threshold") else null;
-
-    return .{
-        .should_rotate = should_rotate_now,
-        .next_check_time = next_check,
-        .rotation_reason = reason,
-        .age_hours = age_hours_val,
-    };
-}
-
-/// Test KMS failure handling
-pub fn testKmsFailure(allocator: std.mem.Allocator) !struct {
-    error_handled: bool,
-    fallback_activated: bool,
-    service_degraded: bool,
-} {
-    _ = allocator;
-
-    // Simulate KMS failure
-    const error_occurred = true;
-    const fallback_ok = error_occurred; // Activate fallback
-    const degraded = false; // Service continues with fallback
-
-    return .{
-        .error_handled = error_occurred,
-        .fallback_activated = fallback_ok,
-        .service_degraded = degraded,
-    };
-}
-
-/// Test corrupted key handling
-pub fn testCorruptedKeyHandling(allocator: std.mem.Allocator) !struct {
-    corruption_detected: bool,
-    recovery_attempted: bool,
-    data_recoverable: bool,
-} {
-    if (!enabled()) return error.FeatureDisabled;
-
-    // Create test data
-    const test_data = try allocator.alloc(u8, 128);
-    defer allocator.free(test_data);
-    // fips-exempt: non-security test-plaintext fill
-    compat_fillRandom(test_data);
-
-    // Encrypt with valid key
-    const encrypted = try encrypt(allocator, test_data, "corruption_test");
-    defer allocator.free(encrypted.data);
-
-    // Simulate corruption detection by trying to decrypt
-    const decrypted = decrypt(allocator, encrypted, "corruption_test") catch {
-        return .{
-            .corruption_detected = true,
-            .recovery_attempted = true,
-            .data_recoverable = false,
-        };
-    };
-    defer allocator.free(decrypted);
-
-    const recovered = std.mem.eql(u8, test_data, decrypted);
-
-    return .{
-        .corruption_detected = !recovered,
-        .recovery_attempted = true,
-        .data_recoverable = recovered,
-    };
-}
-
-/// Cleanup key hierarchy
-pub fn cleanupKeyHierarchy(allocator: std.mem.Allocator) !struct {
-    keys_zeroized: i64,
-    hierarchy_cleared: bool,
-} {
-    _ = allocator;
-
-    // Zeroize all keys in hierarchy using crypto-safe wipe
-    var keys: [3][32]u8 = undefined;
-    for (&keys) |*key| {
-        cb.secureZero(key);
-    }
-
-    // Reset rotation state
-    rotation_state.current_generation = 1;
-    rotation_state.last_rotation_time = 0;
-    rotation_state.rotation_in_progress = false;
-    rotation_state.scheduled_rotation = null;
-
-    return .{
-        .keys_zeroized = 3,
-        .hierarchy_cleared = true,
     };
 }

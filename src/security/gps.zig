@@ -202,6 +202,7 @@ pub const DecisionRequest = struct {
 // REQ-GPS-INVARIANT-001 ASPECT=FailOpenInterim STATUS=COMPLETE for site #2.
 const user_mgmt = @import("user_management.zig");
 const execution = @import("../execution.zig");
+const write_walk = @import("../execution/write_walk.zig");
 const tenancy = @import("../execution/tenancy.zig");
 
 /// Map a GPS Action to the user_management.Permission it requires.
@@ -255,8 +256,8 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     // CANARY: REQ=REQ-GPS-PDP-007; FEATURE="GPS Decision Engine"; ASPECT=InsecureAllowAll; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
     // --insecure-allow-all: process-wide kill-switch that short-circuits all
     // authorization logic. Set only when the flag is present at CLI startup.
-    // This is the canonical bypass path; the legacy auth-disabled short-circuit
-    // in checkPermission() is preserved as a Phase 1 compat path (see Task 2-9).
+    // This is the canonical bypass path. (The legacy auth-disabled
+    // short-circuit lived in execution.checkPermission, removed in SONNY-2781.)
     if (g_insecure_allow_all.load(.acquire)) {
         return PolicyDecision{
             .kind = .allow,
@@ -321,6 +322,20 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
         });
     }
 
+    // CANARY: REQ=REQ-SONNY-2756-POLICY-CATALOG-LOCK; FEATURE="GPS Policy Evaluation"; ASPECT=DecideOneCatalog; STATUS=TESTED; TEST=tests/test_sonny2756_policy_catalog_concurrency.zig; OWNER=security; UPDATED=2026-11-11
+    // SONNY-2756: one shared hold on the policy catalog from the deny scan to
+    // the allow scan, so the decision is the one a single catalog gives and
+    // no policy change frees what the scans read. A change (CREATE, ALTER or
+    // DROP POLICY on another connection) waits for it, briefly: nothing in
+    // between blocks. The cache key above carries the policy version read
+    // before this hold; a change bumps the version under its exclusive hold,
+    // after changing the catalog, so a decision computed from the old
+    // catalog is never cached under the new version.
+    const pc = @import("policy_catalog.zig");
+    const view: ?pc.PolicyCatalog.ReadView = if (pc.getGlobalCatalog()) |cat| cat.acquireRead() else null;
+    defer if (view) |v| v.release();
+    const policies: []const pc.Policy = if (view) |v| v.policies() else &.{};
+
     // CANARY: REQ=REQ-SONNY-2744-GPS-DENY-OVERRIDES; FEATURE="GPS Policy Evaluation"; ASPECT=DenyOverridesAllow; STATUS=TESTED; TEST=tests/test_sonny2744_gps_deny.zig; OWNER=security; UPDATED=2026-09-25
     // SONNY-2744: a matching deny-effect policy refuses the request, whatever
     // would allow it below: a builtin role, an Admin shortcut (decrypt_field,
@@ -328,7 +343,7 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     // deny policies, so a deny never denied. Only actions a policy can name
     // (`policyMatchesAction`) can be denied; --insecure-allow-all, above,
     // still overrides everything.
-    if (denyPolicyApplies(allocator, req)) {
+    if (denyPolicyIn(policies, allocator, req)) {
         return cacheAndReturn(cache_key, PolicyDecision{
             .kind = .deny,
             .reason_code = "policy_deny",
@@ -531,20 +546,17 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     // Phase 4: explicit policy match via the global PolicyCatalog.
     // Phase 5 (Task 5-4): attribute-based expression predicates are now
     // evaluated via the compiled CompiledExpression stored on each Policy.
-    const pc = @import("policy_catalog.zig");
-    if (pc.getGlobalCatalog()) |cat| {
-        for (cat.listPolicies()) |*policy| {
-            // SONNY-2744: deny policies were applied above.
-            if (policy.effect != .allow) continue;
-            if (!policy.enabled) continue;
-            if (!policyMatchesAction(policy.*, req.action)) continue;
-            if (!allowPolicyCovers(policy.*, req.resource)) continue;
-            if (policyExpressionHolds(allocator, policy, req)) {
-                return cacheAndReturn(cache_key, PolicyDecision{
-                    .kind = .allow,
-                    .reason_code = "policy_match",
-                });
-            }
+    for (policies) |*policy| {
+        // SONNY-2744: deny policies were applied above.
+        if (policy.effect != .allow) continue;
+        if (!policy.enabled) continue;
+        if (!policyMatchesAction(policy.*, req.action)) continue;
+        if (!policyCovers(policy.*, req.resource)) continue;
+        if (policyExpressionHolds(allocator, policy, req)) {
+            return cacheAndReturn(cache_key, PolicyDecision{
+                .kind = .allow,
+                .reason_code = "policy_match",
+            });
         }
     }
 
@@ -554,23 +566,67 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     });
 }
 
-/// SONNY-2744: is there an enabled deny-effect policy that matches `req`
-/// (action, resource and USING expression)? Resources match by
-/// `policyMatchesResource`: a policy scoped to one graph matches that graph,
-/// and also every database-, tenant-, node-, edge-, procedure- and
-/// metadata-scoped request, so a deny covers at least what the same allow
-/// would grant (`allowPolicyCovers`, which is narrower).
-fn denyPolicyApplies(allocator: std.mem.Allocator, req: *const DecisionRequest) bool {
-    const pc = @import("policy_catalog.zig");
-    const cat = pc.getGlobalCatalog() orelse return false;
-    for (cat.listPolicies()) |*policy| {
+/// SONNY-2744: is there an enabled deny-effect policy among `policies` (a
+/// catalog the caller holds, SONNY-2756) that matches `req` (action, resource
+/// and USING expression)? SONNY-2753: resources match by `policyCovers`, as
+/// for allow policies: a policy scoped to one graph covers that graph and its
+/// nodes and edges only.
+fn denyPolicyIn(policies: []const @import("policy_catalog.zig").Policy, allocator: std.mem.Allocator, req: *const DecisionRequest) bool {
+    for (policies) |*policy| {
         if (policy.effect != .deny) continue;
         if (!policy.enabled) continue;
         if (!policyMatchesAction(policy.*, req.action)) continue;
-        if (!policyMatchesResource(policy.*, req.resource)) continue;
+        if (!policyCovers(policy.*, req.resource)) continue;
         if (policyExpressionHolds(allocator, policy, req)) return true;
     }
     return false;
+}
+
+// CANARY: REQ=REQ-SONNY-2753-GRAPH-SCOPED-DENY; FEATURE="GPS Policy Evaluation"; ASPECT=EveryGraphDeny; STATUS=TESTED; TEST=tests/test_sonny2753_graph_scoped_deny.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-2753: does an enabled deny-effect policy for `action` (by
+/// `policyMatchesAction`) whose USING expression holds for `principal` apply
+/// on ANY graph, whatever its scope? A request that changes every graph at
+/// once (a self-locking procedure CALL, `writePermitted`; index, constraint
+/// and schema DDL, catalogued database-wide, `schemaPermittedEverywhere`)
+/// changes the graph a deny is scoped to as well, so such a deny refuses it.
+/// --insecure-allow-all bypasses this too, as it bypasses `decide`.
+///
+/// SONNY-2756: `actions` are checked under one shared hold of the catalog.
+fn denyOnAnyGraph(allocator: std.mem.Allocator, principal: *const principal_mod.Principal, actions: []const Action) bool {
+    if (g_insecure_allow_all.load(.acquire)) return false;
+    const pc = @import("policy_catalog.zig");
+    const cat = pc.getGlobalCatalog() orelse return false;
+    const view = cat.acquireRead();
+    defer view.release();
+    for (actions) |action| {
+        if (denyOnAnyGraphIn(view.policies(), allocator, principal, action)) return true;
+    }
+    return false;
+}
+
+fn denyOnAnyGraphIn(policies: []const @import("policy_catalog.zig").Policy, allocator: std.mem.Allocator, principal: *const principal_mod.Principal, action: Action) bool {
+    const req = DecisionRequest{ .principal = principal, .action = action, .resource = .{ .database = {} } };
+    for (policies) |*policy| {
+        if (policy.effect != .deny) continue;
+        if (!policy.enabled) continue;
+        if (!policyMatchesAction(policy.*, action)) continue;
+        if (policyExpressionHolds(allocator, policy, &req)) return true;
+    }
+    return false;
+}
+
+/// SONNY-2753: is there a deny for `action` on `graph` (a policy scoped to
+/// `graph` or `*`)? The procedure gate's graph check: a procedure is a
+/// resource of its own, which only `*` policies cover, and it runs on a
+/// graph, which the graph's policies cover.
+fn denyOnGraph(allocator: std.mem.Allocator, principal: *const principal_mod.Principal, action: Action, graph: []const u8) bool {
+    if (g_insecure_allow_all.load(.acquire)) return false;
+    const pc = @import("policy_catalog.zig");
+    const cat = pc.getGlobalCatalog() orelse return false;
+    const view = cat.acquireRead();
+    defer view.release();
+    const req = DecisionRequest{ .principal = principal, .action = action, .resource = .{ .graph = graph } };
+    return denyPolicyIn(view.policies(), allocator, &req);
 }
 
 /// Does `policy`'s USING expression hold for `req`? The trivial "true" holds.
@@ -653,17 +709,6 @@ pub fn isGrantOnly(principal: *const principal_mod.Principal) bool {
     return false;
 }
 
-/// Does one of `principal`'s builtin roles hold `perm` globally, on every
-/// graph? A per-graph grant never counts here.
-pub fn holdsGlobalPermission(principal: *const principal_mod.Principal, perm: user_mgmt.Permission) bool {
-    for (principal.roles) |role_name| {
-        if (user_mgmt.Role.fromString(role_name)) |role| {
-            if (user_mgmt.hasPermission(role, perm)) return true;
-        }
-    }
-    return false;
-}
-
 /// The per-graph grant action code (`GraphRBACPolicy`: 0=read, 1=write,
 /// 2=schema) that covers `action`, or null when no per-graph grant does.
 fn grantActionCode(action: Action) ?u8 {
@@ -701,13 +746,15 @@ fn allowedOn(allocator: std.mem.Allocator, principal: *const principal_mod.Princ
 }
 
 // CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=GraphReadGate; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
-/// May `principal` read the data of `graph`? A principal whose builtin role
-/// holds Read may read every graph, as before (its graph access is
-/// governed by `bind_graph`). Any other (a user with no stored role) needs
-/// `decide(read, graph)`: a READ grant on the graph, or a policy on it.
+// CANARY: REQ=REQ-SONNY-2781-GPS-ACTION-ENFORCEMENT; FEATURE="GPS Policy Evaluation"; ASPECT=ReadGateDecide; STATUS=TESTED; TEST=tests/test_sonny2781_gps_action_enforcement.zig; OWNER=security; UPDATED=2026-11-11
+/// May `principal` read the data of `graph`? `decide(match_, graph)`, for
+/// every principal: a builtin role with Read (every graph, as before), a
+/// READ grant on the graph, or an allow policy naming READ or MATCH on it;
+/// and no deny naming READ or MATCH on it. SONNY-2781: a principal whose
+/// builtin role holds Read skipped `decide`, so a DENY READ or DENY MATCH
+/// never stopped a plain MATCH.
 pub fn graphReadPermitted(allocator: std.mem.Allocator, principal: *const principal_mod.Principal, graph: []const u8) bool {
-    if (holdsGlobalPermission(principal, .Read)) return true;
-    return allowedOn(allocator, principal, .read, graph);
+    return allowedOn(allocator, principal, .match_, graph);
 }
 
 // CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=GraphWriteGate; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
@@ -724,6 +771,46 @@ pub fn writePermittedOn(allocator: std.mem.Allocator, principal: *const principa
     return allowedOn(allocator, principal, .write, graph);
 }
 
+// CANARY: REQ=REQ-SONNY-2781-GPS-ACTION-ENFORCEMENT; FEATURE="GPS Policy Evaluation"; ASPECT=PerActionWriteGate; STATUS=TESTED; TEST=tests/test_sonny2781_gps_action_enforcement.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-2781: the QUIC and gRPC handlers' write gate for a program that
+/// changes `graph`'s data (`StatementPlan.lock_graph`), by the actions the
+/// program needs (`StatementPlan.actions`, the write walk that also decides
+/// the lock and the read-only floor):
+///
+/// - CREATE / INSERT / INSERT VALUE / MERGE: `decide(create, graph)`;
+/// - SET / REMOVE / a MERGE's ON MATCH SET: `decide(update, graph)`;
+/// - DELETE / DETACH DELETE: `decide(delete, graph)`;
+/// - graph, graph type, schema, index and constraint DDL:
+///   `decide(write, graph)` and `decide(schema, graph)` (the executor's DDL
+///   gates also ask SCHEMA on the graph the statement names, and on every
+///   graph for catalog-wide DDL);
+/// - a change no finer action names (a CALL of a procedure that changes
+///   data, BACKUP / RESTORE): `decide` of WRITE, CREATE, UPDATE and DELETE.
+///
+/// WRITE is the umbrella (`policyMatchesAction`): a deny naming WRITE matches
+/// every one of these requests, and an allow naming WRITE allows all but
+/// SCHEMA; a deny naming CREATE, UPDATE or DELETE stops only the statements
+/// that need it, and an allow naming one allows only them. A builtin role
+/// with Write, and a per-graph WRITE grant, allow all of CREATE, UPDATE,
+/// DELETE and WRITE. The gate used to ask `decide(write, graph)` alone, so a
+/// deny naming CREATE, UPDATE or DELETE stopped nothing and an allow naming
+/// one allowed nothing. An error answers no.
+pub fn changePermittedOn(allocator: std.mem.Allocator, principal: *const principal_mod.Principal, graph: []const u8, actions: write_walk.Actions) bool {
+    if (actions.create and !allowedOn(allocator, principal, .create, graph)) return false;
+    if (actions.update and !allowedOn(allocator, principal, .update, graph)) return false;
+    if (actions.delete and !allowedOn(allocator, principal, .delete, graph)) return false;
+    if (actions.schema) {
+        if (!allowedOn(allocator, principal, .write, graph)) return false;
+        if (!allowedOn(allocator, principal, .schema, graph)) return false;
+    }
+    if (actions.write) {
+        for ([_]Action{ .write, .create, .update, .delete }) |a| {
+            if (!allowedOn(allocator, principal, a, graph)) return false;
+        }
+    }
+    return true;
+}
+
 // CANARY: REQ=REQ-SONNY-2743-WHOLE-PROGRAM-GATE; FEATURE="StatementAuthorization"; ASPECT=WriteGate; STATUS=TESTED; TEST=tests/test_sonny2743_whole_program_gate.zig; OWNER=security; UPDATED=2026-09-25
 /// SONNY-2743: may `principal` change the store as a whole, on no one graph
 /// in particular? `decide(write, database)`: a builtin role with Write, or an
@@ -732,6 +819,11 @@ pub fn writePermittedOn(allocator: std.mem.Allocator, principal: *const principa
 /// graph's data is gated by `writePermittedOn` instead; this is the gate for
 /// a program that writes no single graph (a self-locking procedure CALL that
 /// takes each graph's lock itself). An error answers no.
+///
+/// SONNY-2753: such a program writes every graph, so a deny of WRITE (or of
+/// CREATE, UPDATE or DELETE, which it cannot tell apart) on ANY graph refuses
+/// it (`denyOnAnyGraph`). A graph-scoped deny no longer matches the database
+/// itself in `decide`.
 pub fn writePermitted(allocator: std.mem.Allocator, principal: *const principal_mod.Principal) bool {
     const req = DecisionRequest{
         .principal = principal,
@@ -739,7 +831,44 @@ pub fn writePermitted(allocator: std.mem.Allocator, principal: *const principal_
         .resource = .{ .database = {} },
     };
     const decision = decide(allocator, &req) catch return false;
-    return decision.kind == .allow;
+    if (decision.kind != .allow) return false;
+    return !denyOnAnyGraph(allocator, principal, &.{ .write, .create, .update, .delete });
+}
+
+/// SONNY-2753: may `principal` change the schema of every graph at once
+/// (index, constraint and schema DDL, catalogued database-wide;
+/// `session_graph.maySchemaDatabase`)? `decide(schema, graph "*")` must
+/// allow (Admin's Schema, or a `FOR SCHEMA` policy scoped to `*`; no grant
+/// and no graph-scoped policy), and no DENY SCHEMA on any graph may apply:
+/// such a change binds that graph too.
+pub fn schemaPermittedEverywhere(allocator: std.mem.Allocator, principal: *const principal_mod.Principal) bool {
+    const req = DecisionRequest{
+        .principal = principal,
+        .action = .schema,
+        .resource = .{ .graph = "*" },
+    };
+    const decision = decide(allocator, &req) catch return false;
+    if (decision.kind != .allow) return false;
+    return !denyOnAnyGraph(allocator, principal, &.{.schema});
+}
+
+// CANARY: REQ=REQ-SONNY-2753-GRAPH-SCOPED-DENY; FEATURE="GPS Procedure Enforcement"; ASPECT=ProcedureGraphDeny; STATUS=TESTED; TEST=tests/test_sonny2753_graph_scoped_deny.zig; OWNER=security; UPDATED=2026-11-11
+/// SONNY-2753: may `principal` run procedure `name`, asking `action` (read
+/// for a read-only procedure, write for one that changes something), on
+/// `graph` (the graph it runs on)? `decide(action, procedure)` must allow
+/// (a builtin role, or a `*` policy: a procedure is no one graph's), and no
+/// deny for `action` scoped to `graph` (or `*`) may apply. A deny scoped to
+/// one graph used to match every procedure, so a DENY READ on g refused every
+/// read-only procedure on every graph.
+pub fn procedurePermitted(allocator: std.mem.Allocator, principal: *const principal_mod.Principal, action: Action, name: []const u8, graph: []const u8) !bool {
+    const req = DecisionRequest{
+        .principal = principal,
+        .action = action,
+        .resource = .{ .procedure = name },
+    };
+    const decision = try decide(allocator, &req);
+    if (decision.kind != .allow) return false;
+    return !denyOnGraph(allocator, principal, action, graph);
 }
 
 fn policyMatchesAction(policy: @import("policy_catalog.zig").Policy, action: Action) bool {
@@ -770,38 +899,28 @@ fn policyMatchesAction(policy: @import("policy_catalog.zig").Policy, action: Act
 }
 
 // CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=AllowPolicyScope; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
-/// Does an allow policy scoped to `policy.scope_graph` cover `resource`? A
-/// policy scoped to `*` covers everything. A policy scoped to one graph
-/// covers that graph and the nodes and edges in it, and nothing else: not
-/// another graph, not `*` (every graph), and not a request on no graph in
-/// particular (the database, a tenant, a procedure, metadata).
+// CANARY: REQ=REQ-SONNY-2753-GRAPH-SCOPED-DENY; FEATURE="GPS Policy Evaluation"; ASPECT=OneResourceRule; STATUS=TESTED; TEST=tests/test_sonny2753_graph_scoped_deny.zig; OWNER=security; UPDATED=2026-11-11
+/// Does a policy scoped to `policy.scope_graph` cover `resource`? One rule
+/// for allow and deny policies. A policy scoped to `*` covers everything. A
+/// policy scoped to one graph covers that graph and the nodes and edges in
+/// it, and nothing else: not another graph, not `*` (every graph), and not a
+/// request on no graph in particular (the database, a tenant, a procedure,
+/// metadata).
 ///
-/// Allow policies used to match by `policyMatchesResource`, which lets a
-/// graph-scoped policy match every non-graph resource. The handlers' write
+/// Allow policies used to match by `policyMatchesResource`, which let a
+/// graph-scoped policy match every non-graph resource: the handlers' write
 /// gate asked for write on the database, so an allow policy `FOR WRITE` on
-/// one graph (and every per-graph WRITE grant, which grant_migration turned
-/// into such a policy at startup) allowed writes on every graph. Deny
-/// policies keep the broad match: a deny on one graph still refuses a
-/// request on the whole database, which would include that graph.
-fn allowPolicyCovers(policy: @import("policy_catalog.zig").Policy, resource: ResourceRef) bool {
+/// one graph allowed writes on every graph (REQ-SEC-PER-GRAPH-GRANTS). Deny
+/// policies kept that match until SONNY-2753, so a deny on one graph refused
+/// every procedure, a node or edge of any graph, and every decryption. Where
+/// a request changes every graph at once, `denyOnAnyGraph` applies a deny on
+/// any graph explicitly.
+fn policyCovers(policy: @import("policy_catalog.zig").Policy, resource: ResourceRef) bool {
     if (std.mem.eql(u8, policy.scope_graph, "*")) return true;
     return switch (resource) {
         .graph => |g| std.mem.eql(u8, policy.scope_graph, g),
         .node => |n| std.mem.eql(u8, policy.scope_graph, n.graph),
         .edge => |e| std.mem.eql(u8, policy.scope_graph, e.graph),
         .database, .tenant, .procedure, .metadata => false,
-    };
-}
-
-fn policyMatchesResource(policy: @import("policy_catalog.zig").Policy, resource: ResourceRef) bool {
-    // "*" scope is a wildcard that matches any resource.
-    if (std.mem.eql(u8, policy.scope_graph, "*")) return true;
-    return switch (resource) {
-        // Named graph: compare against policy scope directly.
-        .graph => |g| std.mem.eql(u8, policy.scope_graph, g),
-        // Non-graph resources (database, tenant, node, edge, procedure, metadata)
-        // are matched by any non-wildcard scope in Phase 4.  A more precise
-        // resource-type filter arrives with the Phase 5 expression engine.
-        .database, .tenant, .node, .edge, .procedure, .metadata => true,
     };
 }

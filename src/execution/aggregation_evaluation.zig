@@ -225,20 +225,16 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                             null;
 
                         if (field_name) |field| {
-                            var sum_int: i64 = 0;
+                            // SONNY-2774: integers summed exactly
+                            // (`execution.ExactIntSum`); `sum_float` holds the
+                            // float inputs only.
+                            var sum_int: execution.ExactIntSum = .{};
                             var sum_float: f64 = 0;
                             var has_float = false;
                             for (nodes) |node| {
                                 if (node.properties.get(field)) |val| {
                                     if (val == .Int) {
-                                        // Use overflow-safe addition
-                                        const result = @addWithOverflow(sum_int, val.Int);
-                                        if (result[1] != 0) {
-                                            has_float = true;
-                                        } else {
-                                            sum_int = result[0];
-                                        }
-                                        sum_float += @floatFromInt(val.Int);
+                                        sum_int.add(val.Int);
                                     } else if (val == .Float) {
                                         has_float = true;
                                         sum_float += val.Float;
@@ -250,14 +246,7 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                             const decimal_float = @as(f64, @floatFromInt(ext.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(ext.Decimal.scale)));
                                             sum_float += decimal_float;
                                         } else if (ext == .Int) {
-                                            // Use overflow-safe addition
-                                            const result = @addWithOverflow(sum_int, ext.Int);
-                                            if (result[1] != 0) {
-                                                has_float = true;
-                                            } else {
-                                                sum_int = result[0];
-                                            }
-                                            sum_float += @floatFromInt(ext.Int);
+                                            sum_int.add(ext.Int);
                                         }
                                     } else if (val == .Decimal) {
                                         // CANARY: REQ=REQ-AGGREGATION-SUM-DECIMAL-001; FEATURE="SumAggregation"; ASPECT=DecimalPropertySupport; STATUS=TESTED; TEST=geodetestlab/specs/gap_0123_0136_regression.yml; OWNER=engine; UPDATED=2026-01-25
@@ -272,17 +261,14 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                     }
                                 }
                             }
-                            if (has_float) {
-                                // Return as Decimal with 2 decimal places
-                                return Value{ .Double = sum_float };
-                            }
-                            return Value{ .Int = sum_int };
+                            if (has_float) return Value{ .Double = sum_float + sum_int.approximate() };
+                            return Value{ .Int = try sum_int.exact() };
                         } else {
                             // E32 Fix: Handle complex expressions like CASE in SUM aggregation
                             // CANARY: REQ=REQ-GQL-AGG-CASE-002; FEATURE="CaseInAggregation"; ASPECT=SumEvaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
                             // For complex expressions, evaluate for each node and sum results
                             if (extractNodeVariableFromExpr(call.args[0].*)) |var_name| {
-                                var sum_int: i64 = 0;
+                                var sum_int: execution.ExactIntSum = .{};
                                 var sum_float: f64 = 0;
                                 var has_float = false;
 
@@ -301,19 +287,9 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                     };
 
                                     // Evaluate the expression
-                                    const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                                    const val = eval.evalExpr(allocator, call.args[0].*, env) catch |err| if (eval.isFleReadRefusal(err)) return err else Value{ .Null = {} }; // SONNY-6327
                                     switch (val) {
-                                        .Int => |i| {
-                                            // Use overflow-safe addition
-                                            const result = @addWithOverflow(sum_int, i);
-                                            if (result[1] != 0) {
-                                                // Overflow occurred - fall back to float
-                                                has_float = true;
-                                            } else {
-                                                sum_int = result[0];
-                                            }
-                                            sum_float += @floatFromInt(i);
-                                        },
+                                        .Int => |i| sum_int.add(i),
                                         .Decimal => |d| {
                                             has_float = true;
                                             const decimal_float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale)));
@@ -323,10 +299,8 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
                                     }
                                 }
 
-                                if (has_float) {
-                                    return Value{ .Double = sum_float };
-                                }
-                                return Value{ .Int = sum_int };
+                                if (has_float) return Value{ .Double = sum_float + sum_int.approximate() };
+                                return Value{ .Int = try sum_int.exact() };
                             }
                         }
                     }
@@ -575,60 +549,6 @@ pub fn evaluateGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, no
     return Value{ .Null = {} };
 }
 
-pub fn evaluateNodeExpression(allocator: std.mem.Allocator, expr: ast.Expr, node: *const graph_store.Node) !Value {
-    switch (expr) {
-        .Member => |member| {
-            // Handle property access like n.label
-            // Access property on the current node
-            if (node.properties.get(member.field)) |val| {
-                switch (val) {
-                    .String => |s| return Value{ .Str = s },
-                    .Int => |n| return Value{ .Int = n },
-                    // SONNY-2739: checked (22003) instead of a bare `@intFromFloat`.
-                    .Float => |f| return Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(f, 100.0), .scale = 2 } },
-                    .Bool => |b| return Value{ .Bool = b },
-                    .Null => return Value{ .Null = {} },
-                    .ExtValue => |ext| return Value{ .ExtValue = ext },
-                    .Decimal => |d| return Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-                }
-            }
-            return Value{ .Null = {} };
-        },
-        .PropertyAccess => |prop_access| {
-            // Legacy property access (if still used)
-            // Access property on the current node
-            if (node.properties.get(prop_access.property)) |val| {
-                switch (val) {
-                    .String => |s| return Value{ .Str = s },
-                    .Int => |n| return Value{ .Int = n },
-                    // SONNY-2739: checked (22003) instead of a bare `@intFromFloat`.
-                    .Float => |f| return Value{ .Decimal = .{ .coeff = try decimal128.checkedScaledCoeff(f, 100.0), .scale = 2 } },
-                    .Bool => |b| return Value{ .Bool = b },
-                    .Null => return Value{ .Null = {} },
-                    .ExtValue => |ext| return Value{ .ExtValue = ext },
-                    .Decimal => |d| return Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-                }
-            }
-            return Value{ .Null = {} };
-        },
-        .Ident => |ident| {
-            // Handle node identifier (like 'n' in MATCH (n))
-            _ = ident;
-            // For now, return null
-            return Value{ .Null = {} };
-        },
-        else => {
-            // For other expressions, evaluate normally
-            const env = Env{
-                .names = &.{},
-                .values = &.{},
-                .allocator = allocator,
-            };
-            return try eval.evalExpr(allocator, expr, env);
-        },
-    }
-}
-
 // GAP-0739 / SEC-MTI-01 (2026-04-16): the dead functions
 // evaluateAggregation and evaluateAggregationWithLabels have been
 // removed.  They iterated store.nodes directly without applying a
@@ -668,7 +588,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                 .values = binding.env_values,
                                 .allocator = allocator,
                             };
-                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch |err| if (eval.isFleReadRefusal(err)) return err else Value{ .Null = {} }; // SONNY-6327
                             if (val != .Null) {
                                 count += 1;
                             }
@@ -692,7 +612,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                 .values = binding.env_values,
                                 .allocator = allocator,
                             };
-                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch |err| if (eval.isFleReadRefusal(err)) return err else Value{ .Null = {} }; // SONNY-6327
                             _ = try distinct.add(val);
                         }
                         return Value{ .Int = @intCast(distinct.count()) };
@@ -701,7 +621,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                 } else if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
                     // SUM aggregation over bindings
                     if (call.args.len == 1) {
-                        var sum_int: i64 = 0;
+                        var sum_int: execution.ExactIntSum = .{};
                         var sum_float: f64 = 0;
                         var has_float = false;
                         for (bindings) |binding| {
@@ -710,20 +630,11 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                 .values = binding.env_values,
                                 .allocator = allocator,
                             };
-                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch |err| if (eval.isFleReadRefusal(err)) return err else Value{ .Null = {} }; // SONNY-6327
                             switch (val) {
-                                .Int => |i| {
-                                    // CANARY: REQ=REQ-OVERFLOW-SAFE-SUM-005; FEATURE="OverflowSafeSum"; ASPECT=IntOverflow; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-27
-                                    // Use overflow-safe addition to prevent integer overflow panic
-                                    const result = @addWithOverflow(sum_int, i);
-                                    if (result[1] != 0) {
-                                        // Overflow occurred - fall back to float
-                                        has_float = true;
-                                    } else {
-                                        sum_int = result[0];
-                                    }
-                                    sum_float += @floatFromInt(i);
-                                },
+                                // CANARY: REQ=REQ-OVERFLOW-SAFE-SUM-005; FEATURE="OverflowSafeSum"; ASPECT=IntOverflow; STATUS=TESTED; TEST=tests/test_sonny2774_exact_sum.zig; OWNER=aggregation; UPDATED=2026-11-12
+                                // SONNY-2774: exact, 22003 past i64 (it fell back to a double).
+                                .Int => |i| sum_int.add(i),
                                 .Decimal => |d| {
                                     has_float = true;
                                     const decimal_float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale)));
@@ -735,16 +646,8 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                         const decimal_float = @as(f64, @floatFromInt(ext.Decimal.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(ext.Decimal.scale)));
                                         sum_float += decimal_float;
                                     } else if (ext == .Int) {
-                                        // CANARY: REQ=REQ-OVERFLOW-SAFE-SUM-006; FEATURE="OverflowSafeSum"; ASPECT=ExtIntOverflow; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=aggregation; UPDATED=2025-12-27
-                                        // Use overflow-safe addition to prevent integer overflow panic
-                                        const result = @addWithOverflow(sum_int, ext.Int);
-                                        if (result[1] != 0) {
-                                            // Overflow occurred - fall back to float
-                                            has_float = true;
-                                        } else {
-                                            sum_int = result[0];
-                                        }
-                                        sum_float += @floatFromInt(ext.Int);
+                                        // CANARY: REQ=REQ-OVERFLOW-SAFE-SUM-006; FEATURE="OverflowSafeSum"; ASPECT=ExtIntOverflow; STATUS=TESTED; TEST=tests/test_sonny2774_exact_sum.zig; OWNER=aggregation; UPDATED=2026-11-12
+                                        sum_int.add(ext.Int);
                                     }
                                 },
                                 // GAP-0916: non-numeric input to sum() is a type error.
@@ -752,10 +655,8 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                 else => {},
                             }
                         }
-                        if (has_float) {
-                            return Value{ .Double = sum_float };
-                        }
-                        return Value{ .Int = sum_int };
+                        if (has_float) return Value{ .Double = sum_float + sum_int.approximate() };
+                        return Value{ .Int = try sum_int.exact() };
                     }
                     return Value{ .Int = 0 };
                 } else if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
@@ -769,7 +670,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                 .values = binding.env_values,
                                 .allocator = allocator,
                             };
-                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch |err| if (eval.isFleReadRefusal(err)) return err else Value{ .Null = {} }; // SONNY-6327
                             switch (val) {
                                 .Int => |i| {
                                     sum += @floatFromInt(i);
@@ -804,7 +705,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                 .values = binding.env_values,
                                 .allocator = allocator,
                             };
-                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch |err| if (eval.isFleReadRefusal(err)) return err else Value{ .Null = {} }; // SONNY-6327
                             if (val == .Int) {
                                 if (min_int == null or val.Int < min_int.?) {
                                     min_int = val.Int;
@@ -836,7 +737,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                 .values = binding.env_values,
                                 .allocator = allocator,
                             };
-                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch |err| if (eval.isFleReadRefusal(err)) return err else Value{ .Null = {} }; // SONNY-6327
                             if (val == .Int) {
                                 if (max_int == null or val.Int > max_int.?) {
                                     max_int = val.Int;
@@ -868,7 +769,7 @@ pub fn computeBindingGroupAggregation(allocator: std.mem.Allocator, expr: ast.Ex
                                 .values = binding.env_values,
                                 .allocator = allocator,
                             };
-                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch Value{ .Null = {} };
+                            const val = eval.evalExpr(allocator, call.args[0].*, env) catch |err| if (eval.isFleReadRefusal(err)) return err else Value{ .Null = {} }; // SONNY-6327
                             // B02 Fix: Skip NULL values - COLLECT only collects non-NULL values
                             if (val != .Null) {
                                 list.append(allocator, val) catch {};

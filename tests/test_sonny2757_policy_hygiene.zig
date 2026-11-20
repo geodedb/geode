@@ -62,22 +62,6 @@ fn policyWith(expr: []const u8) RLSEngine.Policy {
     };
 }
 
-fn freeCompiled(engine: *RLSEngine) void {
-    var it = engine.policies.iterator();
-    while (it.next()) |entry| {
-        for (entry.value_ptr.items) |policy| {
-            if (policy.using_expr) |e| {
-                if (e.compiled) |c| {
-                    engine.allocator.free(c.bytecode);
-                    engine.allocator.free(c.constants);
-                    engine.allocator.free(c.jump_table);
-                    engine.allocator.destroy(c);
-                }
-            }
-        }
-    }
-}
-
 /// `row.a = 1 OR (row.a = 1 OR (... row.a = 1 ...))`, `levels` parentheses.
 fn rightNestedOr(aa: std.mem.Allocator, levels: usize) ![]const u8 {
     var buf: std.ArrayList(u8) = .empty;
@@ -101,10 +85,8 @@ const Outcome = enum { refused, evaluates, vm_error };
 /// Install `expr` as a policy and evaluate it on one row.
 fn outcomeOf(expr: []const u8) !Outcome {
     var engine = try RLSEngine.init(testing.allocator);
-    defer {
-        freeCompiled(&engine);
-        engine.deinit();
-    }
+    // SONNY-2773: deinit frees the code createPolicy compiled.
+    defer engine.deinit();
     engine.createPolicy(policyWith(expr)) catch |err| switch (err) {
         error.InvalidRlsExpression => return .refused,
         else => return err,

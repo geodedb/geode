@@ -38,6 +38,7 @@ const builtin = @import("builtin");
 const cluster_mod = @import("cluster.zig");
 const raft_consensus = @import("raft_consensus.zig");
 const cluster_replication = @import("cluster_replication.zig");
+const fle_integration = @import("../fle_integration.zig");
 
 pub const Prop = cluster_replication.Prop;
 pub const MutationType = @FieldType(raft_consensus.GraphMutation, "mutation_type");
@@ -48,11 +49,14 @@ const backing: std.mem.Allocator = if (builtin.is_test) std.testing.allocator el
 /// What a statement's writes fail with here: not replicable (nothing
 /// proposed), not the leader, the proposal refused, its commit not confirmed
 /// in time (the outcome unknown), out of memory.
-pub const Error = error{ ClusterWriteNotReplicable, ClusterNotLeader, ClusterProposeFailed, Timeout, OutOfMemory };
+/// SONNY-6541 (1): or the graph whose lock the statement holds is being
+/// dropped by a Raft drop_graph apply (GraphNotFound, nothing proposed).
+pub const Error = error{ ClusterWriteNotReplicable, ClusterNotLeader, ClusterProposeFailed, Timeout, OutOfMemory, GraphNotFound };
 
 fn narrow(err: anyerror) Error {
     return switch (err) {
         error.ClusterNotLeader, error.NotLeader => error.ClusterNotLeader,
+        error.GraphNotFound => error.GraphNotFound,
         error.ClusterWriteNotReplicable => error.ClusterWriteNotReplicable,
         error.Timeout => error.Timeout,
         error.OutOfMemory => error.OutOfMemory,
@@ -159,6 +163,15 @@ pub fn heldCount() usize {
     return b.items.items.len;
 }
 
+/// SONNY-2846: the kind and graph of held write `i` (< `heldCount()`), for
+/// the UNIQUE check: a leader applies its writes only through the Raft log,
+/// after the statement, where no constraint is checked, so a held write
+/// that could break one is refused (`execution/unique_constraints.zig`).
+pub fn heldWrite(i: usize) struct { mutation: MutationType, graph: []const u8 } {
+    const h = t_batch.?.items.items[i];
+    return .{ .mutation = h.mutation, .graph = h.graph };
+}
+
 /// Propose the write `data` (a lone-entry payload of `mutation`), or hold it
 /// for the statement's batch. `reads`: the write read the store to decide
 /// what it writes (see `checkRead`).
@@ -262,6 +275,7 @@ fn propEql(a: cluster_replication.Prop, b: cluster_replication.Prop) bool {
         .Float => |x| b.value == .Float and b.value.Float == x,
         .Bool => |x| b.value == .Bool and b.value.Bool == x,
         .String => |x| b.value == .String and std.mem.eql(u8, b.value.String, x),
+        .Decimal => |x| b.value == .Decimal and b.value.Decimal.coeff == x.coeff and b.value.Decimal.scale == x.scale,
         else => false,
     };
 }
@@ -322,7 +336,29 @@ fn discard() void {
     backing.destroy(b);
 }
 
-fn proposeNow(cmd: raft_consensus.Command) Error!void {
+fn proposeNow(cmd_in: raft_consensus.Command) Error!void {
+    // CANARY: REQ=REQ-SONNY-2726-REPLICATED-TENANT; FEATURE="DistributedCluster"; ASPECT=ProposeWithTenant; STATUS=TESTED; TEST=tests/test_sonny2726_replicated_tenant.zig; OWNER=distributed; UPDATED=2026-11-12
+    // SONNY-2726: the entry carries the writing session's tenant (a GTN1
+    // envelope, cluster_replication.wrapWithTenant), so every node applies
+    // its creates under it; the apply thread has no request context and
+    // tagged them all with the default tenant. A default-tenant write is
+    // proposed unchanged.
+    var cmd = cmd_in;
+    var wrapped: ?[]u8 = null;
+    defer if (wrapped) |w| backing.free(w);
+    switch (cmd) {
+        .graph_mutation => |*gm| {
+            const tenant = fle_integration.tenantPreferringActiveContext();
+            if (!std.mem.eql(u8, tenant, "default")) {
+                wrapped = cluster_replication.wrapWithTenant(backing, tenant, gm.data) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return error.ClusterWriteNotReplicable,
+                };
+                gm.data = wrapped.?;
+            }
+        },
+        else => {},
+    }
     if (builtin.is_test) {
         if (test_propose_hook) |hook| {
             hook(cmd) catch |err| return narrow(err);

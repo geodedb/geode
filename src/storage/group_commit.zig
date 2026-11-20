@@ -6,10 +6,13 @@
 //! docs/superpowers/specs/2026-04-25-sharded-coordinator-restoration-design.md).
 //!
 //! Each per-graph coordinator runs 16 shard workers on
-//! `pooled.ThreadPool`. `submit(op)` routes by
-//! `sharded_store.shardIndex(op.shardKey())`:
-//!   * node inserts / merges route by the pre-allocated node id
-//!   * regular edge inserts route by source_id
+//! `pooled.ThreadPool`. `submit(op)` routes to a worker by shard:
+//!   * node inserts / merges by `shardIndex` of the pre-allocated node id
+//!     (the bulk insert allocates the node's slot on that shard)
+//!   * relationship ops by the source's ENGINE shard
+//!     (`StorageAdapter.nodeEngineShard`, SONNY-6671): the relationship is
+//!     written there, and an executor-created node's slot is placed
+//!     round-robin, not on `shardIndex` of its public id
 //!   * bulk_match_create_edge resolves source_id at submit time
 //!     under mg.rwlock SHARED and then routes by the resolved id
 //!     (orphan sources silently return 0 without enqueuing)
@@ -96,6 +99,15 @@ fn reserveNodeIdForActiveWriteShard() u64 {
     while (true) {
         const id = store.reserveNodeId();
         if (@as(u64, @intCast(graph_storage.sharded_store.shardIndex(id))) < active) return id;
+    }
+}
+
+/// SONNY-6672: a fresh node id whose shard is `shard`.
+fn reserveNodeIdOnShard(shard: usize) u64 {
+    const store = graph_store.getGlobalStore(graph_store.global_allocator());
+    while (true) {
+        const id = store.reserveNodeId();
+        if (graph_storage.sharded_store.shardIndex(id) == shard) return id;
     }
 }
 
@@ -551,22 +563,37 @@ pub const ShardedCoordinator = struct {
             .bulk_insert_node => |*p| {
                 p.assigned_id = reserveNodeIdForActiveWriteShard();
             },
+            // SONNY-6672: an ON MATCH MERGE whose node exists goes to the
+            // worker of that node's engine shard (and reserves its id there,
+            // should the node be gone by then), which writes the matched
+            // node's properties.
             .bulk_merge_node => |*p| {
-                p.assigned_id = reserveNodeIdForActiveWriteShard();
+                const matched = if (p.apply_on_match) self.adapter.mergeMatchEngineShard(self.graph_name, p.label, p.merge_key, p.merge_value, p.tenant) else null;
+                p.assigned_id = if (matched) |s| reserveNodeIdOnShard(s) else reserveNodeIdForActiveWriteShard();
             },
             .bulk_merge_node_props => |*p| {
-                p.assigned_id = reserveNodeIdForActiveWriteShard();
+                const matched = if (p.apply_on_match and p.merge_props.len > 0)
+                    self.adapter.mergeMatchEngineShard(self.graph_name, p.label, p.merge_props[0].key, p.merge_props[0].value, p.tenant)
+                else
+                    null;
+                p.assigned_id = if (matched) |s| reserveNodeIdOnShard(s) else reserveNodeIdForActiveWriteShard();
             },
             .bulk_insert_edge => {},
             // FIX #3: endpoints pre-resolved by the dispatcher (composite-key
             // MATCH), like bulk_insert_edge — nothing to resolve at submit.
             .bulk_merge_edge => {},
             .bulk_match_create_edge => |*p| {
-                if (self.adapter.lookupNodeByMergeKey(
+                // SONNY-3241: the key's only holder, or
+                // `error.MergeKeyNotUnique` (returned before anything is
+                // queued; the handler declines to the executor).
+                // SONNY-2976: an endpoint is found only in the request's
+                // tenant (stamped above), never another tenant's node.
+                if (self.adapter.lookupSoleNodeByMergeKeyForTenant(
                     self.graph_name,
                     p.src_label,
                     p.src_filter_key,
                     p.src_filter_value,
+                    p.tenant,
                     error.SourceNodeNotFound,
                 )) |sid| {
                     p.source_id = sid;
@@ -583,7 +610,13 @@ pub const ShardedCoordinator = struct {
             },
         }
 
-        const shard_idx = graph_storage.sharded_store.shardIndex(op.shardKey());
+        // SONNY-6671: a relationship op to the worker of its source's engine
+        // shard (where it is written), not of the hashed public id's, which
+        // is that shard only for a node the bulk insert created.
+        const shard_idx = switch (op.*) {
+            .bulk_insert_edge, .bulk_merge_edge, .bulk_match_create_edge => self.adapter.nodeEngineShard(self.graph_name, op.shardKey()),
+            else => graph_storage.sharded_store.shardIndex(op.shardKey()),
+        };
         const s = &self.shards[shard_idx];
 
         const enqueue_start_ns = if (collect_phase_metrics) monoNanosNow() else 0;
@@ -697,6 +730,8 @@ pub const ShardedCoordinator = struct {
     fn shardLoop(self: *ShardedCoordinator, shard_idx: usize) void {
         shard_worker_tls.t_is_shard_worker = true;
         defer shard_worker_tls.t_is_shard_worker = false;
+        graph_storage_adapter.t_group_commit_shard = shard_idx; // SONNY-6671
+        defer graph_storage_adapter.t_group_commit_shard = null;
 
         const io = std.Io.Threaded.global_single_threaded.io();
         const s = &self.shards[shard_idx];
@@ -907,11 +942,15 @@ pub const ShardedCoordinator = struct {
                 .bulk_match_create_edge => |p| {
                     var target_id = p.target_id;
                     if (target_id == 0) {
-                        if (self.adapter.lookupNodeByMergeKey(
+                        // SONNY-3241: as the source at submit; a key more
+                        // nodes may hold reports `error.MergeKeyNotUnique`
+                        // and writes nothing.
+                        if (self.adapter.lookupSoleNodeByMergeKeyForTenant(
                             self.graph_name,
                             p.dst_label,
                             p.dst_filter_key,
                             p.dst_filter_value,
+                            p.tenant,
                             error.TargetNodeNotFound,
                         )) |tid| {
                             target_id = tid;

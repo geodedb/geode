@@ -46,7 +46,7 @@ and [GAP_ANALYSIS.md](GAP_ANALYSIS.md))
 
 ### Architecture Style
 
-- **Language**: Zig 0.15.1+
+- **Language**: Zig 0.16.0+ (`build.zig.zon` `minimum_zig_version`)
 - **Paradigm**: Modular with some monolithic components
 - **Build System**: Zig build system with module injection
 - **Testing**: Unit tests (Zig) + Integration tests (geodetestlab)
@@ -85,7 +85,7 @@ src/storage/        - Storage engine, page management, backup
 src/wal/            - Write-ahead logging
 src/index/          - Index implementations (B-tree, HNSW, R-tree, etc.)
 src/txn/            - Transaction management
-src/graph/          - Graph-specific data structures
+src/graph/          - Test-only community detection and LFU cache (the algo.* procedures live in src/execution/)
 ```
 
 **Security**:
@@ -99,8 +99,8 @@ src/keys/           - Key management
 **Distributed Systems**:
 
 ```
-src/distributed/    - Federation, sharding, Raft consensus
-src/federation/     - Cross-cluster queries
+src/distributed/    - Raft consensus, cluster management, replication of the documented write slice (no replicated DDL and no 2PC: nothing proposes schema_change or txn_prepare/txn_decide, SONNY-6547; federation code removed 2026-11-11, SONNY-6279)
+src/federation/     - Uncompiled router stub that returns `unsupported`
 ```
 
 **Advanced Features**:
@@ -131,7 +131,6 @@ src/utils/          - Additional utilities
 
 ```
 src/types/          - Advanced data types (vector, geographic, network, etc.)
-src/containers/     - Container data structures
 src/unicode/        - Unicode support
 ```
 
@@ -157,10 +156,8 @@ src/fuzz/           - Fuzzing infrastructure
 ```
 src/admin/          - Admin operations
 src/tools/          - Development tools
-src/runtime/        - Runtime support
 src/multitenancy/   - Multi-tenancy support
 src/pagination/     - Pagination utilities
-src/parser/         - Generic parsing utilities
 src/performance/    - Performance optimizations
 src/algorithms/     - Algorithm implementations
 src/dist/           - Distribution utilities
@@ -349,7 +346,7 @@ The complete dependency graph is available in `metrics/dependency_graph.dot` (Gr
 ✓ security/*         - High coverage (auth, audit, TDE, RLS)
 ✓ types/*            - High coverage (vector, geographic, network)
 ✓ gql/*              - High coverage (parser, lexer, AST)
-✓ planner/*          - Good coverage (CBO, optimizer, pipeline)
+✓ planner/*          - Good coverage (cost_explain, cost_seed, pipeline)
 ✓ index/*            - Good coverage (B-tree, HNSW, spatial)
 ✓ ml/*               - Good coverage (embeddings, integration)
 ✓ streaming/*        - Good coverage (CDC, real-time)
@@ -431,16 +428,21 @@ CLI/Server → GQL Parser → Planner → Execution Engine → Eval → Storage 
 **Flow**:
 
 ```
-Client → Server → Transaction Manager → MVCC → WAL → Storage
+Client → Server (graph write lock / per-query read snapshot) → Executor (undo log) → WAL → Storage
 ```
 
 **Key Files**:
 
-- `src/txn/manager.zig` (680 LOC)
-- `src/server/txn/mvcc.zig` (708 LOC)
-- `src/server/txn/enhanced_isolation.zig` (539 LOC)
-- `src/wal/wal.zig` (840 LOC)
+- `src/graph_store.zig` (`acquireGraphWriteLock`, `snapshotUnderReadLock`)
+- `src/txn_undo_log.zig`
 - `src/storage/*.zig`
+
+There are no isolation levels, no SSI and no phantom-read prevention in the
+server; see [ENHANCED_TRANSACTION_ISOLATION.md](ENHANCED_TRANSACTION_ISOLATION.md).
+`src/server/txn/enhanced_isolation.zig` was never compiled and was removed
+(SONNY-6298), and so were `src/server/txn/mvcc.zig` and
+`phantom_read_prevention.zig` (SONNY-6511); `src/transactions/manager.zig` is
+not called by any server path.
 
 **Risk**:
 
@@ -462,7 +464,6 @@ Request → Authentication → Authorization → RLS Policies → Audit → Resp
 
 - `src/security/auth.zig` (1,226 LOC)
 - `src/security/rls.zig` (1,158 LOC)
-- `src/security/rls_enhanced.zig` (972 LOC)
 - `src/security/audit.zig` (1,701 LOC)
 - `src/security/user_manager.zig` (733 LOC)
 
@@ -479,15 +480,18 @@ Request → Authentication → Authorization → RLS Policies → Audit → Resp
 **Flow**:
 
 ```
-Query → Planner → IndexOptimizer → Cost Model → Execution Plan
+Query → rule-based index check (UNIQUE-indexed equality seek, else label scan) → Execution
 ```
 
 **Key Files**:
 
-- `src/server/index_optimizer.zig` (2,444 LOC)
-- `src/planner/cbo.zig` (760 LOC)
+- `src/execution/match_operations.zig` (index seek, `test-multi-pattern-index-seek`)
+- `src/execution/statement_handlers.zig` (EXPLAIN plan with fixed per-operator costs)
+- `src/planner/cbo.zig` (579 LOC; `StatsRegistry`, called by no query path)
 - `src/planner/cost_model.zig` (594 LOC)
-- `src/planner/optimizer.zig` (609 LOC)
+
+The cost-based `src/server/index_optimizer.zig` and `src/planner/optimizer.zig`
+were never compiled and were removed (SONNY-6298).
 
 **Risk**:
 
@@ -502,15 +506,19 @@ Query → Planner → IndexOptimizer → Cost Model → Execution Plan
 **Flow**:
 
 ```
-Query → Federation → Sharding → Cross-Shard Coordinator → Results Merge
+Write → Raft proposal (leader) → commit → raft_apply on every node
 ```
+
+Queries are not distributed: a query runs on the node that receives it. The
+federation / cross-shard coordinator code this section used to list was never
+compiled and was removed 2026-11-11 (SONNY-6279).
 
 **Key Files**:
 
-- `src/distributed/federation.zig` (1,171 LOC)
-- `src/distributed/sharding.zig` (868 LOC)
-- `src/distributed/enhanced_query_coordinator.zig` (750 LOC)
-- `src/distributed/raft_consensus.zig` (1,689 LOC)
+- `src/distributed/cluster.zig`
+- `src/distributed/raft_consensus.zig`
+- `src/distributed/raft_apply.zig`
+- `src/distributed/statement_proposals.zig`
 
 **Risk**:
 
@@ -522,17 +530,30 @@ Query → Federation → Sharding → Cross-Shard Coordinator → Results Merge
 
 #### 6. Backup & Recovery Path (P2 MEDIUM)
 
-**Flow**:
+**Flow** (corrected 2026-11-12, SONNY-6386; it used to show an S3 upload
+step, with encryption before compression):
 
 ```
-Backup Command → Backup Manager → S3 Upload → Encryption → Compression
+geode backup create (CLI --local, or the server's BACKUP request over QUIC/gRPC)
+  → BackupManager: archive the data directory
+  → compress (gzip, opt-in; no other codec has an encoder)
+  → encrypt (AES-256-GCM under GEODE_TDE_KEY, when it is set)
+  → local file: temporary file beside --output, fsync, rename, fsync directory
 ```
+
+No command uploads to or restores from object storage (SONNY-6290): copy the
+backup file with your own tool. `src/storage/s3_backup.zig` is compiled only
+by the SigV4 known-answer test step; nothing in the CLI or server calls it.
+Restore (`geode restore`) decrypts with `GEODE_TDE_KEY`, verifies the archive
+and the `__geode_security` auth chain on a throwaway copy, and renames a
+staged directory into place.
 
 **Key Files**:
 
-- `src/storage/backup.zig` (572 LOC)
-- `src/storage/s3_backup.zig` (778 LOC)
-- `src/security/tde.zig` (1,482 LOC)
+- `src/storage/backup.zig`: archive, compression, encryption, file format, restore staging
+- `src/cli/backup_cli.zig`: `geode backup create` / `geode restore`
+- `src/server/backup_manager.zig`: the server's backup and restore requests
+- `src/security/tde_key_manager.zig`, `src/storage/tde_file_encryption.zig`: `GEODE_TDE_KEY`
 
 **Risk**:
 
@@ -540,7 +561,11 @@ Backup Command → Backup Manager → S3 Upload → Encryption → Compression
 - Must be reliable and tested
 - Encryption must be secure
 
-**Test Coverage**: 90% (good coverage, critical feature)
+**Tests**: `zig build test-sonny6277-backup-restore-roundtrip`,
+`test-sonny6355-backup-encryption-fsync-output`,
+`test-sonny6386-remote-backup-atomic-output`,
+`test-sonny6300-staged-restore-paths` (the former "90%" coverage figure was
+never measured).
 
 ---
 
@@ -712,34 +737,31 @@ Based on this architecture analysis, the modularization phases should proceed as
 | cdc | CDC core | - | - |
 | cli | Command-line interface | ~20 | main.zig (5,885) |
 | client | Client library | ~15 | main.zig (1,081) |
-| containers | Container data structures | - | - |
 | crypto | Cryptographic primitives | - | - |
 | dist | Distribution utilities | - | scaffold.zig (563) |
-| distributed | Distributed systems | ~15 | federation.zig (1,171), raft_consensus.zig (1,689) |
+| distributed | Raft and cluster management | 27 | raft_consensus.zig (4,405), cluster.zig (3,217) |
 | execution | Query execution | ~15 | path_and_call_operations.zig (4,725), crud_operations.zig (1,876), match_operations.zig (2,015) |
-| federation | Cross-cluster queries | - | - |
+| federation | Uncompiled router stub (returns `unsupported`) | - | router.zig |
 | fts | Full-text search | ~5 | advanced.zig (519) |
 | fuzz | Fuzzing infrastructure | - | - |
 | gpu | GPU acceleration | ~5 | vulkan_compute.zig (759), vulkan_ffi.zig (687) |
-| gql | GQL parser/lexer | ~10 | parser.zig (5,883), lexer.zig (631), main.zig (781), match.zig (836), print.zig (725) |
-| graph | Graph data structures | ~10 | builtin_algorithms.zig (1,581), aggregator.zig (723) |
+| gql | GQL parser/lexer | ~10 | parser.zig (5,883), lexer.zig (631), main.zig (781), print.zig (725) |
+| graph | Graph data structures | ~10 | builtin_algorithms.zig (1,581) |
 | index | Index implementations | ~10 | index_manager.zig (924), btree.zig (697), advanced_types_index.zig (702), spatial_index.zig (522) |
 | keys | Key management | - | - |
 | log | Logging infrastructure | - | - |
 | migration | Schema migrations | - | - |
-| ml | Machine learning | ~5 | graph_embeddings.zig (750), integration_enhanced.zig (787) |
+| ml | Machine learning (library and tests only: no server path calls it) | 1 | graph_embeddings.zig (750) |
 | monitoring | Metrics and monitoring | - | metrics.zig (585) |
 | multitenancy | Multi-tenancy support | - | - |
 | optimizer | Query optimization | ~5 | advanced_types_optimizer.zig (599) |
 | pagination | Pagination utilities | - | - |
-| parser | Generic parsing | - | - |
-| performance | Performance optimizations | ~5 | async_io.zig (739), memory_mapped_io.zig (606), io_optimized.zig (545) |
-| planner | Query planning | ~10 | cbo.zig (760), pipeline.zig (750), adaptive.zig (668), recursive.zig (695), cost_model.zig (594), optimizer.zig (609) |
+| performance | Performance helpers | 3 | memory_mapped_io.zig (850; exported by `src/lib.zig`, no product caller), json_optimized_fixed.zig (408; compiled only by its unit test) |
+| planner | Query planning | 10 | cost_model.zig (594), cbo.zig (579), pipeline.zig (420); wcoj, rewrite, path_cache, phase_timing and adaptive_replan were removed (SONNY-6511) |
 | query | Query management | ~5 | enhanced_materialized_views.zig (884), materialized_views.zig (650) |
-| runtime | Runtime support | - | - |
 | schema | Schema management | ~5 | catalog.zig (568) |
-| security | Security features | ~15 | audit.zig (1,701), auth.zig (1,226), rls.zig (1,158), tde.zig (1,482), rls_enhanced.zig (972), user_manager.zig (733) |
-| server | Server implementation | ~15 | main.zig (7,039), index_optimizer.zig (2,444), graph/exec.zig (724), txn/mvcc.zig (708), txn/phantom_read_prevention.zig (651), txn/enhanced_isolation.zig (539) |
+| security | Security features | ~15 | audit.zig (1,701), auth.zig (1,226), rls.zig (1,158), tde.zig (1,482), user_manager.zig (733) |
+| server | Server implementation | ~40 | quic_connection_handler.zig (10,995), main.zig (3,628), query_plan_cache.zig (1,136), graph/exec.zig (756), txn/mvcc.zig (799; no server caller), txn/phantom_read_prevention.zig (706; no server caller) |
 | storage | Storage engine | ~8 | heap.zig (860), user_storage.zig (763), s3_backup.zig (521), backup.zig (498), tde_file_encryption.zig (262) |
 | streaming | CDC and streaming | ~5 | cdc_enhanced.zig (1,390) |
 | temporal | Temporal data types | - | - |
@@ -750,7 +772,7 @@ Based on this architecture analysis, the modularization phases should proceed as
 | txn | Transaction management | ~5 | manager.zig (680) |
 | types | Advanced data types | ~15 | evaluator_functions.zig (1,271), geographic.zig (853), vector.zig (597) |
 | unicode | Unicode support | - | - |
-| util | Utility functions | ~10 | text_formatter.zig (948), yaml.zig (686), yaml_test.zig (525) |
+| util | Utility functions | 1 | feature_flags.zig (76) |
 | utils | Additional utilities | - | - |
 | wal | Write-ahead logging | ~5 | wal.zig (840) |
 

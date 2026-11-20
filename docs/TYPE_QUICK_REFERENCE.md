@@ -1,8 +1,14 @@
 # Geode Type System Quick Reference
 
+> The blocks below are signature listings, not statements: an argument such
+> as `geom1` stands for a value you supply, and an expression runs inside a
+> statement (`RETURN upper('a')`). This page lists the names; it does not
+> check that each one is implemented (see `docs/API_REFERENCE_GENERATED.md`
+> for the function catalogue).
+
 ## Type Constructor Examples
 
-```gql
+```text
 -- Numeric Types
 SmallInt(42)                           -- i16
 Int(1000000)                           -- i32
@@ -22,11 +28,11 @@ Time("14:30:00.123456")                -- Time with microseconds
 TimeTZ("14:30:00", 3600)               -- Time with timezone offset (seconds)
 Timestamp("2024-09-28 14:30:00")       -- Timestamp
 TimestampTZ("2024-09-28 14:30:00+02:00") -- Timestamp with timezone (stored as UTC)
-Interval("P1Y2M3DT4H5M6S")             -- ISO duration
+Interval("P1Y2M3DT4H5M6S")             -- ISO duration  (Geode extension: both unit groups)
 MakeInterval(12, 30, 1000000)          -- 12 months, 30 days, 1M microseconds
 
 -- Binary/JSON Types
-Bytea("\\xDEADBEEF")                   -- Binary data as hex
+Bytea("\\xDEADBEEF")                   -- Binary data as hex (the \x prefix is optional: Bytea('deadbeef'))
 Json('{"key": "value"}')               -- JSON text
 Jsonb('{"key": "value"}')              -- Binary JSON (canonical)
 Xml('<root><child/></root>')           -- Well-formed XML
@@ -57,8 +63,6 @@ Pressure(1013.25, "hPa")              -- Atmospheric pressure
 Url("https://example.com/path?q=1")   -- WHATWG normalized
 Domain("example.com")                  -- FQDN with punycode
 UUID("550e8400-e29b-41d4-a716-446655440000")  -- UUID
-Enum("Priority", "HIGH")               -- Enum type with value
-Array([1, 2, 3])                       -- Homogeneous array
 Bit("B'10101'")                        -- Bit string
 VarBit("B'10101'")                     -- Variable bit string
 Range("int4", 1, 10, "[)")            -- Half-open range [1, 10)
@@ -69,9 +73,16 @@ Vector([0.1, 0.2, 0.3, 0.4])         -- Float32 vector
 
 ## Common Function Patterns
 
+Every function shown here is dispatched; how many operands each takes is in
+`src/eval/function_arity.zig` (a call with another count is refused with
+42000). SONNY-6637 removed functions this page listed that no dispatch
+answered: `Enum()`, `length_chars()`, `now()`, `date_add()`,
+`ts_sub()`, `age()`, `jsonb_set()`, `array_get()`,
+`bit_or()`, `bit_xor()`, `bit_get()`, `bit_set()` and `bounds()`.
+
 ### Numeric Operations
 
-```gql
+```text
 decimal_add(Decimal("10.50", 2), Decimal("5.25", 2))  -- 15.75
 decimal_mul(a, b)                                      -- Multiplication
 decimal_div(a, b)                                      -- Division (banker's rounding)
@@ -79,26 +90,22 @@ decimal_div(a, b)                                      -- Division (banker's rou
 
 ### String Functions
 
-```gql
-length_chars(text)                     -- Character count (Unicode)
+```text
 trim(text)                            -- Remove whitespace
 lower(text) / upper(text)             -- Case conversion
 ```
 
 ### Temporal Functions
 
-```gql
-now()                                  -- Current timestamp
+```text
 current_date / current_time           -- Current date/time
-date_add(date, interval)              -- Add interval
-ts_sub(timestamp, interval)           -- Subtract interval
-age(ts1, ts2)                        -- Interval between timestamps
+current_timestamp()                   -- Current timestamp
 date_part("year", timestamp)         -- Extract component
 ```
 
 ### Network Predicates
 
-```gql
+```text
 ip_contains(Subnet("10.0.0.0/8"), IpAddr("10.1.2.3"))     -- true
 ip_overlaps(subnet1, subnet2)                              -- Check overlap
 ip_is_private(ip)                                          -- RFC private ranges
@@ -107,7 +114,7 @@ ip_family(ip)                                              -- Returns 4 or 6
 
 ### MAC Address Functions
 
-```gql
+```text
 mac_is_local(mac)                     -- Check local admin bit
 mac_is_multicast(mac)                 -- Check multicast bit
 oui(mac)                              -- Extract OUI (vendor ID)
@@ -115,14 +122,14 @@ oui(mac)                              -- Extract OUI (vendor ID)
 
 ### Hash Operations
 
-```gql
+```text
 hash_equals(hash1, hash2)             -- Constant-time comparison
 hash_alg(hash)                        -- Get algorithm name
 ```
 
 ### Currency/Language Functions
 
-```gql
+```text
 minor_units(Currency("USD"))         -- Returns 2 (cents)
 minor_units(Currency("JPY"))         -- Returns 0 (no subunit)
 lang_canonicalize("EN-us")           -- Returns "en-US"
@@ -131,7 +138,7 @@ lang_match(["fr-CA", "fr"], "fr-FR") -- Returns true
 
 ### Geographic Functions
 
-```gql
+```text
 distance_haversine(p1, p2)           -- Distance in meters
 latitude(point) / longitude(point)    -- Extract coordinates
 altitude(point) / alt_ref(point)      -- Extract altitude info
@@ -139,7 +146,7 @@ altitude(point) / alt_ref(point)      -- Extract altitude info
 
 ### Geometry Functions (OGC-style)
 
-```gql
+```text
 st_asText(geometry)                   -- Convert to WKT
 st_asGeoJSON(geometry)               -- Convert to GeoJSON
 st_contains(geom1, geom2)            -- Spatial containment
@@ -149,16 +156,15 @@ st_within(geom1, geom2)              -- Spatial within test
 
 ### JSON/JSONB Functions
 
-```gql
+```text
 jsonb_get(doc, "$.path.to.value")    -- Extract by path
 jsonb_exists(doc, "key")             -- Check key existence
-jsonb_typeof(value)                  -- Get JSON type
-jsonb_set(doc, path, new_value)      -- Update value
+jsonb_typeof(doc)                    -- JSON type name: object, array, string, number, boolean, null
 ```
 
 ### URL/Domain Functions
 
-```gql
+```text
 url_host(url)                        -- Extract host
 url_scheme(url)                      -- Extract scheme (http/https)
 url_path(url)                        -- Extract path
@@ -169,7 +175,7 @@ domain_labels(domain)                -- Split into labels
 
 ### UUID Functions
 
-```gql
+```text
 uuid_v4()                            -- Generate version 4 UUID
 uuid_v7()                            -- Generate version 7 UUID
 uuid_equal(uuid1, uuid2)             -- Bytewise comparison
@@ -177,36 +183,31 @@ uuid_equal(uuid1, uuid2)             -- Bytewise comparison
 
 ### Array Functions
 
-```gql
-array_length(arr)                    -- Get array length
+```text
+Array([1, 2, 3])                     -- Construct an array from a list of one element type
+array_length(arr)                    -- Get array length (an array or a list)
 array_contains(arr, value)           -- Check membership
-array_get(arr, index)               -- Get element by index
 ```
 
 ### Bit String Functions
 
-```gql
+```text
 bit_and(bits1, bits2)               -- Bitwise AND
-bit_or(bits1, bits2)                -- Bitwise OR
-bit_xor(bits1, bits2)               -- Bitwise XOR
 bit_count(bits)                     -- Count set bits
-bit_get(bits, position)             -- Get bit at position
-bit_set(bits, position, value)     -- Set bit value
 ```
 
 ### Range Functions
 
-```gql
+```text
 range_contains(range, value)        -- Check if value in range
 range_overlaps(range1, range2)     -- Check range overlap
 lower(range)                        -- Get lower bound
 upper(range)                        -- Get upper bound
-bounds(range)                       -- Get bounds type ("[)", "[]", etc.)
 ```
 
 ### Vector Operations (ML/AI)
 
-```gql
+```text
 vector_dot(vec1, vec2)              -- Dot product
 vector_l2(vec1, vec2)               -- Euclidean distance
 vector_cosine(vec1, vec2)           -- Cosine similarity (NULL if zero-norm)
@@ -217,7 +218,7 @@ vector_knn(property, query_vec, 5, "cosine")  -- K-nearest neighbors
 
 ### Automatic Index Selection
 
-```gql
+```text
 -- Patricia trie automatically used for:
 WHERE ip_contains(subnet_column, '192.168.1.5'::IpAddr)
 
@@ -240,7 +241,7 @@ WHERE domain_suffix_match(domain_column, 'example.com')
 
 ### Implicit Conversions
 
-```gql
+```text
 SmallInt → Int → BigInt              -- Numeric widening
 Real → Double                         -- Float widening
 Int → Decimal (scale 0)              -- Int to decimal
@@ -249,10 +250,44 @@ Char → Varchar → Text                -- String widening
 
 ### Explicit Casts
 
-```gql
+```text
 CAST(value AS TypeName)              -- Standard SQL cast
 value::TypeName                      -- PostgreSQL-style cast
 ```
+
+`CAST` follows ISO/IEC 39075:2024 20.8 (Table 4 and General Rules g to k).
+A value stored on a node converts as the value it is (a stored DOUBLE is a
+DOUBLE). No combination answers a silent NULL; `CAST(NULL AS T)` is NULL.
+
+| Source \ Target | INTEGER / INT / BIGINT | DECIMAL(p, s) / NUMERIC | FLOAT / DOUBLE / REAL | STRING / VARCHAR / TEXT | BOOLEAN | DATE / TIME / TIMESTAMP |
+|---|---|---|---|---|---|---|
+| INTEGER | itself | exact, 22003 past i128 | the nearest DOUBLE | digits | Geode extension: `<> 0` | 22G03 |
+| DECIMAL | truncated, 22003 past i64 | rescaled (truncated) | the nearest DOUBLE | its digits at its scale | 22G03 | 22G03 |
+| DOUBLE | truncated, 22003 out of range | truncated at `s`, 22003 out of range | itself | shortest literal: `1.5E0`, `1.0E-1`, `0E0` | 22G03 | 22G03 |
+| STRING | trimmed numeric literal, exponent allowed, truncated; else 22018; 22003 out of range | the same | trimmed numeric literal (no `nan`, `inf`, `_`, hex), else 22018; 22003 out of range | itself | trimmed `true` / `false` (any case), Geode extension `1` / `0`; else 22018 | trimmed ISO 8601 literal, else 22007 |
+| BOOLEAN | Geode extension: 1 / 0 | 22G03 | 22G03 | `TRUE` / `FALSE` | itself | 22G03 |
+| DATE, TIME, TIMESTAMP, zoned, DURATION | 22G03 | 22G03 | 22G03 | its ISO 8601 literal | 22G03 | itself; DATE from TIMESTAMP, TIME from TIMESTAMP, TIMESTAMP from DATE; other pairs 22G03 (the standard also allows zoned to local: not implemented) |
+| LIST, RECORD, NODE, EDGE, PATH, extension types | 22G03 | 22G03 | 22G03 | 22G03 | 22G03 | 22G03 |
+
+22G03 (invalid value type) is the standard's exception for a value whose
+type has no conversion to the target (20.8 GR 7 d ii); 22018 (invalid
+character value for cast) and 22007 are for text that is not a literal of
+the target (GR g ii, i ii, k i, l i).
+
+An unknown target type name (`CAST(x AS DURATION)`, `AS ZONED DATETIME`)
+is 0A000. Every type with a character form reads back from it as the same
+value (`CAST(CAST(x AS STRING) AS T) = x`).
+
+### Durations: unit groups
+
+ISO/IEC 39075 types a duration as year-to-month (`P1Y2M`) or day-to-second
+(`P3DT4H`); a duration string naming both (`P1M1D`) is 22G0H there (20.29
+GR 1). Geode accepts it as an extension: a mixed duration holds both parts,
+renders as `P1M1D` and reads back as itself. Adding or subtracting a
+year-to-month and a day-to-second duration is 22G14 (incompatible temporal
+instant unit groups, 20.28 GR 5c ii); a mixed operand is added part by part.
+A component past its field's range (`P999999999Y`) is 22015 (interval field
+overflow); text that is not an ISO 8601 duration is 22G0H.
 
 ## Error Handling
 

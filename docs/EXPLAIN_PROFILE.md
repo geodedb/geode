@@ -17,7 +17,7 @@ The EXPLAIN command displays the execution plan for a query without actually run
 
 ### Syntax
 
-```gql
+```text
 EXPLAIN <statement>
 ```
 
@@ -171,7 +171,7 @@ The PROFILE command executes a query and returns execution statistics. Unlike EX
 
 ### Syntax
 
-```gql
+```text
 PROFILE <statement>
 ```
 
@@ -222,6 +222,47 @@ tenant-aware executor by a concrete tenant scope (GAP-0846/GAP-0509):
 The QUIC wire protocol additionally emits a richer per-operator profile
 payload (`profile_version`, per-op `time_ns`, `rows`, memory totals) for
 profiled queries — see `src/server/profile_payload.zig`.
+
+### Index names in the profile payload
+
+The wire payload names an index only when the executor used it, and the name
+is always a catalog index (one SHOW INDEXES lists). There is no placeholder
+name (SONNY-1335).
+
+- **`profile_version` 2** (planned reads, from the runtime trace): the scan
+  operator is set from how the executor collected the start nodes. It is
+  `IndexSeek`, with `index_name` the catalog index, only when they came from
+  an index seek on a label and property that a `btree` or `hash` catalog
+  index covers (the first indexed property; when several such indexes exist,
+  the smallest name). Otherwise it is `LabelScan` or `AllNodesScan`: no
+  catalog index on that label and property, an index on another label or
+  property, a `fulltext`, vector or spatial index (they do not serve an
+  equality), a dropped index, or a WHERE whose equality is not the whole
+  WHERE (the executor seeks on `WHERE n.p = v` and on an inline property
+  map, and scans for `WHERE n.q > 1 AND n.p = v`). An equality the engine's
+  internal exact-property lookup answers without a declared index reports
+  a scan, as EXPLAIN does. `selectivity_est` is 0 (not estimated).
+- **`profile_version` 1** (tenant-bound and RLS-evaluating sessions, data
+  changes, statement targets the planned runtime declines): the payload
+  comes from the legacy executor. It has an index operator only for a point
+  write the exact-index seek served (`MATCH (n:L) WHERE n.k = 'v' SET ...`,
+  SONNY-6587): `NodeIndexScan`, named after the catalog btree or hash index
+  on the label and key (as version 2 names one), with the nodes the seek
+  returned and `time_ns` 0 (part of the statement's); with no such catalog
+  index, none. Otherwise the legacy executor scans. Before SONNY-1335 it put a
+  `NodeIndexScan` named `"heuristic_index"` first for any WHERE or FILTER
+  equality. The legacy executor has no operator hooks, so the statement is
+  one `LegacyExecute` operator with the wall-clock time measured around it
+  and the rows it returned; nothing else is measured (CPU time, bytes,
+  memory, a UNION's input rows: 0; no planner estimates). Until SONNY-6596
+  the payload listed a fixed operator set (a CREATE showed `NodeScan`,
+  `Expand`, `Project`; a UNION four `Union*` phases) with
+  `time_ns = 10 * (i + 1)` and 64 bytes per operator. A version-1 payload
+  is not evidence of an access path; a client that needs that evidence
+  should require version 2.
+
+Catalog index rows carry no graph: the name reported is the catalog's row
+for the label and property, whichever graph the session is on.
 
 ### Examples by Query Type
 
@@ -476,11 +517,15 @@ Be precise about provenance when reading any cost or row number Geode reports:
   NodeScan decision IS real — it checks the live index catalog for an index
   matching the pattern's label+property (including WHERE equality predicates) —
   but the cost numbers attached are model constants.
-- **Index selection at runtime is cost-based from live statistics** via
-  `src/server/index_optimizer.zig` (IndexOptimizer) and the per-property
-  `SelectivityEstimator`; `chooseIndexForPredicate`
-  (`src/server/index_catalog.zig`) only considers an index when the predicate
-  actually references the indexed property.
+- **Index selection at runtime is rule-based, not cost-based.** A pattern
+  with a UNIQUE-indexed literal-equality property is seeked through the merge
+  index (`src/execution/match_operations.zig`,
+  `zig build test-multi-pattern-index-seek`); otherwise the label is scanned.
+  `chooseIndexForPredicate` (`src/server/index_catalog.zig`) only considers an
+  index when the predicate references the indexed property, but no query path
+  calls it (only `zig build test-gap0867` does). The cost-based
+  `src/server/index_optimizer.zig` this paragraph used to cite was never
+  compiled and was removed (SONNY-6298).
 - **`StatsRegistry` row statistics are real when collected**:
   `analyzeTable()` counts live rows from the graph store (per-label counts via
   `GraphStore.countNodesByLabel`); `analyzeTableWithProvider()` /
@@ -509,14 +554,13 @@ Be precise about provenance when reading any cost or row number Geode reports:
    statement-level wall-clock `time_ms` only (GAP-0868 residual)
 3. **No Memory Usage in statement-level PROFILE rows**: memory totals are
    only available in the QUIC wire profile payload, not the metric/value rows
-4. **QUIC wire profile memory numbers are a deterministic synthetic model,
-   not measured allocations** (GAP-0874 decision, 2026-06-10): the fallback
-   profile path (`src/server/profile_payload.zig:buildProfilePayload`) derives
-   per-op `bytes_alloc`, `peak_bytes`, `total_alloc_bytes`, `net_bytes`, and
-   the `mem_curve` from a fixed per-op model so the wire shape and its
-   internal invariants stay deterministic and testable (pinned by the
-   `e2e_protocol_profile_*` battery); the trace-backed v2 path reports
-   honest zeros for memory. Real per-op attribution would require
+4. **QUIC wire profile memory numbers are not measured** (GAP-0874
+   decision, 2026-06-10): both payload versions report 0 for per-op
+   `bytes_alloc`, `peak_bytes`, `total_alloc_bytes`, `net_bytes` and the
+   `mem_curve` points. Until SONNY-6596 the fallback path
+   (`src/server/profile_payload.zig:buildProfilePayload`) derived them, and
+   its operators and timings, from a fixed per-op model; it now reports the
+   measured statement time only (`zig build test-sonny6596-profile-v1-measured`). Real per-op attribution would require
    per-operator allocator threading — a PROFILE redesign, not planned. Real
    process-level memory telemetry is available via the OTel
    `process.runtime.zig.memory.resident_set` gauge (`/proc/self`-backed)

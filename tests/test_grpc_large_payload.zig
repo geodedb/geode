@@ -49,14 +49,15 @@
 // CANARY: REQ=REQ-CLI-GRPC-FRAMING-002; FEATURE="GrpcQueryTransport"; ASPECT=ResponseReassembly; STATUS=TESTED; TEST=tests/test_grpc_large_payload.zig; OWNER=cli; UPDATED=2026-09-01
 
 const std = @import("std");
+const geode_test_bin = @import("geode_test_bin");
 const builtin = @import("builtin");
 const testing = std.testing;
 const posix = std.posix;
 const linux = std.os.linux;
 
-const binary_path = "zig-out/bin/geode";
+const binary_path = geode_test_bin.geode_exe;
 const admin_username = "geode";
-const admin_password = "testpass123";
+const admin_password = "Test Pass Admin Passphrase";
 const ready_marker = "server ready";
 const ready_deadline_ms: i64 = 60_000;
 const cli_deadline_ms: i64 = 180_000;
@@ -396,6 +397,8 @@ fn buildBigProgram(aa: std.mem.Allocator, label: []const u8) ![]const u8 {
 //    environment and every result below is meaningless.
 // ---------------------------------------------------------------------
 test "control: a small gRPC query round trips" {
+    // SONNY-6782: plaintext gRPC is served in Debug only (grpc_server.shouldAllowGrpcPlaintextFallback).
+    if (builtin.mode != .Debug) return error.SkipZigTest;
     const gpa = testing.allocator;
     var fx = (try setUp(gpa, "small", 23991, 23992)) orelse return error.SkipZigTest;
     defer fx.deinit();
@@ -423,6 +426,8 @@ test "control: a small gRPC query round trips" {
 //    spec-correct FRAME_SIZE_ERROR, reported under a false TLS diagnostic.
 // ---------------------------------------------------------------------
 test "geode query over gRPC carries a request larger than one HTTP/2 frame" {
+    // SONNY-6782: plaintext gRPC is served in Debug only (grpc_server.shouldAllowGrpcPlaintextFallback).
+    if (builtin.mode != .Debug) return error.SkipZigTest;
     const gpa = testing.allocator;
     var fx = (try setUp(gpa, "bigreq", 23993, 23994)) orelse return error.SkipZigTest;
     defer fx.deinit();
@@ -492,6 +497,8 @@ test "control: the same oversized request succeeds over QUIC" {
 //    the whole gRPC message and cannot decode the fragmented reply.
 // ---------------------------------------------------------------------
 test "geode query over gRPC reassembles a response larger than one HTTP/2 frame" {
+    // SONNY-6782: plaintext gRPC is served in Debug only (grpc_server.shouldAllowGrpcPlaintextFallback).
+    if (builtin.mode != .Debug) return error.SkipZigTest;
     const gpa = testing.allocator;
     var fx = (try setUp(gpa, "bigresp", 23997, 23998)) orelse return error.SkipZigTest;
     defer fx.deinit();

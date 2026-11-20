@@ -5,16 +5,16 @@
 Geode is a single-tenant graph database server with strong ISO GQL alignment. This document provides comprehensive technical details on the server's core features, architecture, and capabilities.
 
 **Status**: Development Ready (single-tenant). Multi-tenant and distributed deployments require operator review of [Known Limitations](../CLAUDE.md#known-limitations) before production. Canonical status: [GAP_ANALYSIS.md](GAP_ANALYSIS.md) + [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md).
-**ISO Conformance Suite**: 96/96 named cases in `tests/gql_iso_conformance.zig` (`zig build test-iso-conformance`; parse-only scope — see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md))
+**ISO Conformance Suite**: 106/106 named cases in `tests/gql_iso_conformance.zig` (`zig build test-iso-conformance`; parse-only scope — see [GQL_COMPLIANCE.md](GQL_COMPLIANCE.md))
 **Test Baseline**: local per-step baseline in [KNOWN_TEST_ISSUES.md](KNOWN_TEST_ISSUES.md) (canonical); a fresh geodetestlab harness run is owed — the prior ~97% (1644/1688) is a dated historical snapshot
-**CANARY Markers**: 5,094 governance markers (223 IMPL / 4.4%; run `make status-generate`)
+**CANARY Markers**: 5,937 governance markers (257 IMPL / 4.3%, 2026-11-11; run `make status-generate`)
 
 ---
 
 ## Table of Contents
 
 1. [Storage Engine Architecture](#storage-engine-architecture)
-2. [Transaction Management (MVCC & SSI)](#transaction-management-mvcc--ssi)
+2. [Transaction Management](#2-transaction-management)
 3. [Index Types & Optimization](#index-types--optimization)
 4. [Query Planning & Cost-Based Optimization](#query-planning--cost-based-optimization)
 5. [CDC & Replication Features](#cdc--replication-features)
@@ -47,14 +47,13 @@ Geode uses a slotted page architecture optimized for graph storage:
 
 **Key Features**:
 
-- **Memory-Mapped I/O**: Zero-copy data access with 13.18x performance improvement
+- **Memory-Mapped I/O**: the id map and hydration snapshot are memory-mapped (`src/storage/id_map.zig`, `hydration_snapshot.zig`). The "13.18x improvement" is unmeasured: the figure came from `src/performance/memory_mapped_io.zig`, which no server path uses (despite its name it reads a file into a heap buffer; only a benchmark test runs it), and no measurement backs it for the server (SONNY-6511)
 - **Checksumming**: Adler32 over entire page for corruption detection
 - **Slot-Based Storage**: Each slot tracks offset and size for variable-length records
 - **LSN Tracking**: Every page tracks last modification for WAL recovery
 
 **Performance**:
 
-- I/O operations improved from 5,754μs to 436μs (13.18x)
 - <1% overhead for checksumming
 - Efficient space reclamation with slot compaction
 
@@ -127,202 +126,98 @@ Geode implements ARIES-style write-ahead logging with advanced features:
 
 ### 1.3 Disk Storage
 
-**Implementation**: `/src/storage/disk.zig`
-**CANARY**: `REQ-GQL-025`, `REQ-GQL-026`
+**Implementation**: the vendored `graph_storage` engine (pager, WAL,
+checkpoints), opened per graph by `src/storage/graph_storage_adapter.zig`;
+the key is loaded by `src/storage/tde_file_encryption.zig` (`loadKey`).
 
 **Transparent Data Encryption (TDE)**:
 
-- XTS-AES-256 mode for page-level encryption
-- Per-page tweak: `(page_id << 64) | sector_offset`
-- Software AES with future AES-NI optimization path
-- Key hierarchy with master key separation
+- AES-256-GCM per page (12-byte nonce, 16-byte tag); the storage-engine
+  WAL is encrypted with the same key
+- Enabled by `GEODE_TDE_KEY`; see [TDE_FILE_LEVEL_ENCRYPTION.md](TDE_FILE_LEVEL_ENCRYPTION.md)
 
-**Key Management**:
+**Key Management** (corrected 2026-11-12, SONNY-6430):
 
-- Master key from environment: `GEODE_DISK_KEY_HEX` (64-char hex)
-- Hierarchical key derivation for data, WAL, and backup keys
-- Integration with HashiCorp Vault and AWS KMS
-- Automatic key rotation support
+- One key from the environment: `GEODE_TDE_KEY`, exactly 64 hex characters
+  (32 bytes). A set but malformed value refuses startup. There is no
+  `GEODE_DISK_KEY_HEX` and no separate WAL key (`GEODE_WAL_KEY` refuses
+  startup).
+- No hierarchy of data, WAL and backup keys: the pages and the WAL use the
+  key itself, and a server with it set writes encrypted backups under it
+  (SONNY-6355).
+- No HashiCorp Vault or AWS KMS integration in the server: the Vault
+  provider code in `src/security/vault_kms_provider.zig` is not wired into
+  any server path. The key comes only from `GEODE_TDE_KEY`.
+- No automatic key rotation. Changing `GEODE_TDE_KEY` makes an existing
+  store unreadable; the offline `key_rotate` tool re-encrypts single
+  file-level-TDE files, not the storage engine's pages.
 
 **File Permissions**:
 
 - All database files created with mode 0o600 (owner-only access)
 - Parent directory fsync for durability guarantees
 
-### 1.4 S3 Cloud Backup
+**Shard label dictionaries** (SONNY-6524): each of a graph's 16 shards keeps
+a `labels.dict`. A graph whose shards disagree on what a label id used by
+its records means is not opened: its reads and writes fail with 58000
+`LabelDictionaryDiverged`, the server and its other graphs keep serving,
+and the server log (ERROR, scope `storage`) names the graph and the shape.
+For the shape geode's old ORDER BY path left (shard 0 names every label the
+other shards name, in the same order), `GEODE_LABEL_DICT_ADOPT_SHARD0=<graph>[,<graph>...]`
+rewrites shards 1..15 from shard 0 at the next open. Do not set it for a
+store that ran graph-storage 0.4.13 or older and had a checkpoint of shard 0
+fail before a crash. A graph in which a shard names a label shard 0 lacks,
+or orders two labels differently, is refused even then and needs a manual
+repair.
 
-**Implementation**: `/src/storage/s3_backup.zig`
-**CANARY**: `REQ-GQL-S3-001`
+**Graph write-ahead log damaged mid-log** (SONNY-6642): a graph whose
+shard WAL holds a damaged record with valid records after it (not a torn
+tail, which is truncated) is not opened: graph-storage leaves the log as it
+is, and the graph's reads and writes fail with 58000 `WalCorrupted` (it was
+the generic `GraphQuarantined`). The server and its other graphs keep
+serving; the server log names the graph and the byte offset of the damaged
+record. Restore the graph's directory from a backup, or drop the graph.
 
-**Backup Types**:
+### 1.4 Backup (local files only)
 
-1. **Full Backup**: Complete database snapshot
-2. **Incremental Backup**: Delta changes since last backup
-3. **Point-in-Time Recovery**: Restore to any LSN
+**Status (2026-11-12, SONNY-6422):** there is no S3 / DigitalOcean Spaces
+backup. This section used to describe `src/storage/s3_backup.zig` (multipart
+upload, retries, Raft-snapshot backups, incremental and point-in-time
+recovery, upload throughput) as a working backup target; no command reaches
+that code or any object storage (SONNY-6290). Real object-storage support is
+story SONNY-6356.
 
-**S3 Features**:
-
-- Multipart upload for files >5MB (configurable)
-- Exponential backoff retry (base 100ms, max 3 retries)
-- Compression: `none` or `gzip` only (GAP-0880) — the backup engine applies a
-  real gzip/DEFLATE encoder when requested and records the codec actually
-  applied; `zstd`/`lz4`/`snappy` encoders are NOT bundled and are rejected
-  with `UnsupportedCompression`
-- Encryption: AES-256 with envelope encryption
-- Checksum validation: SHA-256
-
-**Backup Process**:
-
-1. Create Raft snapshot for consistency
-2. Archive data files (tar format)
-3. Calculate checksum
-4. Upload to S3 with metadata
-5. Store backup manifest
-
-**Performance**:
-
-- Multipart upload: 50-100MB/s throughput
-- Compression ratio: 3-5x for graph data
-- Incremental backup: 90-95% smaller than full
+What exists: `geode backup create` writes a local backup file (an `s3://` or
+`http(s)://` `--output` is refused), with `none` or `gzip` payload
+compression (GAP-0880; `zstd`/`lz4`/`snappy` are rejected with
+`UnsupportedCompression`) and encryption under `GEODE_TDE_KEY` when it is set
+(SONNY-6355). `geode restore` restores a local backup file offline into a new
+or empty directory. Copy backup files to object storage with your own tool
+(see [USAGE.md](USAGE.md)).
 
 ---
 
-## 2. Transaction Management (MVCC & SSI)
+## 2. Transaction Management
 
-### 2.1 Multi-Version Concurrency Control (MVCC)
+**Status (2026-11-11, SONNY-6298):** the server has no selectable isolation
+levels, no Serializable Snapshot Isolation, no predicate-lock phantom-read
+prevention and no deadlock detector. This section used to describe them from
+`src/server/txn/enhanced_isolation.zig`, which was never compiled into any
+executable or test and was removed. See
+[ENHANCED_TRANSACTION_ISOLATION.md](ENHANCED_TRANSACTION_ISOLATION.md) for what
+the server does:
 
-**Implementation**: `/src/txn/manager.zig`
-**CANARY**: `REQ-GQL-013`, `REQ-GQL-023`, `REQ-GQL-025`
+- `START TRANSACTION` takes no isolation clause; explicit transactions roll
+  back through the thread's undo log (`src/txn_undo_log.zig`).
+- Mutating statements run while the connection handler holds the graph's write
+  lock (`graph_store.acquireGraphWriteLock`).
+- Each read statement runs against one snapshot taken under the graph's shared
+  lock (`graph_store.snapshotUnderReadLock`) or on a storage-native path.
 
-**Core Concepts**:
-
-- Every transaction has a unique `TxnId` and `start_ts` timestamp
-- Reads see snapshot at `start_ts`
-- Writes are visible only after commit timestamp
-- No read locks required
-
-**Transaction States**:
-
-- `Active`: Transaction in progress
-- `Committed`: Successfully committed with `commit_ts`
-- `Aborted`: Rolled back (changes undone)
-
-**Lock Modes**:
-
-- `Shared`: Multiple readers allowed
-- `Exclusive`: Single writer, blocks all
-
-**Conflict Detection**:
-
-- Conflict matrix tracks: ReadWrite, WriteWrite, WriteRead
-- Wait-for graph for deadlock detection
-- Lock escalation for large scans
-
-**Phantom Read Prevention**:
-
-- Predicate range tracking per transaction
-- Range locks on scan predicates
-- Validation at commit time against concurrent writes
-
-**Example Flow**:
-
-```zig
-// Begin transaction
-const txn = try manager.beginTxn();
-
-// Read with MVCC snapshot
-const value = try manager.read(txn, key);
-
-// Write with conflict detection
-try manager.write(txn, key, new_value);
-
-// Commit with validation
-try manager.commit(txn); // Checks for conflicts
-```
-
-### 2.2 Serializable Snapshot Isolation (SSI)
-
-**Implementation**: `/src/server/txn/enhanced_isolation.zig`
-**CANARY**: `REQ-TXN-ISOLATION-001` through `REQ-TXN-ISOLATION-004`
-
-**Isolation Levels**:
-
-1. **ReadUncommitted**: No guarantees (rarely used)
-2. **ReadCommitted**: Prevents dirty reads
-3. **RepeatableRead**: Prevents dirty + non-repeatable reads
-4. **SnapshotIsolation**: MVCC-based (default)
-5. **Serializable**: Full serializability with predicate locks
-6. **SerializableSnapshot**: Hybrid SSI (best of both)
-
-**SSI Algorithm**:
-
-SSI detects "dangerous structures" - dependency cycles that violate serializability:
-
-**Dependency Types**:
-
-- **RW Edge** (T1 → T2): T1 reads, T2 writes same object
-- **WR Edge** (T1 → T2): T1 writes, T2 reads same object
-
-**Dangerous Structure**: `T1 -RW-> T2 -WR-> T3 -RW-> T1` (cycle)
-
-**Implementation**:
-
-```zig
-pub const DependencyTracker = struct {
-    read_dependencies: AutoHashMap(TxnId, ArrayList(TxnId)),  // RW edges
-    write_dependencies: AutoHashMap(TxnId, ArrayList(TxnId)), // WR edges
-
-    pub fn checkDangerousStructure(txn_id: TxnId) bool {
-        // DFS to detect RW-WR-RW cycles
-        // Returns true if cycle found → abort transaction
-    }
-};
-```
-
-**Commit-Time Validation**:
-
-1. Check for dangerous structures in dependency graph
-2. Validate read set against concurrent writes
-3. If conflict detected → abort transaction
-4. Otherwise → commit with new `commit_ts`
-
-**Performance**:
-
-- <10μs overhead per transaction for SSI tracking
-- 99.9% of transactions commit without conflicts
-- Automatic victim selection for deadlock resolution
-
-### 2.3 Deadlock Detection
-
-**Implementation**: `/src/server/txn/enhanced_isolation.zig`
-
-**Wait-For Graph**:
-
-- Directed graph: T1 → T2 means T1 waits for T2
-- Cycle detection via DFS
-- Periodic detection (default 1 second interval)
-- Priority-based victim selection
-
-**Resolution Strategies**:
-
-1. **Abort**: Kill current transaction
-2. **Wait**: Wait for lock with timeout (default 30s)
-3. **AbortOther**: Abort conflicting transaction (if lower priority)
-4. **Retry**: Exponential backoff retry
-5. **Escalate**: Upgrade to higher isolation level
-
-**Priority System**:
-
-- User-defined priorities (0-255)
-- Victim selection: abort lowest priority transaction
-- Prevents priority inversion
-
-**Statistics**:
-
-- Total conflicts detected
-- Deadlocks resolved
-- Average resolution time
-- Transactions aborted
+`src/transactions/manager.zig` (MVCC lock manager, phantom range tracker,
+write-skew detection) is compiled only by its tests
+(`zig build test-canary-txn-phantom-anomaly`, `test-canary-txn-phantom-range`,
+`test-canary-txn-write-skew`); no server path calls it.
 
 ---
 
@@ -436,10 +331,15 @@ score(D,Q) = Σ IDF(qi) · [f(qi,D) · (k1+1)] / [f(qi,D) + k1·(1-b+b·|D|/avgd
 
 **Features**:
 
-- Stemming: Porter stemmer
-- Stop words: Configurable list
-- Phrase queries: Positional indexing
-- Fuzzy matching: Levenshtein distance
+- Stemming: none (terms are indexed as tokenized, normalized with the
+  partial NFC subset `geode_unicode.nfcNormalize` and case-folded)
+- Stop words: a fixed 24-word English list (`src/index/fts_tokenizer.zig`),
+  not configurable
+- Phrase and proximity queries: positional postings
+  (`CALL geode.fts.phrase` / `geode.fts.proximity`)
+- Fuzzy matching, synonyms, phonetic matching and per-language analyzers:
+  not implemented (the unreachable, non-compiling `src/fts/advanced.zig`
+  that sketched them was removed, SONNY-6499)
 
 **Performance**:
 
@@ -448,11 +348,10 @@ score(D,Q) = Σ IDF(qi) · [f(qi,D) · (k1+1)] / [f(qi,D) + k1·(1-b+b·|D|/avgd
 - Boolean query: ~100-500μs
 - Index build: ~1-2ms per 1000 documents
 
-**IndexOptimizer Integration**:
-
-- Automatic corpus statistics tracking
-- Dynamic selectivity estimation
-- Cost-based decision between full-text vs sequential scan
+**Index choice**: full-text search runs only when the query calls
+`geode.fts.*` explicitly; there is no automatic choice between a full-text
+index and a scan (the IndexOptimizer was never compiled and was removed,
+SONNY-6298).
 
 ### 3.5 Specialized Indexes
 
@@ -484,42 +383,36 @@ score(D,Q) = Σ IDF(qi) · [f(qi,D) · (k1+1)] / [f(qi,D) + k1·(1-b+b·|D|/avgd
 
 ## 4. Query Planning & Cost-Based Optimization
 
+**Status (2026-11-11, SONNY-6298):** no cost-based plan choice reaches query
+execution. Planning phases 4–6 below (enumerate, cost, select) and the 4.2
+index-selection, join-ordering and adaptive re-planning text describe code no
+server path runs: `src/planner/cbo.zig` and `cost_model.zig` are compiled, but
+their only callers are tests (`zig build test-gap0867`), and no query's plan
+is chosen by them (`src/planner/pipeline.zig` and `cost_calibration.zig`,
+reached only by tests, were removed in SONNY-6555;
+`src/distributed/query_planner.zig` in SONNY-6563).
+Index use is rule-based (see 4.3).
+
 ### 4.1 Query Planner
 
 **Implementation**: `/src/planner.zig`
-**CANARY**: `REQ-GQL-016`, `REQ-GQL-021`
+**CANARY**: `REQ-GQL-021`
 
 **Planning Phases**:
 
-1. **Parse**: GQL → AST (96/96 named ISO conformance-suite cases; parse-only scope)
+1. **Parse**: GQL → AST (106/106 named ISO conformance-suite cases; parse-only scope)
 2. **Validate**: Type checking, schema validation
 3. **Rewrite**: Predicate pushdown, constant folding
 4. **Enumerate**: Generate alternative plans
 5. **Cost**: Estimate execution cost
 6. **Select**: Choose lowest-cost plan
 
-**Path Expansion Operator**:
-
-- Variable-length path queries: `(a)-[*1..5]->(b)`
-- BFS traversal with cycle detection
-- Tie-breaking policy: (length, start_id, end_id)
-- Pruning: visited node tracking
-
-**Example**:
-
-```sql
-MATCH (a:Person)-[r:KNOWS*1..3]->(b:Person)
-WHERE a.name = 'Alice'
-RETURN b.name, length(r) as hops
-```
-
-**Plan**:
-
-```
-PathExpand(min=1, max=3)
-  ← IndexScan(Person, name='Alice')
-  → Filter(label=Person)
-```
+**Path expansion** (SONNY-6540 item 6): variable-length patterns
+(`(a)-[*1..5]->(b)`) are expanded by the executor (the planned read's
+`VarLengthExpand` operator, as EXPLAIN and PROFILE name it, and
+`src/execution/match_operations.zig`). The planner's `PathExpand` operator, which this section described
+(BFS with a (length, start_id, end_id) tie-break), was reached by no query
+and has been removed.
 
 ### 4.2 Cost-Based Optimizer (CBO)
 
@@ -567,51 +460,21 @@ PathExpand(min=1, max=3)
 - Greedy heuristic for large queries
 - Bushy trees for complex joins
 
-**Adaptive Re-planning**:
-
-- Runtime statistics collection
-- Re-plan threshold: actual_rows > 2× estimated_rows
-- Hot-path caching
+**Adaptive Re-planning**: not implemented. `src/planner/adaptive_replan.zig`
+(a threshold counter driven only by the synthetic `pipeline.runPipeline`) did
+not compile on Zig 0.16, no build reached it, and it was removed
+(SONNY-6511).
 
 ### 4.3 IndexOptimizer
 
-**Implementation**: `/src/server/index_optimizer.zig`
-
-**Capabilities**:
-
-- Automatic index recommendation
-- Query-specific cost estimation
-- Dynamic index selection
-- Statistics-driven decisions
-
-**Cost Models by Index Type**:
-
-| Index Type | Cost Formula | Use Case |
-|-----------|--------------|----------|
-| Sequential Scan | `O(n)` | Small tables, full scans |
-| B-Tree | `O(log n + k)` | Equality, range queries |
-| HNSW | `O(log n)` | KNN vector search |
-| R-Tree | `O(log n + k)` | Spatial queries |
-| Full-Text | `O(t·log n)` | Text search (t=terms) |
-| Hash | `O(1)` | Exact equality only |
-
-**Integration**:
-
-```zig
-// Automatic index selection
-const index_choice = try index_optimizer.selectBestIndex(
-    label,
-    predicate,
-    statistics,
-);
-
-// Cost estimation
-const estimated_cost = try index_optimizer.estimateCost(
-    index_choice,
-    cardinality,
-    selectivity,
-);
-```
+**Status:** not implemented. `src/server/index_optimizer.zig` was never
+compiled into any executable or test and was removed (SONNY-6298). Index use
+is rule-based: a pattern with a UNIQUE-indexed literal-equality property is
+seeked through the merge index (`src/execution/match_operations.zig`,
+`zig build test-multi-pattern-index-seek`), otherwise the label is scanned.
+`EXPLAIN` checks the index catalog for an index on the pattern's label and
+property and reports fixed per-operator costs
+(`src/execution/statement_handlers.zig`).
 
 ### 4.4 Selectivity Estimator
 
@@ -649,8 +512,14 @@ pub const AdaptiveEstimator = struct {
 
 ### 4.5 PathCache
 
-**Implementation**: `/src/planner/path_cache.zig`
-**CANARY**: 23 PathCache markers
+**Status (2026-11-13, SONNY-6511): not implemented.** `src/planner/path_cache.zig`
+(an LRU of strings keyed by a structural hash) was driven only by the
+synthetic `pipeline.runPipeline` and `plannerPathCacheLookup`, which did not
+compile on Zig 0.16; no executable or running test reached it, and it was
+removed. No path query result is cached. What remains is the structural key
+derivation (`src/planner/structural_key.zig`), exercised by tests and the
+`bench_pathcache_degree_util` benchmark only. The design below was never
+built.
 
 **Cache Key**: Structural hash of path pattern
 
@@ -692,7 +561,40 @@ struct PathCacheEntry {
 **Implementation**: `/src/streaming/cdc_enhanced.zig`
 **CANARY**: `REQ-GQL-042` (47 CDC markers - highest count)
 
-**Core Features**:
+> **Status (SONNY-6570, 2026-11-15): change capture is NOT implemented.**
+> The engine can be started, stopped and inspected, but no write path feeds
+> it: a `CREATE`, `SET`, `DELETE` or `MERGE` produces no change event, its
+> event counters stay 0, and nothing reaches a sink. Change capture is a
+> separate story (SONNY-6572). The features below describe the engine
+> library (`CDCEngine.captureChange` / `ingestChangeRecord`, exercised by its
+> unit tests), not what a running server delivers.
+
+#### CDC procedures (`CALL cdc.*`)
+
+Every `cdc.*` procedure is **Admin only** (42501 for any other role, as the
+CDC_DIAGNOSTICS / CDC_CONTROL frames), on QUIC and gRPC. `enable`, `disable`,
+`start`, `stop` and `reset_guardrails`, and an attempt to run a refused
+configuration procedure, write an audit record (action = the procedure name,
+result success or failure); a CDC_CONTROL frame writes one with action
+`CDC_CONTROL`, and a refused frame an `access_denied` record.
+
+| Procedure | Answer |
+|---|---|
+| `cdc.enable()` | Starts the engine (idempotent). `status = 'enabled'`. |
+| `cdc.disable()` | Stops and frees the engine (idempotent). `status = 'disabled'`. |
+| `cdc.status()` | `enabled` (an engine exists), `streaming` (it runs), `event_count` (its captured-event counter: 0, since nothing is captured). |
+| `cdc.export_diagnostics()` | `event_count`, `malformed_count`, `last_seq_id` (the last sequence number assigned; 0 when none). The full engine diagnostics are the CDC_DIAGNOSTICS frame. |
+| `cdc.get_guardrail_status()` | `current_epoch` (the guardrail epoch), `warn_threshold` / `abort_threshold` (the engine's malformed-record ratios, `GEODE_CDC_MALFORMED_WARN_PCT` / `_ABORT_PCT`, default 0.05 / 0.50; null with no engine), `pending_events` (buffered events: 0). |
+| `cdc.reset_guardrails()` | Clears the guardrail latches; `new_epoch` is the epoch after. 55000 when CDC is not enabled. |
+| `cdc.stop()` / `cdc.start()` | Stop / start the engine's worker; 55000 when CDC is not enabled. |
+| `cdc.get_events`, `get_ordered_events`, `get_pending_events`, `check_duplicates`, `get_change_status`, `get_watermark`, `get_flush_metrics`, `get_telemetry_metrics`, `get_performance_alerts`, `get_malformed_records`, `get_corruption_analysis`, `pause`, `resume`, `set_guardrail`, `configure_adaptive_flush`, `configure_change_stream`, `set_retention_policy`, `cleanup_expired_events` | **0A000** (feature not supported): the message names the procedure, "change capture is not implemented (see SONNY-6572)" and why. Before SONNY-6570 these returned an invented event, fixed rows or fixed numbers, or changed nothing and reported success. |
+
+The gRPC service serves the CDC frames under the names `src/proto/geode.proto`
+declares, `/geode.GeodeService/GetCdcDiagnostics` and
+`/geode.GeodeService/ControlCdc`. The undeclared `/CdcDiag` / `/CdcCtrl`
+aliases are no longer served (SONNY-6593; they answer UNIMPLEMENTED).
+
+**Core Features** (engine library; see the status note above):
 
 - Real-time change event streaming
 - Multiple sink support: Kafka, Webhook, File (plus an in-memory sink for testing). Kinesis and Pub/Sub are **planned, not implemented** — configuring them fails loud at startup with `error.SinkNotImplemented` (GAP-0872)
@@ -782,9 +684,10 @@ pub const CDCConfig = struct {
 
 **Performance**:
 
-- Event capture: <10μs overhead per write
-- Kafka throughput: 50,000-100,000 events/sec
-- Adaptive flush: reduces latency by 60-80%
+- Event capture: none — no write is captured (SONNY-6570 / SONNY-6572), so
+  there is no per-write overhead to report and no server-side sink
+  throughput. The library's own benchmarks (`tests/benchmark_cdc_*.zig`)
+  measure the engine fed directly, not a server.
 
 ### 5.2 Kafka Integration
 
@@ -942,86 +845,56 @@ pub const Config = struct {
 
 ### 7.1 Transparent Data Encryption (TDE)
 
-**Implementation**: `/src/security/tde.zig`
+**Implementation**: page and WAL encryption are the storage engine's
+(`graph_storage`, `PageEncryption`), keyed by `GEODE_TDE_KEY` in
+`graph_store.initGlobalAdapter`; `/src/security/tde.zig` holds the `tde.*`
+procedures (gated by `GEODE_ENABLE_TDE`), not the page encryption.
 **CANARY**: `REQ-GQL-TDE-*`
 
 **Encryption Modes**:
 
-- **Page-Level**: XTS-AES-256 for storage pages
+- **Page-Level**: AES-256-GCM per page, the nonce derived from the page id, file id and a per-page write count (SONNY-6435: was described as XTS-AES-256)
 - **WAL-Level**: AES-256-GCM for log records
-- **Backup-Level**: AES-256-CTR with envelope encryption
+- **Backup-Level**: AES-256-GCM over the whole backup payload under `GEODE_TDE_KEY` when it is set (no envelope or derived backup key; an unusable key fails the backup). Without `GEODE_TDE_KEY` backups are unencrypted (SONNY-6355)
 
-**Key Hierarchy**:
+**Keys**: one 256-bit key, `GEODE_TDE_KEY`, used for pages, WAL and
+backups alike. There is no hierarchy of derived data, WAL and backup keys in
+the server (`src/security/tde_hierarchy.zig` is compiled only by a test).
 
-```
-Master Key (256-bit)
-  ├─> Data Key (for pages)
-  ├─> WAL Key (for log records)
-  └─> Backup Key (for cloud backups)
-```
+**Performance Overhead** (measured, `zig build test-sonny6435-tde-overhead`,
+[TDE_FILE_LEVEL_ENCRYPTION.md](TDE_FILE_LEVEL_ENCRYPTION.md#measured-overhead)):
 
-**Key Derivation**:
-
-```zig
-pub const KeyHierarchy = struct {
-    master_key: [32]u8,
-    data_key: [32]u8,
-    wal_key: [32]u8,
-    backup_key: [32]u8,
-
-    pub fn init(master: [32]u8) KeyHierarchy {
-        // HKDF key derivation
-        data_key = hkdf_expand(master, "data_key", 32);
-        wal_key = hkdf_expand(master, "wal_key", 32);
-        backup_key = hkdf_expand(master, "backup_key", 32);
-    }
-};
-```
-
-**Performance Overhead**:
-
-- Page encryption: <1% CPU overhead
-- WAL encryption: <1% latency overhead
-- AES-NI acceleration: 10x faster on supported CPUs
+- With the default per-commit WAL fsync: about +1% (fsync-bound on the measuring host)
+- On the commit path without fsync (`GEODE_WAL_SYNC=deferred`): about +29%
+- On reads that miss the buffer pool: about +60%
 
 ### 7.2 Key Management System (KMS)
 
-**Implementation**: `/src/security/kms.zig`, `/src/security/kms_remote.zig`
+**Implementation**: `/src/security/kms.zig` (`KMSProvider`),
+`/src/security/kms_remote.zig` (a remote KMS prototype over QUIC). Neither
+supplies a key to the server: the page and WAL key is `GEODE_TDE_KEY`, the FLE
+master key `GEODE_MASTER_KEY`, both from the environment
+([KMS_PROVIDER_SYSTEM.md](KMS_PROVIDER_SYSTEM.md), "TDE-KMS Integration — Not
+Implemented").
 
-**Supported Providers**:
+**Providers** (`KMSProvider`, corrected SONNY-6435):
 
-1. **Local** (file-based): Development only
-2. **HashiCorp Vault**: Enterprise production
-3. **AWS KMS**: Cloud deployments
-4. **Azure Key Vault**: Azure cloud
-5. **GCP KMS**: Google Cloud
+1. **External** (`external_kms`): an in-process deterministic stand-in, compiled into test builds only (SONNY-6442)
+2. HashiCorp Vault, AWS KMS and Azure Key Vault configurations are refused (`error.UnsupportedProvider`); there is no GCP provider, and no `local_dev` provider (removed in SONNY-6448: its wrapping key was derived from the key id)
 
-**Remote KMS Features**:
+**Remote KMS prototype** (`kms_remote.zig`): `Generate`, `Unwrap` and
+`PrivUnwrap` of AES-256-GCM envelopes, and an Ed25519 attestation the client
+verifies under a pinned key over its own nonce (SONNY-6435) and the TLS
+channel's RFC 8446 exporter value (SONNY-6442). The client verifies the
+server's certificate against a CA bundle (`Options.ca_cert_path`) and
+refuses to connect without one; unconnected, it refuses every operation. The
+attested hash is the KEK identifier HKDF-SHA256(KEK, salt
+`GEODE-KMS-KEK-ID-V1`). No server path uses it. There is no key rotation with re-encryption and no audit
+integration.
 
-- Automatic key unwrapping
-- Envelope encryption (KEK + DEK)
-- Key rotation with re-encryption
-- Audit logging integration
-- Attestation support
+### 7.3 Row-Level Security (RLS)
 
-**Example (Vault)**:
-
-```zig
-const vault_config = VaultConfig{
-    .address = "https://vault.example.com",
-    .token = "s.secret_token",
-    .namespace = "production",
-    .mount_path = "transit",
-    .key_name = "geode-master-key",
-};
-
-const kms = try VaultKMSProvider.init(allocator, vault_config);
-const dek = try kms.unwrapKey(wrapped_dek);
-```
-
-### 7.3 Enhanced Row-Level Security (RLS)
-
-**Implementation**: `/src/security/rls_enhanced.zig`
+**Implementation**: `/src/security/rls_core.zig` (the `rls` module: policies, expression bytecode, temporal and IPv4 CIDR conditions, policy cache), wired into the MATCH loop through `passesRLSExprFilter` (`src/execution/match_operations.zig`); label-level post-result filter in `/src/server/rls_filter.zig`. The struct and function below are illustrative, not the source.
 
 **Policy Types**:
 
@@ -1080,17 +953,28 @@ pub fn evaluatePolicy(
 
 - Policy evaluation: <10μs per policy
 - Expression compilation: JIT to bytecode
-- Policy cache: 90%+ hit rate
+- Policy cache: a row-level decision is not cached (the verdict depends on
+  the row, and the cache key has none; SONNY-6377)
 - Minimal query overhead (<5%)
 
 ### 7.4 Multi-Factor Authentication (MFA)
 
 **Implementation**: `/src/security/mfa.zig`
 
-**Supported Methods**:
+**MFA is not enforced at login (SONNY-6602).** HELLO (QUIC and gRPC)
+never asks for a TOTP code or a recovery code, and
+`SecurityManager.authenticateWithMFA` has no production caller. The
+methods below are enrolled and checked on request by the
+`geode.auth.mfa_*` procedures (whose results carry a `warning` column
+saying so); wiring them into login is story SONNY-6604. See
+[USER_AUTH.md](USER_AUTH.md#mfa-is-not-enforced-at-login).
+
+**Supported Methods** (library and procedures; not at login):
 
 1. **TOTP**: Time-based one-time passwords (RFC 6238) — implemented (`src/security/mfa.zig`)
-2. **Recovery codes**: one-time backup codes — implemented
+2. **Recovery codes**: one-time backup codes — issued by `mfa_setup` and
+   redeemable only through `SecurityManager.authenticateWithMFA`, which
+   nothing calls yet
 
 Planned (not implemented): SMS codes, email codes, hardware tokens (U2F/FIDO2).
 
@@ -1108,11 +992,13 @@ Planned (not implemented): SMS codes, email codes, hardware tokens (U2F/FIDO2).
 risk score from deterministic placeholder factors. Real signals (login
 location, device fingerprint, behavioral history) are planned, not wired.
 
-**Recovery Codes**:
+**Recovery Codes** (no login redeems them yet, SONNY-6604):
 
-- One-time use backup codes
-- Secure generation and storage
-- Rate limiting on recovery attempts
+- One-time use backup codes (in `SecurityManager.authenticateWithMFA`)
+- Secure generation; held as SHA-256 digests (SONNY-6600)
+- `geode.auth.mfa_verify` is rate limited (five failures, five-minute
+  lockout) and fails closed: an attempt that cannot be counted is refused
+  with 53000 without checking the code (SONNY-6602)
 
 ### 7.5 Audit Logging
 
@@ -1215,11 +1101,12 @@ pub const AuditRecord = struct {
 - Memory: Tested up to 512GB
 - Disk: 10-50TB single instance
 
-**Horizontal Scaling** (Federation):
-
-- Shards: Tested up to 32 shards
-- Replication: 3-5 replicas typical
-- Query routing: <100μs overhead
+**Horizontal Scaling**: not implemented. A cluster (`GEODE_CLUSTER_TOKEN`)
+replicates the documented write slice to every node through Raft; it does
+not shard data, route queries to shards, or promote shard replicas (nothing
+in production fills the coordinator's shard table; SONNY-6459), and its
+membership is the static `--peers` list. See
+[DISTRIBUTED_QUERY_COORDINATION.md](DISTRIBUTED_QUERY_COORDINATION.md).
 
 **Concurrent Users**:
 
@@ -1284,16 +1171,16 @@ Total CANARY markers: 1284 tracking governance compliance
 
 **Top 10 Features by CANARY Count**:
 
-1. **CDC Engine** (47 markers): Change data capture with adaptive backpressure
+1. **CDC Engine** (47 markers): the CDC engine library (adaptive backpressure); a server captures no changes (SONNY-6570)
 2. **Network Transport** (35 markers): QUIC protocol implementation
 3. **Query Planner** (27 markers): Cost-based query optimization
 4. **Governance** (25 markers): CANARY system itself
-5. **PathCache** (23 markers): Path query result caching
+5. **PathCache**: not implemented (structural key only; see 4.5)
 6. **Cost-Based Optimizer** (20 markers): Query plan cost estimation
-7. **Authentication** (18 markers): RBAC/ABAC with MFA
+7. **Authentication** (18 markers): RBAC/ABAC (MFA library and procedures; not enforced at login, SONNY-6604)
 8. **Full-Text Search** (15 markers): BM25 ranking with inverted index
 9. **Storage Constraints** (13 markers): Schema validation engine
-10. **Transaction Management** (12 markers): MVCC with SSI
+10. **Transaction Management** (12 markers): markers on `src/transactions/manager.zig`, which only tests compile (no isolation levels or SSI in the server)
 
 **Status Distribution**:
 
@@ -1309,80 +1196,86 @@ Total CANARY markers: 1284 tracking governance compliance
 
 **Storage**:
 
-- `GEODE_DATA_DIR`: Data directory path (default, per-user: `$XDG_STATE_HOME/geode`, else `$HOME/.local/state/geode`, else `/tmp/geode-<uid>`)
-- `GEODE_PAGE_SIZE`: Page size in bytes (default: 4096)
-- `GEODE_DISK_ENCRYPTION`: Enable TDE (`on`/`off`)
-- `GEODE_DISK_KEY_HEX`: Master encryption key (64 hex chars)
+- `GEODE_DATA_DIR`: Data directory path (default, per-user: `$XDG_STATE_HOME/geode`, else `$HOME/.local/state/geode`, else `$TMPDIR/geode-<uid>` (TMPDIR when absolute, else `/tmp`), which must be a 0700 directory of this user; SONNY-6325)
+- `GEODE_TDE_KEY`: Page and WAL encryption key (exactly 64 hex characters); unset runs without page encryption
+- `GEODE_MASTER_KEY` / `GEODE_MASTER_KEY_FORMAT`: Field-level encryption master key and its format ([FIELD_LEVEL_ENCRYPTION.md](FIELD_LEVEL_ENCRYPTION.md))
+
+The server reads none of `GEODE_PAGE_SIZE`, `GEODE_DISK_ENCRYPTION`,
+`GEODE_DISK_KEY_HEX` (corrected 2026-11-12, SONNY-6430).
 
 **WAL**:
 
-- `GEODE_WAL_ENCRYPTION`: Enable WAL encryption
-- `GEODE_WAL_SEGMENT_SIZE`: Segment rollover size (default: 1MB)
-- `GEODE_WAL_FLUSH_MODE`: `always`, `every_n`, or `time_window_ms`
-- `GEODE_WAL_FLUSH_EVERY_N`: Commit group size when `GEODE_WAL_FLUSH_MODE=every_n` (default: 10)
-- `GEODE_WAL_FLUSH_WINDOW_MS`: Flush window when `GEODE_WAL_FLUSH_MODE=time_window_ms` (default: 5ms)
+- `GEODE_WAL_SYNC`: `each_commit` (default, fsync per commit) or `deferred` (durable at the next checkpoint; replayable bulk loads only)
 
-**CDC**:
+**Checkpoints** (SONNY-6523 item 6):
 
-- `CDC_ENABLED`: Enable change data capture
-- `CDC_SINKS`: Comma-separated sink list
-- `CDC_BATCH_SIZE`: Batch size (default: 1000)
-- `CDC_ADAPTIVE_FLUSH`: Enable adaptive batching
+- `--persist-interval <ms>` (default 30000): the persistence tick. Every tick
+  syncs the WAL and runs a light (O(dirty)) checkpoint, which flushes the
+  dirty pages and truncates the WAL. This is the checkpoint cadence; nothing
+  else turns it off. A tick that cannot checkpoint is counted
+  (`adapter_checkpoint_failures_total` in the runtime metrics) and logged at
+  ERROR once per distinct cause, again at most every 10 minutes while the
+  same cause repeats, and once when checkpoints succeed again. A checkpoint
+  runs only on a shard with something to write, so after a crash restart a
+  shard nothing has made dirty keeps the WAL that recovery replayed, through
+  every tick and the clean shutdown, until its next checkpoint runs. Its
+  records lie below the checkpoint frontier recovery advanced (the data is in
+  the flushed pages) and the next recovery skips them: disk use, not lost
+  data (graph-storage; SONNY-6595 item 5, docs/KNOWN_TEST_ISSUES.md).
+- `GEODE_CHECKPOINT_OPS` (default 50000) and `GEODE_CHECKPOINT_INTERVAL_MS`
+  (default 60000): extra triggers for bulk ingest (the fast paths and group
+  commit), which a tick may not keep up with: a light checkpoint as soon as
+  that many bulk operations are pending, or when that long has passed since
+  the last checkpoint (or since the server opened its data directory) with
+  bulk operations pending. They add checkpoints; they do not delay or stop
+  the tick's. To run without checkpoints until shutdown (tests that need a
+  crash to replay the WAL), give a long `--persist-interval`.
+
+The server reads none of `GEODE_WAL_ENCRYPTION`, `GEODE_WAL_SEGMENT_SIZE`,
+`GEODE_WAL_FLUSH_MODE`, `GEODE_WAL_FLUSH_EVERY_N`, `GEODE_WAL_FLUSH_WINDOW_MS`
+(corrected 2026-11-12, SONNY-6430): the WAL is encrypted with
+`GEODE_TDE_KEY`, and its segmenting and flushing are the storage engine's own.
 
 **Network**:
 
-- `GEODE_LISTEN_ADDR`: Bind address (default: 0.0.0.0)
-- `GEODE_LISTEN_PORT`: Bind port (default: 7567)
-- `GEODE_TLS_CERT`: TLS certificate path
-- `GEODE_TLS_KEY`: TLS private key path
+- `GEODE_PORT`: QUIC port when `--listen` is not given (binds `0.0.0.0:<port>`; default 3141; an invalid value refuses startup)
+- `GEODE_METRICS_PORT` / `GEODE_METRICS_BIND`: Prometheus `/metrics` and `/health` listener (off when the port is unset)
+
+The listen address and the TLS certificate are options, not variables:
+`--listen <host:port>`, `--cert <path>`, `--key <path>`.
 
 **Security**:
 
-- `GEODE_MFA_ENABLED`: Enable MFA
-- `GEODE_AUDIT_LOG_PATH`: Audit log location
-- `GEODE_KMS_PROVIDER`: `local`, `vault`, `aws`, `azure`, `gcp`
+- `GEODE_AUDIT_LOG_PATH`: Audit log file (default `<data dir>/audit.jsonl`)
+- `GEODE_ENABLE_MFA`: MFA feature flag (`src/util/feature_flags.zig`)
+
+Corrected 2026-11-12 (SONNY-6435): the server reads none of `CDC_ENABLED`,
+`CDC_SINKS`, `CDC_BATCH_SIZE`, `CDC_ADAPTIVE_FLUSH`, `GEODE_LISTEN_ADDR`,
+`GEODE_LISTEN_PORT`, `GEODE_TLS_CERT`, `GEODE_TLS_KEY`, `GEODE_MFA_ENABLED`
+or `GEODE_KMS_PROVIDER`; it has no KMS provider setting (section 7.2).
 
 ### Configuration File
 
-Geode supports TOML configuration file:
+`geode serve` reads the file `--config <path>` names, else the first of
+`.geode/config.{yaml,yml,toml,json}` and `config.{yaml,yml,toml,json}` in
+the user configuration directory (`geode/` under `$XDG_CONFIG_HOME`, else
+`~/.config`). It takes flat keys, each the counterpart of a command-line
+option, values as strings, durations in milliseconds; an option given on
+the command line wins (`src/server/cli_args.zig`):
 
 ```toml
-[server]
-listen_addr = "0.0.0.0"
-listen_port = 7567
-max_connections = 10000
-
-[storage]
+listen_quic = "0.0.0.0:3141"
+cert_path = "/etc/geode/server.crt"
+key_path = "/etc/geode/server.key"
 data_dir = "/var/lib/geode"
-page_size = 4096
-encryption_enabled = true
-
-[wal]
-segment_size = 1048576  # 1MB
-flush_mode = "every_n"
-flush_every_n = 10
-
-[cdc]
-enabled = true
-sinks = ["kafka"]
-batch_size = 1000
-adaptive_flush = true
-
-[cdc.kafka]
-brokers = "kafka1:9092,kafka2:9092"
-topic = "geode_changes"
-compression = "snappy"
-
-[security]
-mfa_enabled = true
-audit_log_path = "/var/log/geode/audit.log"
-kms_provider = "vault"
-
-[security.vault]
-address = "https://vault.example.com"
-token = "${VAULT_TOKEN}"
-key_name = "geode-master-key"
+log_level = "info"
+idle_timeout = "300000"  # milliseconds
 ```
+
+Also read: `listen_grpc`, `persist_interval`, `idle_in_transaction_timeout`,
+`grpc_session_idle_timeout`, `grpc_max_sessions_per_principal` and
+`require_capability_profile`. There are no `[server]`, `[storage]`, `[wal]`,
+`[cdc]` or `[security]` sections (corrected 2026-11-12, SONNY-6435).
 
 ---
 
@@ -1390,7 +1283,7 @@ key_name = "geode-master-key"
 
 **AST**: Abstract Syntax Tree - parsed representation of GQL query
 **CANARY**: Governance marker for requirement tracking
-**CDC**: Change Data Capture - streaming database changes
+**CDC**: Change Data Capture - streaming database changes (not implemented in the server: no write is captured, SONNY-6570)
 **CBO**: Cost-Based Optimizer - query plan cost estimation
 **GQL**: Graph Query Language (ISO/IEC 39075:2024)
 **HNSW**: Hierarchical Navigable Small World - vector index algorithm
@@ -1399,7 +1292,7 @@ key_name = "geode-master-key"
 **MVCC**: Multi-Version Concurrency Control - transaction isolation
 **QUIC**: Quick UDP Internet Connections - modern transport protocol
 **RLS**: Row-Level Security - fine-grained access control
-**SSI**: Serializable Snapshot Isolation - transaction isolation level
+**SSI**: Serializable Snapshot Isolation - a transaction isolation level Geode does not implement
 **TDE**: Transparent Data Encryption - automatic encryption
 **WAL**: Write-Ahead Logging - durability mechanism
 

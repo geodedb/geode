@@ -11,14 +11,14 @@
 //   secret is never overwritten.
 // - I2 (SONNY-3242): a SET swap swaps, with or without a RETURN.
 // - I11 (SONNY-3247): a statement naming a parameter the request does not
-//   supply is refused (42P02) before any path runs it, the QUIC MERGE fast
+//   supply is refused (42002 since SONNY-6645) before any path runs it, the QUIC MERGE fast
 //   path too.
 // - I8 (SONNY-3244): the parser's limits answer 54000 / 54001.
 // - Round 4b-1 (SONNY-759): a comma pattern binds its node-only chain
 //   (SONNY-3318); chained MERGE actions follow the last MERGE clause
 //   (SONNY-3320); the node-scan stream serves only the fields it reads
 //   (SONNY-3321: a LET, or a WHERE with a FILTER, goes to the executor);
-//   SKIP / LIMIT parameters, a repeated SET target (22G03) and LET scope
+//   SKIP / LIMIT parameters, a repeated SET target (22G0M, SONNY-6368) and LET scope
 //   (SONNY-3248).
 // - Round 4b-1c (the round 4b-1b re-review): `WITH *` and FOR carry kinds
 //   (42000); EXISTS and IN subqueries read the statement's LETs, and a LET
@@ -31,11 +31,14 @@
 //   streamed comma join and its read budget (53200), every type of an
 //   alternation, a repeated SET target refused before anything is written
 //   (the QUIC MERGE fast path too), window values (22G03), LET chains and
-//   CALL bodies, and a label SET's vector check (22000, QUIC).
+//   CALL bodies, and a label SET's vector check (22000; over gRPC too since
+//   SONNY-3379).
 //
 // CANARY: REQ=REQ-SONNY-3139-WRITE-SHAPES; FEATURE="WriteShapeValidator"; ASPECT=TransportProfile; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-28
 
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const geode = @import("geode");
 const schema = @import("schema");
@@ -47,6 +50,8 @@ const util = @import("proto_test_util.zig");
 const graph_store = geode.graph_store;
 const user_mgmt = geode.user_management;
 const gps = geode.security.gps;
+const execution = geode.execution;
+const index_manager = geode.index_manager;
 
 // ---------------------------------------------------------------------------
 // The cases, one label family per case (`L` is replaced by `L<n>`).
@@ -99,8 +104,11 @@ const cases = [_]Case{
         nothing_written,
         nothing_written_q,
     } },
+    // SONNY-6525 item 2: `nn` is bound by nothing, so the statement is
+    // refused with 42000 before its write shape is checked (it was the
+    // write shape's 0A000); nothing is written either way.
     .{ .name = "C1 unbound target", .steps = &.{
-        .{ .query = "PROFILE MATCH (n:L) SET n.x = 1, nn.y = 2", .code = "0A000" },
+        .{ .query = "PROFILE MATCH (n:L) SET n.x = 1, nn.y = 2", .code = "42000" },
         nothing_written,
         nothing_written_q,
     } },
@@ -162,13 +170,13 @@ const cases = [_]Case{
     } },
     // I11: the QUIC key-resolved MERGE fast path evaluated $nosuch as null.
     .{ .name = "I11", .steps = &.{
-        .{ .query = "MERGE (m:LM {g: $nosuch})", .code = "42P02" },
-        .{ .query = "MERGE (m:LM {g: $nosuch}) ON CREATE SET m.k = 1", .code = "42P02" },
+        .{ .query = "MERGE (m:LM {g: $nosuch})", .code = "42002" },
+        .{ .query = "MERGE (m:LM {g: $nosuch}) ON CREATE SET m.k = 1", .code = "42002" },
         .{ .query = "MATCH (m:LM) RETURN count(m) AS c", .want = "0" },
-        .{ .query = "MATCH (q:LQ {i: 1}) SET q.name = $nosuch", .code = "42P02" },
-        .{ .query = "MATCH (q:LQ) SET q.x = 1 RETURN q.i AS i ORDER BY i LIMIT $nosuch", .code = "42P02" },
-        .{ .query = "MATCH (q:LQ) WHERE q.i = $nosuch RETURN q.name", .code = "42P02" },
-        .{ .query = "PROFILE MATCH (q:LQ) WHERE q.i = $nosuch RETURN q.name", .code = "42P02" },
+        .{ .query = "MATCH (q:LQ {i: 1}) SET q.name = $nosuch", .code = "42002" },
+        .{ .query = "MATCH (q:LQ) SET q.x = 1 RETURN q.i AS i ORDER BY i LIMIT $nosuch", .code = "42002" },
+        .{ .query = "MATCH (q:LQ) WHERE q.i = $nosuch RETURN q.name", .code = "42002" },
+        .{ .query = "PROFILE MATCH (q:LQ) WHERE q.i = $nosuch RETURN q.name", .code = "42002" },
         .{ .query = "MATCH (q:LQ) WHERE q.name = 'q' RETURN count(q) AS c", .want = "4" },
         nothing_written,
         .{ .query = "MERGE (m:LM {g: $g})", .params = &.{.{ .name = "g", .value = "a" }} },
@@ -182,9 +190,31 @@ const cases = [_]Case{
             .{ .query = "MATCH (u:LU) RETURN u.i", .want = "0;1;2;3" },
             .{ .query = "WITH 1 AS one UNWIND [4, 5] AS i CREATE (a:LU {i: i}), (b:LU {i: a.i + 10})" },
             .{ .query = "MATCH (u:LU) WHERE u.i >= 4 RETURN u.i", .want = "14;15;4;5" },
-            // A statement cannot begin with UNWIND: a syntax error, nothing written.
-            .{ .query = "UNWIND [0] AS i CREATE (:LV {i: i})", .code = "42000" },
-            .{ .query = "MATCH (v:LV) RETURN count(v) AS c", .want = "0" },
+            // SONNY-6613: a statement may begin with UNWIND, read as `FOR i IN
+            // [0]` (it was a syntax error, 42000, for that alone): it writes
+            // what the FOR writes, once per element, and answers no rows.
+            .{ .query = "UNWIND [0] AS i CREATE (:LV {i: i})", .want = "" },
+            .{ .query = "MATCH (v:LV) RETURN v.i", .want = "0" },
+            .{ .query = "FOR i IN [0] CREATE (:LV {i: i + 100})", .want = "" },
+            .{ .query = "UNWIND [1, 2] AS i CREATE (:LV {i: i})", .want = "" },
+            .{ .query = "FOR i IN [1, 2] CREATE (:LV {i: i + 100})", .want = "" },
+            .{ .query = "MATCH (v:LV) RETURN v.i", .want = "0;1;100;101;102;2" },
+            // All or nothing: the element that fails leaves no node behind.
+            .{ .query = "UNWIND [3, 0] AS i CREATE (:LV {i: 10 / i})", .code = "22012" },
+            .{ .query = "FOR i IN [3, 0] CREATE (:LV {i: 10 / i})", .code = "22012" },
+            // A write its body does not apply is refused before anything runs.
+            .{ .query = "UNWIND [3] AS i CREATE (v:LV {i: i}) DELETE v", .code = "0A000" },
+            .{ .query = "MATCH (v:LV) RETURN count(v) AS c", .want = "6" },
+            // Inside a transaction: ROLLBACK undoes it, COMMIT keeps it.
+            .{ .query = "START TRANSACTION" },
+            .{ .query = "UNWIND [7, 8] AS i CREATE (:LV {i: i})" },
+            .{ .query = "MATCH (v:LV) WHERE v.i >= 7 AND v.i < 100 RETURN v.i", .want = "7;8" },
+            .{ .query = "ROLLBACK" },
+            .{ .query = "MATCH (v:LV) WHERE v.i >= 7 AND v.i < 100 RETURN count(v) AS c", .want = "0" },
+            .{ .query = "START TRANSACTION" },
+            .{ .query = "UNWIND [9] AS i CREATE (:LV {i: i})" },
+            .{ .query = "COMMIT" },
+            .{ .query = "MATCH (v:LV) WHERE v.i >= 7 AND v.i < 100 RETURN v.i", .want = "9" },
         },
     },
     // Round 4b-1 (SONNY-759).
@@ -234,9 +264,9 @@ const cases = [_]Case{
     .{
         .name = "3248 SET target, LET scope",
         .steps = &.{
-            .{ .query = "MATCH (q:LQ {i: 1}) SET q.c = 1, q.c = 2", .code = "22G03" },
-            .{ .query = "MATCH (a:LQ {i: 1}), (b:LQ {i: 1}) SET a.c = 1, b.c = 2 RETURN a.c", .code = "22G03" },
-            .{ .query = "MATCH (q:LQ) WHERE q.i IN (LET $z = 1 MATCH (k:LQ) WHERE k.i = $z RETURN k.i) RETURN q.i, $z AS z", .code = "42P02" },
+            .{ .query = "MATCH (q:LQ {i: 1}) SET q.c = 1, q.c = 2", .code = "22G0M" },
+            .{ .query = "MATCH (a:LQ {i: 1}), (b:LQ {i: 1}) SET a.c = 1, b.c = 2 RETURN a.c", .code = "22G0M" },
+            .{ .query = "MATCH (q:LQ) WHERE q.i IN (LET $z = 1 MATCH (k:LQ) WHERE k.i = $z RETURN k.i) RETURN q.i, $z AS z", .code = "42002" },
             nothing_written_q,
             .{ .query = "MATCH (q:LQ) WHERE q.i IN (LET $z = 1 MATCH (k:LQ) WHERE k.i = $z RETURN k.i) RETURN q.i", .want = "1" },
             // Round 4b-1b (review I-E): an IN subquery reads an outer LET, as
@@ -278,11 +308,11 @@ const cases = [_]Case{
     // SONNY-3248 (I-2, I-3): refused before anything is written, on the QUIC
     // MERGE fast path too (go/oidc's MERGE shape was last-wins there).
     .{ .name = "3248 repeated SET target", .steps = &.{
-        .{ .query = "MERGE (t:LT1 {k: 1}) SET t.a = 1, t.a = 2", .code = "22G03" },
-        .{ .query = "MERGE (t:LT2 {k: $k}) ON CREATE SET t.a = $v, t.a = 9", .params = &.{ .{ .name = "k", .int = 5 }, .{ .name = "v", .int = 7 } }, .code = "22G03" },
-        .{ .query = "MERGE (t:LT2 {k: $k}) ON CREATE SET t.a = $v ON MATCH SET t.a = 9, t.a = 10", .params = &.{ .{ .name = "k", .int = 5 }, .{ .name = "v", .int = 7 } }, .code = "22G03" },
-        .{ .query = "CREATE (z:LT3 {k: 1}) SET z.a = 1, z.a = 2", .code = "22G03" },
-        .{ .query = "MATCH (q:LQ {i: 1}) CREATE (z:LT4) SET z.a = 1, z.a = 2", .code = "22G03" },
+        .{ .query = "MERGE (t:LT1 {k: 1}) SET t.a = 1, t.a = 2", .code = "22G0M" },
+        .{ .query = "MERGE (t:LT2 {k: $k}) ON CREATE SET t.a = $v, t.a = 9", .params = &.{ .{ .name = "k", .int = 5 }, .{ .name = "v", .int = 7 } }, .code = "22G0M" },
+        .{ .query = "MERGE (t:LT2 {k: $k}) ON CREATE SET t.a = $v ON MATCH SET t.a = 9, t.a = 10", .params = &.{ .{ .name = "k", .int = 5 }, .{ .name = "v", .int = 7 } }, .code = "22G0M" },
+        .{ .query = "CREATE (z:LT3 {k: 1}) SET z.a = 1, z.a = 2", .code = "22G0M" },
+        .{ .query = "MATCH (q:LQ {i: 1}) CREATE (z:LT4) SET z.a = 1, z.a = 2", .code = "22G0M" },
         .{ .query = "MATCH (t:LT1) RETURN count(t) AS c", .want = "0" },
         .{ .query = "MATCH (t:LT2) RETURN count(t) AS c", .want = "0" },
         .{ .query = "MATCH (t:LT3) RETURN count(t) AS c", .want = "0" },
@@ -301,7 +331,7 @@ const cases = [_]Case{
     .{ .name = "3248 LET chain", .steps = &.{
         .{ .query = "LET $a = 2, $b = $a + 1 MATCH (n:L) WHERE n.i = $b RETURN n.i", .want = "3" },
         .{ .query = "LET $x = 2 CALL { MATCH (n:L) WHERE n.i = $x RETURN n.i AS k } RETURN k", .want = "2" },
-        .{ .query = "LET $a = $b, $b = 1 MATCH (n:L) WHERE n.i = $a RETURN n.i", .code = "42P02" },
+        .{ .query = "LET $a = $b, $b = 1 MATCH (n:L) WHERE n.i = $a RETURN n.i", .code = "42002" },
     } },
     // Round 4b-1c (the round 4b-1b re-review).
     // SONNY-3367 (I-A): `WITH *` carries each variable's kind; a value is no
@@ -343,7 +373,7 @@ const cases = [_]Case{
             .{ .query = "CALL { MATCH (n:L) RETURN n.i AS k ORDER BY k LIMIT $l } RETURN k", .params = &.{.{ .name = "l", .int = 2 }}, .want = "0;1" },
             .{ .query = "CALL { MATCH (n:L) RETURN n.i AS k ORDER BY k SKIP $l LIMIT 1 } RETURN k", .params = &.{.{ .name = "l", .int = 2 }}, .want = "2" },
             // m-c: two MERGEs of one node, one property set through both.
-            .{ .query = "MERGE (a:LW {k: 1}) MERGE (b:LW {k: 1}) SET a.x = 1, b.x = 2", .code = "22G03" },
+            .{ .query = "MERGE (a:LW {k: 1}) MERGE (b:LW {k: 1}) SET a.x = 1, b.x = 2", .code = "22G0M" },
             .{ .query = "MATCH (n:LW) RETURN count(n) AS c", .want = "0" },
         },
     },
@@ -382,14 +412,10 @@ const cases = [_]Case{
         .{ .query = "WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a WITH 1 AS a RETURN a", .code = "54001" },
         .{ .query = "WITH 1 AS a WITH 1 AS a WITH 1 AS a RETURN a", .want = "1" },
     } },
-};
-
-/// Cases run over QUIC only. SONNY-3319's creates a vector index, and the
-/// in-process gRPC fixture's index manager lives in the fixture's request
-/// arena, which the fixture frees before the catalog it registers into (a
-/// harness limit: the catalog cleanup then reads freed memory).
-const quic_only_cases = [_]Case{
-    // SONNY-3319 (I-4): a label SET checks the vectors the node holds.
+    // SONNY-3319 (I-4): a label SET checks the vectors the node holds. Over
+    // gRPC too since SONNY-3379 (the fixture's teardown freed the index
+    // manager this case's CREATE INDEX makes before the catalog cleanup
+    // called into it).
     .{ .name = "3319 label SET vectors", .steps = &.{
         .{ .query = "CREATE INDEX vk4b_idx ON VK4b (emb) USING HNSW WITH (metric = 'l2')" },
         .{ .query = "CREATE (:VK4b {id: 1, emb: vectorf32('[1.0, 0.0, 0.0, 0.0]')})" },
@@ -472,6 +498,10 @@ const Fixture = struct {
         errdefer self.h.deinit();
         _ = graph_store.getGlobalStore(testing.allocator);
         _ = geode.txn_undo_log.getGlobalUndoLog(testing.allocator);
+        // SONNY-3379: the first CREATE INDEX would create the process-wide
+        // index manager with the requests' arena, which `deinit` frees.
+        _ = try index_manager.ensureGlobalIndexManager(testing.allocator);
+        errdefer index_manager.cleanupGlobalIndexManager();
         self.auth_was_enabled = user_mgmt.isAuthEnabled();
         user_mgmt.setAuthEnabled(false);
         self.allow_all_was = gps.isInsecureAllowAll();
@@ -484,6 +514,10 @@ const Fixture = struct {
     fn deinit(self: *Fixture) void {
         grpc.setSessionStore(null);
         self.sessions.deinit();
+        // SONNY-3379: the catalog (whose cleanup calls into the index
+        // manager), then the index manager, then the arena and the store.
+        execution.cleanupCatalogInstance();
+        index_manager.cleanupGlobalIndexManager();
         self.arena.deinit();
         gps.setInsecureAllowAll(self.allow_all_was);
         user_mgmt.setAuthEnabled(self.auth_was_enabled);
@@ -541,6 +575,8 @@ const Fixture = struct {
 };
 
 test "round 4a over gRPC: PROFILE repros refused, C3, I2, I11 and I8" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
@@ -561,7 +597,9 @@ test "round 4a over gRPC: PROFILE repros refused, C3, I2, I11 and I8" {
 }
 
 // CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=ReadBudgetOverGrpc; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-28
-test "round 4b-1b over gRPC: LIMIT 1 over two 1,500-pair chains answers under a 64 MiB read budget; the whole product answers 53200 (SONNY-3368)" {
+test "round 4b-1b over gRPC: LIMIT 1 over two 1,499-pair chains answers under a 64 MiB read budget; the whole product answers 53200 (SONNY-3368)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
@@ -582,7 +620,8 @@ test "round 4b-1b over gRPC: LIMIT 1 over two 1,500-pair chains answers under a 
 // ---------------------------------------------------------------------------
 // Round 4b-1c: the join's memory and time over the wire (SONNY-3368, the
 // round 4b-1b re-review I-B / I-C). A WHERE that keeps none of the 2.25
-// million bindings of two 1,500-pair chains held about 700 MB (a node copy
+// million bindings of two 1,499-pair chains (`range(1, 1500)`; the end is
+// exclusive) held about 700 MB (a node copy
 // per binding, `getNodePtrForScan`), unseen by the read budget.
 
 /// A /proc status field (`VmRSS`, `VmHWM`) of process `pid` (0: this one),
@@ -690,7 +729,9 @@ const GrpcBoundJob = struct {
 };
 
 // CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=MemoryOverGrpc; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-29
-test "round 4b-1c over gRPC: a WHERE that keeps nothing over two 1,500-pair chains holds flat memory; LIMIT 1 answers at once (SONNY-3368)" {
+test "round 4b-1c over gRPC: a WHERE that keeps nothing over two 1,499-pair chains holds flat memory; LIMIT 1 answers at once (SONNY-3368)" {
+    // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
@@ -718,6 +759,8 @@ test "round 4b-1c over gRPC: a WHERE that keeps nothing over two 1,500-pair chai
 
 // CANARY: REQ=REQ-SONNY-3368-BOUNDED-JOIN; FEATURE="MultiChainRelationshipMatch"; ASPECT=MemoryOverQuic; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=engine; UPDATED=2026-09-29
 test "round 4b-1c over QUIC: flat server memory for a WHERE that keeps nothing, 53200 for the product, and a disconnect stops a join that completes nothing (SONNY-3368)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -730,7 +773,7 @@ test "round 4b-1c over QUIC: flat server memory for a WHERE that keeps nothing, 
     defer std.Io.Dir.cwd().deleteTree(io_fs, data_dir) catch {};
     const addr = try util.formatAddr(allocator, port);
     defer allocator.free(addr);
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, &.{"GEODE_READ_EXECUTOR_BUDGET_MB=64"});
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir }, &.{"GEODE_READ_EXECUTOR_BUDGET_MB=64"});
     defer server.deinit();
     try util.waitForServerReady(allocator, addr, 30000);
     const server_pid: std.posix.pid_t = server.child.id orelse return error.NoServerPid;
@@ -777,24 +820,33 @@ test "round 4b-1c over QUIC: flat server memory for a WHERE that keeps nothing, 
     }
     {
         // A join no binding of which completes (64 million steps, about an
-        // hour at 1,500 pairs): the client gives up after 1 s and closes its
-        // connection. The join polls the stream's cancel at every step, so
-        // it stops when the server marks the stream abandoned (its
-        // per-connection stall watchdog does at 60 s idle) instead of
-        // running to the end: within 100 s the server is idle.
+        // hour at 1,499 pairs): the client gives up after 1 s and closes its
+        // connection (CONNECTION_CLOSE: `deinit` sends one since SONNY-6466).
+        // The join polls the stream's cancel at every step, so it stops when
+        // the server marks the stream abandoned instead of running to the
+        // end: within 30 s the server is idle. (A client that vanishes
+        // without closing is tests/test_sonny6466_abandoned_read_cancel.zig.)
+        //
+        // SONNY-6466: the request is written and the client leaves 1 s later
+        // without reading. It used to wait for the reply with a 1 s timeout,
+        // but since SONNY-6301 the test client extends a reply wait while the
+        // server is alive, so it waited until the stall watchdog answered
+        // (60-65 s, more under load) and this check timed the watchdog.
         const name = "3368 abandoned join (QUIC)";
         var client = try util.QuicProtoClient.connect(allocator, addr);
         var hello = try client.hello(allocator, util.defaultUsername(), util.defaultPassword());
         hello.deinit(allocator);
         const left = nowMillis();
-        if (client.executeAndCollectWithTimeout(allocator, "MATCH (a:KP)-[:KE]->(b), (c:KP), (d:KP)-[:NOPE]->(z) RETURN a.i", util.emptyParams(), 1000, 1)) |r| {
-            var res = r;
-            res.deinit(allocator);
-        } else |_| {}
+        try client.writeMessage(.{ .execute = schema.ExecuteRequest{
+            .session_id = client.session_id,
+            .query = "MATCH (a:KP)-[:KE]->(b), (c:KP), (d:KP)-[:NOPE]->(z) RETURN a.i",
+            .params = .empty,
+        } });
+        sleepMillis(1_000);
         client.deinit();
         var idle_after: ?i64 = null;
         var prev = procCpuTicks(server_pid);
-        while (nowMillis() - left < 100_000) {
+        while (nowMillis() - left < 30_000) {
             sleepMillis(1_000);
             const now_t = procCpuTicks(server_pid);
             // Clock ticks are 1/100 s: a join still running spends about
@@ -805,7 +857,7 @@ test "round 4b-1c over QUIC: flat server memory for a WHERE that keeps nothing, 
             }
             prev = now_t;
         }
-        if (idle_after) |ms| std.debug.print("{s}: the server was idle {d} ms after the client left\n", .{ name, ms }) else try failures.append(aa, try std.fmt.allocPrint(aa, "{s}: the server was still busy 100 s after the client left", .{name}));
+        if (idle_after) |ms| std.debug.print("{s}: the server was idle {d} ms after the client left\n", .{ name, ms }) else try failures.append(aa, try std.fmt.allocPrint(aa, "{s}: the server was still busy 30 s after the client left", .{name}));
         var alive = try util.QuicProtoClient.connect(allocator, addr);
         defer alive.deinit();
         var hello2 = try alive.hello(allocator, util.defaultUsername(), util.defaultPassword());
@@ -817,6 +869,10 @@ test "round 4b-1c over QUIC: flat server memory for a WHERE that keeps nothing, 
 
 // CANARY: REQ=REQ-SONNY-3385-GRPC-OWNED-ENTITIES; FEATURE="GrpcStreaming"; ASPECT=RealServer; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4_transport.zig; OWNER=transport; UPDATED=2026-09-29
 test "round 4b-1c over a real gRPC server: a node a chained part returns is pulled, and the server serves on (SONNY-3385)" {
+    // SONNY-6782: plaintext gRPC is served in Debug only.
+    if (!util.grpc_plaintext_served) return error.SkipZigTest;
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -832,7 +888,7 @@ test "round 4b-1c over a real gRPC server: a node a chained part returns is pull
     defer allocator.free(quic_addr);
     const grpc_addr = try util.formatAddr(allocator, grpc_port);
     defer allocator.free(grpc_addr);
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr, "--data-dir", data_dir }, util.TestEnv.grpcPlaintext());
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", quic_addr, "--listen-grpc", grpc_addr, "--data-dir", data_dir }, util.TestEnv.grpcPlaintext());
     defer server.deinit();
     try util.waitForServerReady(allocator, quic_addr, 30000);
     const server_pid: std.posix.pid_t = server.child.id orelse return error.NoServerPid;
@@ -922,6 +978,8 @@ fn handlerInChild(job: *HandlerJob, stack: usize) ?u8 {
 }
 
 test "round 4a over gRPC: the deepest nesting the parser allows runs on an 8 MiB connection thread; one level more is refused (54001)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var f: Fixture = undefined;
     try f.init();
     defer f.deinit();
@@ -990,6 +1048,8 @@ fn quicAnswer(aa: std.mem.Allocator, client: *util.QuicProtoClient, query: []con
 }
 
 test "round 4a over QUIC: PROFILE repros refused, C3, I2, I11 (the MERGE fast path too) and I8" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -1002,7 +1062,7 @@ test "round 4a over QUIC: PROFILE repros refused, C3, I2, I11 (the MERGE fast pa
     defer std.Io.Dir.cwd().deleteTree(io_fs, data_dir) catch {};
     const addr = try util.formatAddr(allocator, port);
     defer allocator.free(addr);
-    var server = try util.spawnServer(allocator, &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir }, util.TestEnv.standard());
+    var server = try util.spawnServer(allocator, &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir }, util.TestEnv.standard());
     defer server.deinit();
     try util.waitForServerReady(allocator, addr, 30000);
     var client = try util.QuicProtoClient.connect(allocator, addr);
@@ -1020,16 +1080,6 @@ test "round 4a over QUIC: PROFILE repros refused, C3, I2, I11 (the MERGE fast pa
             const query = try labeled(aa, st.query, n);
             const got = try quicAnswer(aa, &client, query, st.params);
             try check(aa, &failures, "quic", c.name, st, query, got);
-        }
-    }
-    for (quic_only_cases, cases.len..) |c, n| {
-        for (seed) |st| {
-            const query = try labeled(aa, st.query, n);
-            try check(aa, &failures, "quic", c.name, st, query, try quicAnswer(aa, &client, query, &.{}));
-        }
-        for (c.steps) |st| {
-            const query = try labeled(aa, st.query, n);
-            try check(aa, &failures, "quic", c.name, st, query, try quicAnswer(aa, &client, query, st.params));
         }
     }
     // I8: more than 1024 statements (54000).

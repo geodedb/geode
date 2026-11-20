@@ -34,7 +34,7 @@ For multi-line queries, end with a semicolon (`;`).
 
 ### Examples
 
-```gql
+```text
 geode> RETURN 1 AS x;
 {"columns":["a"],"data":[[1]]}
 
@@ -66,20 +66,25 @@ Switch with `\set keymap vi`
 
 ## Configuration
 
-History is saved to:
+History is saved to `GEODE_HISTORY` when it is set, else to
+`$HOME/.geode_history` (SONNY-6551). Either must be an absolute path: with
+a relative or unset HOME (or a relative `GEODE_HISTORY`) the shell says
+`Note: shell history is not saved to a file: ...` and keeps history for the
+session only; it never writes `.geode_history` into the working directory.
+The file is mode 0600, and an existing one with group or other access is
+tightened.
 
-- Linux: `~/.local/share/geode/history`
-- macOS: `~/Library/Application Support/geode/history`
-- Windows: `%APPDATA%\geode\history`
-
-Or set `GEODE_HISTORY` environment variable to a custom path.
+Lines that carry a credential are not recorded, in the file or in the
+session (the rule of the mysql client, which keeps `*IDENTIFIED*` and
+`*PASSWORD*` lines out of its history): any line containing `password`,
+`identified` or `secret` (any case), or calling `geode.auth.user_create`,
+`geode.auth.user_import` or `geode.auth.mfa_*`. So `CREATE USER ... SET
+PASSWORD '...'` and `ALTER USER ... SET PASSWORD '...'` are not saved.
+`\connect <address>` is saved without the address's `user:password@` part,
+and with secret query values shown as `***`. Lines saved by an older geode
+are not rewritten: clear them with `\history -c` or edit the file.
 
 ## Troubleshooting
 
-If you see "REPL error: FileNotFound", the REPL may be having trouble creating the history directory.
-This should be automatically fixed now, but if issues persist, manually create the directory:
-
-```bash
-mkdir -p ~/.local/share/geode  # Linux
-mkdir -p ~/Library/Application\ Support/geode  # macOS
-```
+If you see "REPL error: FileNotFound", the directory of `GEODE_HISTORY`
+could not be created; point `GEODE_HISTORY` at a writable absolute path.

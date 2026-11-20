@@ -20,7 +20,7 @@
 // CANARY: REQ=GQL-39075-RQ-0016; FEATURE="Conformance/BytestringMaxLength"; ASPECT=ImplDefined; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0016_BytestringMaxLength65534; OWNER=conformance; UPDATED=2026-02-23
 // CANARY: REQ=GQL-39075-RQ-0017; FEATURE="Conformance/SessionParamPrefix"; ASPECT=ImplDefined; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0017_SessionParamPrefix; OWNER=conformance; UPDATED=2026-02-23
 // CANARY: REQ=GQL-39075-RQ-0018; FEATURE="Conformance/GA08DiagnosticGating"; ASPECT=FeatureFlag; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0018_GA08DiagnosticGating; OWNER=conformance; UPDATED=2026-02-23
-// CANARY: REQ=GQL-39075-RQ-0019; FEATURE="Conformance/PrivilegeViolation42000"; ASPECT=SQLSTATE; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0019_PrivilegeViolation42000; OWNER=conformance; UPDATED=2026-02-23
+// CANARY: REQ=GQL-39075-RQ-0019; FEATURE="Conformance/PrivilegeViolationClass42"; ASPECT=SQLSTATE; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0019_PrivilegeViolationClass42; OWNER=conformance; UPDATED=2026-11-14
 // CANARY: REQ=GQL-39075-RQ-0020; FEATURE="Conformance/ConnectionLoss40003_08007"; ASPECT=SQLSTATE; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0020_ConnectionLoss40003_08007; OWNER=conformance; UPDATED=2026-02-23
 // CANARY: REQ=GQL-39075-RQ-0021; FEATURE="Conformance/ImplTransactionsExplicit"; ASPECT=GT01; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0021_ImplTransactionsAreExplicit; OWNER=conformance; UPDATED=2026-02-23
 // CANARY: REQ=GQL-39075-RQ-0022; FEATURE="Conformance/KeywordsCaseInsensitive"; ASPECT=Parser; STATUS=TESTED; TEST=TestCANARY_GQL39075_RQ_0022_KeywordsCaseInsensitive; OWNER=conformance; UPDATED=2026-02-23
@@ -32,12 +32,11 @@ const geode = @import("geode");
 
 // Imports from the conformance infrastructure.
 // lib.zig exports: geode.conformance, geode.gql.status, geode.server_flags,
-//                  geode.confusables, geode.impl_flagger
+//                  geode.confusables
 const conformance = geode.conformance;
 const status = geode.gql.status;
 const server_flags = geode.server_flags;
 const confusables = geode.confusables;
-const impl_flagger = geode.impl_flagger;
 
 // RQ-0001: Execute conforming GQL programs.
 // The implementation can execute the minimal conforming program set.
@@ -62,8 +61,8 @@ test "TestCANARY_GQL39075_RQ_0003_GqlFlaggerImplDefined" {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
-    const findings = try impl_flagger.collect(alloc, .{ .zero_length_paths_excluded = false });
-    defer impl_flagger.freeFindings(alloc, findings);
+    const findings = try conformance.collectImplDefinedFlags(alloc);
+    defer alloc.free(findings);
     // Must enumerate at least all 15 Annex B items.
     try std.testing.expect(findings.len >= 15);
 }
@@ -186,10 +185,21 @@ test "TestCANARY_GQL39075_RQ_0018_GA08DiagnosticGating" {
     try std.testing.expect(prof.iso_features.GA08 == true);
 }
 
-// RQ-0019: Privilege violations raise SQLSTATE 42000.
-test "TestCANARY_GQL39075_RQ_0019_PrivilegeViolation42000" {
+// RQ-0019: a privilege violation is the class-42 condition "syntax error or
+// access rule violation" (ISO/IEC 39075:2024 4.2.4.2), for which the standard
+// names no subcondition. 23.1: "If a subclass code is not specified for a
+// condition, then either subclass '000' or an implementation-defined subclass
+// is returned"; implementation-defined subclasses begin with '5'..'9' or
+// 'I'..'Z'. A standard-defined subclass (42001 invalid syntax, 42002 invalid
+// reference, ...) would misreport it. SONNY-6536: this asserted exactly 42000
+// and failed on the conforming 42501.
+test "TestCANARY_GQL39075_RQ_0019_PrivilegeViolationClass42" {
     const s = status.privilegeViolation("CREATE GRAPH");
-    try std.testing.expect(std.mem.eql(u8, &s.sqlstate, "42000"));
+    try std.testing.expectEqualStrings("42", s.sqlstate[0..2]);
+    const sub = s.sqlstate[2..5];
+    const first = sub[0];
+    const implementation_defined = (first >= '5' and first <= '9') or (first >= 'I' and first <= 'Z');
+    try std.testing.expect(std.mem.eql(u8, sub, "000") or implementation_defined);
 }
 
 // RQ-0020: Connection loss raises 40003/08007.

@@ -41,21 +41,13 @@ const mfa_policy = @import("mfa_policy");
 
 // Multi-Factor Authentication (MFA) test support and compliance helpers.
 // Production auth and CLI code import the external auth library directly.
-// CANARY: REQ=REQ-GQL-MFA-CORE-001; FEATURE="MfaCoreTotpRecovery"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_CORE_001_RecoveryCodeSingleUse|TestCANARY_REQ_GQL_MFA_CORE_001_ReauthIntervalPolicyTrigger|TestCANARY_REQ_GQL_MFA_CORE_001_ElevationTtlExpiry|TestCANARY_REQ_GQL_MFA_CORE_001_DynamicPolicyCacheBypass|TestCANARY_REQ_GQL_MFA_CORE_001_EndToEndElevationFlow; OWNER=security; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-MFA-CORE-001; FEATURE="MfaCoreTotpRecovery"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/canary_mfa_recovery_code_contention.zig|tests/canary_mfa_risk_stepup.zig; OWNER=security; UPDATED=2026-11-12
 
 pub fn globallyEnabled() bool {
     return flags_mod.global().mfa.enabled();
 }
 
-pub const MfaChallenge = struct {
-    method: []const u8 = "totp",
-    issued_at_ms: i64 = 0,
-};
-
-pub const MfaResponse = struct {
-    code: ?u32 = null,
-    recovery_code: ?[]const u8 = null,
-};
+// SONNY-6608: `MfaChallenge` / `MfaResponse` (no user) were removed.
 
 pub const Enrollment = struct {
     secret_raw: []u8,
@@ -105,17 +97,16 @@ pub fn verifyEnrollment(allocator: std.mem.Allocator, secret_base32: []const u8,
     return verifyCode(allocator, secret_base32, now_ms, code, 30, 6, 1);
 }
 
-pub fn verifyRecoveryCode(candidate: []const u8, codes_ptr: anytype) ?usize {
-    if (candidate.len != 8) return null;
-
-    for (codes_ptr.*, 0..) |code, idx| {
-        if (code.len != candidate.len) continue;
-        if (std.crypto.timing_safe.eql([8]u8, code[0..8].*, candidate[0..8].*)) { // fips-exempt: non-security (timing-safe TOTP code comparison; HMAC-SHA1 is already routed through cb.Mac.hmacSha1)
-            return idx;
-        }
-    }
-    return null;
+/// SONNY-6600: the digest a recovery code is held as (SHA-256, the auth
+/// library's `hashScratchCode`; the codes are 160-bit random values).
+pub fn hashRecoveryCode(code: []const u8) [32]u8 {
+    return ext_mfa.hashScratchCode(code);
 }
+
+// SONNY-6602: `verifyRecoveryCode` is gone. It matched 8-character codes
+// only, the issued codes are 32 characters, and nothing but a test called
+// it. Recovery codes are redeemed by `SecurityManager.authenticateWithMFA`
+// alone (digests at rest, constant-time compare, single use; SONNY-6600).
 
 pub fn freeEnrollment(allocator: std.mem.Allocator, enrollment: *Enrollment) void {
     for (enrollment.scratch_codes) |code| allocator.free(code);

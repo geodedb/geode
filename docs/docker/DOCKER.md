@@ -220,12 +220,12 @@ docker run -d \
   -p 8443:8443/udp \
   -v /var/lib/geode:/data \
   -v /etc/geode/certs:/certs:ro \
-  -e LOG_LEVEL=warn \
   geode:latest \
   --data-dir /data \
   --cert /certs/server.crt \
   --key /certs/server.key \
-  --listen 0.0.0.0:8443
+  --listen 0.0.0.0:8443 \
+  --log-level warn
 ```
 
 ### Docker Compose (Single Node)
@@ -243,9 +243,7 @@ services:
     volumes:
       - geode-data:/data
       - ./certs:/certs:ro
-    environment:
-      - GEODE_LOG_LEVEL=info
-      - GEODE_MAX_CONNECTIONS=1000
+    command: ["serve", "--data-dir", "/data", "--log-level", "info", "--max-connections", "1000"]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "geode", "query", "RETURN 1", "--server", "127.0.0.1:8443"]
@@ -300,14 +298,22 @@ docker-compose -f docker-compose.distributed.yml down
 
 ### Cluster Environment Variables
 
+As shipped, `docker-compose.distributed.yml` runs three standalone nodes
+(see the comment at the top of that file). Geode forms a Raft cluster from
+these variables (`src/server/cluster_bootstrap.zig`), which the compose file
+does not set:
+
 ```bash
-NODE_ID=node-1
-NODE_ROLE=leader|follower
-CLUSTER_NAME=geode-cluster
-GEODE_DISTRIBUTED=true
-GEODE_SHARD_COUNT=3
-GEODE_REPLICATION_FACTOR=2
+GEODE_CLUSTER_TOKEN=<shared secret>          # enables cluster mode
+GEODE_PEERS=geode-leader:8300,geode-follower-1:8300,geode-follower-2:8300
+GEODE_NODE_ID=1                              # 1-based position in GEODE_PEERS
+GEODE_CLUSTER_NAME=geode-cluster
+GEODE_CLUSTER_PORT=8300
+GEODE_CLUSTER_CA_CERT=/certs/ca.crt          # CA that signed every node's certificate
 ```
+
+`GEODE_CLUSTER_CA_CERT` must name a readable CA bundle: a missing or
+unreadable file fails each peer connection (SONNY-6448).
 
 ---
 
@@ -315,14 +321,19 @@ GEODE_REPLICATION_FACTOR=2
 
 ### Environment Variables
 
+The log level and connection cap are `geode serve` options
+(`--log-level`, `--max-connections`), given in the image `CMD` or the
+`docker run` arguments; geode reads no `LOG_LEVEL`, log-level, cache-size,
+WAL-size or FIPS variable (SONNY-6442, see
+[DOCKER_LOG_LEVEL_CONFIG.md](../DOCKER_LOG_LEVEL_CONFIG.md)).
+
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `GEODE_LOG_LEVEL` | Log level (debug, info, warn, error) | info |
-| `GEODE_MAX_CONNECTIONS` | Maximum concurrent connections | 1000 |
-| `GEODE_CACHE_SIZE` | Query cache size | 1GB |
-| `GEODE_WAL_SIZE_LIMIT` | WAL size limit | 10GB |
-| `LOG_LEVEL` | Alternative log level env var | error |
-| `FIPS_MODE` | Enable FIPS mode | enabled |
+| `GEODE_DATA_DIR` | Data directory (when `--data-dir` is not given) | per-user default |
+| `GEODE_METRICS_PORT` | Port of the metrics and `/health` listener (the images set it) | unset (off) |
+| `GEODE_ADMIN_PASSWORD` | Bootstrap admin password | generated |
+| `GEODE_TDE_KEY` | Storage (TDE) encryption key | unset (off) |
+| `GEODE_MASTER_KEY` | Field-level encryption master key | unset |
 
 ### Volume Mounts
 
@@ -439,8 +450,8 @@ docker build -f Dockerfile.simple -t geode:latest .
 ### Debug Mode
 
 ```bash
-# Enable debug logging
-docker run -e GEODE_LOG_LEVEL=debug ghcr.io/spyderorg/geode:latest
+# Enable debug logging (the arguments replace the image CMD)
+docker run ghcr.io/spyderorg/geode:latest serve --data-dir /data --log-level debug
 
 # Attach for debugging
 docker exec -it <container> /bin/sh
@@ -477,7 +488,6 @@ deploy:
 - `Dockerfile` - Multi-stage production build
 - `Dockerfile.dev` - Development environment
 - `Dockerfile.simple` - Fallback with inline Zig installation
-- `Dockerfile.prod` - Distroless production image
 - `docker-compose.yml` - Standard deployment
 - `docker-compose.dev.yml` - Development orchestration
 - `docker-compose.distributed.yml` - 3-node cluster

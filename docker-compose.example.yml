@@ -6,7 +6,7 @@ services:
     image: geode:latest
     build:
       context: .
-      dockerfile: Dockerfile.prod
+      dockerfile: Dockerfile
     container_name: geode-example
     ports:
       - "3141:3141"  # QUIC+TLS
@@ -15,19 +15,27 @@ services:
       - ./migrations:/migrations:ro
       - ./certs:/certs
     environment:
-      - LOG_LEVEL=${LOG_LEVEL:-error}
-      - GEODE_LOG_JSON=true
       - GEODE_DATA_DIR=/data
-      - GEODE_CERT_PATH=/certs
+      # geode reads no LOG_LEVEL, GEODE_LOG_JSON or GEODE_CERT_PATH: the log
+      # level is `--log-level`, the certificate `--cert` / `--key` (or the
+      # config file's log_level, cert_path and key_path). SONNY-6435.
       # Extended type system is enabled by default
       # All indexes (Patricia, R-tree, HNSW) are automatically available
     ulimits:
       nproc:
         soft: 4096
         hard: 4096
-    pids_limit: 4096
+    deploy:
+      resources:
+        limits:
+          # SONNY-6453: here, not pids_limit, so a later deploy limit cannot
+          # conflict with it (Compose refuses both).
+          pids: 4096
     healthcheck:
-      test: ["CMD", "/usr/local/bin/geode query", "--host", "127.0.0.1", "--port", "3141", "RETURN 1"]
+      # SONNY-6442: the image's shared probe (GET /health on
+      # GEODE_METRICS_PORT). The exec-form program used to be the one string
+      # "/usr/local/bin/geode query", which does not exist.
+      test: ["CMD", "/usr/local/bin/health-check.sh"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -43,6 +51,9 @@ services:
         condition: service_healthy
     volumes:
       - ./migrations:/migrations:ro
+      # SONNY-6453: the CA that signed the server certificate; a release
+      # geode refuses to query without one (or the explicit insecure flag).
+      - ./certs:/certs:ro
     command: |
       sh -c "
         echo 'Waiting for Geode to be ready...'
@@ -50,15 +61,15 @@ services:
         echo 'Loading example dataset...'
         for file in /migrations/*.gql; do
           echo \"Loading $$file...\"
-          geode query --host geode --port 3141 < $$file || exit 1
+          geode query --host geode --port 3141 --ca-cert /certs/ca.crt < $$file || exit 1
         done
         echo 'Dataset loaded successfully!'
         echo 'Verifying data...'
-        geode query --host geode --port 3141 'MATCH (n) RETURN count(n) AS nodes'
-        geode query --host geode --port 3141 'MATCH ()-[r]->() RETURN count(r) AS edges'
+        geode query --host geode --port 3141 --ca-cert /certs/ca.crt 'MATCH (n) RETURN count(n) AS nodes'
+        geode query --host geode --port 3141 --ca-cert /certs/ca.crt 'MATCH ()-[r]->() RETURN count(r) AS edges'
         echo 'Example queries you can try:'
-        echo '  geode query --host localhost --port 3141 \"MATCH (u:User) WHERE u.verified = true RETURN u.username\"'
-        echo '  geode query --host localhost --port 3141 \"MATCH (d:Device) WHERE ip_is_private(d.ip_address) RETURN d.id, d.ip_address\"'
+        echo '  geode query --host localhost --port 3141 --ca-cert certs/ca.crt \"MATCH (u:User) WHERE u.verified = true RETURN u.username\"'
+        echo '  geode query --host localhost --port 3141 --ca-cert certs/ca.crt \"MATCH (d:Device) WHERE ip_is_private(d.ip_address) RETURN d.id, d.ip_address\"'
         echo 'Dataset loading complete!'
       "
     networks:

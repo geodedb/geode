@@ -98,6 +98,19 @@
 - Federation system (src/distributed/federation.zig - 1,171 lines)
 - Raft consensus (src/distributed/raft.zig - 1,689 lines)
 **Total Implementation:** 10,451 lines of distributed code
+
+> **Correction (2026-11-15, SONNY-6592):** none of the five files above is
+> delivered. No build artifact compiled `query_transport.zig`,
+> `enhanced_query_coordinator.zig` or `federation.zig` (removed in
+> SONNY-6279, `78362bdae`), the old string-ID Raft shim `raft.zig` (removed
+> in SONNY-6298, `2003d5fd0`), or `network_transport.zig` (removed in
+> SONNY-6563, `ba55c57f8`). The server's distributed code is the Raft
+> cluster in `src/distributed/` (`cluster.zig`, `raft_consensus.zig` over the
+> external `raft` library, `raft_apply.zig`, `txn_coordinator.zig`; the full
+> list is `src/distributed/README.md`). There is no federation, scatter-gather
+> or distributed query coordination in the server
+> (docs/DISTRIBUTED_QUERY_COORDINATION.md); the line count and the feature
+> list below describe the removed code.
 **Features:**
 - QUIC-based cluster networking
 - Sophisticated query optimization

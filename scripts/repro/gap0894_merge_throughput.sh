@@ -31,7 +31,7 @@ set -euo pipefail
 
 BIN="${GEODE_BIN:-./zig-out/bin/geode}"
 PORT="${GEODE_PORT:-3197}"
-PW="${GEODE_ADMIN_PASSWORD:-gap0894-probe-pw}"
+PW="${GEODE_ADMIN_PASSWORD:-Gap Merge Throughput Probe Passphrase}"
 N="${N:-80}"
 DATA="$(mktemp -d)"
 LOG="$(mktemp)"

@@ -8,10 +8,14 @@
 //   through gps.decide(.bind_graph)) make every assertion GREEN.
 
 const std = @import("std");
+const builtin = @import("builtin");
+const geode_test_bin = @import("geode_test_bin");
 const testing = std.testing;
 const util = @import("proto_test_util.zig");
 
 test "QUIC HELLO graph-bind RBAC: non-admin may not bind ungranted graph (cross-graph BOLA)" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
 
     // Persistent data-dir required: user + grant DDL must survive across the
@@ -28,7 +32,7 @@ test "QUIC HELLO graph-bind RBAC: non-admin may not bind ungranted graph (cross-
 
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir },
         util.TestEnv.standard(),
     );
     defer server.deinit();
@@ -47,7 +51,7 @@ test "QUIC HELLO graph-bind RBAC: non-admin may not bind ungranted graph (cross-
         r1.deinit(allocator);
         var r2 = try admin.executeAndCollect(allocator, "CREATE GRAPH graph_b", util.emptyParams(), 10);
         r2.deinit(allocator);
-        var r3 = try admin.executeAndCollect(allocator, "CREATE USER alice SET PASSWORD 'Alice123!' ROLE readonly", util.emptyParams(), 10);
+        var r3 = try admin.executeAndCollect(allocator, "CREATE USER alice SET PASSWORD 'Alice Cross Graph Passphrase' ROLE readonly", util.emptyParams(), 10);
         r3.deinit(allocator);
         var r4 = try admin.executeAndCollect(allocator, "GRANT READ ON GRAPH graph_a TO alice", util.emptyParams(), 10);
         r4.deinit(allocator);
@@ -59,7 +63,7 @@ test "QUIC HELLO graph-bind RBAC: non-admin may not bind ungranted graph (cross-
     {
         var client = try util.QuicProtoClient.connect(allocator, addr);
         defer client.deinit();
-        var h = try client.helloWithGraph(allocator, "alice", "Alice123!", "graph_b");
+        var h = try client.helloWithGraph(allocator, "alice", "Alice Cross Graph Passphrase", "graph_b");
         defer h.deinit(allocator);
         if (h.success) std.debug.print("BOLA: alice bound graph_b without a grant (pre-fix fail-open)\n", .{});
         try testing.expect(!h.success); // <- RED pre-fix
@@ -69,7 +73,7 @@ test "QUIC HELLO graph-bind RBAC: non-admin may not bind ungranted graph (cross-
     {
         var client = try util.QuicProtoClient.connect(allocator, addr);
         defer client.deinit();
-        var h = try client.helloWithGraph(allocator, "alice", "Alice123!", "graph_a");
+        var h = try client.helloWithGraph(allocator, "alice", "Alice Cross Graph Passphrase", "graph_a");
         defer h.deinit(allocator);
         if (!h.success) std.debug.print("grant assertion: alice denied graph_a unexpectedly: {s}\n", .{h.error_message});
         try testing.expect(h.success);
@@ -81,7 +85,7 @@ test "QUIC HELLO graph-bind RBAC: non-admin may not bind ungranted graph (cross-
     {
         var client = try util.QuicProtoClient.connect(allocator, addr);
         defer client.deinit();
-        var h = try client.helloWithGraph(allocator, "alice", "Alice123!", "default");
+        var h = try client.helloWithGraph(allocator, "alice", "Alice Cross Graph Passphrase", "default");
         defer h.deinit(allocator);
         if (!h.success) std.debug.print("compat: alice denied default graph: {s}\n", .{h.error_message});
         try testing.expect(h.success);
@@ -92,13 +96,15 @@ test "QUIC HELLO graph-bind RBAC: non-admin may not bind ungranted graph (cross-
     {
         var client = try util.QuicProtoClient.connect(allocator, addr);
         defer client.deinit();
-        var h = try client.hello(allocator, "alice", "Alice123!");
+        var h = try client.hello(allocator, "alice", "Alice Cross Graph Passphrase");
         defer h.deinit(allocator);
         try testing.expect(h.success);
     }
 }
 
 test "QUIC HELLO race-recovery path: ReadOnly user bind to existing ungranted graph is denied" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // NOTE: This test covers the existing-graph deny path. The race-recovery sub-path guard
     // (lines 5904-5915) rests on code-symmetry with this path + the guard added in this commit.
     // The race cannot be triggered deterministically; the guard mirrors the block at
@@ -117,7 +123,7 @@ test "QUIC HELLO race-recovery path: ReadOnly user bind to existing ungranted gr
 
     var server = try util.spawnServer(
         allocator,
-        &.{ "./zig-out/bin/geode", "serve", "--listen", addr, "--data-dir", data_dir },
+        &.{ geode_test_bin.geode_exe, "serve", "--listen", addr, "--data-dir", data_dir },
         util.TestEnv.standard(),
     );
     defer server.deinit();
@@ -136,7 +142,7 @@ test "QUIC HELLO race-recovery path: ReadOnly user bind to existing ungranted gr
         r1.deinit(allocator);
         var r2 = try admin.executeAndCollect(allocator, "CREATE GRAPH graph_c", util.emptyParams(), 10);
         r2.deinit(allocator);
-        var r3 = try admin.executeAndCollect(allocator, "CREATE USER bob SET PASSWORD 'Bobby123!' ROLE readonly", util.emptyParams(), 10);
+        var r3 = try admin.executeAndCollect(allocator, "CREATE USER bob SET PASSWORD 'Bobby Cross Graph Passphrase' ROLE readonly", util.emptyParams(), 10);
         r3.deinit(allocator);
         var r4 = try admin.executeAndCollect(allocator, "GRANT READ ON GRAPH graph_a TO bob", util.emptyParams(), 10);
         r4.deinit(allocator);
@@ -150,7 +156,7 @@ test "QUIC HELLO race-recovery path: ReadOnly user bind to existing ungranted gr
     {
         var client = try util.QuicProtoClient.connect(allocator, addr);
         defer client.deinit();
-        var h = try client.helloWithGraph(allocator, "bob", "Bobby123!", "graph_c");
+        var h = try client.helloWithGraph(allocator, "bob", "Bobby Cross Graph Passphrase", "graph_c");
         defer h.deinit(allocator);
         if (h.success) std.debug.print("SECURITY: bob bound graph_c without a grant\n", .{});
         try testing.expect(!h.success); // Access denied — no grant on graph_c
@@ -160,7 +166,7 @@ test "QUIC HELLO race-recovery path: ReadOnly user bind to existing ungranted gr
     {
         var client = try util.QuicProtoClient.connect(allocator, addr);
         defer client.deinit();
-        var h = try client.helloWithGraph(allocator, "bob", "Bobby123!", "graph_a");
+        var h = try client.helloWithGraph(allocator, "bob", "Bobby Cross Graph Passphrase", "graph_a");
         defer h.deinit(allocator);
         if (!h.success) std.debug.print("grant assertion: bob denied graph_a unexpectedly: {s}\n", .{h.error_message});
         try testing.expect(h.success);

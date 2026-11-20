@@ -10,6 +10,7 @@
 // Real store, real parser, real executor — no mocks.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const testing = std.testing;
 const geode = @import("geode");
 
@@ -83,6 +84,8 @@ const Harness = struct {
 };
 
 test "GAP-0811b: sum(p.age) label-index scan without materialize" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     // The result-correctness assertions (row count, expected sum) run
     // unconditionally so the fast path is regression-covered everywhere.
     // The 10 ms latency budget at the bottom is what's noise-sensitive on
@@ -131,6 +134,8 @@ test "GAP-0811b: sum(p.age) label-index scan without materialize" {
 }
 
 test "GAP-0811b: avg(p.age) returns correct decimal" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
@@ -159,6 +164,8 @@ test "GAP-0811b: avg(p.age) returns correct decimal" {
 }
 
 test "GAP-0811b: min/max on same property" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
@@ -183,6 +190,8 @@ test "GAP-0811b: min/max on same property" {
 }
 
 test "GAP-0811b: WHERE p.age > K narrows the scan" {
+    // SONNY-6770: Linux-only (raw syscalls or /proc); skipped on macOS.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 

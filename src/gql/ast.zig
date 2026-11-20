@@ -94,6 +94,15 @@ pub const Query = struct {
     detach_delete: bool = false,
     group_by: ?GroupBy = null,
     having: ?Expr = null,
+    // CANARY: REQ=REQ-SONNY-2698-GROUPING-STAGE; FEATURE="StageOwnedGrouping"; ASPECT=ParserRecords; STATUS=TESTED; TEST=tests/test_sonny2672_read_semantics_batch.zig; OWNER=parser; UPDATED=2026-11-12
+    // SONNY-2698: `group_by` and `having` were written after the RETURN
+    // items (a GROUP BY, or a WHERE after RETURN), so they are the RETURN's
+    // even when the part has a WITH. ISO/IEC 39075:2024 14.11: a <group by
+    // clause> is part of the <return statement body>. When false, a part
+    // with a WITH gives them to the WITH (written between the WITH and the
+    // RETURN, a Geode extension). The parser keeps one grouping per part and
+    // refuses a second (`withStageGroupBy`, `returnStageGroupBy`).
+    return_grouping: bool = false,
     ret: ReturnClause,
     order_by: ?OrderBy,
     limit: ?usize,
@@ -154,12 +163,50 @@ pub const Query = struct {
     // it joined with the MATCH's and it filters the whole row, not only the
     // optional part, so the write-shape allowlist refuses a write after one.
     optional_where: bool = false,
+    // SONNY-3184, SONNY-6337: the MATCH and OPTIONAL MATCH clauses of the
+    // part, in order: each owns `match.chains[previous end..end]` and the
+    // WHERE written after it. `where_clause` keeps them all joined by AND for
+    // every other reader; the OPTIONAL MATCH executor needs each one, since
+    // an OPTIONAL MATCH's WHERE restricts its own match only. Empty when the
+    // parser recorded none (no MATCH, or an `OPTIONAL { }` block first).
+    match_clauses: []const MatchClause = &.{},
     // SONNY-3242 (round-3 review I2): where each SET clause in `set_clauses`
     // ends, when the part has more than one (`SET a.x = 1 SET a.y = a.x` is two
     // clauses, the second reading what the first wrote); empty for one clause
     // or none. Every value of one clause is evaluated against the bindings as
     // they stood before it, then its assignments apply (`SetClauseGroups`).
     set_clause_ends: []const usize = &.{},
+
+    /// SONNY-2698: the GROUP BY the part's WITH applies, if any.
+    pub fn withStageGroupBy(self: Query) ?GroupBy {
+        if (self.with_clause == null or self.return_grouping) return null;
+        return self.group_by;
+    }
+
+    /// The HAVING the part's WITH applies: its GROUP BY's.
+    pub fn withStageHaving(self: Query) ?Expr {
+        return if (self.withStageGroupBy() != null) self.having else null;
+    }
+
+    /// SONNY-2698: the GROUP BY the part's RETURN applies, if any.
+    pub fn returnStageGroupBy(self: Query) ?GroupBy {
+        return if (self.withStageGroupBy() == null) self.group_by else null;
+    }
+
+    /// The HAVING the part's RETURN applies: its GROUP BY's, or a WHERE
+    /// after the RETURN (a HAVING with no GROUP BY, SONNY-2667).
+    pub fn returnStageHaving(self: Query) ?Expr {
+        return if (self.withStageGroupBy() == null) self.having else null;
+    }
+};
+
+/// SONNY-3184: one MATCH or OPTIONAL MATCH clause of a query part
+/// (`Query.match_clauses`): the chains up to `end` (from the previous
+/// clause's end) and its own WHERE.
+pub const MatchClause = struct {
+    optional: bool,
+    end: usize,
+    where: ?Expr = null,
 };
 
 // CANARY: REQ=REQ-SONNY-3242-SET-SEMANTICS; FEATURE="SetClauseSemantics"; ASPECT=ClauseGroups; STATUS=TESTED; TEST=tests/test_sonny_write_allowlist_r4.zig; OWNER=parser; UPDATED=2026-09-28
@@ -495,7 +542,15 @@ pub const MergeStatement = struct {
 pub const CallProcedure = struct {
     procedure: Expr, // Function call expression: db.labels()
     yield_items: ?[]ReturnItem = null, // YIELD clause items
+    // SONNY-6460: the FILTER statements after the call (ISO/IEC 39075:2024
+    // 14.6), their conditions ANDed; a row is kept only when it is True. A
+    // pointer: an inline Expr grew every Query and parseQuery frame.
+    filter: ?*const Expr = null,
     return_clause: ?ReturnClause = null, // Optional RETURN clause
+    // SONNY-6596: the RETURN's GROUP BY and HAVING (ISO/IEC 39075:2024
+    // 14.11: the <group by clause> is part of the <return statement body>).
+    group_by: ?GroupBy = null,
+    having: ?*const Expr = null,
     order_by: ?OrderBy = null, // ORDER BY clause
     limit: ?usize = null, // LIMIT clause
     offset: ?usize = null, // OFFSET clause
@@ -518,6 +573,8 @@ pub const CallStatement = union(enum) {
 pub const CallClause = struct {
     procedure: Expr, // Function call expression: algo.bfs.stream(node)
     yield_items: ?[]ReturnItem = null, // YIELD clause items (required for MATCH+CALL)
+    // SONNY-6460: the FILTER statements after the call, as `CallProcedure.filter`.
+    filter: ?*const Expr = null,
 };
 
 pub const SetClause = union(enum) {
@@ -587,6 +644,12 @@ pub const SessionParameterName = struct {
     specification: []const u8, // parameter specification
 };
 
+/// SONNY-6727: the callee name the parser gives CURRENT_GRAPH and
+/// CURRENT_PROPERTY_GRAPH when they are value expressions; the evaluator
+/// answers it with the session's graph name. The `__` prefix keeps it out of
+/// the variable scope check and out of the user-callable function namespace.
+pub const session_graph_value_fn = "__current_graph";
+
 pub const SessionResetStatement = struct {
     arguments: ?SessionResetArguments = null,
 };
@@ -654,7 +717,7 @@ pub const DropConstraintStatement = struct {
 
 pub const ShowStatement = struct {
     show_type: ShowType,
-    /// Optional target for SHOW PERMISSIONS FOR <username>; null for all other SHOW forms.
+    /// Optional target for SHOW PERMISSIONS / SHOW GRANTS FOR <username>; null otherwise.
     target: ?[]const u8 = null,
 };
 
@@ -672,7 +735,8 @@ pub const ShowType = enum {
     capabilities,
     policies,
     // CANARY: REQ=REQ-GPS-DDL-004; FEATURE="GPS SHOW GRANTS FOR"; ASPECT=ShowTypeGrantsFor; STATUS=TESTED; TEST=tests/test_gps_show_grants_for.zig; OWNER=security; UPDATED=2026-05-21
-    /// SHOW GRANTS FOR <username>: ShowStatement.target holds the username.
+    /// SHOW GRANTS [FOR <username>]: ShowStatement.target holds the username,
+    /// null for the current user (SONNY-1333).
     grants_for,
     // CANARY: REQ=REQ-DIST-SHOW-CLUSTER-STATUS; FEATURE="SHOW CLUSTER STATUS"; ASPECT=ShowTypeClusterStatus; STATUS=TESTED; TEST=tests/test_show_cluster_status.zig; OWNER=distributed; UPDATED=2026-05-26
     /// SHOW CLUSTER STATUS: returns one row per cluster member (node_id,
@@ -741,7 +805,7 @@ pub const DropGraphStatement = struct {
 };
 
 // Field-Level Encryption AST Extensions
-// CANARY: REQ=REQ-FLE-AST-001; FEATURE="FieldLevelEncryption"; ASPECT=AST; STATUS=TESTED; TEST=tests/test_tde_kms_integration.zig; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-FLE-AST-001; FEATURE="FieldLevelEncryption"; ASPECT=AST; STATUS=TESTED; TEST=tests/test_sonny6321_tde_fle_cases.zig; OWNER=security; UPDATED=2026-11-12
 
 /// Field annotation for FLE (e.g., @encrypted, @searchable)
 pub const FieldAnnotation = struct {

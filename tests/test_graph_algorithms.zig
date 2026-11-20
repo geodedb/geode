@@ -9,7 +9,7 @@ test "Graph store - create and retrieve nodes" {
     defer store.deinit();
 
     // Clear any existing data
-    store.clearNodes();
+    try store.clearNodes();
 
     // Create a node with label
     const labels = [_][]const u8{"TestNode"};
@@ -35,7 +35,7 @@ test "Graph store - create edges between nodes" {
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
-    store.clearNodes();
+    try store.clearNodes();
 
     // Create two nodes
     const labels_a = [_][]const u8{"NodeA"};
@@ -68,7 +68,7 @@ test "Graph store - set and get node properties" {
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
-    store.clearNodes();
+    try store.clearNodes();
 
     // Create a node
     const labels = [_][]const u8{"Person"};
@@ -111,7 +111,7 @@ test "Graph store - get outgoing edges" {
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
-    store.clearNodes();
+    try store.clearNodes();
 
     // Create a star pattern: center connected to three spokes
     const center_labels = [_][]const u8{"Center"};
@@ -130,7 +130,7 @@ test "Graph store - get outgoing edges" {
     _ = try store.createEdge(center, spoke3, "CONNECTS");
 
     // Get outgoing edges from center
-    const outgoing = store.getEdgesFrom(allocator, center);
+    const outgoing = try store.getEdgesFrom(allocator, center);
     defer allocator.free(outgoing);
 
     // Should have 3 outgoing edges
@@ -160,7 +160,7 @@ test "Graph store - clear nodes" {
     try testing.expect(store.nodes.count() > 0);
 
     // Clear nodes
-    store.clearNodes();
+    try store.clearNodes();
 
     // Verify nodes are cleared
     try testing.expectEqual(@as(u32, 0), store.nodes.count());
@@ -173,7 +173,7 @@ test "Graph store - count edges for degree calculation" {
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
 
-    store.clearNodes();
+    try store.clearNodes();
 
     // Create a triangle graph
     const labels = [_][]const u8{"Node"};

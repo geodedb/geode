@@ -30,7 +30,7 @@ endif
 .PHONY: all build release install install-tuning test integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test test-all-integration dataset-integration-test load-dataset fuzz bench tools doccheck clean cert-gen fmt ci help check-openssl test-mermaid-integration
 .PHONY: goreleaser goreleaser-test goreleaser-snapshot goreleaser-check
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
-.PHONY: canary canary-verify go-test-fips governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate match-ops-parity match-ops-bench cli-transport-parity stdio-abstraction-check release-target-manifest-check docker-release-sync docker-release-check docker-release-signoff docker-healthcheck-test
+.PHONY: canary canary-verify go-test-fips governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate match-ops-parity match-ops-bench cli-transport-parity stdio-abstraction-check release-target-manifest-check docker-release-sync docker-release-check docker-release-signoff docker-healthcheck-test cross-gate-status-test
 .PHONY: test-shim test-fips test-dual test-fips-seam
 .PHONY: telemetry-smoke quic-smoke quic-smoke-strict quic-test client-test-zig
 .PHONY: transport-parity-smokes status-generate status-csv status-generate-test no-feature-flags zig-package-cache-check cluster-test
@@ -83,6 +83,7 @@ help:
 	@echo "  make release-target-manifest-check - Ensure CI/GoReleaser target manifest is in sync"
 	@echo "  make docker-release-check - Ensure release Dockerfiles match generated manifest"
 	@echo "  make docker-healthcheck-test - Verify the shipped Docker HEALTHCHECK probe contract"
+	@echo "  make cross-gate-status-test - Verify cross-build and zig-test pre-push gates (status, CPU budget)"
 	@echo ""
 	@echo "Test targets:"
 	@echo "  make test        - Run all tests (Zig + QUIC)"
@@ -456,6 +457,8 @@ docker-release-sync:
 
 docker-release-check:
 	@python3 tools/release_dockerfile_manifest.py check --manifest release/dockerfile_manifest.json --repo-root .
+	@python3 tests/test_sonny4884_release_image_runtime_compat.py
+	@python3 tests/test_sonny4885_fips_release_runtime_compat.py
 
 docker-release-signoff:
 	@python3 tools/release_dockerfile_manifest.py signoff --manifest release/dockerfile_manifest.json --repo-root . --output /tmp/release-dockerfile-signoff.txt
@@ -466,6 +469,15 @@ docker-release-signoff:
 # no docker daemon, no network, no live server.
 docker-healthcheck-test:
 	@python3 tests/test_dockerfile_health_check.py
+
+## cross-gate-status-test: required cross-build gates propagate failures (SONNY-4911)
+# and the zig-test pre-push shards fit one CPU budget (SONNY-4920).
+# Hermetic: runs the cross-* targets with a stub zig, the cross-compile-check
+# hook command with a stub make, and the zig-test hook command with stub zig
+# and nproc — no real cross-compile or Zig build.
+cross-gate-status-test:
+	@python3 tests/test_sonny4911_cross_gate_status.py
+	@python3 tests/test_sonny4920_prepush_shard_budget.py
 
 # Run Zig unit tests (fast, used by pre-push hooks)
 test:
@@ -667,6 +679,7 @@ governance-check:
 	@$(MAKE) release-target-manifest-check
 	@$(MAKE) docker-release-check
 	@$(MAKE) docker-healthcheck-test
+	@$(MAKE) cross-gate-status-test
 	@python3 tools/zig_package_cache_guard.py --strict-stale
 	@echo "Governance check completed"
 
@@ -727,15 +740,17 @@ quic-status:
 		echo "Run: git submodule update --init --recursive"; \
 	fi
 
-# Generate TLS certificates
+# Generate TLS certificates into CERT_DIR (default ./certs; cert_gen has no
+# default directory, SONNY-6325).
+CERT_DIR ?= certs
 cert-gen: build
 	@if [ -f "./zig-out/bin/cert_gen" ]; then \
-		./zig-out/bin/cert_gen; \
+		./zig-out/bin/cert_gen "$(CERT_DIR)"; \
 	else \
 		echo "cert_gen not found, building it..."; \
 		$(ZIG) build $(ZIG_FLAGS); \
 		if [ -f "./zig-out/bin/cert_gen" ]; then \
-			./zig-out/bin/cert_gen; \
+			./zig-out/bin/cert_gen "$(CERT_DIR)"; \
 		else \
 			echo "cert_gen build failed"; \
 		fi \
@@ -1100,11 +1115,13 @@ cross-linux-riscv64:
 	@echo "✓ Linux RISC-V 64-bit build successful"
 
 # Cross-compile for macOS x86_64
+# SONNY-4911: both macOS recipes run Zig inside an `if`; make's `sh -c` has no
+# -e, so the success echo is chained with && to keep the compiler's status.
 cross-macos-x86_64:
 	@echo "Cross-compiling for macOS x86_64..."
 	@# Only run on non-macOS systems or when on ARM macOS
 	@if [ "$$(uname)" != "Darwin" ] || [ "$$(uname -m)" = "arm64" ]; then \
-		$(ZIG) build -Dtarget=x86_64-macos -p zig-out/macos-x86_64 $(ZIG_FLAGS); \
+		$(ZIG) build -Dtarget=x86_64-macos -p zig-out/macos-x86_64 $(ZIG_FLAGS) && \
 		echo "✓ macOS x86_64 build successful"; \
 	else \
 		echo "Skipping macOS x86_64 cross-compile on x86_64 macOS"; \
@@ -1115,7 +1132,7 @@ cross-macos-arm64:
 	@echo "Cross-compiling for macOS ARM64..."
 	@# Only run on non-macOS systems or when on Intel macOS
 	@if [ "$$(uname)" != "Darwin" ] || [ "$$(uname -m)" = "x86_64" ]; then \
-		$(ZIG) build -Dtarget=aarch64-macos -p zig-out/macos-arm64 $(ZIG_FLAGS); \
+		$(ZIG) build -Dtarget=aarch64-macos -p zig-out/macos-arm64 $(ZIG_FLAGS) && \
 		echo "✓ macOS ARM64 build successful"; \
 	else \
 		echo "Skipping macOS ARM64 cross-compile on ARM64 macOS"; \
@@ -1242,14 +1259,6 @@ docker-build:
 		echo "Failed to build Docker image" && exit 1; \
 	fi
 	@echo "Docker images built successfully"
-
-docker-build-prod:
-	@echo "Building production Docker image..."
-	@if [ -f "Dockerfile.prod" ]; then \
-		docker build -t geode:prod -f Dockerfile.prod .; \
-	else \
-		echo "Dockerfile.prod not found, skipping production build"; \
-	fi
 
 docker-up-singleton: docker-build
 	@echo "Starting Geode singleton container..."
@@ -1698,7 +1707,7 @@ test-mermaid-integration:
 
 otel-compose-up: ## Build geode + bring up the geode/collector otel stack
 	zig build -Doptimize=ReleaseSafe
-	GEODE_OTEL_PASSWORD="$${GEODE_OTEL_PASSWORD:-$$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')}" \
+	GEODE_OTEL_PASSWORD="$${GEODE_OTEL_PASSWORD:-Otel Compose $$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n') Passphrase}" \
 		docker compose -f docker-compose.otel.yml up --build -d
 
 otel-compose-verify: ## Run the end-to-end telemetry verification (metrics land in collector)

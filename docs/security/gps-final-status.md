@@ -128,9 +128,12 @@ live list. As of Phase 7, the shipped families and their coverage are:
 - **ALTER POLICY persistence.** ALTER mutations are in-memory only; a server
   restart resets enabled/disabled state to the persisted value. Needs a
   write-through hook in `policy_persistence.zig`.
-- **Multi-step EXPLAIN POLICY.** Phase 7 classifies only the first top-level
-  action. Compound queries (e.g. `MATCH … DELETE`) need multi-action
-  classification.
+- ~~**Multi-step EXPLAIN POLICY.**~~ Done (SONNY-6313): EXPLAIN POLICY
+  reports every question the read and write gates ask for the statement,
+  per graph and per action (e.g. `MATCH … DELETE`: `match_` then
+  `delete`), for the session's graph, and (SONNY-6369) the executor's own
+  checks: the procedure gate, the DDL schema gates and the USE GRAPH bind
+  check.
 - **Remove `graph_grant_check_fn` field entirely.** Phase 7 removed the
   widening consumer inside `decide()`; the function-pointer field itself remains
   for back-compat until all call sites are confirmed dead.

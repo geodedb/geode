@@ -13,7 +13,7 @@ fn compat_milliTimestamp() i64 {
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
 
-// CANARY: REQ=REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC; FEATURE="ConnectionPool"; ASPECT=RateLimitPredicate; STATUS=TESTED; TEST=tests/test_gap0928_pool_exhausted.zig; OWNER=transport; UPDATED=2026-07-10
+// CANARY: REQ=REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC; FEATURE="ConnectionPool"; ASPECT=RateLimitPredicate; STATUS=TESTED; TEST=test-gap0927; OWNER=transport; UPDATED=2026-11-12
 /// GAP-0928: rate-limit the POOL_EXHAUSTED diagnostic to at most once per
 /// `pool_exhausted_log_window_ms` while the pool stays at capacity. Pure and
 /// unit-testable — it reads no clock. `last_log_ms == 0` means "never logged"
@@ -127,21 +127,16 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const posix = std.posix;
 const geode = @import("geode");
-const impl_flagger = geode.impl_flagger;
 const diagnostics = @import("geode").diagnostics;
 const eval = geode.eval;
 const eval_extended = geode.eval_ext;
-const exec = geode.exec;
-const txn_mgr = @import("txn");
 const SelectivityEstimator = @import("index_selectivity").SelectivityEstimator;
-const TextFormatter = @import("text_formatter").TextFormatter;
 const quic_transport = @import("transport/quic");
 const grpc_transport = @import("../transport/grpc_server.zig");
 const thread_pool = @import("transport/thread_pool");
 const cert_gen = @import("../tools/cert_gen.zig");
 const query_ast_cache = @import("query_ast_cache");
 // Note: cert_gen now imported for certificate generation (M3.2 Phase 3 CLI extraction)
-// const mvcc = @import("server/txn/mvcc.zig");
 // const logger = @import("log/logger.zig");
 const query_plan_cache = geode.query_plan_cache;
 
@@ -267,6 +262,23 @@ const default_quic_acceptor_worker_count = 64;
 const default_quic_connection_worker_count = 64;
 const default_quic_detached_first_stream_threads = if (builtin.mode == .Debug) 64 else 256;
 const default_quic_cooperative_first_stream_worker_count = if (builtin.mode == .Debug) 16 else 512;
+
+// CANARY: REQ=REQ-SONNY-6466-CONN-STALL-CANCEL; FEATURE="QUIC Abandoned Read Cancellation"; ASPECT=ConfigurableConnectionStallThreshold; STATUS=TESTED; TEST=tests/test_sonny6466_abandoned_read_cancel.zig; OWNER=transport; UPDATED=2026-11-13
+//
+// SONNY-6466: the per-connection stall watchdog's threshold
+// (GEODE_QUIC_STALL_CANCEL_MS). A client that vanishes without a
+// CONNECTION_CLOSE (a crash, a pulled cable) sends nothing more, and vendored
+// quic (still on v0.1.51: `connection/idle.zig` is not wired and the
+// dead-connection reaper is opt-in) neither sends PINGs nor enforces the
+// idle timeout it advertises, so the server cannot tell it from a quiet live client. What it
+// can see is a connection on which no stream has read a message for this
+// long: the watchdog then cancels that connection's in-flight reads (57014).
+// The same bound therefore caps a single read that runs this long on a
+// connection with no other stream reading — set it above the longest read
+// you run. Checked every 5 s, so a cancel lands up to 5 s after it.
+const default_conn_stall_cancel_ms: usize = 60_000;
+const min_conn_stall_cancel_ms: usize = 1_000;
+const max_conn_stall_cancel_ms: usize = 3_600_000;
 // ENG-3914 (RC-4): the Debug default used to be 1 ("deterministic local
 // traces"). ONE endpoint poll worker serialises datagram delivery for EVERY
 // connection, and the stall is not linear — measured on this repo's Debug
@@ -327,13 +339,6 @@ const min_quic_admission_stack_mb: usize = 8;
 const max_quic_admission_stack_mb: usize = 512 * 1024 * 1024;
 var g_quic_admission_stack_size: usize = default_quic_admission_stack_mb * 1024 * 1024;
 
-// Process-global AuthProvider used by the embedded LSP TCP listener to
-// authenticate `initialize` bearer / session tokens.  `null` until the
-// server bootstraps it (and stays `null` if `--lsp-port=0`), in which
-// case the listener stays fail-closed.  The provider lives for the
-// lifetime of the server process — we never tear it down because the
-// listener and accepted sessions hold borrowed pointers into it.
-var g_lsp_auth_provider: ?*authn_mod.AuthProvider = null;
 // ENG-3979: the `__geode_security`-backed PersistentUserResolver callbacks
 // (and their role/duplication helpers) live in a dedicated module so the
 // regression suite can drive the REAL callbacks — the seam where a mutating
@@ -354,7 +359,6 @@ const ConnectionContext = struct {
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
-    env_spill_threshold: usize,
     env_storage_checksum_error: bool,
     security_manager: ?*geode_auth.SecurityManager,
     shared_ast_cache: ?*query_ast_cache.SharedAstCache,
@@ -455,7 +459,6 @@ fn handleConnectionAsync(context: *anyopaque) void {
         ctx.disable_estimates,
         ctx.compact_profile,
         ctx.memcurve_profile,
-        ctx.env_spill_threshold,
         ctx.env_storage_checksum_error,
         false,
         ctx.security_manager,
@@ -499,31 +502,150 @@ fn runLeakedConnReaper(context: *anyopaque) void {
 // `main()` once the QUIC server is up. It owns its own
 // `std.Io.Threaded` instance for the lifetime of the listener so the
 // `Io` vtable handed to the listener and to every accepted stream is
-// stable. Each accepted connection is dispatched to a detached
-// `runLspSession` thread — multiple LSP clients can therefore have
-// concurrent sessions, which is what enables a geode-ui tab plus a
-// terminal editor (or two browser tabs) to drive the LSP at the same
-// time without serializing on a single accept-and-run loop the way
-// standalone `geode lsp --listen` does.
+// stable. Each accepted connection is dispatched to a `runLspSession`
+// thread — multiple LSP clients can therefore have concurrent sessions,
+// which is what enables a geode-ui tab plus a terminal editor (or two
+// browser tabs) to drive the LSP at the same time without serializing on
+// a single accept-and-run loop the way standalone `geode lsp --listen`
+// does.
 //
-// Auth caveat: `verifier = null` and `allow_unauth = false` mean the
-// session is fail-closed. Until the AuthProvider→Verifier adapter
-// lands (follow-up task tracked in the plan), this listener is bound
-// but cannot satisfy any client's initialize request. See
-// `runLspSession`'s in-body TODO.
-const LspListenerArgs = struct {
+// Every session verifies its `initialize` against `provider` (a token,
+// through `verifier`) or the user store (a user name and password, as a
+// QUIC HELLO, SONNY-6589); the TCP-embedded path always requires auth.
+//
+// CANARY: REQ=REQ-SONNY-6374-LSP-AUTH-PROVIDER-LIFETIME; FEATURE="Embedded LSP"; ASPECT=ListenerOwnsProviderLifetime; STATUS=TESTED; TEST=tests/test_sonny6374_lsp_auth_provider_lifetime.zig; OWNER=lsp; UPDATED=2026-11-12
+// SONNY-6374: the provider used to be freed by a `defer` inside the `if`
+// block that spawned the listener, i.e. as soon as the thread had started,
+// so every session's verifier read freed memory (a debug server panicked on
+// the first `initialize`). `EmbeddedLsp` now owns the provider, the
+// listener thread and the live sessions together: `stop` wakes the accept
+// loop, the listener shuts down every open session's socket and waits for
+// the session threads to return, and only then is the provider freed. If a
+// session outlives the bounded drain, the provider (and the listener's Io)
+// is leaked deliberately rather than freed under it.
+const lsp_session_drain_timeout_ms: u64 = 5_000;
+
+const EmbeddedLsp = struct {
     allocator: std.mem.Allocator,
     port: u16,
     loopback_only: bool,
-    // Optional verifier installed into every accepted LSP session.
-    // `null` keeps the listener fail-closed (legacy behavior); a real
-    // verifier is built by `verifierFromAuthProvider(g_lsp_auth_provider)`
-    // when the server bootstraps an AuthProvider.
-    verifier: ?lsp_auth_mod.Verifier = null,
+    provider: *authn_mod.AuthProvider,
+    verifier: lsp_auth_mod.Verifier,
+    thread: ?std.Thread = null,
+    // Set by `stop`; the accept loop exits on the next accept.
+    stopping: std.atomic.Value(bool) = .init(false),
+    // Set by the listener thread as its last action.
+    finished: std.atomic.Value(bool) = .init(false),
+    // A session (or the listener) outlived the drain: nothing it may still
+    // touch is freed.
+    abandoned: std.atomic.Value(bool) = .init(false),
+    // Session threads that have not returned yet. Decremented as the last
+    // action of each session thread.
+    live_sessions: std.atomic.Value(usize) = .init(0),
+    // Open sessions whose sockets `stop` shuts down. A session removes
+    // itself before it closes its socket, so the listener never shuts down
+    // a closed (and possibly reused) descriptor.
+    sessions_mutex: std.Io.Mutex = .init,
+    sessions: std.ArrayList(*LspSessionArgs) = .empty,
+
+    fn create(allocator: std.mem.Allocator, port: u16, loopback_only: bool) !*EmbeddedLsp {
+        const provider = try allocator.create(authn_mod.AuthProvider);
+        errdefer allocator.destroy(provider);
+        // Empty stores: the server issues no API keys or session tokens
+        // (SONNY-6554), so every `initialize` token is rejected. Sessions
+        // log in with a user name and password instead (SONNY-6589,
+        // `lspCredentialsVerifyFn`).
+        provider.* = authn_mod.AuthProvider.init(allocator);
+        errdefer provider.deinit();
+        const self = try allocator.create(EmbeddedLsp);
+        self.* = .{
+            .allocator = allocator,
+            .port = port,
+            .loopback_only = loopback_only,
+            .provider = provider,
+            .verifier = lsp_auth_mod.verifierFromAuthProvider(provider),
+        };
+        return self;
+    }
+
+    fn start(self: *EmbeddedLsp) !void {
+        self.thread = try std.Thread.spawn(.{}, runLspListener, .{self});
+    }
+
+    fn unregister(self: *EmbeddedLsp, io: std.Io, session: *LspSessionArgs) void {
+        self.sessions_mutex.lockUncancelable(io);
+        defer self.sessions_mutex.unlock(io);
+        for (self.sessions.items, 0..) |s, i| {
+            if (s == session) {
+                _ = self.sessions.swapRemove(i);
+                return;
+            }
+        }
+    }
+
+    /// Unblock the listener's `accept` with a loopback connection, which the
+    /// listener closes on sight once `stopping` is set.
+    fn wakeAccept(self: *EmbeddedLsp) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", self.port) catch return;
+        const stream = addr.connect(io, .{ .mode = .stream }) catch return;
+        stream.close(io);
+    }
+
+    /// Stop accepting, close every open session and wait (bounded) for the
+    /// listener thread to return. Idempotent.
+    fn stop(self: *EmbeddedLsp) void {
+        if (self.thread == null) return;
+        const t0 = compat_milliTimestamp();
+        self.stopping.store(true, .release);
+        // The listener's own drain is bounded by
+        // lsp_session_drain_timeout_ms; allow it that plus a margin.
+        const deadline = t0 + @as(i64, @intCast(lsp_session_drain_timeout_ms)) + 2_000;
+        var next_wake: i64 = 0;
+        while (!self.finished.load(.acquire)) {
+            const now = compat_milliTimestamp();
+            if (now >= deadline) break;
+            // Repeat the wake: a stop that races the listener's bind can
+            // connect before it accepts.
+            if (now >= next_wake) {
+                self.wakeAccept();
+                next_wake = now + 250;
+            }
+            compat_sleepMs(10);
+        }
+        const thr = self.thread.?;
+        self.thread = null;
+        if (self.finished.load(.acquire)) {
+            thr.join();
+        } else {
+            self.abandoned.store(true, .release);
+            thr.detach();
+        }
+        if (self.abandoned.load(.acquire)) {
+            std.debug.print(
+                "[shutdown] LSP listener or {d} LSP session(s) still running after {d}ms; leaking the LSP AuthProvider to avoid use-after-free\n",
+                .{ self.live_sessions.load(.acquire), compat_milliTimestamp() - t0 },
+            );
+        } else {
+            std.debug.print("[shutdown] LSP listener stopped ({d}ms)\n", .{compat_milliTimestamp() - t0});
+        }
+    }
+
+    /// `stop`, then free the provider and this struct unless something that
+    /// borrows them is still running.
+    fn shutdown(self: *EmbeddedLsp) void {
+        self.stop();
+        if (self.abandoned.load(.acquire)) return;
+        self.sessions.deinit(self.allocator);
+        self.provider.deinit();
+        self.allocator.destroy(self.provider);
+        self.allocator.destroy(self);
+    }
 };
 
-fn runLspListener(args: LspListenerArgs) void {
-    const host: []const u8 = if (args.loopback_only) "127.0.0.1" else "0.0.0.0";
+fn runLspListener(self: *EmbeddedLsp) void {
+    defer self.finished.store(true, .release);
+    const host: []const u8 = if (self.loopback_only) "127.0.0.1" else "0.0.0.0";
 
     // LSP-SEC-008 / SEC-LSP-BIND-01: hard-assert the bind policy at the
     // layer that knows both the bind scope and the auth wiring. Embedded
@@ -533,13 +655,13 @@ fn runLspListener(args: LspListenerArgs) void {
     // listener without tripping this guard (and its regression test,
     // tests/test_gap0885_lsp_hardening.zig).
     lsp_server.validateBindPolicy(.{
-        .loopback_only = args.loopback_only,
+        .loopback_only = self.loopback_only,
         .allow_unauth = false,
-        .has_verifier = args.verifier != null,
+        .has_verifier = true,
     }) catch {
         log.err("LSP listener: refusing non-loopback bind without an authentication verifier (LSP-SEC-008)", &.{
             Attr.string("host", host),
-            Attr.int("port", @as(i64, args.port)),
+            Attr.int("port", @as(i64, self.port)),
         });
         return;
     };
@@ -548,21 +670,22 @@ fn runLspListener(args: LspListenerArgs) void {
     // `std.Io` vtable for the lifetime of the listener. A dedicated
     // `std.Io.Threaded` instance, owned by this thread, satisfies that
     // (same pattern as `metrics_server.zig` and the standalone
-    // `geode lsp --listen` path in `cli/main.zig`).
-    var threaded = std.Io.Threaded.init(args.allocator, .{});
-    defer threaded.deinit();
+    // `geode lsp --listen` path in `cli/main.zig`). Sessions that outlived
+    // the drain still use it, so it is then leaked with them.
+    var threaded = std.Io.Threaded.init(self.allocator, .{});
+    defer if (!self.abandoned.load(.acquire)) threaded.deinit();
     const io = threaded.io();
 
     // Zig 0.16 net stack: `std.Io.net.IpAddress.parse` handles v4 and
     // falls back to v6. We bind a numeric literal — no DNS — so the
     // narrow `parseIp4`/`parseIp6` fallbacks would also work, but
     // `parse` is the more forgiving entry point.
-    var bind_addr = std.Io.net.IpAddress.parse(host, args.port) catch
-        std.Io.net.IpAddress.parseIp4(host, args.port) catch
-        std.Io.net.IpAddress.parseIp6(host, args.port) catch {
+    var bind_addr = std.Io.net.IpAddress.parse(host, self.port) catch
+        std.Io.net.IpAddress.parseIp4(host, self.port) catch
+        std.Io.net.IpAddress.parseIp6(host, self.port) catch {
         log.err("LSP listener: failed to parse bind host", &.{
             Attr.string("host", host),
-            Attr.int("port", @as(i64, args.port)),
+            Attr.int("port", @as(i64, self.port)),
         });
         return;
     };
@@ -570,7 +693,7 @@ fn runLspListener(args: LspListenerArgs) void {
     var listener = std.Io.net.IpAddress.listen(&bind_addr, io, .{ .reuse_address = true }) catch |err| {
         log.err("LSP listener: bind failed", &.{
             Attr.string("host", host),
-            Attr.int("port", @as(i64, args.port)),
+            Attr.int("port", @as(i64, self.port)),
             Attr.string("error", @errorName(err)),
         });
         return;
@@ -579,74 +702,192 @@ fn runLspListener(args: LspListenerArgs) void {
 
     log.info("LSP server started", &.{
         Attr.string("address", host),
-        Attr.int("port", @as(i64, args.port)),
+        Attr.int("port", @as(i64, self.port)),
         Attr.string("transport", "tcp"),
     });
 
-    while (true) {
+    while (!self.stopping.load(.acquire)) {
         const accepted = listener.accept(io) catch |err| {
+            if (self.stopping.load(.acquire)) break;
             log.warn("LSP accept error", &.{Attr.string("error", @errorName(err))});
             continue;
         };
+        if (self.stopping.load(.acquire)) {
+            accepted.close(io);
+            break;
+        }
         // The session takes ownership of `accepted`. Spawning failure
         // means we still own it and must close it ourselves to avoid
         // leaking the FD.
-        const session_args = args.allocator.create(LspSessionArgs) catch {
+        const session_args = self.allocator.create(LspSessionArgs) catch {
             log.err("LSP session args alloc failed", &.{});
             accepted.close(io);
             continue;
         };
         session_args.* = .{
-            .allocator = args.allocator,
+            .owner = self,
+            .allocator = self.allocator,
             .io = io,
             .stream = accepted,
-            .verifier = args.verifier,
+            .verifier = self.verifier,
         };
+        session_args.setPeerIp(accepted.socket.address);
+        {
+            self.sessions_mutex.lockUncancelable(io);
+            defer self.sessions_mutex.unlock(io);
+            self.sessions.append(self.allocator, session_args) catch {
+                log.err("LSP session registry alloc failed", &.{});
+                accepted.close(io);
+                self.allocator.destroy(session_args);
+                continue;
+            };
+        }
+        _ = self.live_sessions.fetchAdd(1, .acq_rel);
         const thr = std.Thread.spawn(.{}, runLspSession, .{session_args}) catch |err| {
             log.err("LSP session spawn error", &.{Attr.string("error", @errorName(err))});
+            self.unregister(io, session_args);
+            _ = self.live_sessions.fetchSub(1, .acq_rel);
             accepted.close(io);
-            args.allocator.destroy(session_args);
+            self.allocator.destroy(session_args);
             continue;
         };
         thr.detach();
     }
+
+    // Shut down every open session's socket so its blocked read returns
+    // end-of-stream, then wait for the session threads to return before
+    // the Io (and, in `EmbeddedLsp.shutdown`, the provider) is freed.
+    {
+        self.sessions_mutex.lockUncancelable(io);
+        defer self.sessions_mutex.unlock(io);
+        for (self.sessions.items) |s| s.stream.shutdown(io, .both) catch {};
+    }
+    const deadline = compat_milliTimestamp() + @as(i64, @intCast(lsp_session_drain_timeout_ms));
+    while (self.live_sessions.load(.acquire) > 0 and compat_milliTimestamp() < deadline) {
+        compat_sleepMs(10);
+    }
+    if (self.live_sessions.load(.acquire) > 0) self.abandoned.store(true, .release);
 }
 
 const LspSessionArgs = struct {
+    owner: *EmbeddedLsp,
     allocator: std.mem.Allocator,
     io: std.Io,
     stream: std.Io.net.Stream,
-    // Forwarded from the listener.  When non-null this is plumbed into
+    // Forwarded from the listener and plumbed into
     // `lsp_server.Server.initWithTransport` so the per-session
     // `AuthState.verify` call can validate the client's bearer / session
     // token against the live AuthProvider.
-    verifier: ?lsp_auth_mod.Verifier,
+    verifier: lsp_auth_mod.Verifier,
+    // SONNY-6589: the peer's IP, the rate limiter's key for a login.
+    peer_ip_buf: [64]u8 = undefined,
+    peer_ip_len: usize = 0,
+
+    fn setPeerIp(self: *LspSessionArgs, address: std.Io.net.IpAddress) void {
+        var a = address;
+        a.setPort(0);
+        const text = std.fmt.bufPrint(&self.peer_ip_buf, "{f}", .{a}) catch {
+            self.peer_ip_len = 0;
+            return;
+        };
+        // "<ip>:0" / "[<ip6>]:0": the address without the port.
+        var ip = if (std.mem.endsWith(u8, text, ":0")) text[0 .. text.len - 2] else text;
+        if (ip.len >= 2 and ip[0] == '[' and ip[ip.len - 1] == ']') ip = ip[1 .. ip.len - 1];
+        std.mem.copyForwards(u8, self.peer_ip_buf[0..ip.len], ip);
+        self.peer_ip_len = ip.len;
+    }
+
+    fn peerIp(self: *const LspSessionArgs) []const u8 {
+        return if (self.peer_ip_len == 0) "unknown" else self.peer_ip_buf[0..self.peer_ip_len];
+    }
+
+    /// The session's verifier: a token goes to the listener's provider; a
+    /// user name and password to `lspCredentialsVerifyFn`. `self` outlives
+    /// the session's Server (freed last in `runLspSession`).
+    fn sessionVerifier(self: *LspSessionArgs) lsp_auth_mod.Verifier {
+        return .{
+            .ctx = self,
+            .verifyFn = lspTokenVerifyFn,
+            .verifyCredentialsFn = lspCredentialsVerifyFn,
+        };
+    }
 };
 
+fn lspTokenVerifyFn(ctx: *anyopaque, token: []const u8) lsp_auth_mod.Verifier.Outcome {
+    const args: *LspSessionArgs = @ptrCast(@alignCast(ctx));
+    return args.verifier.verifyFn(args.verifier.ctx, token);
+}
+
+// CANARY: REQ=REQ-SONNY-6589-LSP-PASSWORD-AUTH; FEATURE="Embedded LSP"; ASPECT=HelloCredentialsAuthenticateLsp; STATUS=TESTED; TEST=tests/test_sonny6589_lsp_auth.zig; OWNER=lsp; UPDATED=2026-11-15
+/// SONNY-6589 (3): an embedded LSP `initialize` logs in with a user name and
+/// password, checked as a QUIC HELLO's: `user_management.authenticate`
+/// behind the same per-(peer IP, user) rate limiter, a checked-and-rejected
+/// credential counting against it. A user who must change their password
+/// first is refused (the HELLO admits it only to change the password). The
+/// LSP's AuthProvider had no credential at all, so every `initialize` was
+/// refused.
+fn lspCredentialsVerifyFn(ctx: *anyopaque, username: []const u8, password: []const u8) lsp_auth_mod.Verifier.Outcome {
+    const args: *LspSessionArgs = @ptrCast(@alignCast(ctx));
+    const user_mgmt = geode.user_management;
+    const auth_rate_limiter = @import("auth_rate_limiter.zig");
+    if (!auth_rate_limiter.credentialsPresent(username, password)) return .invalid;
+    const peer_ip = args.peerIp();
+    const limiter = quic_connection_handler.getAuthRateLimiter();
+    if (limiter) |l| {
+        if (l.isLockedForPrincipal(peer_ip, username)) {
+            log.warn("LSP login refused: too many failed authentication attempts", &.{
+                Attr.string("peer_ip", peer_ip),
+                Attr.string("username", username),
+            });
+            return .invalid;
+        }
+    }
+    const result = user_mgmt.authenticate(username, password) catch |err| {
+        if (auth_rate_limiter.shouldCountFailedAttempt(err)) {
+            if (limiter) |l| l.recordFailureForPrincipal(peer_ip, username);
+        }
+        log.warn("LSP login refused", &.{
+            Attr.string("peer_ip", peer_ip),
+            Attr.string("username", username),
+            Attr.string("error", @errorName(err)),
+        });
+        return .invalid;
+    };
+    if (limiter) |l| l.recordSuccessForPrincipal(peer_ip, username);
+    if (result.password_reset_required) {
+        log.warn("LSP login refused: the user must change their password first", &.{Attr.string("username", username)});
+        return .invalid;
+    }
+    return .{ .ok = .{ .username = username, .role = result.role.toString() } };
+}
+
 fn runLspSession(args: *LspSessionArgs) void {
+    const owner = args.owner;
+    // Last action of the thread: after it the listener may free the Io
+    // and the provider.
+    defer _ = owner.live_sessions.fetchSub(1, .acq_rel);
     // The listener allocated this struct; we own it now and must free
     // it on every return path.
     defer args.allocator.destroy(args);
 
-    // AuthProvider→Verifier adapter is wired below via `args.verifier`
-    // (built by `lsp_auth_mod.verifierFromAuthProvider`).  When the
-    // server bootstrapped an AuthProvider this is non-null and the LSP
-    // session validates `initialize` tokens against the live provider.
-    // Otherwise the verifier stays `null` and the session is fail-closed
-    // (every initialize is rejected) — same legacy behavior as before
-    // the adapter landed.  The TCP-embedded path still REQUIRES auth
-    // (`--no-auth` is stdio-only).
+    // The session validates `initialize` tokens against the live
+    // provider through `args.verifier`. The TCP-embedded path always
+    // REQUIRES auth (`--no-auth` is stdio-only).
     var tx = lsp_transport_mod.Transport.initTcp(args.allocator, args.io, args.stream) catch |err| {
         log.warn("LSP transport init error", &.{Attr.string("error", @errorName(err))});
+        owner.unregister(args.io, args);
         args.stream.close(args.io);
         return;
     };
-    var srv = lsp_server.Server.initWithTransport(args.allocator, tx, args.verifier, false) catch |err| {
+    var srv = lsp_server.Server.initWithTransport(args.allocator, tx, args.sessionVerifier(), false) catch |err| {
         log.warn("LSP server init error", &.{Attr.string("error", @errorName(err))});
+        owner.unregister(args.io, args);
         tx.deinit();
         return;
     };
+    // `srv.deinit` closes the socket; unregister first (defers run LIFO).
     defer srv.deinit();
+    defer owner.unregister(args.io, args);
     srv.run() catch |err| {
         log.warn("LSP session error", &.{Attr.string("error", @errorName(err))});
     };
@@ -660,17 +901,31 @@ const LspBootstrapConfig = struct {
 /// Task 28: parse the two embedded-LSP options that
 /// `src/server/cli_args.zig` does NOT know about (`--lsp-port=N` and
 /// `--lsp-bind-all`). We don't extend `ServerConfig` because the plan
-/// limits this task to `src/server/main.zig` only; `parseArgs` ignores
-/// flags it doesn't recognise, so these flags pass through it
-/// untouched and we re-walk argv here.
+/// limits this task to `src/server/main.zig` only; `parseArgs` accepts
+/// these two without reading them (it refuses every other flag it does
+/// not know, SONNY-6442), and we re-walk argv here.
 ///
 /// Zig 0.16: `std.process.argsAlloc` was removed; argv is recovered from the
 /// portable `process_args` holder that `src/unified_entry.zig` captures from
 /// the `std.process.Args` delivered to `main`. This works on every supported
 /// platform (the prior `/proc/self/cmdline` read was Linux-only). Any failure
 /// degrades silently to the defaults (port=3142, loopback-only).
+///
+/// SONNY-6332: `GEODE_LSP_PORT` sets the port when `--lsp-port` is absent
+/// (the flag wins; 0 disables the listener). Every `geode serve` used to open
+/// TCP 3142, so concurrent test servers on one host fought over it; the test
+/// build sets GEODE_LSP_PORT=0 for every test that spawns geode.
 fn parseLspBootstrapConfig(allocator: std.mem.Allocator) LspBootstrapConfig {
     var cfg: LspBootstrapConfig = .{};
+    if (posixGetenv("GEODE_LSP_PORT")) |v| {
+        cfg.port = std.fmt.parseUnsigned(u16, v, 10) catch blk: {
+            log.warn("GEODE_LSP_PORT is not a port number; using the default", &.{
+                Attr.string("value", v),
+                Attr.int("port", @as(i64, cfg.port)),
+            });
+            break :blk cfg.port;
+        };
+    }
     const args = process_args.getArgs(allocator) catch return cfg;
     defer allocator.free(args);
 
@@ -719,7 +974,6 @@ const F_UNION_PHASES = server_flags.F_UNION_PHASES;
 const F_ADAPT_EST = server_flags.F_ADAPT_EST;
 const F_HEUR_INDEX = server_flags.F_HEUR_INDEX;
 const nullsFlag = server_flags.nullsFlag;
-const initImplDefinedFlags = server_flags.initImplDefinedFlags;
 const computeBaseFlags = server_flags.computeBaseFlags;
 // Import graph storage management (M3.1 Phase 3 graph persistence extraction)
 // CANARY: REQ=REQ-BINARY-PERSIST-003; FEATURE="BinaryPersistence"; ASPECT=MainImports; STATUS=TESTED; TEST=tests/test_gap0514_repl_dispatch.zig; OWNER=server; UPDATED=2026-06-11
@@ -740,6 +994,10 @@ fn handleShutdownSignal(_: posix.SIG) callconv(.c) void {
 /// (`graph_store.flushForCleanShutdown`) has returned, so the first-stage flush
 /// watchdog disarms instead of force-exiting a completed shutdown.
 var g_shutdown_flush_done = std.atomic.Value(bool).init(false);
+
+/// SONNY-6459: when the shutdown tail noticed the signal (ms, 0 = no
+/// shutdown yet), so the last teardown line can report the whole shutdown.
+var g_shutdown_started_ms = std.atomic.Value(i64).init(0);
 
 fn compat_sleepMs(ms: u64) void {
     if (comptime @import("builtin").os.tag == .linux) {
@@ -1030,10 +1288,15 @@ fn rehydrateTenantDerivedState(
     reg: *geode.tenant_registry.TenantRegistry,
     engine: *@import("rls").RLSEngine,
     quota_mgr: *geode.tenant_quota.TenantQuotaManager,
-) void {
+) !void {
+    // SONNY-6567 (5): the tenant hierarchy and quotas are rebuilt from the
+    // registry whole, or startup fails. A failed listing, hierarchy add or
+    // quota replay was a warning: a tenant missing from the hierarchy (its
+    // parent no longer sees its rows; a cascade drop misses it) or running
+    // with the default quota instead of its own.
     const recs = reg.list(gpa) catch |err| {
-        log.warn("tenant_registry.rehydrate_list_failed", &.{Attr.string("error", @errorName(err))});
-        return;
+        log.err("tenant_registry.rehydrate_list_failed; refusing to start", &.{Attr.string("error", @errorName(err))});
+        return err;
     };
     defer geode.tenant_registry.TenantRegistry.freeRecordSlice(gpa, recs);
     if (recs.len == 0) return;
@@ -1051,20 +1314,34 @@ fn rehydrateTenantDerivedState(
             if (!parent_ready) continue;
             engine.hierarchy_manager.addTenant(rec.tenant_id, rec.parent) catch |err| switch (err) {
                 error.TenantAlreadyExists => {},
-                else => log.warn("tenant_registry.rehydrate_hierarchy_failed", &.{
-                    Attr.string("tenant", rec.tenant_id),
-                    Attr.string("error", @errorName(err)),
-                }),
+                else => {
+                    log.err("tenant_registry.rehydrate_hierarchy_failed; refusing to start", &.{
+                        Attr.string("tenant", rec.tenant_id),
+                        Attr.string("error", @errorName(err)),
+                    });
+                    return err;
+                },
             };
-            added.put(i, {}) catch {};
+            try added.put(i, {});
             made_progress = true;
         }
     }
+    // SONNY-6607 (4): a tenant whose parent is not registered (or a parent
+    // cycle) cannot be placed in the hierarchy; it was a warning and the
+    // server ran with the tenant outside it (its parent did not see its
+    // rows; a cascade drop missed it). The registry never writes one, so it
+    // is damage: refuse to start, naming each, as for any other part of the
+    // tenant state that cannot be rebuilt.
     if (added.count() < recs.len) {
-        log.warn("tenant_registry.rehydrate_incomplete_orphan_parents", &.{
-            Attr.int("added", @intCast(added.count())),
-            Attr.int("total", @intCast(recs.len)),
-        });
+        for (recs, 0..) |rec, i| {
+            if (added.contains(i)) continue;
+            log.err("tenant_registry.rehydrate_orphan_parent; refusing to start", &.{
+                Attr.string("tenant", rec.tenant_id),
+                Attr.string("parent", rec.parent orelse ""),
+            });
+            std.debug.print("geode: tenant registry: tenant '{s}' names parent '{s}', which is not registered; refusing to start (restore the registry, or remove or re-parent the tenant)\n", .{ rec.tenant_id, rec.parent orelse "" });
+        }
+        return error.TenantRegistryOrphanParent;
     }
 
     // Replay quota overrides into the live manager (order-independent).
@@ -1075,10 +1352,13 @@ fn rehydrateTenantDerivedState(
             .max_concurrent_queries = rec.max_concurrent_queries,
             .max_graphs = rec.max_graphs,
             .max_nodes_per_graph = rec.max_nodes_per_graph,
-        }) catch |err| log.warn("tenant_registry.rehydrate_quota_failed", &.{
-            Attr.string("tenant", rec.tenant_id),
-            Attr.string("error", @errorName(err)),
-        });
+        }) catch |err| {
+            log.err("tenant_registry.rehydrate_quota_failed; refusing to start", &.{
+                Attr.string("tenant", rec.tenant_id),
+                Attr.string("error", @errorName(err)),
+            });
+            return err;
+        };
     }
 
     log.info("tenant_registry.rehydrated", &.{Attr.int("tenants", @intCast(recs.len))});
@@ -1128,6 +1408,86 @@ fn enforceCapabilityProfile(allocator: std.mem.Allocator, path: []const u8) !voi
     try geode.capability_gate.validateProfile(allocator, bytes, rows, geode.capability_gate.engineVersionFromBuildLabel(build_options.version));
 }
 
+/// GEODE_MTLS_REQUIRED is "1", "true" or "on" (case-insensitive).
+fn mtlsRequiredFromEnv(gpa: std.mem.Allocator) bool {
+    const v = getEnvVarOwned(gpa, "GEODE_MTLS_REQUIRED") catch return false;
+    defer gpa.free(v);
+    return std.ascii.eqlIgnoreCase(v, "true") or std.mem.eql(u8, v, "1") or std.ascii.eqlIgnoreCase(v, "on");
+}
+
+// CANARY: REQ=REQ-AUTH-MTLS-QUIC-006; FEATURE="mTLS over QUIC"; ASPECT=ClientCaTrust; STATUS=TESTED; TEST=tests/test_sonny6453_mtls_client_ca.zig; OWNER=security; UPDATED=2026-11-13
+/// SONNY-6453: with GEODE_MTLS_REQUIRED set, load GEODE_MTLS_CLIENT_CA (a PEM
+/// bundle of CA certificates) as the only trust anchors for client
+/// certificates. Refuses (error) when it is unset, cannot be loaded, holds no
+/// certificate or a non-CA one, or when a gRPC listener is configured: the
+/// gRPC transport does not request or verify client certificates, so it would
+/// serve without the mTLS the operator required.
+fn loadMtlsClientCa(gpa: std.mem.Allocator, grpc_listener: bool) !quic_transport.ClientCaTrust {
+    if (grpc_listener) {
+        log.err("mTLS: GEODE_MTLS_REQUIRED cannot be enforced on the gRPC listener; refusing to start (drop --listen-grpc or GEODE_MTLS_REQUIRED)", &.{});
+        return error.MtlsNotSupportedOnGrpc;
+    }
+    const path = getEnvVarOwned(gpa, "GEODE_MTLS_CLIENT_CA") catch {
+        log.err("mTLS: GEODE_MTLS_REQUIRED is set but GEODE_MTLS_CLIENT_CA (the CA bundle client certificates must chain to) is not; refusing to start", &.{});
+        return error.MtlsClientCaRequired;
+    };
+    defer gpa.free(path);
+    const trust = quic_transport.loadClientCaTrust(gpa, path) catch |err| {
+        log.err("mTLS: cannot use GEODE_MTLS_CLIENT_CA; refusing to start", &.{
+            Attr.string("path", path),
+            Attr.string("error", @errorName(err)),
+        });
+        return err;
+    };
+    log.info("mTLS: client certificates verified against GEODE_MTLS_CLIENT_CA", &.{
+        Attr.string("path", path),
+        Attr.int("ca_certificates", @intCast(trust.ders.len)),
+    });
+    return trust;
+}
+
+// CANARY: REQ=REQ-SONNY-6339-RESOLVED-DATA-DIR; FEATURE="Server Startup"; ASPECT=OneResolver; STATUS=TESTED; TEST=tests/test_sonny6339_resolved_data_dir.zig; OWNER=security; UPDATED=2026-11-12
+/// SONNY-6339: the server's data directory: the `--data-dir` flag, else
+/// GEODE_DATA_DIR, else the per-user default (graph_store's own chain,
+/// `getPersistenceFilePath`, the one the storage engine resolves). The only
+/// place startup reads the raw flag. It replaces the flag field of `config`
+/// with the resolved path (owned by `config`), and returns it non-optional, so no
+/// consumer can take "no flag" for "no directory": the HMAC key lookup, the
+/// auth graph, the audit log path, the tenant registry, timeseries and raft
+/// storage did, and ran without durable state. A source check in
+/// tests/test_sonny6339_resolved_data_dir.zig fails when main.zig reads the
+/// flag anywhere else.
+///
+/// SONNY-6499: the path is made absolute and normalized (`.` and `..`
+/// resolved against the working directory) once, here, so every component
+/// sees the same path: the timeseries store refuses any path holding `..`
+/// (`validateDataDir`, PathTraversal), and the auth graph manager's failure
+/// to open read as "auth records exist", so `--data-dir ../X` on a fresh
+/// directory refused to start with "HMAC key required".
+fn resolveServerDataDir(gpa: std.mem.Allocator, config: *cli_args.ServerConfig) ![]const u8 {
+    const given: []u8 = if (config.data_dir) |flag|
+        try gpa.dupe(u8, flag)
+    else
+        try graph_store.getPersistenceFilePath(gpa);
+    defer gpa.free(given);
+    const resolved: []u8 = try absoluteDataDir(gpa, given);
+    if (config._allocated_data_dir) {
+        if (config.data_dir) |old| gpa.free(old);
+    }
+    config.data_dir = resolved;
+    config._allocated_data_dir = true;
+    return resolved;
+}
+
+/// SONNY-6499: `path` absolute and normalized; a relative path is taken
+/// from the working directory. Owned by `gpa`.
+fn absoluteDataDir(gpa: std.mem.Allocator, path: []const u8) ![]u8 {
+    if (std.fs.path.isAbsolute(path)) return std.fs.path.resolve(gpa, &.{path});
+    const cwd = try std.process.currentPathAlloc(std.Io.Threaded.global_single_threaded.io(), gpa);
+    defer gpa.free(cwd);
+    return std.fs.path.resolve(gpa, &.{ cwd, path });
+}
+
 pub fn main() !void {
     // Return freed large per-connection allocations to the OS (see notes on
     // tuneServerMalloc). Must run before the first glibc allocation.
@@ -1146,6 +1506,14 @@ pub fn main() !void {
             .{ fd_raise.soft_before, fd_raise.soft_after, fd_raise.hard },
         );
     }
+    // SONNY-6459: runs last (registered first): the whole SIGTERM shutdown,
+    // teardown and allocator leak check included.
+    defer if (g_shutdown_started_ms.load(.acquire) != 0) {
+        std.debug.print(
+            "[shutdown] teardown complete ({d}ms after the signal)\n",
+            .{compat_milliTimestamp() - g_shutdown_started_ms.load(.acquire)},
+        );
+    };
     var gpa_instance = ServerAllocator{};
     defer {
         if (builtin.mode == .Debug) _ = gpa_instance.deinit();
@@ -1160,8 +1528,20 @@ pub fn main() !void {
     // outlive the DebugAllocator and surface as leaks on shutdown, which the
     // test harness interprets as a server crash mid-spec. See ensuing fix.
     defer geode.execution.cleanupCatalogInstance();
+    // SONNY-6378: the proto-reader registry capacity reserved for the QUIC
+    // listener. Registered this early so it runs after every stream thread
+    // (which unregisters itself) has been joined.
+    defer quic_connection_handler.deinitProtoReaderRegistry(gpa);
     // Parse server CLI args using modularized cli_args module (M3.2 Phase 3 CLI extraction)
-    const config_opt = try cli_args.parseArgs(gpa);
+    // SONNY-6442: an unknown option, or an option without its value, is a
+    // usage error (exit 2, as `geode backup create`); the parser has printed
+    // which argument.
+    const config_opt = cli_args.parseArgs(gpa) catch |err| switch (err) {
+        error.UnknownServeOption, error.MissingArgument => std.process.exit(2),
+        // SONNY-1336: a --listen-grpc address the listener cannot bind as given.
+        error.InvalidGrpcListenPort, error.GrpcListenAddressNotIpv4, error.GrpcPortOnlyListenNotIpv4 => std.process.exit(2),
+        else => return err,
+    };
     if (config_opt == null) return; // Help was shown, exit
 
     var config = config_opt.?;
@@ -1172,7 +1552,6 @@ pub fn main() !void {
     const listen_quic = config.listen_quic;
     const listen_grpc = config.listen_grpc;
     const order_keys_mode_expr = config.order_keys_mode_expr;
-    const data_dir = config.data_dir;
     const log_level_arg = config.log_level_arg;
 
     // CANARY: REQ=REQ-ENG-3921-DATA-DIR-LOCK-001; FEATURE="DataDirLock"; ASPECT=ServerStartup; STATUS=TESTED; TEST=tests/test_datadir_lock_subprocess.zig; OWNER=storage; UPDATED=2026-08-31
@@ -1185,24 +1564,41 @@ pub fn main() !void {
     // The lock covers the RESOLVED directory, not the raw flag: an omitted
     // --data-dir still resolves (GEODE_DATA_DIR, else the per-user default
     // from graph_store.defaultDataDir) to a real directory that a second
-    // process would share, so resolve it exactly the way graph_store does
-    // before locking. `--data-dir` is not yet installed as the store override
-    // at this point (server_init.initialize does that), so apply the flag
-    // first and fall back to graph_store's own chain.
-    const resolved_data_dir: []const u8 = if (data_dir) |dir|
-        try gpa.dupe(u8, dir)
+    // process would share.
+    //
+    // SONNY-6339: and so does everything else. `data_dir` is the resolved
+    // directory, never null; it is installed as the store override at once,
+    // so every later consumer (the storage engine, the HMAC key and auth
+    // graph, the audit log, the tenant registry, timeseries, raft, TLS,
+    // backups, the catalog) sees the same directory however it was given.
+    //
+    // SONNY-6386: a set but malformed GEODE_TDE_KEY refuses startup here,
+    // before the data directory is created: it used to open the store with
+    // no page key and write every page in plaintext.
+    try server_init.refuseUnusableTdeKey(gpa);
+    // SONNY-6422: likewise a half-configured audit key pair, a short
+    // GEODE_MASTER_KEY, or a GEODE_WAL_KEY nothing reads.
+    try server_init.refuseUnusableKeyConfig(gpa);
+    // SONNY-6453: GEODE_MTLS_REQUIRED verifies client certificates against
+    // GEODE_MTLS_CLIENT_CA and nothing else; without a usable one, or with a
+    // gRPC listener (which cannot verify client certificates), refuse to start.
+    const mtls_required = mtlsRequiredFromEnv(gpa);
+    var mtls_client_ca: ?quic_transport.ClientCaTrust = if (mtls_required)
+        try loadMtlsClientCa(gpa, listen_grpc != null)
     else
-        try graph_store.getPersistenceFilePath(gpa);
-    defer gpa.free(resolved_data_dir);
+        null;
+    defer if (mtls_client_ca) |*t| t.deinit();
+    const data_dir: []const u8 = try resolveServerDataDir(gpa, &config);
+    graph_store.setDataDirOverride(gpa, data_dir);
 
     // GAP-0909: a --data-dir that does not exist used to crash the server at
     // startup. Create it (mkdir -p); refuse cleanly only if creation fails.
     // ENG-3921 R1: the RESOLVED directory is created, not just the flag —
     // the per-user default ($XDG_STATE_HOME/geode, $HOME/.local/state/geode)
     // does not exist on a fresh machine, and the lockfile below lives in it.
-    graph_store.ensureDataDir(resolved_data_dir) catch |err| {
+    graph_store.ensureDataDir(data_dir) catch |err| {
         log.err("data dir unavailable; refusing to start", &.{
-            Attr.string("path", resolved_data_dir),
+            Attr.string("path", data_dir),
             Attr.string("error", @errorName(err)),
         });
         return error.DataDirUnavailable;
@@ -1213,15 +1609,15 @@ pub fn main() !void {
     // used to start cleanly INSIDE a running server's tree and write into it.
     // Refuse when any ANCESTOR holds a live `.geode.lock` (flock probe, so a
     // stale lockfile left by a dead holder never blocks a legitimate start).
-    if (data_dir_lock_mod.findLiveAncestorLock(gpa, resolved_data_dir)) |ancestor| {
+    if (data_dir_lock_mod.findLiveAncestorLock(gpa, data_dir)) |ancestor| {
         var holder = ancestor;
         defer holder.deinit(gpa);
         std.debug.print(
             "[startup] data directory {s} is nested inside {s}, which is locked by pid {d}; refusing to start\n",
-            .{ resolved_data_dir, holder.dir, holder.pid },
+            .{ data_dir, holder.dir, holder.pid },
         );
         log.err("data directory is nested inside a locked data directory; refusing to start", &.{
-            Attr.string("path", resolved_data_dir),
+            Attr.string("path", data_dir),
             Attr.string("locked_ancestor", holder.dir),
             Attr.int("holder_pid", holder.pid),
         });
@@ -1231,19 +1627,19 @@ pub fn main() !void {
     const lock_budget_ms = data_dir_lock_mod.timeoutFromEnv();
     var data_dir_guard = data_dir_lock_mod.DataDirLock.acquireWithTimeout(
         gpa,
-        resolved_data_dir,
+        data_dir,
         lock_budget_ms,
     ) catch |err| switch (err) {
         error.DataDirLocked => {
-            const holder = data_dir_lock_mod.readHolderPid(gpa, resolved_data_dir) orelse -1;
+            const holder = data_dir_lock_mod.readHolderPid(gpa, data_dir) orelse -1;
             // Message wording is load-bearing: operators and the e2e test
             // both key off "data directory is locked by pid".
             std.debug.print(
                 "[startup] data directory is locked by pid {d} ({s}); refusing to start\n",
-                .{ holder, resolved_data_dir },
+                .{ holder, data_dir },
             );
             log.err("data directory is locked by pid; refusing to start", &.{
-                Attr.string("path", resolved_data_dir),
+                Attr.string("path", data_dir),
                 Attr.int("holder_pid", holder),
                 Attr.int("waited_ms", @intCast(lock_budget_ms)),
             });
@@ -1261,10 +1657,10 @@ pub fn main() !void {
                 "[startup] cannot acquire data directory lock for {s}: {s}; refusing to start\n" ++
                     "  Check that {s}/{s} is a regular file this user can read and write,\n" ++
                     "  and that the filesystem supports advisory locks.\n",
-                .{ resolved_data_dir, @errorName(err), resolved_data_dir, data_dir_lock_mod.lock_filename },
+                .{ data_dir, @errorName(err), data_dir, data_dir_lock_mod.lock_filename },
             );
             log.err("cannot acquire data directory lock; refusing to start (fail-closed)", &.{
-                Attr.string("path", resolved_data_dir),
+                Attr.string("path", data_dir),
                 Attr.string("error", @errorName(err)),
             });
             return error.DataDirLockUnavailable;
@@ -1339,6 +1735,28 @@ pub fn main() !void {
             std.process.exit(1);
         };
     }
+    // CANARY: REQ=REQ-SONNY-6600-CLUSTER-TOKEN-CONFIG; FEATURE="ClusterAuth"; ASPECT=StartupRefusal; STATUS=TESTED; TEST=tests/test_sonny6600_cluster_token.zig; OWNER=security; UPDATED=2026-11-15
+    // SONNY-6600: refuse a cluster token too short to be a secret before any
+    // listener binds (GEODE_CLUSTER_TOKEN=t turned cluster mode on with a
+    // one-byte shared secret). Printed as well as logged, as above.
+    {
+        const cluster_auth = geode.distributed.cluster_auth;
+        cluster_auth.validateClusterTokenEnv() catch |err| {
+            const name = if (err == error.ClusterTokenTooShort) "GEODE_CLUSTER_TOKEN" else "GEODE_CLUSTER_TOKEN_PREVIOUS";
+            const value: ?[]const u8 = posixGetenv(if (err == error.ClusterTokenTooShort) "GEODE_CLUSTER_TOKEN" else "GEODE_CLUSTER_TOKEN_PREVIOUS");
+            const len: usize = if (value) |v| v.len else 0;
+            std.debug.print(
+                "SECURITY: refusing to start — {s} is {d} bytes; a cluster token must be at least {d} bytes (generate one with `openssl rand -hex 32`). See src/distributed/README.md.\n",
+                .{ name, len, cluster_auth.min_token_len },
+            );
+            log.err("SECURITY: refusing to start — the cluster token is too short", &.{
+                Attr.string("variable", name),
+                Attr.int("length", @intCast(len)),
+                Attr.int("minimum", @intCast(cluster_auth.min_token_len)),
+            });
+            std.process.exit(1);
+        };
+    }
     if (config.insecure_allow_all) {
         gps.setInsecureAllowAll(true);
         // CANARY: REQ=REQ-GAP-0842-INSECURE-BANNER-001; FEATURE="InsecureAllowAllStartupBanner"; ASPECT=Startup; STATUS=TESTED; TEST=tests/test_gap0842_insecure_allow_all_banner.zig; OWNER=security; UPDATED=2026-06-08
@@ -1394,14 +1812,10 @@ pub fn main() !void {
     decision_cache_mod.setGlobalCache(&global_decision_cache);
     defer decision_cache_mod.clearGlobalCache();
 
-    // NOTE: ensureDefaultUser() is called AFTER server_init.initialize() below
-    // so that users from the auth graph store are synced first (avoiding a
-    // second admin with a different password).
-
     // Resolve certificate paths and ensure they exist
-    const cert_paths = try cli_args.resolveCertPaths(gpa, &config);
-    var cert_path = cert_paths.cert_path;
-    var key_path = cert_paths.key_path;
+    const cert_paths = try cli_args.resolveCertPaths(gpa, &config, data_dir);
+    const cert_path = cert_paths.cert_path;
+    const key_path = cert_paths.key_path;
     const cert_explicit = cert_paths.cert_explicit or cert_paths.key_explicit;
 
     // Try to ensure certificates if using QUIC or gRPC (TLS needed for both).
@@ -1456,18 +1870,28 @@ pub fn main() !void {
                 Attr.string("key_path", key_path),
             });
         } else {
-            // Auto path: no cert supplied → generate-if-missing into the
-            // resolved (data-dir/cert-dir) location, with a /tmp fallback only
-            // when that location is not writable.
+            // Auto path: no cert supplied → use or generate the pair in the
+            // resolved data directory (or GEODE_CERT_DIR).
+            //
+            // CANARY: REQ=REQ-SONNY-6325-NO-FIXED-TMP; FEATURE="Secret File Hygiene"; ASPECT=NoTmpCertFallback; STATUS=TESTED; TEST=tests/test_sonny6325_no_fixed_tmp_paths.zig; OWNER=security; UPDATED=2026-11-11
+            // SONNY-6325: there is no fallback. A failure here used to switch
+            // to /tmp/geode-server.{crt,key}, a fixed path in a shared
+            // directory: a key already there was served whoever planted it.
+            // An unusable auto key (a link, another user's, group/world
+            // readable, or half a pair) or an unwritable directory refuses
+            // startup with the reason; the key is never changed.
             cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path) catch |err| {
-                log.warn("Could not generate certificates, using fallback paths", &.{
+                std.debug.print(
+                    "SECURITY: the auto-generated TLS key {s} / certificate {s} cannot be used: {s} ({s}). Refusing to start.\n" ++
+                        "Fix or remove the files (the key must be a regular file owned by this user, mode 0600), set GEODE_CERT_DIR to a directory this user can write, or pass --cert and --key.\n",
+                    .{ key_path, cert_path, cert_gen.describeTlsError(err), @errorName(err) },
+                );
+                log.err("auto TLS certificate/key unusable; refusing to start", &.{
+                    Attr.string("cert_path", cert_path),
+                    Attr.string("key_path", key_path),
                     Attr.string("error", @errorName(err)),
-                    Attr.string("fallback_cert", "/tmp/geode-server.crt"),
-                    Attr.string("fallback_key", "/tmp/geode-server.key"),
                 });
-                cert_path = "/tmp/geode-server.crt";
-                key_path = "/tmp/geode-server.key";
-                try cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path);
+                return err;
             };
             std.debug.print("[startup] certificates ready ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
         }
@@ -1517,6 +1941,11 @@ pub fn main() !void {
             });
             return err;
         };
+        defer {
+            gpa.free(result.provider_name);
+            gpa.free(result.endpoint);
+            gpa.free(result.test_result);
+        }
         if (!result.configured) {
             log.err("KMS configuration unsuccessful; refusing to start", &.{
                 Attr.string("test_result", result.test_result),
@@ -1524,8 +1953,9 @@ pub fn main() !void {
             });
             return error.KmsUnreachable;
         }
-        log.info("KMS configured", &.{
-            Attr.string("provider", result.provider_name),
+        // SONNY-6348: only reachability is checked; say so rather than
+        // "KMS configured" (no key is fetched from or wrapped by it).
+        log.info("KMS endpoint reachable (TCP only; TDE keys still come from GEODE_TDE_KEY)", &.{
             Attr.string("endpoint", result.endpoint),
             Attr.string("test_result", result.test_result),
         });
@@ -1558,8 +1988,10 @@ pub fn main() !void {
     defer if (audit_path_env) |p| gpa.free(p);
     if (audit_path_env) |p| {
         audit_config.file_path = p;
-    } else if (data_dir) |dir| {
-        default_audit_path = try std.fmt.allocPrint(gpa, "{s}/audit.jsonl", .{dir});
+    } else {
+        // SONNY-6339: without --data-dir this was the working directory's
+        // audit.jsonl.
+        default_audit_path = try std.fmt.allocPrint(gpa, "{s}/audit.jsonl", .{data_dir});
         audit_config.file_path = default_audit_path.?;
     }
 
@@ -1599,59 +2031,35 @@ pub fn main() !void {
     std.debug.print("[startup] server initialized ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
 
     phase_start = compat_milliTimestamp();
-    if (init_ctx.auth_graph_mgr) |agm| {
-        user_mgmt.setPersistentUserResolver(.{
-            .lookup_fn = lookupPersistentAuthUser,
-            .has_users_fn = persistentAuthUsersExist,
-            .list_fn = listPersistentAuthUsers,
-            .auth_version_fn = lookupPersistentAuthVersion,
-        });
-        // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-036; FEATURE="AuthDDLPersistence"; ASPECT=StartupWiring; STATUS=TESTED; TEST=tests/test_auth_persistence.zig; OWNER=security; UPDATED=2026-06-11
-        // P7: Install write-through callbacks for user/role/grant DDL and hydrate
-        // in-memory state from __geode_security.
-        server_init.wireAuthDDLCallbacks(agm, gpa);
-        log.info("Authentication configured for persistent auth graph with LRU cache", &.{});
+    // SONNY-6339: server_init.initialize refuses to start rather than return
+    // without an auth graph manager. There is no in-memory-only
+    // authentication mode any more: it was the silent fallback when the HMAC
+    // key or the store was unavailable (always, without --data-dir), and
+    // auth DDL then succeeded into process memory and was gone on restart.
+    const agm = init_ctx.auth_graph_mgr orelse return error.AuthGraphUnavailable;
+    user_mgmt.setPersistentUserResolver(.{
+        .lookup_fn = lookupPersistentAuthUser,
+        .has_users_fn = persistentAuthUsersExist,
+        .list_fn = listPersistentAuthUsers,
+        .auth_version_fn = lookupPersistentAuthVersion,
+    });
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-036; FEATURE="AuthDDLPersistence"; ASPECT=StartupWiring; STATUS=TESTED; TEST=tests/test_auth_persistence.zig; OWNER=security; UPDATED=2026-06-11
+    // P7: Install write-through callbacks for user/role/grant DDL and hydrate
+    // in-memory state from __geode_security.
+    try server_init.wireAuthDDLCallbacks(agm, gpa);
+    // SONNY-6378: registered here, so it runs after the listener blocks
+    // below have stopped every request thread.
+    defer server_init.releaseAuthDDLPolicy(gpa);
+    log.info("Authentication configured for persistent auth graph with LRU cache", &.{});
 
-        // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=StartupHydration; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
-        // GPS Phase 4 (Task 4-5): hydrate the in-memory PolicyCatalog from the
-        // persisted :Policy nodes in __geode_security.  Errors are non-fatal —
-        // the server continues without pre-loaded policies (operators can
-        // recreate them via DDL).
-        server_init.wireGpsPolicyHooks(gpa, agm, &global_policy_catalog);
-    } else {
-        user_mgmt.setPersistentUserResolver(null);
-        // Review-0016 Important-3 (2026-07-01 incident residual): this branch
-        // runs when NO AuthGraphManager is active (AGM.init threw, HMAC key
-        // unavailable, or the store fell back to in-memory). Historically it
-        // unconditionally seeded an IN-MEMORY admin from GEODE_ADMIN_PASSWORD —
-        // so on a data dir that still holds a persisted admin credential, the
-        // env password became the working admin credential for the session
-        // (the operator-visible "password tracks the env var" symptom). Run
-        // the same engine-level persisted-admin check the bootstrap guard
-        // uses and REFUSE env seeding (fail closed) when persisted records
-        // exist or the engine check itself fails. The persisted credential on
-        // disk stays authoritative; admin login may be unavailable this
-        // session until the operator repairs the store — strictly better than
-        // silently activating the env credential.
-        const agm_mod = @import("auth_graph_manager");
-        const persisted_on_disk: ?u64 = agm_mod.persistedSecurityUserCountOnDisk() catch null; // null => engine error => fail closed
-        if (persisted_on_disk == null or persisted_on_disk.? > 0) {
-            log.err("ADMIN ENV SEEDING SKIPPED (fail-closed): no auth graph manager is active this session, but the storage engine reports persisted admin records in __geode_security (or errored while checking); refusing to seed an in-memory admin from GEODE_ADMIN_PASSWORD — the persisted credential remains authoritative. Repair the auth graph / HMAC key setup and restart.", &.{
-                Attr.uint("persisted_user_records", persisted_on_disk orelse 0),
-                Attr.string("engine_check", if (persisted_on_disk == null) "error (fail-closed)" else "ok"),
-            });
-            std.debug.print("[startup] admin env seeding SKIPPED: persisted admin records exist on disk (or the engine check failed) but the auth graph manager is unavailable; GEODE_ADMIN_PASSWORD ignored (fail-closed)\n", .{});
-        } else {
-            user_mgmt.ensureDefaultUser(gpa) catch |err| {
-                log.err("Failed to create default users", &.{Attr.string("error", @errorName(err))});
-                return err;
-            };
-        }
-    }
+    // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=StartupHydration; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
+    // GPS Phase 4 (Task 4-5): hydrate the in-memory PolicyCatalog from the
+    // persisted :Policy nodes in __geode_security.  SONNY-6567 (5): an error
+    // fails startup (it continued without the stored policies).
+    try server_init.wireGpsPolicyHooks(gpa, agm, &global_policy_catalog);
     std.debug.print("[startup] auth cache configured ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
 
     // Extract initialization values for compatibility with existing code
-    const env_spill_threshold = init_ctx.env_config.spill_threshold;
     const env_storage_checksum_error = init_ctx.env_config.storage_checksum_error;
     const disable_estimates = init_ctx.env_config.disable_estimates;
     const compact_profile = init_ctx.env_config.compact_profile;
@@ -1711,9 +2119,15 @@ pub fn main() !void {
     geode.tenant_quota.setGlobalQuotaManager(&quota_manager);
     defer geode.tenant_quota.setGlobalQuotaManager(null);
 
-    var tenant_reg = geode.tenant_registry.TenantRegistry.initWithDataDir(gpa, data_dir) catch blk: {
-        log.warn("tenant_registry.init_failed_fallback_in_memory", &.{});
-        break :blk geode.tenant_registry.TenantRegistry.init(gpa);
+    // SONNY-6346: a tenant registry that cannot be durable refuses startup
+    // (it fell back to an in-memory registry whose tenants a restart lost),
+    // like the auth state of SONNY-6339.
+    var tenant_reg = geode.tenant_registry.TenantRegistry.initWithDataDir(gpa, data_dir) catch |err| {
+        log.err("cannot open the tenant registry in the data directory; refusing to start", &.{
+            Attr.string("dir", data_dir),
+            Attr.string("error", @errorName(err)),
+        });
+        return err;
     };
     defer tenant_reg.deinit();
     geode.tenant_registry.setGlobalRegistry(&tenant_reg);
@@ -1724,7 +2138,7 @@ pub fn main() !void {
     // sorted parent-before-child by their created_at so addTenant's "parent must
     // exist" invariant holds for hierarchies built in order; any out-of-order
     // parent is retried until the set stabilizes.
-    rehydrateTenantDerivedState(gpa, &tenant_reg, &expr_rls_engine, &quota_manager);
+    try rehydrateTenantDerivedState(gpa, &tenant_reg, &expr_rls_engine, &quota_manager);
 
     // CANARY: REQ=REQ-GAP-0848-TENANCY-DEFAULT-001; FEATURE="StrictTenancyAutoDefault"; ASPECT=Startup; STATUS=TESTED; TEST=tests/test_gap0848_tenancy_default.zig; OWNER=security; UPDATED=2026-06-09
     // GAP-0848: resolve the FINAL effective strict-tenancy mode now that the
@@ -1746,6 +2160,15 @@ pub fn main() !void {
             });
             return err;
         };
+    }
+
+    // CANARY: REQ=REQ-SONNY-6561-CDC-ENABLE-ENV; FEATURE="CDCProcedures"; ASPECT=StartupEnable; STATUS=TESTED; TEST=tests/test_sonny6561_cdc_transport_parity.zig; OWNER=cdc; UPDATED=2026-11-14
+    // SONNY-6561: GEODE_CDC_ENABLE=1 (docs/QUICK_REFERENCE.md) starts the CDC
+    // engine as `CALL cdc.enable()` does; nothing read it. A server told to
+    // run CDC that cannot start it does not start.
+    if (envBool(gpa, "GEODE_CDC_ENABLE", false)) {
+        try geode.storage_dispatch.enableCdc();
+        log.info("CDC engine started via GEODE_CDC_ENABLE", &.{});
     }
 
     // CANARY: REQ=REQ-OTEL-METRICS-002; FEATURE="OTel Instrumentation"; ASPECT=ServerInit; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
@@ -1775,6 +2198,21 @@ pub fn main() !void {
         _ = id.toString(&instance_id_buf);
         break :blk instance_id_buf[0..];
     };
+
+    // SONNY-6665: test hook, Debug builds only (see
+    // raft_consensus.armTestDropSnapshotChunks): this node loses, up to N
+    // times, the inbound InstallSnapshot chunk right after a snapshot's
+    // first one.
+    if (comptime geode.distributed.raft_consensus.snapshot_chunk_drop_hook_available) {
+        const drops = envUsize(gpa, "GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS", 0, 0, 1_000_000);
+        if (drops > 0) {
+            geode.distributed.raft_consensus.armTestDropSnapshotChunks(@intCast(drops)) catch |err| {
+                log.err("GEODE_TEST_RAFT_DROP_SNAPSHOT_CHUNKS refused", &.{Attr.string("error", @errorName(err))});
+                return err;
+            };
+            log.warn("TEST HOOK: inbound InstallSnapshot chunks will be dropped (Debug build only)", &.{Attr.int("count", @intCast(drops))});
+        }
+    }
 
     const cluster_token = getEnvVarOwned(gpa, "GEODE_CLUSTER_TOKEN") catch null;
     defer if (cluster_token) |t| gpa.free(t);
@@ -1816,6 +2254,9 @@ pub fn main() !void {
     // here would silently skip FTS maintenance for the replayed entries.
     // CANARY: REQ=REQ-DIST-CLUSTER-FTS-APPLY-SYMMETRY; FEATURE="DistributedCluster"; ASPECT=ServerInitFtsApplyHook; STATUS=TESTED; TEST=tests/test_fts_apply_symmetry.zig; OWNER=distributed; UPDATED=2026-06-10
     geode.execution.fts_index_ops.registerFtsApplyHook();
+    // SONNY-6636: after a Raft snapshot restore replaced a graph's files,
+    // the vector indexes (not per graph) are rebuilt from it.
+    geode.distributed.raft_snapshot_manager.setGraphRestoredHook(&geode.index_manager.rebuildVectorIndexesForRestoredGraph);
 
     if (cluster_token != null) {
         // Build a small EnvMap with just the keys cluster_bootstrap needs.
@@ -2029,6 +2470,46 @@ pub fn main() !void {
     auth_rate_limiter_mod.setGlobalRateLimiter(&ip_rate_limiter);
     defer auth_rate_limiter_mod.setGlobalRateLimiter(null);
 
+    // SONNY-6598: test hook, Debug builds only (see
+    // user_management.injectKdfAllocFailures): the next N logins of one user
+    // fail their Argon2id allocation.
+    if (comptime user_mgmt.kdf_fault_hook_available) {
+        if (getEnvVarOwned(gpa, "GEODE_TEST_AUTH_KDF_FAULT_USER")) |fault_user| {
+            defer gpa.free(fault_user);
+            const fault_count = envUsize(gpa, "GEODE_TEST_AUTH_KDF_FAULT_COUNT", 0, 0, 1_000_000);
+            if (fault_count > 0) {
+                user_mgmt.injectKdfAllocFailures(fault_user, @intCast(fault_count)) catch |err| {
+                    log.err("GEODE_TEST_AUTH_KDF_FAULT_USER refused", &.{Attr.string("error", @errorName(err))});
+                    return err;
+                };
+                log.warn("TEST HOOK: password verifications of this user will fail their Argon2id allocation (Debug build only)", &.{
+                    Attr.string("user", fault_user),
+                    Attr.int("count", @intCast(fault_count)),
+                });
+            }
+        } else |_| {}
+    }
+
+    // SONNY-6658: test hook, Debug builds only (see
+    // statement_undo.armTestKill): the process kills itself when a statement
+    // is about to make its (n+1)th change of one node property key.
+    if (comptime geode.statement_undo.kill_hook_available) {
+        if (getEnvVarOwned(gpa, "GEODE_TEST_STATEMENT_KILL_KEY")) |kill_key| {
+            defer gpa.free(kill_key);
+            const kill_after = envUsize(gpa, "GEODE_TEST_STATEMENT_KILL_AFTER", 0, 0, 1_000_000);
+            if (kill_after > 0) {
+                geode.statement_undo.armTestKill(kill_key, @intCast(kill_after)) catch |err| {
+                    log.err("GEODE_TEST_STATEMENT_KILL_KEY refused", &.{Attr.string("error", @errorName(err))});
+                    return err;
+                };
+                log.warn("TEST HOOK: the process kills itself at a statement's change of this property (Debug build only)", &.{
+                    Attr.string("key", kill_key),
+                    Attr.int("after", @intCast(kill_after)),
+                });
+            }
+        } else |_| {}
+    }
+
     // Task 1 (throughput plan): initialise per-mutation timing instrumentation.
     const mutation_timing = geode.mutation_timing;
     mutation_timing.init(null);
@@ -2042,34 +2523,27 @@ pub fn main() !void {
     // then only read them.
     geode.execution.initEvaluator();
 
-    // S1: Initialize the global RLS filter engine for label-based row filtering.
+    // S1: Initialize the global RLS label-deny engine.
     // CANARY: REQ=REQ-SEC-RLS-WIRE-004; FEATURE="RLS Query Enforcement"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/server/rls_filter.zig; OWNER=security; UPDATED=2026-06-11
-    const rls_filter_mod = @import("rls_filter.zig");
-    var rls_engine = rls_filter_mod.RLSFilterEngine.init(gpa);
-    defer rls_engine.deinit();
-    rls_filter_mod.setGlobalRLSFilterEngine(&rls_engine);
-    defer rls_filter_mod.setGlobalRLSFilterEngine(null);
-
-    // GAP-0510 Task 3: Also initialize the rls_types shared label-filter engine.
+    // GAP-0510 Task 3 / SONNY-2729: one engine (rls_types'), read by the
+    // executor and by the transport post-filter (rls_filter re-exports its
+    // type and global). There were two, kept in step here.
     // CANARY: REQ=REQ-SEC-RLS-WIRE-012; FEATURE="RLS Expression Wiring"; ASPECT=ServerInitLabelEngine; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-06-11
     const rls_types_mod = @import("rls_types");
-    var rls_types_engine = rls_types_mod.RLSFilterEngine.init(gpa);
-    defer rls_types_engine.deinit();
-    rls_types_mod.setGlobalRLSFilterEngine(&rls_types_engine);
+    var rls_engine = rls_types_mod.RLSFilterEngine.init(gpa);
+    defer rls_engine.deinit();
+    rls_types_mod.setGlobalRLSFilterEngine(&rls_engine);
     defer rls_types_mod.setGlobalRLSFilterEngine(null);
 
     // REQ-RLS-DDL-001: Wire the geode.rls.* deny-policy procedures to the live
-    // engines the connection handlers consult.
+    // engine the connection handlers consult.
     // CANARY: REQ=REQ-RLS-DDL-001; FEATURE="RLS deny-policy procedure"; ASPECT=ServerCallbackWiring; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/rls_cross_tenant_query_shapes.yml; OWNER=security; UPDATED=2026-05-22
     const rls_dispatch_mod = geode.execution.rls_dispatch;
+    const RlsAgm = @import("auth_graph_manager").AuthGraphManager;
     const RlsCbCtx = struct {
-        label_engine: *rls_filter_mod.RLSFilterEngine,
-        types_engine: *rls_types_mod.RLSFilterEngine,
+        engine: *rls_types_mod.RLSFilterEngine,
     };
-    var rls_cb_ctx: RlsCbCtx = .{
-        .label_engine = &rls_engine,
-        .types_engine = &rls_types_engine,
-    };
+    var rls_cb_ctx: RlsCbCtx = .{ .engine = &rls_engine };
     const RlsCbFns = struct {
         fn addDeny(
             ctx_anyopaque: ?*anyopaque,
@@ -2078,14 +2552,8 @@ pub fn main() !void {
             username: []const u8,
         ) anyerror!void {
             const ctx: *RlsCbCtx = @ptrCast(@alignCast(ctx_anyopaque.?));
-            try ctx.label_engine.addDenyPolicy(graph, label, username);
-            ctx.types_engine.addDenyPolicy(graph, label, username) catch |err| {
-                log.warn("rls_types addDenyPolicy failed", &.{
-                    logging.Attr.string("err", @errorName(err)),
-                    logging.Attr.string("graph", graph),
-                    logging.Attr.string("label", label),
-                });
-            };
+            // SONNY-3038: all or nothing (one engine since SONNY-2729).
+            try ctx.engine.addDenyPolicy(graph, label, username);
         }
         fn removeDeny(
             ctx_anyopaque: ?*anyopaque,
@@ -2094,10 +2562,9 @@ pub fn main() !void {
             username: []const u8,
         ) usize {
             const ctx: *RlsCbCtx = @ptrCast(@alignCast(ctx_anyopaque.?));
-            const before = ctx.label_engine.policyCount();
-            ctx.label_engine.removeDenyPolicy(graph, label, username);
-            ctx.types_engine.removeDenyPolicy(graph, label, username);
-            const after = ctx.label_engine.policyCount();
+            const before = ctx.engine.policyCount();
+            ctx.engine.removeDenyPolicy(graph, label, username);
+            const after = ctx.engine.policyCount();
             return if (before >= after) before - after else 0;
         }
         fn listDeny(
@@ -2105,8 +2572,8 @@ pub fn main() !void {
             allocator: std.mem.Allocator,
         ) anyerror![]rls_dispatch_mod.ListedPolicy {
             const ctx: *RlsCbCtx = @ptrCast(@alignCast(ctx_anyopaque.?));
-            ctx.label_engine.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            defer ctx.label_engine.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+            ctx.engine.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer ctx.engine.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
             var list = std.ArrayList(rls_dispatch_mod.ListedPolicy).empty;
             errdefer {
@@ -2117,7 +2584,7 @@ pub fn main() !void {
                 }
                 list.deinit(allocator);
             }
-            for (ctx.label_engine.policies.items) |p| {
+            for (ctx.engine.policies.items) |p| {
                 if (!p.deny) continue;
                 try list.append(allocator, .{
                     .graph = try allocator.dupe(u8, p.graph),
@@ -2129,7 +2596,30 @@ pub fn main() !void {
         }
         fn count(ctx_anyopaque: ?*anyopaque) usize {
             const ctx: *RlsCbCtx = @ptrCast(@alignCast(ctx_anyopaque.?));
-            return ctx.label_engine.policyCount();
+            return ctx.engine.policyCount();
+        }
+        // SONNY-3034: the restrictions are stored in __geode_security. No
+        // auth graph manager (a degraded start): refused, not kept in memory
+        // only.
+        fn restriction(kind: rls_dispatch_mod.RestrictionKind, graph: []const u8, label: []const u8, subject: []const u8, attribute: []const u8) RlsAgm.RlsRestriction {
+            return .{
+                .kind = switch (kind) {
+                    .deny => .rls_deny,
+                    .attribute => .rls_attribute,
+                },
+                .graph = graph,
+                .label = label,
+                .subject = subject,
+                .attribute = attribute,
+            };
+        }
+        fn persist(_: ?*anyopaque, kind: rls_dispatch_mod.RestrictionKind, graph: []const u8, label: []const u8, subject: []const u8, attribute: []const u8) anyerror!void {
+            const rls_agm = RlsAgm.getGlobal() orelse return error.SecurityGraphUnavailable;
+            try rls_agm.persistRlsRestriction(&rls_agm.hmac_key, restriction(kind, graph, label, subject, attribute));
+        }
+        fn unpersist(_: ?*anyopaque, kind: rls_dispatch_mod.RestrictionKind, graph: []const u8, label: []const u8, subject: []const u8, attribute: []const u8) anyerror!void {
+            const rls_agm = RlsAgm.getGlobal() orelse return error.SecurityGraphUnavailable;
+            try rls_agm.removeRlsRestriction(&rls_agm.hmac_key, restriction(kind, graph, label, subject, attribute));
         }
     };
     rls_dispatch_mod.setCallbacks(.{
@@ -2138,8 +2628,39 @@ pub fn main() !void {
         .remove_deny_fn = RlsCbFns.removeDeny,
         .list_deny_fn = RlsCbFns.listDeny,
         .policy_count_fn = RlsCbFns.count,
+        .persist_fn = RlsCbFns.persist,
+        .unpersist_fn = RlsCbFns.unpersist,
     });
     defer rls_dispatch_mod.resetCallbacks();
+
+    // CANARY: REQ=REQ-SONNY-3034-RLS-RESTRICTIONS-DURABLE; FEATURE="RLS deny-policy procedure"; ASPECT=ServerHydration; STATUS=TESTED; TEST=tests/test_sonny3034_rls_restrictions_durable.zig; OWNER=security; UPDATED=2026-11-12
+    // SONNY-3034: put the stored geode.rls.* restrictions back in force
+    // before any listener starts. One that cannot be applied is logged
+    // loudly; the rest still load.
+    if (RlsAgm.getGlobal()) |rls_agm| load: {
+        const stored = rls_agm.listRlsRestrictions(gpa) catch |err| {
+            log.err("SONNY-3034: the stored geode.rls restrictions could not be read; none are in force", &.{Attr.string("error", @errorName(err))});
+            std.debug.print("[startup] ERROR: the stored geode.rls restrictions could not be read ({s}); none are in force\n", .{@errorName(err)});
+            break :load;
+        };
+        defer RlsAgm.freeRlsRestrictions(gpa, stored);
+        var loaded: usize = 0;
+        for (stored) |r| {
+            const kind: rls_dispatch_mod.RestrictionKind = if (r.kind == .rls_deny) .deny else .attribute;
+            rls_dispatch_mod.applyStoredRestriction(kind, r.graph, r.label, r.subject, r.attribute) catch |err| {
+                log.err("SONNY-3034: a stored geode.rls restriction could not be put back in force", &.{
+                    Attr.string("kind", @tagName(kind)),
+                    Attr.string("graph", r.graph),
+                    Attr.string("label", r.label),
+                    Attr.string("error", @errorName(err)),
+                });
+                std.debug.print("[startup] ERROR: stored geode.rls {s} restriction on {s}:{s} NOT in force ({s})\n", .{ @tagName(kind), r.graph, r.label, @errorName(err) });
+                continue;
+            };
+            loaded += 1;
+        }
+        if (stored.len > 0) std.debug.print("[startup] geode.rls restrictions loaded: {d} of {d}\n", .{ loaded, stored.len });
+    }
 
     // gRPC server (optional)
     //
@@ -2169,20 +2690,14 @@ pub fn main() !void {
     }
 
     if (listen_grpc) |grpc_addr| {
-        const colon = std.mem.lastIndexOfScalar(u8, grpc_addr, ':');
-        var grpc_port: u16 = 3142;
-        var grpc_address: []const u8 = "0.0.0.0";
-
-        if (colon) |ci| {
-            grpc_address = grpc_addr[0..ci];
-            const p = grpc_addr[ci + 1 ..];
-            grpc_port = std.fmt.parseUnsigned(u16, p, 10) catch 3142;
-        } else {
-            grpc_port = std.fmt.parseUnsigned(u16, grpc_addr, 10) catch 3142;
-        }
+        // SONNY-1336: bind the --listen-grpc address itself (it used to reach
+        // only the log line, and grpc-zig bound 127.0.0.1). cli_args already
+        // refused an address that cannot be bound as given.
+        const grpc_bind = try cli_args.resolveGrpcBind(grpc_addr, listen_quic);
+        const grpc_port = grpc_bind.port;
+        const grpc_address = grpc_bind.address;
 
         const grpc_config = grpc_transport.GrpcConfig{
-            .spill_threshold = env_spill_threshold,
             .storage_checksum_error = env_storage_checksum_error,
             .disable_estimates = disable_estimates,
             .compact_profile = compact_profile,
@@ -2199,8 +2714,12 @@ pub fn main() !void {
 
         const grpc_server = try gpa.create(grpc_transport.GeodeGrpcServer);
         errdefer gpa.destroy(grpc_server);
-        grpc_server.* = try grpc_transport.GeodeGrpcServer.init(gpa, grpc_port, cert_path, key_path, grpc_config);
+        grpc_server.* = try grpc_transport.GeodeGrpcServer.init(gpa, grpc_address, grpc_port, cert_path, key_path, grpc_config);
         grpc_server_owner = grpc_server;
+        // Startup banner for operational tooling (JSON on stderr), naming the
+        // address and port the listener actually bound (the QUIC twin is in
+        // QuicTransport.start).
+        std.debug.print("{{\"component\":\"transport\",\"transport\":\"grpc\",\"address\":\"{s}\",\"port\":{d},\"status\":\"listening\"}}\n", .{ grpc_address, grpc_server.boundPort() });
 
         if (listen_quic == null) {
             log.info("gRPC server started", &.{
@@ -2235,18 +2754,18 @@ pub fn main() !void {
 
     // QUIC mode: preferred over TCP
     if (listen_quic) |addr_str| {
-        const colon = std.mem.lastIndexOfScalar(u8, addr_str, ':');
-        var port: u16 = quic_transport.DEFAULT_PORT;
-        var address_str: []const u8 = "0.0.0.0";
-
-        if (colon) |ci| {
-            address_str = addr_str[0..ci];
-            const p = addr_str[ci + 1 ..];
-            port = std.fmt.parseUnsigned(u16, p, 10) catch quic_transport.DEFAULT_PORT;
-        } else {
-            // If no colon, treat as port only
-            port = std.fmt.parseUnsigned(u16, addr_str, 10) catch quic_transport.DEFAULT_PORT;
-        }
+        // SONNY-6487: the shared host:port grammar. parseArgs already refused
+        // an address this cannot resolve; an IPv6 address keeps its brackets
+        // because the transport binds "{address}:{port}".
+        const quic_listen = cli_args.resolveQuicListen(addr_str) catch |err| {
+            log.err("Invalid --listen address; refusing to start", &.{
+                Attr.string("listen", addr_str),
+                Attr.string("error", @errorName(err)),
+            });
+            return err;
+        };
+        const port: u16 = quic_listen.port;
+        const address_str: []const u8 = quic_listen.address;
 
         // Initialize QUIC transport
         // GAP-0327: honor --max-connections; 0 means "transport default".
@@ -2286,18 +2805,21 @@ pub fn main() !void {
 
         // GAP-0258: Initialize mTLS provider for QUIC client certificate authentication
         // CANARY: REQ=REQ-AUTH-MTLS-QUIC-005; FEATURE="mTLS over QUIC"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/authn_mtls_rejection_matrix.yml; OWNER=security; UPDATED=2026-06-11
-        const mtls_required_env = getEnvVarOwned(gpa, "GEODE_MTLS_REQUIRED") catch null;
-        defer if (mtls_required_env) |e| gpa.free(e);
-        const mtls_required = if (mtls_required_env) |v| blk: {
-            if (v.len == 0) break :blk false;
-            if (std.ascii.eqlIgnoreCase(v, "true") or std.ascii.eqlIgnoreCase(v, "1") or std.ascii.eqlIgnoreCase(v, "on"))
-                break :blk true;
-            break :blk false;
-        } else false;
-
-        if (mtls_required) {
+        // SONNY-6453: resolved (the client CA bundle loaded) at startup.
+        // SONNY-6457: the bundle goes to the TLS layer, which verifies client
+        // chains against these CAs only and completes a chain sent without
+        // its issuer from them. SONNY-6490: the listener is its only user.
+        if (mtls_client_ca) |*trust| {
             transport.config.require_client_cert = true;
+            transport.config.inline_client_ca_der = trust.ders;
         }
+        // SONNY-6490: with passive teardown the transport is never torn down,
+        // so its TLS configuration keeps pointing at the client CA bundle.
+        // The bundle is left allocated with it (main's `deinit` of
+        // `mtls_client_ca` sees null), never freed under a live endpoint.
+        defer if (passive_teardown) {
+            mtls_client_ca = null;
+        };
 
         var mtls_prov = geode.mtls_provider.MtlsProvider.init(gpa);
         defer mtls_prov.deinit();
@@ -2309,7 +2831,7 @@ pub fn main() !void {
         // gates were HOISTED to before the gRPC serve path (search
         // "GAP-0901"). They formerly lived here, INSIDE the `if (listen_quic)`
         // block, so the gRPC-only serve path never initialized them.
-        // `ip_rate_limiter`, `rls_engine`, `rls_types_engine`, and `rls_cb_ctx`
+        // `ip_rate_limiter`, `rls_engine` (the one label-deny engine), and `rls_cb_ctx`
         // are now in scope here from the hoisted block.
 
         // GAP-0848 follow-up (2026-06-09): the expression RLS engine, per-tenant
@@ -2339,8 +2861,8 @@ pub fn main() !void {
         // fresh dir because the engine refuses to mkdir). Opt back into the
         // legacy soft behaviour with GEODE_TS_DURABILITY=best_effort (the
         // wrapper then degrades internally with a warning). Retention is
-        // wired via GEODE_TS_RETENTION_DAYS and TDE via GEODE_TS_TDE=1 +
-        // GEODE_TDE_KEY.
+        // wired via GEODE_TS_RETENTION_DAYS and TDE via GEODE_TDE_KEY
+        // (SONNY-6590: on whenever it is set; GEODE_TS_TDE=0 opts out).
         // CANARY: REQ=REQ-TIMESERIES-WIRE-003; FEATURE="TimeseriesServerWiring"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/eval.zig; OWNER=server; UPDATED=2026-04-01
         // CANARY: REQ=REQ-TS-PERSIST-001; FEATURE="TimeSeriesPersistence"; ASPECT=ServerInit; STATUS=TESTED; TEST=tests/ts_durability.zig; OWNER=server; UPDATED=2026-06-10
         const ts_mod = geode.timeseries;
@@ -2355,7 +2877,16 @@ pub fn main() !void {
         }) catch |err| {
             log.err("timeseries.open_failed_fail_closed", &.{
                 Attr.string("error", @errorName(err)),
-                Attr.string("hint", "set GEODE_TS_DURABILITY=best_effort to degrade to in-memory"),
+                Attr.string("dir", data_dir),
+                // SONNY-6590: the server-wide time-series store holds data
+                // written in plaintext before time-series encryption
+                // followed GEODE_TDE_KEY; it is neither opened nor dropped.
+                Attr.string("hint", if (err == error.TimeseriesNotEncrypted)
+                    "the time-series store <data-dir>/timeseries holds data written in plaintext before TDE covered time-series; geode will not keep plaintext data under GEODE_TDE_KEY. To keep it: start once with GEODE_TS_TDE=0, export it with CALL geode.ts.range, stop, remove <data-dir>/timeseries, restart without GEODE_TS_TDE and re-insert it (docs/TDE_FILE_LEVEL_ENCRYPTION.md)"
+                else if (err == error.TimeseriesNeedsTdeKey)
+                    "the time-series store <data-dir>/timeseries is encrypted; start with the GEODE_TDE_KEY it was written with and without GEODE_TS_TDE=0"
+                else
+                    "set GEODE_TS_DURABILITY=best_effort to degrade to in-memory"),
             });
             return err;
         };
@@ -2366,9 +2897,9 @@ pub fn main() !void {
         eval.setGlobalTimeseriesStore(&ts_store);
         defer eval.setGlobalTimeseriesStore(null);
 
-        // GAP-0268: Wire WAL persistence hooks for checkpoint truncation.
-        // The hooks allow the persistence loop to sync and truncate the WAL
-        // after each successful checkpoint, preventing unbounded WAL growth.
+        // GAP-0268: Wire the persistence-loop hooks: a light (O(dirty))
+        // engine checkpoint on every persistence tick, which also truncates
+        // the storage-engine WAL (SONNY-6422: no logical WAL is behind them).
         // CANARY: REQ=REQ-WAL-HOOKS-001; FEATURE="WAL Persistence Hooks"; ASPECT=ServerInit; STATUS=TESTED; TEST=tests/test_wal.zig; OWNER=storage; UPDATED=2026-06-11
         const wal_mod = geode.wal;
         wal_mod.installPersistenceHooks();
@@ -2382,66 +2913,13 @@ pub fn main() !void {
         try transport.listen();
         std.debug.print("[startup] QUIC transport listening ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
 
+        // SONNY-6332: the bound port (the kernel's choice for `--listen
+        // host:0`), so a caller can start on port 0 and read it back.
         log.info("QUIC server started", &.{
             Attr.string("address", address_str),
-            Attr.int("port", port),
+            Attr.int("port", transport.boundPort()),
             Attr.string("tls", "1.3"),
         });
-
-        // Task 28 (Phase 9): spawn the embedded LSP TCP listener so
-        // geode-ui / monaco-languageclient sessions can attach to the
-        // same in-process schema view as QUIC handlers. `lsp_port == 0`
-        // disables the listener entirely. The thread is detached and
-        // lives for the lifetime of the server process — there is no
-        // explicit join on shutdown because the listener will be torn
-        // down with the process. Per-session threads are similarly
-        // detached and exit when their LSP session terminates. See
-        // `runLspListener` for the auth caveat.
-        const lsp_bootstrap_cfg = parseLspBootstrapConfig(gpa);
-        if (lsp_bootstrap_cfg.port != 0) {
-            // Bootstrap the process-global AuthProvider used by every
-            // accepted LSP session.  AuthProvider.init is allocation-only
-            // (no I/O, no syscalls beyond the mutex pair); we keep it
-            // alive for the lifetime of the process.  Empty stores by
-            // default — operators populate API keys via the auth CLI /
-            // server-side procedures before clients can authenticate.
-            const lsp_provider = gpa.create(authn_mod.AuthProvider) catch |err| {
-                log.err("Failed to allocate LSP AuthProvider", &.{Attr.string("error", @errorName(err))});
-                return err;
-            };
-            lsp_provider.* = authn_mod.AuthProvider.init(gpa);
-            g_lsp_auth_provider = lsp_provider;
-            // The listener thread is detached and the verifier borrows
-            // `lsp_provider` for the lifetime of the process, so the
-            // tear-down has to wait until the rest of the server shutdown
-            // sequence has joined / cancelled every in-flight LSP session
-            // (see the QUIC drain block further down).  Order here matches
-            // graph_store: register a defer on the same scope so the
-            // free runs exactly once when `cmdServe` returns.  DebugAllocator
-            // otherwise reports the AuthProvider as leaked on graceful exit.
-            defer {
-                g_lsp_auth_provider = null;
-                lsp_provider.deinit();
-                gpa.destroy(lsp_provider);
-            }
-            const lsp_verifier = lsp_auth_mod.verifierFromAuthProvider(lsp_provider);
-
-            const lsp_thr = std.Thread.spawn(.{}, runLspListener, .{LspListenerArgs{
-                .allocator = gpa,
-                .port = lsp_bootstrap_cfg.port,
-                .loopback_only = lsp_bootstrap_cfg.loopback_only,
-                .verifier = lsp_verifier,
-            }}) catch |err| {
-                log.err("Failed to spawn LSP listener thread", &.{
-                    Attr.string("error", @errorName(err)),
-                    Attr.int("port", @as(i64, lsp_bootstrap_cfg.port)),
-                });
-                return err;
-            };
-            lsp_thr.detach();
-        } else {
-            log.info("LSP listener disabled (--lsp-port=0)", &.{});
-        }
 
         // GAP-0260: Start background persistence thread for write coalescing
         graph_store.startPersistenceThread(config.persist_interval_ms);
@@ -2467,12 +2945,57 @@ pub fn main() !void {
             // from under the handler.
             const grpc_still_running = grpc_transport.grpcInflightCount();
             if (grpc_still_running == 0) {
+                const close_t0 = compat_milliTimestamp();
                 graph_store.deinitGlobalStore();
+                // SONNY-6758: close the durable undo log `openTxnUndoLog`
+                // installed at startup. Every request thread has stopped and
+                // the store is closed, so nothing logs or ends a transaction
+                // any more; a transaction still open stays in the file and is
+                // undone at the next start. Gated like the store free: a
+                // gRPC handler still in flight may still write to it.
+                if (geode.txn_durable_undo.uninstall()) |undo_log| undo_log.close();
+                // SONNY-6459: per-phase shutdown timing (the storage engines'
+                // close runs here: each shard's WAL writes its checkpoint file).
+                if (g_shutdown_started_ms.load(.acquire) != 0) {
+                    std.debug.print("[shutdown] store closed ({d}ms)\n", .{compat_milliTimestamp() - close_t0});
+                }
             } else {
                 log.warn("skipping global store free at teardown: gRPC handler still in flight", &.{
                     Attr.int("grpc_inflight", @intCast(grpc_still_running)),
                 });
             }
+        }
+
+        // Task 28 (Phase 9): spawn the embedded LSP TCP listener so
+        // geode-ui / monaco-languageclient sessions can attach to the
+        // same in-process schema view as QUIC handlers. `lsp_port == 0`
+        // disables the listener entirely.
+        //
+        // SONNY-6374: `EmbeddedLsp` owns the listener thread, its sessions
+        // and the AuthProvider their verifier borrows. The shutdown tail
+        // stops it (closing open sessions) before the data flush, and this
+        // defer frees the provider only after the listener and every
+        // session thread have returned. It is registered after the store's
+        // deinit defer so it runs first: sessions read the global store.
+        var embedded_lsp: ?*EmbeddedLsp = null;
+        defer if (embedded_lsp) |lsp| lsp.shutdown();
+        const lsp_bootstrap_cfg = parseLspBootstrapConfig(gpa);
+        if (lsp_bootstrap_cfg.port != 0) {
+            const lsp = EmbeddedLsp.create(gpa, lsp_bootstrap_cfg.port, lsp_bootstrap_cfg.loopback_only) catch |err| {
+                log.err("Failed to allocate the embedded LSP listener", &.{Attr.string("error", @errorName(err))});
+                return err;
+            };
+            // `shutdown` with no thread started just frees.
+            embedded_lsp = lsp;
+            lsp.start() catch |err| {
+                log.err("Failed to spawn LSP listener thread", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.int("port", @as(i64, lsp_bootstrap_cfg.port)),
+                });
+                return err;
+            };
+        } else {
+            log.info("LSP listener disabled (--lsp-port=0 or GEODE_LSP_PORT=0)", &.{});
         }
 
         // #540: Spawn a dedicated poll thread to continuously process incoming
@@ -2696,7 +3219,7 @@ pub fn main() !void {
                     });
                     continue;
                 };
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache, init_ctx.shared_optimizer, &init_ctx.env_config, stream_pool) catch |err2| {
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache, init_ctx.shared_optimizer, &init_ctx.env_config, stream_pool) catch |err2| {
                     log.err("Error handling QUIC connection", &.{
                         Attr.string("error", @errorName(err2)),
                     });
@@ -2829,6 +3352,9 @@ pub fn main() !void {
         quic_metrics_ctx.* = .{ .transport = &transport };
 
         defer {
+            // SONNY-6794: OTel's shutdown (an outer defer) collects once more;
+            // its geode.runtime.* bridges must not read these sources then.
+            otel_metrics_facade.detachRuntimeMetricsOtel();
             metrics_server.setRuntimeSnapshotCallback(null, null);
             runtime_metrics_mod.setGlobalRegistry(null);
             metrics_registry.deinit();
@@ -3033,6 +3559,7 @@ pub fn main() !void {
         // SONNY-3348 (round 19, m3): statement undo replays, undo failures,
         // and writes refused by the undo record's budget.
         try geode.statement_undo.registerAll(metrics_registry);
+        try geode.txn_durable_undo.registerAll(metrics_registry); // SONNY-2979
 
         // Phase C1: bridge the now-fully-populated runtime metrics registry into
         // OTLP as geode.runtime.* observable gauges. MUST run after every
@@ -3047,23 +3574,40 @@ pub fn main() !void {
             registry: *runtime_metrics_mod.Registry,
             should_stop: *std.atomic.Value(u32),
             allocator: std.mem.Allocator,
-            // QUIC listener port for the accept-path wedge watchdog (0 = unknown
-            // → watchdog inert). Parsed from `--listen host:port`.
-            quic_port: u16,
+            // The QUIC listener the accept-path wedge watchdog watches: the
+            // transport's bound address (null = unknown, watchdog inert).
+            // SONNY-6480: it was the port parsed from `--listen host:port`,
+            // so `host:0` left the watchdog off, and only the port was
+            // matched (IPv4 only).
+            listener: ?acceptor_watchdog.ListenerAddr,
+            // SONNY-2719: the listener's drained-datagram count, the
+            // watchdog's progress signal.
+            transport: *quic_transport.QuicTransport,
+            // SONNY-6466: per-connection stall threshold (ns) — how long every
+            // stream of one connection may go without reading a message before
+            // its in-flight reads are cancelled. GEODE_QUIC_STALL_CANCEL_MS.
+            conn_stall_threshold_ns: u64,
         };
-        // Resolve the QUIC listener port for the wedge watchdog.
-        const watchdog_quic_port: u16 = blk: {
-            const la = listen_quic orelse break :blk 0;
-            const pcolon = std.mem.lastIndexOfScalar(u8, la, ':') orelse break :blk 0;
-            break :blk std.fmt.parseInt(u16, la[pcolon + 1 ..], 10) catch 0;
+        // CANARY: REQ=REQ-SONNY-6480-WATCHDOG-LISTENER; FEATURE="QUIC High-Concurrency Connection Admission"; ASPECT=WatchesBoundListener; STATUS=TESTED; TEST=tests/test_sonny6480_acceptor_watchdog.zig; OWNER=transport; UPDATED=2026-11-13
+        // The listener the wedge watchdog watches: the bound socket.
+        const watchdog_listener: ?acceptor_watchdog.ListenerAddr = blk: {
+            const st = transport.boundAddress() orelse break :blk null;
+            break :blk acceptor_watchdog.ListenerAddr.fromStorage(&st);
         };
+        if (watchdog_listener) |wl| {
+            std.debug.print("[startup] acceptor watchdog: watching {s} {f} port {d}\n", .{ wl.tableName(), wl, wl.port });
+        } else {
+            std.debug.print("[startup] acceptor watchdog: off (the QUIC listener's address is unknown)\n", .{});
+        }
         const metrics_ctx = try gpa.create(MetricsCtx);
         defer gpa.destroy(metrics_ctx);
         metrics_ctx.* = .{
             .registry = metrics_registry,
             .should_stop = &metrics_should_stop,
             .allocator = gpa,
-            .quic_port = watchdog_quic_port,
+            .listener = watchdog_listener,
+            .transport = &transport,
+            .conn_stall_threshold_ns = @as(u64, envUsize(gpa, "GEODE_QUIC_STALL_CANCEL_MS", default_conn_stall_cancel_ms, min_conn_stall_cancel_ms, max_conn_stall_cancel_ms)) * std.time.ns_per_ms,
         };
 
         // PERF-D / #816: park on `should_stop` via futexWaitTimeout instead
@@ -3200,12 +3744,15 @@ pub fn main() !void {
                     else
                         std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
                     const now_ns: u64 = @as(u64, @intCast(@max(ts.sec, 0))) * std.time.ns_per_s + @as(u64, @intCast(@max(ts.nsec, 0)));
-                    if (reg.connectionLevelStall(now_ns, stall_threshold_ns)) |snap| {
+                    if (reg.connectionLevelStall(now_ns, ctx.conn_stall_threshold_ns)) |snap| {
                         // GAP-ENT-0045: the whole connection is wedged (every
                         // stream idle past threshold — client likely gone).
                         // Abort ITS in-flight read executors only; healthy
-                        // connections are untouched.
-                        const conn_cancelled_n = reg.cancelConnection(snap.peer_addr);
+                        // connections are untouched. SONNY-6466: the
+                        // connection is the vendored connection's identity,
+                        // not the peer IP, which every client on one host
+                        // shares.
+                        const conn_cancelled_n = reg.cancelConnection(snap.conn_id);
                         std.log.warn(
                             "per-connection proto_reader stall: stream_id={d} peer={s} idle_ms={d} (every stream on this connection idle past threshold; client likely gone — requested executor cancellation for {d} readers; connection will be reaped on its own timeout)",
                             .{ snap.stream_id, snap.peer_addr, snap.idle_ns / std.time.ns_per_ms, conn_cancelled_n },
@@ -3220,17 +3767,22 @@ pub fn main() !void {
                     // recovery. Self-restart so the orchestrator recovers it.
                     // See docs/bugs/2026-06-03-acceptor-wedge-connection-burst-new-conns-refused.md.
                     // CANARY: REQ=REQ-QUIC-ACCEPTOR-WEDGE-WATCHDOG; FEATURE="QUIC High-Concurrency Connection Admission"; ASPECT=AcceptPathWedgeAutoRecovery; STATUS=TESTED; TEST=src/server/acceptor_watchdog.zig; OWNER=transport; UPDATED=2026-06-05
-                    if (wd_cfg.enabled and ctx.quic_port != 0) {
-                        if (acceptor_watchdog.readListenerRxQueue(ctx.quic_port)) |rx| {
+                    // SONNY-6480: not once shutdown has begun (the acceptor
+                    // stops accepting, so queued datagrams are not drained).
+                    if (wd_cfg.enabled and ctx.listener != null and !ctx.transport.isShuttingDown()) {
+                        if (acceptor_watchdog.readListenerRxQueue(ctx.listener.?)) |rx| {
                             const now_ms2: i64 = @intCast(now_ns / std.time.ns_per_ms);
-                            if (wd_tracker.update(rx, now_ms2, wd_cfg) == .restart) {
+                            // SONNY-2719: with the drained-datagram count, so a
+                            // starved or overloaded acceptor that is still
+                            // reading its socket is not taken for a wedge.
+                            if (wd_tracker.update(rx, ctx.transport.getDatagramsDrained(), now_ms2, wd_cfg) == .restart) {
                                 std.log.err(
-                                    "ACCEPTOR WEDGE: :{d} UDP rx_queue={d} bytes stayed >= {d} for >= {d}ms — the QUIC acceptor is wedged and not draining new connections. Self-restarting so the orchestrator recovers automatically (set GEODE_ACCEPTOR_WATCHDOG_DISABLE=1 to opt out).",
-                                    .{ ctx.quic_port, rx, wd_cfg.rx_threshold_bytes, wd_cfg.deadline_ms },
+                                    "ACCEPTOR WEDGE: :{d} UDP rx_queue={d} bytes stayed >= {d} with no datagram drained for >= {d}ms — the QUIC acceptor is wedged and not draining new connections. Self-restarting so the orchestrator recovers automatically (set GEODE_ACCEPTOR_WATCHDOG_DISABLE=1 to opt out).",
+                                    .{ ctx.listener.?.port, rx, wd_cfg.rx_threshold_bytes, wd_cfg.deadline_ms },
                                 );
                                 std.debug.print(
-                                    "ACCEPTOR WEDGE: :{d} UDP rx_queue={d} bytes wedged >= {d}ms; self-restarting for automatic recovery.\n",
-                                    .{ ctx.quic_port, rx, wd_cfg.deadline_ms },
+                                    "ACCEPTOR WEDGE: :{d} UDP rx_queue={d} bytes, no datagram drained for >= {d}ms; self-restarting for automatic recovery.\n",
+                                    .{ ctx.listener.?.port, rx, wd_cfg.deadline_ms },
                                 );
                                 // Let the log flush, then exit non-zero so the
                                 // k8s restartPolicy restarts the pod. (This path
@@ -3316,7 +3868,7 @@ pub fn main() !void {
         posix.sigaction(posix.SIG.TERM, &sa, null);
         posix.sigaction(posix.SIG.INT, &sa, null);
 
-        // CANARY: REQ=REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC; FEATURE="ConnectionPool"; ASPECT=AdmissionDiagnostic; STATUS=TESTED; TEST=tests/test_gap0928_pool_exhausted.zig; OWNER=transport; UPDATED=2026-07-10
+        // CANARY: REQ=REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC; FEATURE="ConnectionPool"; ASPECT=AdmissionDiagnostic; STATUS=TESTED; TEST=test-gap0927; OWNER=transport; UPDATED=2026-11-12
         // GAP-0928: at `--max-connections` capacity the accept loop parks and
         // the N+1-th connection got NO server-side signal — the operator only
         // saw the client's own --timeout fire (pool exhaustion was invisible
@@ -3387,7 +3939,7 @@ pub fn main() !void {
                 continue;
             };
 
-            // CANARY: REQ=REQ-ABAC-WIRE-016; FEATURE="ABAC Enforcement"; ASPECT=QUICLoop; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
+            // CANARY: REQ=REQ-ABAC-WIRE-016; FEATURE="ABAC Enforcement"; ASPECT=QUICLoop; STATUS=IMPL; OWNER=security; UPDATED=2026-11-12
             // GAP-0202: Create context for async connection handling
             // #50: Reject connection on alloc failure instead of blocking main thread
             const ctx = gpa.create(ConnectionContext) catch {
@@ -3406,7 +3958,6 @@ pub fn main() !void {
                 .disable_estimates = disable_estimates,
                 .compact_profile = compact_profile,
                 .memcurve_profile = memcurve_profile,
-                .env_spill_threshold = env_spill_threshold,
                 .env_storage_checksum_error = env_storage_checksum_error,
                 .security_manager = init_ctx.security_manager,
                 .shared_ast_cache = init_ctx.shared_ast_cache,
@@ -3481,12 +4032,19 @@ pub fn main() !void {
         // instant (mirrors transport.requestShutdown for QUIC). The in-flight
         // drain happens below, after the QUIC connection drain.
         grpc_transport.requestGrpcShutdown();
+        // SONNY-6605 (3): and stop its accept loop, so the pool running it
+        // (`grpc_pool_owner`) joins at teardown instead of timing out and
+        // leaving the teardown watchdog to force the exit.
+        if (grpc_server_owner) |grpc_srv| grpc_srv.stopAccepting();
         if (detached_connection_admission and !g_connection_admission_gate.waitForZero(10 * std.time.ns_per_s)) {
             log.warn("Connection admission threads still active during shutdown", &.{
                 Attr.int("active_admission", @intCast(g_connection_admission_gate.active.load(.acquire))),
             });
         }
         std.debug.print("[shutdown] signal received, flushing data and stopping...\n", .{});
+        g_shutdown_started_ms.store(compat_milliTimestamp(), .release);
+        // SONNY-6459: checkpoint runs this shutdown makes (reported below).
+        const checkpoint_runs_at_signal = graph_store.checkpointRunsTotal();
 
         // ── Gap 0039: bounded graceful connection drain ─────────────────
         // Abandoned peers (client vanished without CONNECTION_CLOSE) used to
@@ -3534,6 +4092,11 @@ pub fn main() !void {
             }
         }
 
+        // ── Embedded LSP (SONNY-6374) ──
+        // Stop accepting and close open LSP sessions (bounded) before the
+        // data flush. The provider is freed by the `embedded_lsp` defer.
+        if (embedded_lsp) |lsp| lsp.stop();
+
         // ── gRPC in-flight handler drain (REQ-TRANSPORT-GRPC-SHUTDOWN-001) ──
         // gRPC handlers run on threads the vendored accept loop detaches, so
         // they are invisible to the QUIC connection drain above and to
@@ -3572,7 +4135,14 @@ pub fn main() !void {
         // Runs on this thread BEFORE any pool-deinit defer can wedge on a
         // stuck handler, and before the teardown watchdog is armed. However
         // long the checkpoint takes, the watchdog cannot cut it short.
-        graph_store.stopPersistenceThread(gpa);
+        const pstop_t0 = compat_milliTimestamp();
+        // SONNY-6459: no final light checkpoint here when the FULL one below
+        // applies — it flushes the same pages and truncates the same WAL.
+        graph_store.stopPersistenceThreadForCleanShutdown();
+        std.debug.print(
+            "[shutdown] persistence thread stopped ({d}ms)\n",
+            .{compat_milliTimestamp() - pstop_t0},
+        );
         // GAP-0065 FIX D: `stopPersistenceThread` only runs the LIGHT engine
         // checkpoint (flush + engine-WAL truncate); it does NOT write the FIX-B
         // idmap/loop2 reload snapshots. Those were written by the FULL
@@ -3606,10 +4176,33 @@ pub fn main() !void {
             std.debug.print("[shutdown] TEST: stalling durability flush {d}ms (GEODE_TEST_SHUTDOWN_FLUSH_STALL_MS) to exercise the liveness watchdog\n", .{flush_stall_ms});
             compat_sleepMs(flush_stall_ms);
         }
+        // ── Cluster transport (SONNY-6451) ──
+        // Stop the raft loops, the outbox drains, the client poll / peer
+        // re-resolve thread and the inbound cluster handlers BEFORE the final
+        // flush: a node still leading or following would otherwise apply
+        // committed entries to the store during and after the flush, and its
+        // transport threads ran on until the `cluster_handle` defer. Runs under
+        // the first-stage flush watchdog (armed above), so a wedged join still
+        // ends in a bounded exit; every raft apply has finished before the
+        // full checkpoint below. `stop()` is idempotent; the defer still frees
+        // the coordinator.
+        if (cluster_handle) |*h| {
+            const cstop_t0 = compat_milliTimestamp();
+            h.coordinator.stop();
+            std.debug.print(
+                "[shutdown] cluster transport stopped ({d}ms)\n",
+                .{compat_milliTimestamp() - cstop_t0},
+            );
+        }
+
+        const flush_t0 = compat_milliTimestamp();
         graph_store.flushForCleanShutdown();
         g_shutdown_flush_done.store(true, .release); // disarm the first-stage watchdog
         persistence_flushed_eagerly = true;
-        std.debug.print("[shutdown] data flush complete\n", .{});
+        std.debug.print(
+            "[shutdown] data flush complete ({d}ms, checkpoint runs since the signal: {d})\n",
+            .{ compat_milliTimestamp() - flush_t0, graph_store.checkpointRunsTotal() -| checkpoint_runs_at_signal },
+        );
 
         // ── Gap 0039: bounded teardown ──────────────────────────────────
         // Everything durable is on disk. If the remaining LIFO teardown

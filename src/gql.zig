@@ -529,7 +529,7 @@ test "parameters: parse $name in expressions" {
 }
 
 test "parameters in GROUP BY, ORDER BY, and RETURN print" {
-    const src = "MATCH (n) WHERE n.age > $min GROUP BY n.name RETURN n.name, COUNT(n) ORDER BY $ord";
+    const src = "MATCH (n) WHERE n.age > $`min` GROUP BY n.name RETURN n.name, COUNT(n) ORDER BY $ord";
     var result = try lib.parse(std.testing.allocator, src, .{});
     defer result.deinit();
     // parse already done

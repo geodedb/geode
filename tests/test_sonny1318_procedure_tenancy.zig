@@ -231,7 +231,7 @@ fn seedFixture(h: *Harness, allocator: std.mem.Allocator) !Fixture {
 
     // The bridge, tagged tenant-A on purpose (see the file header).
     const bridge = try h.store.createEdgeWithGraphAndTenant(f.a2, f.b1, "L", graph_store.DEFAULT_GRAPH_NAME, tenant_a);
-    const bridge_edge = h.store.getEdgePtrHydrated(bridge) orelse return error.BridgeEdgeMissing;
+    const bridge_edge = (try h.store.getEdgePtrHydratedChecked(bridge)) orelse return error.BridgeEdgeMissing;
     if (!std.mem.eql(u8, bridge_edge.tenant_id, tenant_a)) return error.BridgeDidNotCarryTenantTag;
 
     return f;
@@ -667,7 +667,7 @@ fn seedParallelFixture(h: *Harness, allocator: std.mem.Allocator) !ParallelFixtu
     // under test cannot be produced through GQL under strict tenancy at all.
     const expectTag = struct {
         fn check(hh: *Harness, edge_id: u64, want: []const u8) !void {
-            const e = hh.store.getEdgeHydrated(edge_id) orelse return error.EdgeMissing;
+            const e = (try hh.store.getEdgeHydratedChecked(edge_id)) orelse return error.EdgeMissing;
             if (!std.mem.eql(u8, e.tenant_id, want)) return error.EdgeDidNotCarryTenantTag;
         }
     }.check;

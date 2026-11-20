@@ -252,7 +252,7 @@ test "SONNY-3348 r19 m3: an undo entry that cannot be undone answers 40003; ROLL
     try testing.expectEqual(@as(usize, 1), try rowsOf(ga, s, "MATCH (n:C) WHERE n.u IS NOT NULL RETURN n"));
 }
 
-test "SONNY-3348 r19 m1, m5: a failed statement in a transaction aborts the engine transaction before its replay; COMMIT after it answers 40000 in every form" {
+test "SONNY-3348 r19 m1, m5: a failed statement in a transaction is replayed inside the engine transaction (SONNY-6529); COMMIT after it answers 40000 in every form" {
     var f: fx.Fixture = undefined;
     try f.init();
     defer f.deinit();
@@ -261,12 +261,14 @@ test "SONNY-3348 r19 m1, m5: a failed statement in a transaction aborts the engi
     try seedC(ga, s);
 
     // m1: the CREATE writes in the session's engine transaction (R9), and
-    // its RETURN fails; the replay's DELETE commits on its own.
+    // its RETURN fails. SONNY-6529: the replay's DELETE joins that engine
+    // transaction (it was aborted before the replay, which graph-storage
+    // 0.4.16 turned into a second undo of the CREATE).
     try fx.begin(ga, s);
     try fx.expectRuns(ga, s, "MATCH (n:C) SET n.a = 1");
-    const aborted0 = geode.execution.session_txn_aborted_before_replay_total.load(.monotonic);
+    const joined0 = geode.execution.session_txn_replay_joined_total.load(.monotonic);
     try expectCode(ga, s, "m1 CREATE then a failing RETURN", "CREATE (d:D1 {k: 1}) RETURN " ++ EX ++ " AS e", TE, "54001");
-    try testing.expectEqual(aborted0 + 1, geode.execution.session_txn_aborted_before_replay_total.load(.monotonic));
+    try testing.expectEqual(joined0 + 1, geode.execution.session_txn_replay_joined_total.load(.monotonic));
     try testing.expect(try fx.rollback(ga, s));
     try testing.expectEqual(@as(usize, 0), try rowsOf(ga, s, "MATCH (d:D1) RETURN d"));
     try fx.begin(ga, s);

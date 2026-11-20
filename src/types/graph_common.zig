@@ -1,9 +1,8 @@
 const std = @import("std");
 const graph_store = @import("../graph_store.zig");
 
-// Shared types between graph execution and index optimization
-// This module contains types that are used by both exec.zig and index_optimizer.zig
-// to avoid circular dependencies.
+// Shared types for graph execution (exec.zig), materialized views and the
+// transaction undo log, kept here to avoid circular dependencies.
 
 pub const NodeId = u64;
 pub const EdgeId = u64;

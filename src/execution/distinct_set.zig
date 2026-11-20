@@ -3,6 +3,7 @@ const value_types = @import("../value_types.zig");
 const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_order = @import("value_order.zig");
+const canonical_string = @import("../unicode/canonical_string.zig");
 
 const Value = value_types.Value;
 
@@ -23,7 +24,10 @@ const Value = value_types.Value;
 //                             keyed through f64, so decimals past ~16
 //                             significant digits merged, and each NaN bit
 //                             pattern was a value of its own.)
-//   * strings              -> by bytes (Str / Text / Char / Varchar alias).
+//   * strings              -> by the bytes of their NFC form (Str / Text /
+//                             Char / Varchar alias): a precomposed 'é' and
+//                             'e' + U+0301 are one value, as `=` decides
+//                             (SONNY-3055: they were two).
 //   * Bool                 -> by the boolean.
 //   * intervals            -> by months and day-to-second length (a month is
 //                             not 30 days; a day is 24 hours); a time with a
@@ -100,6 +104,16 @@ pub fn writeGroupKeyPart(w: *std.Io.Writer, scratch: std.mem.Allocator, value: V
 
 pub const WriteKeyError = std.Io.Writer.Error || error{OutOfMemory};
 
+// CANARY: REQ=REQ-SONNY-6613-GROUP-KEY-OOM; FEATURE="Grouping"; ASPECT=KeyAllocationFailureIsOutOfMemory; STATUS=TESTED; TEST=tests/test_sonny6613_group_key_oom.zig; OWNER=engine; UPDATED=2026-11-15
+/// SONNY-6613: `writeGroupKeyPart` into an allocating writer. Its writer
+/// fails only when its allocator does, and says so as `error.WriteFailed`:
+/// that is an allocation failure, OutOfMemory (53200), not a failed write.
+pub fn appendGroupKeyPart(aw: *std.Io.Writer.Allocating, scratch: std.mem.Allocator, value: Value) error{OutOfMemory}!void {
+    writeGroupKeyPart(&aw.writer, scratch, value) catch |err| switch (err) {
+        error.WriteFailed, error.OutOfMemory => return error.OutOfMemory,
+    };
+}
+
 // The type byte of each key. NULL has one only inside a group key or a list.
 const tag_null = '0';
 
@@ -126,10 +140,10 @@ pub fn writeKey(w: *std.Io.Writer, scratch: std.mem.Allocator, value: Value) Wri
         },
         .Bool => |b| try w.writeAll(if (b) "B1" else "B0"),
         .Int, .SmallInt, .BigInt, .Real, .Double, .Decimal => try value_order.writeNumberKey(w, value_order.numberOf(value).?),
-        .Str => |t| try writeBytes(w, 'S', t),
-        .Text => |t| try writeBytes(w, 'S', t),
-        .Char => |c| try writeBytes(w, 'S', c.data),
-        .Varchar => |c| try writeBytes(w, 'S', c.data),
+        .Str => |t| try writeText(w, scratch, t),
+        .Text => |t| try writeText(w, scratch, t),
+        .Char => |c| try writeText(w, scratch, c.data),
+        .Varchar => |c| try writeText(w, scratch, c.data),
         .Bytea => |b| try writeBytes(w, 'X', b),
         .Json => |j| try writeBytes(w, 'J', j),
         .Jsonb => |j| try writeBytes(w, 'j', j.data),
@@ -222,6 +236,13 @@ pub fn writeKey(w: *std.Io.Writer, scratch: std.mem.Allocator, value: Value) Wri
         },
     }
     return true;
+}
+
+/// A string's key: its NFC form (SONNY-3055).
+fn writeText(w: *std.Io.Writer, scratch: std.mem.Allocator, text: []const u8) WriteKeyError!void {
+    const c = try canonical_string.canonical(scratch, text);
+    defer c.deinit(scratch);
+    try writeBytes(w, 'S', c.bytes);
 }
 
 fn writeBytes(w: *std.Io.Writer, tag: u8, bytes: []const u8) std.Io.Writer.Error!void {

@@ -148,7 +148,6 @@ SERVER_DOCKERFILES = [
     "Dockerfile.ci.alpine",
     "Dockerfile.ci.gpu",
     "Dockerfile.prebuilt",
-    "Dockerfile.prod",
     "Dockerfile.reliable",
     "Dockerfile.simple",
     "Dockerfile.release",

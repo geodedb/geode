@@ -71,6 +71,7 @@ const server_flags = geode.server_flags;
 const diagnostics = geode.diagnostics;
 const execution = geode.execution;
 const graph_store = geode.graph_store;
+const read_budget = geode.read_budget;
 const server_state = geode.server_state;
 const query_runner = geode.query_runner;
 const query_traits = geode.query_traits;
@@ -89,6 +90,9 @@ const node_scan_stream = geode.node_scan_stream;
 const query_plan_cache = geode.query_plan_cache;
 const geode_auth = @import("geode_auth");
 const grpc_tls = @import("grpc_tls.zig");
+const grpc_cancel_watch = @import("grpc_cancel_watch.zig");
+// SONNY-6593: the RPCs served, exactly the ones geode.proto declares.
+const grpc_service_methods = geode.grpc_service_methods;
 // Issue #515: Backup types for new gRPC handlers
 const backup_mgr = geode.backup_manager;
 const SimplifiedBackupManager = backup_mgr.SimplifiedBackupManager;
@@ -111,7 +115,6 @@ const log = logging.scoped("grpc");
 const Attr = logging.Attr;
 
 pub const GrpcConfig = struct {
-    spill_threshold: usize = 0,
     storage_checksum_error: bool = false,
     disable_estimates: bool = false,
     compact_profile: bool = false,
@@ -204,6 +207,22 @@ fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
 /// principal holds `max_sessions_per_principal` sessions, all in use. Any
 /// other error is the handler's.
 fn helloSessionRefused(allocator: std.mem.Allocator, caps: std.ArrayList([]const u8), err: anyerror) ![]u8 {
+    // CANARY: REQ=REQ-SONNY-6645-GRPC-CONNECTION-QUOTA; FEATURE="TenantQuota"; ASPECT=GrpcHandshakeRefusal; STATUS=TESTED; TEST=tests/test_sonny3313_grpc_peer_ip.zig; OWNER=transport; UPDATED=2026-11-16
+    // SONNY-6645: past the tenant's connection quota the Handshake is
+    // refused with QUIC's SQLSTATE, "53300: <message>" (the gRPC
+    // convention for a refusal, as the CDC frames send it).
+    if (err == error.TenantConnectionQuotaExceeded) {
+        const quota = proto_util.mapError(err);
+        const message = try std.fmt.allocPrint(allocator, "{s}: {s}", .{ quota.code, quota.message });
+        defer allocator.free(message);
+        const resp = schema.HelloResponse{
+            .success = false,
+            .session_id = "",
+            .error_message = message,
+            .capabilities = caps,
+        };
+        return encodeMessage(allocator, resp);
+    }
     if (err != error.TooManySessions) return err;
     const resp = schema.HelloResponse{
         .success = false,
@@ -229,10 +248,18 @@ fn throttleInvalidSessionProbe() void {
     std.Io.Threaded.global_single_threaded.io().sleep(.fromNanoseconds(@as(i96, req.sec) * std.time.ns_per_s + req.nsec), .awake) catch {};
 }
 
+/// SONNY-6607 (3): the flagger finding a statement's result carries when an
+/// index backfill run after it failed. The statement has committed (its
+/// catalog row is written) before the backfill runs, so it is not failed;
+/// the client is told instead. A literal, so a result that does not own its
+/// flags can carry it.
+pub const index_backfill_failed_flag = "IndexBackfillFailed: an index this statement created or changed could not be built (its backfill failed; see the server log). The index is not in use until it is rebuilt: the next query that needs it rebuilds it, or run the statement again";
+
 fn rebuildPendingIndexes(
     allocator: std.mem.Allocator,
     graph_name: []const u8,
     pending_index_rebuilds: *std.StringHashMap(void),
+    warn_into: ?*execution.ExecutionResult,
 ) void {
     if (pending_index_rebuilds.count() == 0) return;
     const manager = index_manager.getGlobalIndexManager() orelse return;
@@ -249,6 +276,7 @@ fn rebuildPendingIndexes(
                 Attr.string("graph", graph_name),
                 Attr.string("error", @errorName(err)),
             });
+            if (warn_into) |r| appendFlagToResult(allocator, r, index_backfill_failed_flag) catch {};
             continue;
         };
         log.info("Advanced index backfill complete", &.{
@@ -463,6 +491,28 @@ pub const SessionStore = struct {
         return self.createSessionAs(username, username, password, role, tenant_id, graph, pwd_reset_required, auth_version);
     }
 
+    /// SONNY-6334: the FLE role a HELLO named, validated
+    /// (`fle_integration.helloFleRole`, as QUIC), kept on the session's
+    /// state; an invalid or empty one is no role.
+    pub fn setSessionFleRole(self: *SessionStore, session_id: []const u8, requested: ?[]const u8) !void {
+        const role = fle_integration.helloFleRole(requested) orelse {
+            if (requested) |r| if (r.len > 0) log.warn("Rejected invalid FLE role: contains illegal characters", &.{});
+            return;
+        };
+        const entry = self.acquire(session_id) orelse return error.SessionNotFound;
+        defer self.release(entry);
+        {
+            entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            const copy = try entry.state.allocator.dupe(u8, role);
+            if (entry.state.fle_user_role) |old| entry.state.allocator.free(old);
+            entry.state.fle_user_role = copy;
+        }
+        // SONNY-6341: a role the user does not hold is audited and not acted
+        // under (`ServerState.effectiveFleRole`, every request).
+        entry.state.auditUnheldFleRole();
+    }
+
     /// SONNY-3252: a session for `username`, counted against `principal`.
     pub fn createSessionAs(
         self: *SessionStore,
@@ -509,17 +559,18 @@ pub const SessionStore = struct {
                 if (tenant_quota.getGlobalQuotaManager()) |qm| {
                     qm.acquireConnection(tenant) catch {
                         self.allocator.free(tenant_copy);
-                        return error.OutOfMemory; // quota exceeded
+                        // SONNY-6645: refused as QUIC refuses it (53300,
+                        // `helloSessionRefused`); it was an OutOfMemory.
+                        return error.TenantConnectionQuotaExceeded;
                     };
                 }
                 state.session_config = server_state.SessionConfiguration.init(self.allocator);
                 state.session_config.?.tenant_id = tenant_copy;
             }
 
-            // GAP-0281: Set per-thread FLE tenant_id for encryption namespace isolation.
-            fle_integration.setCurrentTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
-            // GAP-0282: Set per-thread audit tenant_id so all audit events carry tenant context.
-            audit_mod.setCurrentAuditTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
+            // GAP-0281/0282, SONNY-6334: the tenant reaches FLE and audit
+            // through each request's context (`installRequestThreadState`),
+            // not the Handshake's thread, which serves other sessions next.
 
             // CANARY: REQ=REQ-DSN-GRAPH-BIND-004; FEATURE="DSNGraphBinding"; ASPECT=GrpcSessionGraph; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
             if (graph) |g| {
@@ -841,12 +892,10 @@ fn initServerState(allocator: std.mem.Allocator, config: GrpcConfig) !*server_st
         defer allocator.free(v);
         break :blk true;
     } else |_| false;
-    state.txn_manager.init(allocator);
     state.inserted_values = .empty;
     state.catalog_schemas = std.HashMap([]const u8, server_state.CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
     state.catalog_graphs = std.HashMap([]const u8, server_state.CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
     state.graph_types = std.HashMap([]const u8, server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
-    state.query_mem_limit_bytes = config.spill_threshold;
     state.storage_checksum_error = config.storage_checksum_error;
     state.security_manager = config.security_manager;
     // GAP-0756: Wire the shared query optimizer so the gRPC handler hits the
@@ -872,6 +921,10 @@ fn deinitServerState(state: *server_state.ServerState) void {
     fle_integration.clearCurrentThreadState();
     // GAP-0285: Also clear per-thread audit tenant_id.
     audit_mod.setCurrentAuditTenantId(null);
+    if (state.fle_user_role) |r| {
+        alloc.free(r);
+        state.fle_user_role = null;
+    }
 
     // CANARY: REQ=REQ-SONNY-2823-SESSION-ENGINE-TXN; FEATURE="TransactionManagement"; ASPECT=GrpcTeardown; STATUS=TESTED; TEST=tests/test_sonny2823_session_engine_txn.zig; OWNER=storage; UPDATED=2026-09-26
     // SONNY-2823: a session that ends with a transaction open rolls it back,
@@ -896,7 +949,6 @@ fn deinitServerState(state: *server_state.ServerState) void {
         cb.secureZero(@constCast(p)); // SECURITY (S7): Zero plaintext password before freeing
         alloc.free(p);
     }
-    state.txn_manager.deinit();
     for (state.inserted_values.items) |item| {
         alloc.free(item.value);
     }
@@ -1025,84 +1077,9 @@ fn appendFlagToResult(allocator: std.mem.Allocator, result: *execution.Execution
     try result.flags.append(allocator, flag_to_add);
 }
 
-/// Extract variable name and property name from a property access expression.
-/// Handles both PropertyAccess (object.property) and Member (Ident.field) forms.
-fn extractVarProperty(expr: gql_ast.Expr) ?struct { variable: []const u8, property: []const u8 } {
-    if (expr == .PropertyAccess) {
-        const pa = expr.PropertyAccess;
-        return .{ .variable = pa.object, .property = pa.property };
-    }
-    if (expr == .Member) {
-        const m = expr.Member;
-        if (m.target.* == .Ident) {
-            return .{ .variable = m.target.Ident.orig, .property = m.field };
-        }
-    }
-    return null;
-}
-
-/// Check if a WHERE clause contains an equality predicate on a property
-/// that matches a catalog index for the given label and variable name.
-fn whereHasIndexedEq(root: gql_ast.Expr, var_name: []const u8, label: []const u8, cat: anytype) bool {
-    // SONNY-3189: down an AND chain with a loop, not one recursion (and one
-    // copy of the expression) per AND: EXPLAIN reaches this before
-    // authorization.
-    var at: *const gql_ast.Expr = &root;
-    while (at.* == .Binary and at.Binary.op == .And) {
-        if (whereHasIndexedEq(at.Binary.right.*, var_name, label, cat)) return true;
-        at = at.Binary.left;
-    }
-    const where_expr = at.*;
-    switch (where_expr) {
-        .Binary => |bin| {
-            if (bin.op == .And) {
-                if (whereHasIndexedEq(bin.left.*, var_name, label, cat)) return true;
-                if (whereHasIndexedEq(bin.right.*, var_name, label, cat)) return true;
-                return false;
-            } else if (bin.op == .Eq) {
-                const prop_name = blk: {
-                    if (extractVarProperty(bin.left.*)) |vp| {
-                        if (std.mem.eql(u8, vp.variable, var_name)) break :blk vp.property;
-                    }
-                    if (extractVarProperty(bin.right.*)) |vp| {
-                        if (std.mem.eql(u8, vp.variable, var_name)) break :blk vp.property;
-                    }
-                    break :blk @as(?[]const u8, null);
-                };
-                if (prop_name) |pn| {
-                    var idx_iter = cat.indexes.valueIterator();
-                    while (idx_iter.next()) |info| {
-                        if (std.mem.eql(u8, info.table_name, label) and
-                            info.columns.len > 0 and
-                            std.mem.eql(u8, info.columns[0], pn)) return true;
-                    }
-                }
-                return false;
-            }
-            return false;
-        },
-        else => return false,
-    }
-}
-
 fn findOrderBy(program: *const gql_ast.Program) ?*const gql_ast.OrderBy {
-    var idx: usize = program.statements.len;
-    while (idx > 0) : (idx -= 1) {
-        const stmt_ptr = &program.statements[idx - 1];
-        switch (stmt_ptr.*) {
-            .Query => |*q| {
-                if (q.order_by) |*ob| return ob;
-                return null;
-            },
-            .Union => |*u| {
-                if (u.order_by) |ob_ptr| return ob_ptr;
-                return null;
-            },
-            .StartTransaction, .Commit, .Rollback => continue,
-            else => return null,
-        }
-    }
-    return null;
+    // SONNY-6562: the ORDER BY `traits.ordered` is decided from.
+    return query_traits.resultOrderBy(program);
 }
 
 fn buildOrderKeys(
@@ -1226,9 +1203,16 @@ pub const GeodeGrpcServer = struct {
     session_store: *SessionStore,
     /// GAP-0518: Heap-allocated random session key (freed in deinit).
     grpc_session_key: ?[]u8 = null,
+    /// SONNY-6605 (3): `stopAccepting` ran; the accept loop's error is the
+    /// stop, not a failure.
+    accept_stopped: std.atomic.Value(bool) = .init(false),
 
+    /// SONNY-1336: `bind_address` is the IPv4 address to listen on
+    /// (`cli_args.resolveGrpcBind`); it is passed to grpc-zig's
+    /// `initWithBind`, so GRPC_ZIG_BIND_ADDR no longer decides the bind.
     pub fn init(
         allocator: std.mem.Allocator,
+        bind_address: []const u8,
         port: u16,
         cert_path: ?[]const u8,
         key_path: ?[]const u8,
@@ -1242,7 +1226,7 @@ pub const GeodeGrpcServer = struct {
         const grpc_session_key = try allocator.alloc(u8, 64);
         const hex_array = std.fmt.bytesToHex(grpc_session_key_raw, .lower);
         @memcpy(grpc_session_key, &hex_array);
-        var server = try GrpcServer.init(allocator, std.Io.Threaded.global_single_threaded.io(), port, grpc_session_key);
+        var server = try GrpcServer.initWithBind(allocator, std.Io.Threaded.global_single_threaded.io(), bind_address, port, grpc_session_key);
         const allow_plaintext_fallback = shouldAllowGrpcPlaintextFallback(allocator);
 
         if (allow_plaintext_fallback) {
@@ -1302,6 +1286,12 @@ pub const GeodeGrpcServer = struct {
         return self;
     }
 
+    /// The TCP port the listener is bound to (the requested one, or the
+    /// kernel's choice for port 0).
+    pub fn boundPort(self: *const GeodeGrpcServer) u16 {
+        return self.server.server.socket.address.getPort();
+    }
+
     pub fn deinit(self: *GeodeGrpcServer) void {
         self.session_store.deinit();
         self.allocator.destroy(self.session_store);
@@ -1321,7 +1311,28 @@ pub const GeodeGrpcServer = struct {
         self.session_store.startReaper() catch |err| {
             log.err("gRPC session reaper failed to start: idle sessions and transactions are not closed", &.{Attr.string("error", @errorName(err))});
         };
-        try self.server.start();
+        self.server.start() catch |err| {
+            // SONNY-6605 (3): the shutdown stopped the accept loop.
+            if (self.accept_stopped.load(.acquire)) return;
+            return err;
+        };
+    }
+
+    // CANARY: REQ=REQ-SONNY-6605-GRPC-ACCEPT-STOP; FEATURE="GrpcServerLifecycle"; ASPECT=AcceptLoopStops; STATUS=TESTED; TEST=tests/test_sonny6605_grpc_shutdown.zig; OWNER=transport; UPDATED=2026-11-15
+    /// SONNY-6605 (3): make `start` return. grpc-zig's accept loop is a
+    /// `while (true)` around a blocking accept with no stop of its own; with
+    /// `--listen` and `--listen-grpc` it runs as the one task of a pool
+    /// whose deinit waited 2 s for it, then joined a worker that never
+    /// returned, until the teardown watchdog forced the exit 30 s later.
+    /// Shutting the listening socket down wakes the blocked accept with an
+    /// error (Linux), which ends the loop. The socket stays open (`deinit`
+    /// closes it); connections already accepted are not touched. Elsewhere
+    /// this does nothing and the pool's join waits as before.
+    pub fn stopAccepting(self: *GeodeGrpcServer) void {
+        self.accept_stopped.store(true, .release);
+        if (comptime builtin.os.tag == .linux) {
+            _ = std.os.linux.shutdown(self.server.server.socket.handle, std.os.linux.SHUT.RDWR);
+        }
     }
 
     /// Fully-qualified gRPC method paths served by `handlePacket`.
@@ -1330,23 +1341,12 @@ pub const GeodeGrpcServer = struct {
     /// method the packet wrapper understands must be registered under its
     /// full `/geode.GeodeService/<Method>` path. Anything absent gets a
     /// `grpc-status: 12` (UNIMPLEMENTED) trailer from the vendor listener
-    /// before `handlePacket` is ever reached. Keep this list in sync with the
-    /// suffix dispatch in `handlePacket` and with `src/proto/geode.proto`.
-    const method_paths = [_][]const u8{
-        "/geode.GeodeService/Handshake",
-        "/geode.GeodeService/Execute",
-        "/geode.GeodeService/Ping",
-        "/geode.GeodeService/Begin",
-        "/geode.GeodeService/Commit",
-        "/geode.GeodeService/Rollback",
-        "/geode.GeodeService/Savepoint",
-        "/geode.GeodeService/RollbackTo",
-        "/geode.GeodeService/CdcDiag",
-        "/geode.GeodeService/CdcCtrl",
-        "/geode.GeodeService/Backup",
-        "/geode.GeodeService/Restore",
-        "/geode.GeodeService/UploadBackup",
-    };
+    /// before `handlePacket` is ever reached. SONNY-6593: the list is
+    /// `grpc_service_methods.paths`, the RPCs src/proto/geode.proto declares
+    /// (it served Savepoint, RollbackTo, Backup, Restore and UploadBackup,
+    /// which the .proto did not declare, and the undeclared CdcDiag /
+    /// CdcCtrl aliases). Keep the suffix dispatch in `handlePacket` in step.
+    const method_paths = grpc_service_methods.paths;
 
     fn registerHandlers(self: *GeodeGrpcServer) !void {
         for (method_paths) |path| {
@@ -1394,6 +1394,35 @@ fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTrans
         defer allocator.free(err_resp);
         return sendUnaryResponse(trans, err_resp);
     }
+    // SONNY-6753: the shutdown flag is this handler's statement cancel source,
+    // the gRPC counterpart of the QUIC handler's `stream.shutdown_requested`.
+    // The read and write executors capture it when their budget scope opens
+    // and poll it at every row boundary, so SIGTERM aborts an in-flight gRPC
+    // statement with 57014 within one row. Without it the statement ran on to
+    // completion: the shutdown sat out the whole gRPC drain timeout, skipped
+    // the store free, and reached the allocator leak check (or the teardown
+    // watchdog) with the statement's working set still allocated.
+    //
+    // SONNY-6759: the cancel source is this RPC's own flag, which the cancel
+    // watcher also sets when the client closes its connection or resets the
+    // RPC's stream (RST_STREAM), as a QUIC client closing its connection
+    // cancels its statement. Should the watcher thread not start, the
+    // shutdown flag alone is the source, as before.
+    const prev_cancel = read_budget.streamCancelSource();
+    var cancel_watch = grpc_cancel_watch.Watch.init(trans, &g_grpc_shutting_down);
+    const watched = grpc_cancel_watch.register(&cancel_watch);
+    read_budget.setStreamCancelSource(if (watched) &cancel_watch.cancel else &g_grpc_shutting_down);
+    defer read_budget.setStreamCancelSource(prev_cancel);
+    defer if (watched) {
+        grpc_cancel_watch.unregister(&cancel_watch);
+        switch (cancel_watch.cancelReason()) {
+            .stream_reset, .peer_closed => |why| log.info("gRPC statement cancelled: the client went away", &.{
+                Attr.string("method", method),
+                Attr.string("reason", @tagName(why)),
+            }),
+            .none, .shutdown => {},
+        }
+    };
 
     log.info("gRPC dispatch", &.{
         Attr.string("method", if (method.len > 0) method else "(empty)"),
@@ -1425,7 +1454,7 @@ fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTrans
             defer allocator.free(resp);
             return sendUnaryResponse(trans, resp);
         } else if (std.mem.endsWith(u8, method, "/Savepoint")) {
-            // Issue #515: Savepoint handler (stub — matches QUIC behavior)
+            // Issue #515: Savepoint handler (matches QUIC behavior)
             const resp = try handleSavepoint(request_bytes, allocator);
             defer allocator.free(resp);
             return sendUnaryResponse(trans, resp);
@@ -1433,14 +1462,10 @@ fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTrans
             const resp = try handleRollbackTo(request_bytes, allocator);
             defer allocator.free(resp);
             return sendUnaryResponse(trans, resp);
-        } else if (std.mem.endsWith(u8, method, "/CdcDiag")) {
-            const resp = try handleCdcDiag(request_bytes, allocator);
-            defer allocator.free(resp);
-            return sendUnaryResponse(trans, resp);
-        } else if (std.mem.endsWith(u8, method, "/CdcCtrl")) {
-            const resp = try handleCdcCtrl(request_bytes, allocator);
-            defer allocator.free(resp);
-            return sendUnaryResponse(trans, resp);
+        } else if (std.mem.endsWith(u8, method, "/GetCdcDiagnostics")) {
+            return sendCdcReply(trans, try handleCdcDiag(request_bytes, allocator), allocator);
+        } else if (std.mem.endsWith(u8, method, "/ControlCdc")) {
+            return sendCdcReply(trans, try handleCdcCtrl(request_bytes, allocator), allocator);
         } else if (std.mem.endsWith(u8, method, "/Backup")) {
             const resp = try handleBackup(request_bytes, allocator);
             defer allocator.free(resp);
@@ -1472,68 +1497,21 @@ fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTrans
 const PageResult = struct { bytes: []u8, is_final: bool };
 const grpc_stream_page_size: usize = query_runner.default_page_size;
 
-fn buildStreamDataPage(session_id: []const u8, allocator: std.mem.Allocator) !PageResult {
-    const store = getSessionStore() orelse {
-        var resp = try buildErrorResponse(allocator, "58000", "Server not initialized", &.{}, &.{});
-        defer resp.deinit(allocator);
-        return .{ .bytes = try encodeMessage(allocator, resp), .is_final = true };
-    };
-
-    const entry = store.acquire(session_id) orelse {
-        throttleInvalidSessionProbe();
-        var resp = try buildErrorResponse(allocator, "28000", "Unknown session", &.{}, &.{});
-        defer resp.deinit(allocator);
-        return .{ .bytes = try encodeMessage(allocator, resp), .is_final = true };
-    };
-    // SONNY-3032: held for the request; the reaper closes only an unheld session.
-    defer store.release(entry);
-
-    entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-    const state = entry.state;
-    // SONNY-2799, SONNY-2823: the session's undo-log and engine transactions
-    // are this thread's for the request, whichever worker thread serves it.
-    const txn_scope = state.enterSessionTxn();
-    defer state.leaveSessionTxn(txn_scope);
-
-    const result_ptr = if (state.active_result_values) |*res| res else {
-        var resp = try buildErrorResponse(allocator, "02000", "No active result set", &.{}, &.{});
-        defer resp.deinit(allocator);
-        return .{ .bytes = try encodeMessage(allocator, resp), .is_final = true };
-    };
-
-    const start = state.result_page_index;
-
-    // Arena allocator for data page serialization (Issue #446):
-    // Per-value string dups become bump allocations; arena bulk-frees after encode.
-    var page_arena = std.heap.ArenaAllocator.init(allocator);
-    defer page_arena.deinit();
-    const pa = page_arena.allocator();
-
-    const page = try proto_util.buildDataPage(pa, result_ptr, start, grpc_stream_page_size, state.result_ordered, state.result_order_keys);
-    state.result_page_index += page.rows.items.len;
-    const is_final = page.final;
-
-    const status = try proto_util.buildStatus(pa, "00000", result_ptr.flags.items);
-    const resp = schema.ExecutionResponse{
-        .status = status,
-        .payload = .{ .page = page },
-    };
-    // resp.deinit not needed: arena handles all proto object memory
-
-    const encoded_tmp = try encodeMessage(pa, resp);
-    const encoded = try allocator.dupe(u8, encoded_tmp);
-
-    if (is_final) {
-        state.resetResult();
-    }
-
-    return .{ .bytes = encoded, .is_final = is_final };
-}
-
 /// Issue #514: Lock-free variant that operates on an already-locked state pointer.
 /// Caller MUST hold entry.mutex for the entire streaming loop.
 fn buildStreamDataPageLocked(state: *server_state.ServerState, allocator: std.mem.Allocator) !PageResult {
+    // SONNY-6334: the page encodes FLE fields as the session may read them.
+    state.installRequestThreadState();
+    defer server_state.ServerState.clearRequestThreadState();
+    // SONNY-2465: a statement the node-scan fast path served holds a stream,
+    // not an executor result; page it as Pull does (it used to end the
+    // streamed Execute after the schema frame with zero rows).
+    if (state.active_node_scan_stream) |*active_stream| {
+        // The scan reads storage as it pages: in the session's transaction.
+        const txn_scope = state.enterSessionTxn();
+        defer state.leaveSessionTxn(txn_scope);
+        return buildNodeScanStreamPage(state, active_stream, allocator);
+    }
     const result_ptr = if (state.active_result_values) |*res| res else {
         var resp = try buildErrorResponse(allocator, "02000", "No active result set", &.{}, &.{});
         defer resp.deinit(allocator);
@@ -1565,6 +1543,43 @@ fn buildStreamDataPageLocked(state: *server_state.ServerState, allocator: std.me
     }
 
     return .{ .bytes = encoded, .is_final = is_final };
+}
+
+// CANARY: REQ=REQ-SONNY-2465-GRPC-STREAM-NODE-SCAN; FEATURE="GrpcStreaming"; ASPECT=NodeScanPushedPages; STATUS=TESTED; TEST=tests/test_sonny2465_grpc_stream_node_scan.zig; OWNER=transport; UPDATED=2026-11-13
+/// SONNY-2465: the next pushed page of a node-scan stream (the streamed twin
+/// of handlePull's node-scan branch). A limit a page's WHERE runs into ends
+/// the stream with its SQLSTATE and fails the statement's transaction; the
+/// final page releases the stream. Caller holds `entry.mutex`.
+fn buildNodeScanStreamPage(
+    state: *server_state.ServerState,
+    active_stream: *node_scan_stream.NodeScanStream,
+    allocator: std.mem.Allocator,
+) !PageResult {
+    var page_result = active_stream.buildNextPage(allocator, grpc_stream_page_size) catch |err| {
+        if (!geode.eval.isResourceLimitError(err)) return err;
+        state.resetResult();
+        abortTxnAfterPullFailure(state);
+        const info = proto_util.mapError(err);
+        var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+        defer resp.deinit(allocator);
+        return .{ .bytes = try encodeMessage(allocator, resp), .is_final = true };
+    };
+    defer page_result.result.deinit(allocator);
+
+    var page_arena = std.heap.ArenaAllocator.init(allocator);
+    defer page_arena.deinit();
+    const pa = page_arena.allocator();
+
+    const page = try proto_util.buildDataPageFromRows(pa, page_result.result.rows, page_result.final, false, &.{});
+    const status = try proto_util.buildStatus(pa, "00000", active_stream.flags);
+    const resp = schema.ExecutionResponse{
+        .status = status,
+        .payload = .{ .page = page },
+    };
+    const encoded_tmp = try encodeMessage(pa, resp);
+    const encoded = try allocator.dupe(u8, encoded_tmp);
+    if (page.final) state.resetResult();
+    return .{ .bytes = encoded, .is_final = page.final };
 }
 
 // ── SONNY-1560: bounded, lock-free-between-pages pushed-result drain ────────
@@ -1789,7 +1804,7 @@ pub fn pushResultPages(
             });
             return .superseded;
         }
-        if (entry.state.active_result_values == null) {
+        if (entry.state.active_result_values == null and entry.state.active_node_scan_stream == null) {
             entry.mutex.unlock(io);
             return .no_result;
         }
@@ -1902,7 +1917,17 @@ fn handleExecuteStreaming(request_bytes: []const u8, trans: *GrpcTransport, allo
     // session result generation this Execute installed (SONNY-1560); the push
     // loop below re-validates it after every unlocked write.
     var claimed_epoch: u64 = 0;
-    const exec_resp = try handleExecute(request_bytes, allocator, &claimed_epoch);
+    // CANARY: REQ=REQ-SONNY-6547-TRANSPORT-PARITY; FEATURE="StorageIntegrity"; ASPECT=GrpcExecuteFallbackAnswer; STATUS=TESTED; TEST=tests/test_sonny6547_transport_parity.zig; OWNER=transport; UPDATED=2026-11-14
+    // SONNY-6547 (1): an error the handler did not answer is answered as the
+    // QUIC connection loop answers it (`proto_util.unhandledErrorInfo`); it
+    // failed the call.
+    const exec_resp = handleExecute(request_bytes, allocator, &claimed_epoch) catch |err| blk: {
+        log.err("gRPC Execute failed", &.{Attr.string("error", @errorName(err))});
+        const info = proto_util.unhandledErrorInfo(err);
+        var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+        defer resp.deinit(allocator);
+        break :blk try encodeMessage(allocator, resp);
+    };
     defer allocator.free(exec_resp);
 
     // SONNY-1560: probe the initial schema write the same way the page writes
@@ -2135,7 +2160,12 @@ fn handleLegacyPacket(request_bytes: []const u8, trans: *GrpcTransport, allocato
         .cdc_diag => |req| blk: {
             const req_bytes = try encodeMessage(allocator, req);
             defer allocator.free(req_bytes);
-            const resp_bytes = try handleCdcDiag(req_bytes, allocator);
+            const resp_bytes = switch (try handleCdcDiag(req_bytes, allocator)) {
+                .answer => |bytes| bytes,
+                // SONNY-6561: the QUIC handler's error frame.
+                .refused => |refusal| break :blk buildPacketError(allocator, refusal.sqlstate(), refusal.message()),
+                .invalid => break :blk buildPacketError(allocator, "22023", "Invalid CDC request"),
+            };
             defer allocator.free(resp_bytes);
             var resp_reader: std.Io.Reader = .fixed(resp_bytes);
             const resp = try protobuf.decode(schema.CdcDiagnosticsResponse, &resp_reader, allocator);
@@ -2146,7 +2176,11 @@ fn handleLegacyPacket(request_bytes: []const u8, trans: *GrpcTransport, allocato
         .cdc_ctrl => |req| blk: {
             const req_bytes = try encodeMessage(allocator, req);
             defer allocator.free(req_bytes);
-            const resp_bytes = try handleCdcCtrl(req_bytes, allocator);
+            const resp_bytes = switch (try handleCdcCtrl(req_bytes, allocator)) {
+                .answer => |bytes| bytes,
+                .refused => |refusal| break :blk buildPacketError(allocator, refusal.sqlstate(), refusal.message()),
+                .invalid => break :blk buildPacketError(allocator, "22023", "Invalid CDC request"),
+            };
             defer allocator.free(resp_bytes);
             var resp_reader: std.Io.Reader = .fixed(resp_bytes);
             const resp = try protobuf.decode(schema.CdcControlResponse, &resp_reader, allocator);
@@ -2461,10 +2495,13 @@ pub fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocat
         return encodeMessage(allocator, resp);
     };
 
+    // SONNY-6757: the response borrows everything it names (these literals,
+    // the store's session id, the request's graph name); `encodeMessage`
+    // copies the bytes, so only the list itself is freed here. The heap
+    // copies the response used to hold leaked on every Handshake.
     var caps = std.ArrayList([]const u8).initCapacity(allocator, 3) catch return error.OutOfMemory;
-    try caps.append(allocator, try allocator.dupe(u8, "GRPC"));
-    try caps.append(allocator, try allocator.dupe(u8, "PROTOBUF"));
-    try caps.append(allocator, try allocator.dupe(u8, "TLS1.3"));
+    defer caps.deinit(allocator);
+    caps.appendSliceAssumeCapacity(&.{ "GRPC", "PROTOBUF", "TLS1.3" });
 
     // S12: Use peer IP as rate limiter key (not attacker-controlled username).
     // This matches the QUIC handler which uses peer_ip at quic_connection_handler.zig:1301.
@@ -2511,7 +2548,7 @@ pub fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocat
         const session_id = store.createSessionAs(fed_principal, req.username, "", .ReadWrite, req.tenant_id, null, false, 0) catch |err| return helloSessionRefused(allocator, caps, err);
         const resp = schema.HelloResponse{
             .success = true,
-            .session_id = try allocator.dupe(u8, session_id),
+            .session_id = session_id,
             .error_message = "",
             .capabilities = caps,
         };
@@ -2543,10 +2580,13 @@ pub fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocat
                     limiter.recordFailureForPrincipal(peer_ip, req.username);
                 }
             }
+            // SONNY-6598 (QUIC parity): audited as a failed login or as an
+            // auth-system error; answered "failed" only when checked.
+            audit_mod.logLoginRefusal(allocator, req.username, auth_err);
             const resp = schema.HelloResponse{
                 .success = false,
                 .session_id = "",
-                .error_message = if (checked) "Authentication failed" else "Authentication temporarily unavailable",
+                .error_message = auth_rate_limiter_mod.helloRefusalMessage(auth_err),
                 .capabilities = caps,
             };
             return encodeMessage(allocator, resp);
@@ -2709,39 +2749,18 @@ pub fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocat
             }
         }
 
-        // GAP-0284: Set FLE role from HELLO request with injection validation (parity with QUIC handler).
-        // Always reset role on new connection to prevent stale role leakage.
-        if (req.role) |requested_role| {
-            if (requested_role.len > 0) {
-                // Validate role: only [a-zA-Z0-9_-] allowed — reject semicolons, commas, wildcards
-                var role_valid = true;
-                for (requested_role) |c| {
-                    if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') {
-                        role_valid = false;
-                        break;
-                    }
-                }
-                if (role_valid) {
-                    fle_integration.setCurrentUserRole(requested_role);
-                } else {
-                    log.warn("Rejected invalid FLE role: contains illegal characters", &.{});
-                    fle_integration.setCurrentUserRole(null);
-                }
-            } else {
-                fle_integration.setCurrentUserRole(null);
-            }
-        } else {
-            fle_integration.setCurrentUserRole(null);
-        }
-
         const session_id = store.createSession(req.username, req.password, auth_result.role, req.tenant_id, resolved_graph, auth_result.password_reset_required, auth_result.auth_version) catch |err| return helloSessionRefused(allocator, caps, err);
+        // GAP-0284, SONNY-6334: the FLE role the HELLO named, validated as
+        // QUIC does, kept on the session (its requests install it), never
+        // on the Handshake's thread.
+        store.setSessionFleRole(session_id, req.role) catch |err| return helloSessionRefused(allocator, caps, err);
         const resp = schema.HelloResponse{
             .success = true,
-            .session_id = try allocator.dupe(u8, session_id),
+            .session_id = session_id,
             .error_message = "",
             .capabilities = caps,
             .password_reset_required = auth_result.password_reset_required,
-            .graph = if (resolved_graph) |g| try allocator.dupe(u8, g) else null,
+            .graph = resolved_graph,
         };
         return encodeMessage(allocator, resp);
     }
@@ -2836,12 +2855,13 @@ pub fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocat
     var anon_buf: [96]u8 = undefined;
     const anon_principal = principalFor(&anon_buf, .anonymous, "", peer_ip);
     const session_id = store.createSessionAs(anon_principal, "", "", null, req.tenant_id, noauth_resolved_graph, false, 0) catch |err| return helloSessionRefused(allocator, caps, err);
+    store.setSessionFleRole(session_id, req.role) catch |err| return helloSessionRefused(allocator, caps, err);
     const resp = schema.HelloResponse{
         .success = true,
-        .session_id = try allocator.dupe(u8, session_id),
+        .session_id = session_id,
         .error_message = "",
         .capabilities = caps,
-        .graph = if (noauth_resolved_graph) |g| try allocator.dupe(u8, g) else null,
+        .graph = noauth_resolved_graph,
     };
     return encodeMessage(allocator, resp);
 }
@@ -2953,6 +2973,10 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
     // are this thread's for the request, whichever worker thread serves it.
     const txn_scope = state.enterSessionTxn();
     defer state.leaveSessionTxn(txn_scope);
+    // SONNY-6334: the session's request context (tenant, FLE role,
+    // decrypt_field gate) on this thread for the request, as QUIC does.
+    state.installRequestThreadState();
+    defer server_state.ServerState.clearRequestThreadState();
 
     state.resetResult();
     // SONNY-1560: a new statement invalidates any in-flight pushed stream on
@@ -2982,7 +3006,20 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
     // CANARY: REQ=REQ-GAP-0284-ALTER-USER-GRPC-WIRE; FEATURE="PasswordResetEnforcement"; ASPECT=GrpcExecuteIntercept; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
     {
         const trimmed = std.mem.trim(u8, req.query, " \t\r\n");
-        if (parseAlterUserSetPassword(trimmed)) |parsed| {
+        const parsed_password = parseAlterUserSetPassword(trimmed);
+        // SONNY-6359: another user's password goes to the parser
+        // (geode.auth.user_reset_password: Admin only, the policy).
+        const intercepted = if (parsed_password) |p| proto_util.passwordInterceptApplies(state.authenticated_user, p.username) else false;
+        if (intercepted) {
+            const parsed = parsed_password.?;
+            // SONNY-2751: a read-only request refuses a password change, as
+            // the read-only floor refuses the rest of the security DDL (see
+            // the QUIC handler).
+            if (req.read_only) {
+                var resp = try buildErrorResponse(allocator, "42501", "Read-only request: data modification rejected", &.{}, &.{});
+                defer resp.deinit(allocator);
+                return encodeMessage(allocator, resp);
+            }
             // Verify the user is changing their own password
             if (state.authenticated_user) |auth_user| {
                 if (!std.mem.eql(u8, auth_user, parsed.username)) {
@@ -2996,19 +3033,20 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                 return encodeMessage(allocator, resp);
             }
 
+            // SONNY-1332: refused in cluster mode (no Raft slice for
+            // __geode_security); see the QUIC handler's twin.
+            geode.distributed.cluster.gateUnreplicatedWrite() catch |err| {
+                const info = proto_util.mapError(err);
+                var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+                defer resp.deinit(allocator);
+                return encodeMessage(allocator, resp);
+            };
+
             // Validate password against SecurityManager policy BEFORE updating
             if (state.security_manager) |sm| {
                 sm.validatePassword(parsed.new_password) catch |err| {
-                    const msg = switch (err) {
-                        error.PasswordTooShort => "Password too short (minimum 20 characters)",
-                        error.PasswordTooLong => "Password too long (maximum 256 characters)",
-                        error.PasswordMissingUppercase => "Password must contain at least one uppercase letter",
-                        error.PasswordMissingLowercase => "Password must contain at least one lowercase letter",
-                        error.PasswordMissingDigit => "Password must contain at least one digit",
-                        error.PasswordContainsSpaces => "Password must not contain spaces",
-                        error.PasswordNotPassphrase => "Password must be a passphrase with at least 3 words",
-                        else => "Password does not meet security policy requirements",
-                    };
+                    // SONNY-6331: the rule that failed, with the configured limit.
+                    const msg = if (geode_auth.PasswordPolicy.violationOf(err)) |v| sm.password_policy.message(v) else "Password does not meet security policy requirements";
                     var resp = try buildErrorResponse(allocator, "28P01", msg, &.{}, &.{});
                     defer resp.deinit(allocator);
                     return encodeMessage(allocator, resp);
@@ -3023,11 +3061,12 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             }
 
             user_mgmt.updateUserPassword(allocator, parsed.username, parsed.new_password) catch |err| {
-                const msg = switch (err) {
+                // SONNY-3038: not saved (58030); the user is locked out.
+                const info: proto_util.ErrorInfo = if (err == error.UserNotPersisted) proto_util.mapError(err) else .{ .code = "28P01", .message = switch (err) {
                     error.PasswordReuse => "New password must not match the current password",
-                    else => "Failed to update password",
-                };
-                var resp = try buildErrorResponse(allocator, "28P01", msg, &.{}, &.{});
+                    else => if (geode_auth.PasswordPolicy.violationOf(err)) |v| geode_auth.PasswordPolicy.geodeSecure().message(v) else "Failed to update password",
+                } };
+                var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
                 defer resp.deinit(allocator);
                 return encodeMessage(allocator, resp);
             };
@@ -3142,10 +3181,9 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // SONNY-2805: `analyzeRequest` keeps a program with transaction
             // control off the fast paths that run only its last query.
             const analysis = query_traits.analyzeRequest(&parse_result.program);
-            var traits = analysis.traits;
+            const traits = analysis.traits;
             const ordered = traits.ordered;
             const distinct = traits.distinct;
-            const heur_index = traits.has_where_eq or traits.has_filter_eq;
 
             const role = if (state.authenticated_role) |role_u8|
                 @as(user_mgmt.Role, @enumFromInt(role_u8))
@@ -3154,51 +3192,14 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
 
             const catalog = try execution.ensureCatalogInstance(allocator);
 
-            // Detect index-seek for EXPLAIN: check if query's node pattern
-            // matches a catalog index (label + property equality)
-            if (analysis.kind == .explain) {
-                if (analysis.target) |target| {
-                    if (target.* == .Query) {
-                        const q = target.Query;
-                        if (q.match.chains.len > 0) {
-                            const head_opt = q.match.chains[0].head;
-                            if (head_opt) |head| {
-                                if (head.labels.len > 0) {
-                                    const label = head.labels[0];
-                                    // Check inline properties
-                                    if (head.props) |props| {
-                                        if (props.len > 0) {
-                                            const prop_name = props[0].key;
-                                            catalog.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
-                                            defer catalog.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
-                                            var idx_iter = catalog.indexes.valueIterator();
-                                            while (idx_iter.next()) |info| {
-                                                if (std.mem.eql(u8, info.table_name, label) and
-                                                    info.columns.len > 0 and
-                                                    std.mem.eql(u8, info.columns[0], prop_name))
-                                                {
-                                                    traits.has_index_seek = true;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    // Check WHERE clause for equality on indexed property
-                                    if (!traits.has_index_seek) {
-                                        if (q.where_clause) |where_expr| {
-                                            if (head.name) |vn| {
-                                                catalog.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
-                                                defer catalog.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
-                                                traits.has_index_seek = whereHasIndexedEq(where_expr, vn, label, catalog);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            // SONNY-6276: a legacy EXPLAIN (no plan; the version-1 payload)
+            // claims no index seek. It said IndexSeek for any catalog index on
+            // an inline property or an equality anywhere in the WHERE (a
+            // fulltext index, an AND), while the legacy executor behind it never
+            // reports one (SONNY-1335). A planned EXPLAIN asks the executor's
+            // own seek decision (planned_read_runtime.nodeCanUseIndex), and the
+            // response flag U:HeuristicIndexSelection, set for every WHERE or
+            // FILTER equality, is no longer sent.
             // GAP-0756: Consult the shared query optimizer before building the
             // execution context so repeat parameterised queries hit the
             // cross-connection plan cache instead of re-planning every time.
@@ -3239,6 +3240,10 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     .source = .grpc_handler,
                 });
             };
+            // SONNY-2782: the principal every gate below and the executor
+            // authorize as; null with authentication disabled (the QUIC
+            // handler decides the same way).
+            const request_principal = execution.session_graph.requestPrincipal(&principal_for_request);
 
             var exec_context = execution.ExecutionContext{
                 .catalog = catalog,
@@ -3254,13 +3259,11 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                 .graph_bound = state.graph_bound,
                 // GAP-0281: Thread session tenant_id into execution context for FLE hooks
                 .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
-                // GAP-0844 (secondary): thread the session FLE role into the context
-                // so getCurrentUserRoleCtx prefers it. The gRPC HELLO sets the role
-                // per-thread (setCurrentUserRole); state.fle_user_role mirrors it
-                // when populated, else null falls back to the per-thread map —
-                // identical to current behavior.
-                .fle_role = state.fle_user_role,
-                .principal = &principal_for_request,
+                // GAP-0844 (secondary), SONNY-6334: the session's FLE role, the
+                // one its HELLO named (`SessionStore.setSessionFleRole`), when
+                // the authenticated user holds it (SONNY-6341).
+                .fle_role = state.effectiveFleRole(),
+                .principal = request_principal,
                 .pending_index_rebuilds = null,
                 // SONNY-2799: see `abortFailedTransaction`.
                 .defer_failed_txn_rollback = true,
@@ -3282,12 +3285,8 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             for (base_flags) |flag| {
                 try appendFlagIfMissing(allocator, &flags, flag);
             }
-            if (traits.has_union) {
-                try appendFlagIfMissing(allocator, &flags, server_flags.F_UNION_PHASES);
-            }
-            if (heur_index) {
-                try appendFlagIfMissing(allocator, &flags, server_flags.F_HEUR_INDEX);
-            }
+            // SONNY-6596: no `U:UnionPhaseTimings` flag. No UNION phase is
+            // timed (the version-1 PROFILE's Union* operators were invented).
             if (parse_result.has_double_solidus_comment) {
                 try appendFlagIfMissing(allocator, &flags, "GB03:DoubleSolidusComment");
             }
@@ -3298,7 +3297,9 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             if (grpc_query_tenant) |tid| {
                 if (tenant_quota.getGlobalQuotaManager()) |qm| {
                     qm.acquireQuery(tid) catch {
-                        var resp = try buildErrorResponse(allocator, "42000", "Query quota exceeded for tenant", &.{}, &.{});
+                        // SONNY-6645: a resource limit, 53400 (it was 42000).
+                        const quota = proto_util.mapError(error.TenantQueryQuotaExceeded);
+                        var resp = try buildErrorResponse(allocator, quota.code, quota.message, &.{}, &.{});
                         defer resp.deinit(allocator);
                         return encodeMessage(allocator, resp);
                     };
@@ -3354,7 +3355,6 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             const lock_graph = txn_end_graph orelse stmt_plan.lock_graph;
             const self_locking = stmt_plan.self_locking;
             const needs_store_lock = stmt_plan.needs_store_lock or txn_end_graph != null;
-            const program_is_mutating = stmt_plan.is_mutation;
             const is_mutation = stmt_plan.is_mutation;
             // The write lock: for a change, or for the end of a transaction.
             const write_locked = is_mutation or txn_end_graph != null;
@@ -3366,7 +3366,9 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // orchestrator sets ExecuteRequest.read_only=true to guarantee no
             // mutation reaches the store no matter what role the connection holds.
             // CANARY: REQ=REQ-EXEC-READ-ONLY-REQUEST-001; FEATURE="ReadOnlyExecute"; ASPECT=GrpcGate; STATUS=TESTED; TEST=tests/test_read_only_execute.zig; OWNER=engine; UPDATED=2026-08-28
-            if (req.read_only and program_is_mutating) {
+            // SONNY-2751: any change of stored state, the security DDL
+            // included (see the QUIC handler).
+            if (req.read_only and stmt_plan.changes_state) {
                 var resp = try buildErrorResponse(allocator, "42501", "Read-only request: data modification rejected", &.{}, &.{});
                 defer resp.deinit(allocator);
                 return encodeMessage(allocator, resp);
@@ -3381,13 +3383,14 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // CANARY: REQ=REQ-SEC-PER-GRAPH-GRANTS; FEATURE="PerGraphGrants"; ASPECT=GrpcWriteGate; STATUS=TESTED; TEST=tests/test_per_graph_grants.zig; OWNER=security; UPDATED=2026-10-11
             // REQ-SEC-PER-GRAPH-GRANTS: write on the graph the program
             // changes, for every principal; a self-locking CALL needs
-            // database-wide write. See the QUIC handler.
+            // database-wide write. SONNY-2781: by the actions the program
+            // needs (`changePermittedOn`). See the QUIC handler.
+            // SONNY-2782: the shared gate (`session_graph.requestChangePermitted`):
+            // with authentication disabled there is no principal and nothing
+            // is refused, as on QUIC. It refused every change (42501:
+            // decide answered unauthenticated) unless --insecure-allow-all.
             if (is_mutation) {
-                const write_ok = if (stmt_plan.self_locking)
-                    geode.security.gps.writePermitted(std.heap.smp_allocator, &principal_for_request)
-                else
-                    geode.security.gps.writePermittedOn(std.heap.smp_allocator, &principal_for_request, lock_graph);
-                if (!write_ok) {
+                if (!execution.session_graph.requestChangePermitted(std.heap.smp_allocator, request_principal, stmt_plan.self_locking, lock_graph, stmt_plan.actions)) {
                     var resp = try buildErrorResponse(allocator, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
                     defer resp.deinit(allocator);
                     return encodeMessage(allocator, resp);
@@ -3396,14 +3399,12 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
             // CANARY: REQ=REQ-SEC-DEFAULT-ROLE-FAIL-CLOSED; FEATURE="FailClosedDefaultRole"; ASPECT=GrpcReadGate; STATUS=TESTED; TEST=tests/test_default_role_fail_closed.zig; OWNER=security; UPDATED=2026-10-11
             // A principal with no global Read (a user with no stored role)
             // reads only graphs it holds a READ grant on, the default graph
-            // included. A session with no role (auth disabled) is not gated,
-            // as on QUIC: it has no principal for `gps.decide` to allow.
-            if (role != null) {
-                if (!try execution.session_graph.programReadPermitted(allocator, &principal_for_request, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
-                    var resp = try buildErrorResponse(allocator, "42501", "Permission denied: no grant on the graph", &.{}, &.{});
-                    defer resp.deinit(allocator);
-                    return encodeMessage(allocator, resp);
-                }
+            // included. SONNY-2782: the shared gate, as on QUIC: every
+            // session with authentication enabled, none with it disabled.
+            if (!try execution.session_graph.requestReadPermitted(allocator, request_principal, &parse_result.program, &analysis, query_graph_name, homeGraphName(state))) {
+                var resp = try buildErrorResponse(allocator, "42501", "Permission denied: no grant on the graph", &.{}, &.{});
+                defer resp.deinit(allocator);
+                return encodeMessage(allocator, resp);
             }
 
             // CANARY: REQ=REQ-SONNY-2802-PROFILE-REGIME; FEATURE="StatementAuthorization"; ASPECT=GrpcHandler; STATUS=TESTED; TEST=tests/test_sonny2802_profile_regime.zig; OWNER=security; UPDATED=2026-09-26
@@ -3456,6 +3457,25 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     return encodeMessage(allocator, resp);
                 }
             }
+            // CANARY: REQ=REQ-SONNY-6523-QUARANTINE-FAIL-CLOSED; FEATURE="StorageIntegrity"; ASPECT=GrpcProgramGate; STATUS=TESTED; TEST=tests/test_sonny6523_quarantine_fail_closed.zig; OWNER=storage; UPDATED=2026-11-13
+            // SONNY-6523: as the QUIC handler (`programQuarantineError`).
+            // SONNY-6541 (7): and as it, not for a program that touches no
+            // graph's data.
+            if (stmt_plan.needs_store_lock and !stmt_plan.lock_graph_may_be_missing and !stmt_plan.reads_several_graphs and
+                query_traits.programDataGraph(&parse_result.program, query_graph_name, homeGraphName(state)) != .none)
+            {
+                // SONNY-6547 (1): a read is hydrated first too, as the
+                // executor's gate does (SONNY-6541 (3)): with no row-security
+                // engine installed (the handler called in process) a read is
+                // served engine-direct, with no read snapshot to find the
+                // damage, and answered rows from the damaged store.
+                if (graph_store.programQuarantineError(allocator, &.{lock_graph}, true)) |qerr| {
+                    const info = proto_util.mapError(qerr);
+                    var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
+                    defer resp.deinit(allocator);
+                    return encodeMessage(allocator, resp);
+                }
+            } else graph_store.clearQuarantinedReadError();
 
             // SONNY-2799: a failed statement's transaction is rolled back
             // after the request's lock is released: this defer is registered
@@ -3609,7 +3629,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                     if (graph_lock_handle) |h| {
                         // GAP-0511: Release lock before index rebuild
                         graph_store.releaseGraphLock(h);
-                        rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
+                        rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds, null);
                     }
                 }
                 // GAP-0753: Always pop the active-store thread-local and
@@ -3739,7 +3759,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                                     // GAP-0511: Release lock before index rebuild
                                     graph_store.releaseGraphLock(h);
                                     lock_released = true;
-                                    rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
+                                    rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds, &owned_planned.result);
                                 }
                             }
 
@@ -3754,7 +3774,6 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                                 .compact = store.config.compact_profile,
                                 .include_mem_curve = store.config.memcurve_profile,
                                 .disable_estimates = store.config.disable_estimates,
-                                .spill_threshold = state.query_mem_limit_bytes,
                                 .committed_txns = state.global_commit_ts,
                                 .graph_store_nodes = profile_node_count,
                                 .graph_store_edges = profile_edge_count,
@@ -3773,6 +3792,9 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                         }
                     }
 
+                    // SONNY-6596: the version-1 PROFILE reports this measured time.
+                    const legacy_start_ns = profile_payload.monotonicNs();
+                    _ = execution.takePointWriteSeek();
                     var exec_result = execution.executeStatementWithContext(allocator, target_stmt.*, exec_context) catch |err| {
                         failed_in_txn = true;
                         const info = proto_util.mapError(err);
@@ -3780,7 +3802,16 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                         defer resp.deinit(allocator);
                         return encodeMessage(allocator, resp);
                     };
+                    const legacy_time_ns = profile_payload.monotonicNs() -| legacy_start_ns;
                     defer exec_result.deinit(allocator);
+                    // SONNY-6587 item 2: the catalog index the point-write seek
+                    // used, as the version-2 trace names one (SONNY-1335).
+                    var point_seek_rows: u64 = 0;
+                    const point_seek_index: ?[]u8 = if (execution.takePointWriteSeek()) |seek| blk: {
+                        point_seek_rows = seek.rows;
+                        break :blk try planned_read_runtime.equalityIndexName(allocator, exec_context, seek.label, seek.key);
+                    } else null;
+                    defer if (point_seek_index) |name| allocator.free(name);
                     geode.graph_storage_adapter.settleThreadSessionTxn() catch |err| {
                         failed_in_txn = true;
                         const info = proto_util.mapError(err);
@@ -3807,7 +3838,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                             // GAP-0511: Release lock before index rebuild
                             graph_store.releaseGraphLock(h);
                             lock_released = true;
-                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
+                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds, &exec_result);
                         }
                     }
 
@@ -3826,13 +3857,15 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                         .compact = store.config.compact_profile,
                         .include_mem_curve = store.config.memcurve_profile,
                         .disable_estimates = store.config.disable_estimates,
-                        .spill_threshold = state.query_mem_limit_bytes,
                         .committed_txns = state.global_commit_ts,
                         .graph_store_nodes = @intCast(store_ptr.getNodeCount()),
                         .graph_store_edges = @intCast(store_ptr.getEdgeCount()),
                         .graph_store_dirty = store_ptr.isDirty(),
                         .flagger_findings = exec_result.flags.items,
                         .union_part_count = analysis.union_part_count,
+                        .execute_time_ns = legacy_time_ns,
+                        .index_name = point_seek_index,
+                        .index_rows = point_seek_rows,
                     });
 
                     const status = try proto_util.buildStatus(allocator, "00000", exec_result.flags.items);
@@ -3860,8 +3893,9 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                                     // SONNY-3348 (round 19, m2): any error the
                                     // scan fails with fails its transaction.
                                     failed_in_txn = true;
-                                    if (!geode.eval.isResourceLimitError(err)) return err;
-                                    const info = proto_util.mapError(err);
+                                    // SONNY-6547 (1): and a storage-integrity
+                                    // refusal answers as itself, as a limit does.
+                                    const info = proto_util.statementErrorInfo(err) orelse return err;
                                     var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
                                     defer resp.deinit(allocator);
                                     return encodeMessage(allocator, resp);
@@ -3883,7 +3917,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                                             // GAP-0511: Release lock before index rebuild
                                             graph_store.releaseGraphLock(h);
                                             lock_released = true;
-                                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
+                                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds, null);
                                         }
                                     }
 
@@ -3968,7 +4002,7 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
                             // GAP-0511: Release lock before index rebuild
                             graph_store.releaseGraphLock(h);
                             lock_released = true;
-                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds);
+                            rebuildPendingIndexes(allocator, lock_graph, &pending_index_rebuilds, &exec_result);
                         }
                     }
 
@@ -4005,6 +4039,14 @@ pub fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator, ep
 
                     // Deep-copy result to prevent use-after-free when AST is freed
                     // (gRPC streaming builds data pages after handleExecute returns)
+                    // SONNY-6602: `allocator` is not request-scoped. grpc_zig
+                    // calls every handler with `GrpcServer.allocator`
+                    // (server.zig, `handler.handler_fn(.., self.allocator)`),
+                    // the allocator `GeodeGrpcServer.init` passed it, which is
+                    // also the SessionStore's and so `state.allocator`: the
+                    // process allocator `geode serve` hands in (main.zig). The
+                    // retained result is freed by `resetResult` with the
+                    // allocator that made it.
                     var duped = try execution.duplicateResult(allocator, exec_result);
                     // SONNY-3385: the stored result outlives this request, and
                     // the nodes and relationships it holds may live in the
@@ -4073,6 +4115,10 @@ pub fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8
     // are this thread's for the request, whichever worker thread serves it.
     const txn_scope = state.enterSessionTxn();
     defer state.leaveSessionTxn(txn_scope);
+    // SONNY-6334: the session's request context (tenant, FLE role,
+    // decrypt_field gate) on this thread for the request, as QUIC does.
+    state.installRequestThreadState();
+    defer server_state.ServerState.clearRequestThreadState();
 
     switch (try validateSessionAuth(allocator, state)) {
         .ok => {},
@@ -4299,7 +4345,16 @@ pub fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
             return encodeMessage(allocator, resp);
         };
         const store_ptr = graph_store.getGlobalStore(allocator);
-        txn_undo_log.getGlobalUndoLog(allocator).commit(store_ptr);
+        // SONNY-2979: the durable undo log's COMMITTED record is the commit
+        // point; without it the transaction is rolled back and COMMIT fails.
+        txn_undo_log.getGlobalUndoLog(allocator).commit(store_ptr) catch {
+            txn_undo_log.getGlobalUndoLog(allocator).rollback(graph_store.getWritableGlobalStore(allocator)) catch |err| {
+                log.warn("transaction rollback after a failed commit failed", &.{Attr.string("error", @errorName(err))});
+            };
+            state.endTransaction();
+            const resp = schema.CommitResponse{ .success = false, .@"error" = txnEndError(error.SessionCommitFailed) };
+            return encodeMessage(allocator, resp);
+        };
 
         state.global_commit_ts += 1;
         state.endTransaction();
@@ -4500,69 +4555,90 @@ fn handleRollbackTo(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
     return encodeMessage(allocator, resp);
 }
 
-fn handleCdcDiag(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
-    // SEC-002 (#849): Authenticate before exposing any diagnostic data.
-    // Decode the request to read session_id; on any non-.ok auth status return
-    // the SAFE empty/default response (leaks no diagnostics).
-    var diag_reader: std.Io.Reader = .fixed(request_bytes);
-    var diag_req = protobuf.decode(schema.CdcDiagnosticsRequest, &diag_reader, allocator) catch {
-        // Undecodable body — treat as unauthenticated (no session_id). Return safe default.
-        var safe_resp = schema.CdcDiagnosticsResponse{
-            .config = .{ .enabled = false },
-            .engine = .{ .is_running = false },
-            .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot).empty,
-            .malformed_hashes = std.ArrayList(schema.CdcMalformedHash).empty,
-            .version = try allocator.dupe(u8, @import("build_options").version),
-            .timestamp_ms = compat_milliTimestamp(),
-        };
-        defer safe_resp.deinit(allocator);
-        return try encodeMessage(allocator, safe_resp);
-    };
-    defer diag_req.deinit(allocator);
+// CANARY: REQ=REQ-SONNY-6561-CDC-WIRE-PARITY; FEATURE="CDCControlProtocol"; ASPECT=GrpcRefusalStatus; STATUS=TESTED; TEST=tests/test_sonny6561_cdc_transport_parity.zig; OWNER=cdc; UPDATED=2026-11-14
+/// SONNY-6561: the reply to a CDC_DIAGNOSTICS / CDC_CONTROL request. The
+/// answer and the refusals are the QUIC handler's (`execution.cdc*Answer`,
+/// `execution.CdcRefusal`): a refused caller gets the SQLSTATE QUIC sends,
+/// as a grpc-status trailer (`sendCdcReply`). The diagnostics refusal used to
+/// be an empty "CDC disabled" payload, and CDC_CONTROL answered AUTH_REQUIRED
+/// to a non-admin.
+const CdcReply = union(enum) {
+    /// The encoded CdcDiagnosticsResponse / CdcControlResponse.
+    answer: []u8,
+    refused: execution.CdcRefusal,
+    /// The request body did not decode.
+    invalid,
+};
 
-    switch (try authorizeAdminSession(diag_req.session_id, allocator)) {
-        .ok => {},
-        .missing, .invalidated, .forbidden => {
-            // Return safe default — leaks no diagnostics.
-            var safe_resp = schema.CdcDiagnosticsResponse{
-                .config = .{ .enabled = false },
-                .engine = .{ .is_running = false },
-                .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot).empty,
-                .malformed_hashes = std.ArrayList(schema.CdcMalformedHash).empty,
-                .version = try allocator.dupe(u8, @import("build_options").version),
-                .timestamp_ms = compat_milliTimestamp(),
-            };
-            defer safe_resp.deinit(allocator);
-            return try encodeMessage(allocator, safe_resp);
-        },
-    }
-
-    // GAP-0255: Use the real global CDC engine when available (parity with QUIC handler).
-    // Acquire CDC mutex for thread-safe access (parity with procedure_registry).
-    const cdc_mutex = execution.getCdcMutex();
-    cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-    if (execution.getGlobalCdcEngine()) |eng| {
-        const resp = try eng.exportDiagnostics(allocator);
-        return encodeMessage(allocator, resp);
-    }
-    // No CDC engine running — return default diagnostics
-    const resp = schema.CdcDiagnosticsResponse{
-        .config = .{ .enabled = false },
-        .engine = .{ .is_running = false },
-        .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot).empty,
-        .malformed_hashes = std.ArrayList(schema.CdcMalformedHash).empty,
-        .version = try allocator.dupe(u8, @import("build_options").version),
-        .timestamp_ms = compat_milliTimestamp(),
+fn cdcRefusal(session_id: []const u8, allocator: std.mem.Allocator) !?execution.CdcRefusal {
+    return switch (try authorizeAdminSession(session_id, allocator)) {
+        .ok => null,
+        .missing, .invalidated => .unauthenticated,
+        .forbidden => .not_admin,
     };
-    return encodeMessage(allocator, resp);
 }
 
-fn handleCdcCtrl(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
-    // SEC-002 (#849): Authenticate before touching the CDC engine.
-    // Decode the request FIRST to read session_id, then gate before
-    // execution.getGlobalCdcEngine().  This closes both the native gRPC path
-    // AND the legacy handleLegacyPacket shim which calls this handler directly.
+/// SONNY-6570: the session's user name, copied into `buf`, for a CDC audit
+/// record ("" with no session).
+fn cdcActor(session_id: []const u8, buf: []u8) execution.CdcActor {
+    if (session_id.len == 0) return .{};
+    const store = getSessionStore() orelse return .{};
+    const entry = store.acquire(session_id) orelse return .{};
+    defer store.release(entry);
+    entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const name = entry.state.authenticated_user orelse return .{};
+    const n = @min(name.len, buf.len);
+    @memcpy(buf[0..n], name[0..n]);
+    return .{ .username = buf[0..n] };
+}
+
+fn cdcRefusalGrpcStatus(refusal: execution.CdcRefusal) u8 {
+    return switch (refusal) {
+        .unauthenticated => 16, // UNAUTHENTICATED
+        .not_admin => 7, // PERMISSION_DENIED
+    };
+}
+
+/// "<SQLSTATE>: <message>" (under the 127 bytes `endStreamWithStatus` keeps).
+fn cdcRefusalGrpcMessage(refusal: execution.CdcRefusal) []const u8 {
+    return switch (refusal) {
+        inline else => |r| comptime r.sqlstate() ++ ": " ++ r.message(),
+    };
+}
+
+const cdc_invalid_request_grpc_message = "22023: Invalid CDC request";
+
+fn sendCdcReply(trans: *GrpcTransport, reply: CdcReply, allocator: std.mem.Allocator) !void {
+    switch (reply) {
+        .answer => |bytes| {
+            defer allocator.free(bytes);
+            return sendUnaryResponse(trans, bytes);
+        },
+        .refused => |refusal| return trans.endStreamWithStatus(trans.last_stream_id, cdcRefusalGrpcStatus(refusal), cdcRefusalGrpcMessage(refusal)),
+        .invalid => return trans.endStreamWithStatus(trans.last_stream_id, 3, cdc_invalid_request_grpc_message), // INVALID_ARGUMENT
+    }
+}
+
+fn handleCdcDiag(request_bytes: []const u8, allocator: std.mem.Allocator) !CdcReply {
+    // SEC-002 (#849): authenticate before exposing any diagnostic data.
+    var reader: std.Io.Reader = .fixed(request_bytes);
+    var req = protobuf.decode(schema.CdcDiagnosticsRequest, &reader, allocator) catch return .invalid;
+    defer req.deinit(allocator);
+    if (try cdcRefusal(req.session_id, allocator)) |refusal| {
+        var name_buf: [256]u8 = undefined;
+        execution.auditCdcFrameRefusal(allocator, "CDC_DIAGNOSTICS", cdcActor(req.session_id, &name_buf), refusal);
+        return .{ .refused = refusal };
+    }
+
+    var resp = try execution.cdcDiagnosticsAnswer(allocator);
+    defer resp.deinit(allocator);
+    return .{ .answer = try encodeMessage(allocator, resp) };
+}
+
+fn handleCdcCtrl(request_bytes: []const u8, allocator: std.mem.Allocator) !CdcReply {
+    // SEC-002 (#849): authenticate before touching the CDC engine. This
+    // gates the native gRPC path and the legacy handleLegacyPacket shim.
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.CdcControlRequest, &reader, allocator) catch {
         var inval_resp = schema.CdcControlResponse{
@@ -4571,56 +4647,19 @@ fn handleCdcCtrl(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
             .guardrail_epoch = 0,
         };
         defer inval_resp.deinit(allocator);
-        return try encodeMessage(allocator, inval_resp);
+        return .{ .answer = try encodeMessage(allocator, inval_resp) };
     };
     defer req.deinit(allocator);
-
-    switch (try authorizeAdminSession(req.session_id, allocator)) {
-        .ok => {},
-        .missing, .invalidated, .forbidden => {
-            var auth_resp = schema.CdcControlResponse{
-                .success = false,
-                .status = try allocator.dupe(u8, "AUTH_REQUIRED"),
-                .guardrail_epoch = 0,
-            };
-            defer auth_resp.deinit(allocator);
-            return try encodeMessage(allocator, auth_resp);
-        },
+    var name_buf: [256]u8 = undefined;
+    const actor = cdcActor(req.session_id, &name_buf);
+    if (try cdcRefusal(req.session_id, allocator)) |refusal| {
+        execution.auditCdcFrameRefusal(allocator, "CDC_CONTROL", actor, refusal);
+        return .{ .refused = refusal };
     }
 
-    // GAP-0255: Use the real global CDC engine when available (parity with QUIC handler).
-    // Acquire CDC mutex for thread-safe access (parity with procedure_registry).
-    const cdc_mutex = execution.getCdcMutex();
-    cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-    if (execution.getGlobalCdcEngine()) |eng| {
-        if (std.ascii.eqlIgnoreCase(req.action, "RESET_GUARDRAILS")) {
-            eng.resetGuardrailState();
-            var ok_resp = schema.CdcControlResponse{
-                .success = true,
-                .status = try allocator.dupe(u8, "OK"),
-                .guardrail_epoch = eng.guardrail_epoch,
-            };
-            defer ok_resp.deinit(allocator);
-            return try encodeMessage(allocator, ok_resp);
-        } else {
-            var unsup_resp = schema.CdcControlResponse{
-                .success = false,
-                .status = try allocator.dupe(u8, "UNSUPPORTED"),
-                .guardrail_epoch = eng.guardrail_epoch,
-            };
-            defer unsup_resp.deinit(allocator);
-            return try encodeMessage(allocator, unsup_resp);
-        }
-    }
-    // No CDC engine running — return NO_ENGINE
-    var no_eng_resp = schema.CdcControlResponse{
-        .success = false,
-        .status = try allocator.dupe(u8, "NO_ENGINE"),
-        .guardrail_epoch = 0,
-    };
-    defer no_eng_resp.deinit(allocator);
-    return try encodeMessage(allocator, no_eng_resp);
+    var resp = try execution.cdcControlAnswer(allocator, req.action, actor);
+    defer resp.deinit(allocator);
+    return .{ .answer = try encodeMessage(allocator, resp) };
 }
 
 fn handleBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
@@ -4664,13 +4703,14 @@ fn handleBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     const backup_lock_handle = graph_store.acquireGraphReadLockTagged(graph_store.DEFAULT_GRAPH_NAME, .misc);
     defer graph_store.releaseGraphLock(backup_lock_handle);
 
-    const backup_dir = "./server_backups";
-    var mgr = SimplifiedBackupManager.init(allocator, backup_dir, .{
+    // SONNY-6299: under the data directory (or GEODE_BACKUP_DIR), not
+    // ./server_backups of the working directory.
+    var mgr = SimplifiedBackupManager.initForServer(allocator, .{
         // GAP-0880: gzip is the only compression codec with a real encoder;
         // never request zstd (no encoder — UnsupportedCompression).
         .compression = if (req.compress) .gzip else .none,
-        .encryption = false,
-        .retention_days = 30,
+        // SONNY-6355: encrypted under GEODE_TDE_KEY when it is set.
+        .encryption = backup_mgr.encryptionFromEnv(),
     }) catch |err| {
         const msg = try std.fmt.allocPrint(allocator, "Backup init failed: {s}", .{@errorName(err)});
         const resp = schema.BackupResponse{ .success = false, .message = msg };
@@ -4700,6 +4740,21 @@ fn handleBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
         .checksum = try std.fmt.allocPrint(allocator, "{x}", .{metadata.checksum}),
     };
     return encodeMessage(allocator, resp);
+}
+
+/// The authenticated username of `session_id`, copied into `buf` (for an
+/// audit record); "" when there is none or it does not fit.
+fn sessionUsername(session_id: []const u8, buf: []u8) []const u8 {
+    if (session_id.len == 0) return "";
+    const store = getSessionStore() orelse return "";
+    const entry = store.acquire(session_id) orelse return "";
+    defer store.release(entry);
+    entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    const name = entry.state.authenticated_user orelse return "";
+    if (name.len > buf.len) return "";
+    @memcpy(buf[0..name.len], name);
+    return buf[0..name.len];
 }
 
 fn handleRestore(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
@@ -4746,41 +4801,20 @@ fn handleRestore(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
         return encodeMessage(allocator, resp);
     }
 
-    var mgr = SimplifiedBackupManager.init(allocator, "./server_backups", .{
-        // Restore reads the codec from each backup file's header; keep the
-        // honest default (.none) — .zstd has no encoder (GAP-0880).
-        .compression = .none,
-        .encryption = false,
-        .retention_days = 30,
-    }) catch |err| {
-        const msg = try std.fmt.allocPrint(allocator, "Restore init failed: {s}", .{@errorName(err)});
-        const resp = schema.RestoreResponse{ .success = false, .message = msg };
-        return encodeMessage(allocator, resp);
-    };
-    defer mgr.deinit();
-
-    const target_time: i64 = if (req.target_time.len > 0)
-        std.fmt.parseInt(i64, req.target_time, 10) catch compat_milliTimestamp()
-    else
-        compat_milliTimestamp();
-
-    const restore_dir = if (getEnvVarOwned(allocator, "GEODE_DATA_DIR")) |dir| blk: {
-        defer allocator.free(dir);
-        break :blk try allocator.dupe(u8, dir);
-    } else |_| try allocator.dupe(u8, "./data");
-
-    mgr.restoreToPointInTime(target_time, restore_dir) catch |err| {
-        const msg = try std.fmt.allocPrint(allocator, "Restore failed: {s}", .{@errorName(err)});
-        const resp = schema.RestoreResponse{ .success = false, .message = msg };
-        allocator.free(restore_dir);
-        return encodeMessage(allocator, resp);
-    };
-
+    // SONNY-6288: same restore as the QUIC handler (backup_manager.
+    // restoreForServer): into a new directory beside the server's data
+    // directory, never into the live store (which used to be GEODE_DATA_DIR
+    // or ./data, written in place while this server kept serving old data).
+    var user_buf: [256]u8 = undefined;
+    const username = sessionUsername(req.session_id, &user_buf);
+    const result = try backup_mgr.restoreForServerDefault(allocator, req.target_time, username);
+    defer allocator.free(result.message);
+    defer allocator.free(result.restore_dir);
     const resp = schema.RestoreResponse{
-        .success = true,
-        .message = try allocator.dupe(u8, "Restore completed"),
-        .restore_dir = restore_dir,
-        .target_time = try allocator.dupe(u8, if (req.target_time.len > 0) req.target_time else "latest"),
+        .success = result.success,
+        .message = result.message,
+        .restore_dir = result.restore_dir,
+        .target_time = if (req.target_time.len > 0) req.target_time else "latest",
         .restore_timestamp = @intCast(compat_milliTimestamp()),
     };
     return encodeMessage(allocator, resp);
@@ -4854,7 +4888,7 @@ fn handleUploadBackup(request_bytes: []const u8, allocator: std.mem.Allocator) !
         return encodeMessage(allocator, resp);
     };
 
-    var upload_mgr = SimplifiedBackupManager.init(allocator, "./server_backups", .{}) catch |err| {
+    var upload_mgr = SimplifiedBackupManager.initForServer(allocator, .{}) catch |err| {
         const resp = schema.UploadBackupResponse{
             .success = false,
             .message = try std.fmt.allocPrint(allocator, "Upload init failed: {s}", .{@errorName(err)}),
@@ -4874,7 +4908,7 @@ fn handleUploadBackup(request_bytes: []const u8, allocator: std.mem.Allocator) !
     const resp = schema.UploadBackupResponse{
         .success = true,
         .message = try allocator.dupe(u8, "Backup uploaded, verified, and registered"),
-        .upload_path = try std.fmt.allocPrint(allocator, "./server_backups/full_{x}.backup", .{ingested.backup_id}),
+        .upload_path = try std.fmt.allocPrint(allocator, "{s}/full_{x}.backup", .{ upload_mgr.backupDir(), ingested.backup_id }),
     };
     return encodeMessage(allocator, resp);
 }
@@ -4891,14 +4925,11 @@ test "unauthenticated gRPC cdc_ctrl is rejected (SEC-002 live-engine path)" {
     const req = schema.CdcControlRequest{ .action = "RESET_GUARDRAILS" };
     const req_bytes = try encodeMessage(a, req);
     defer a.free(req_bytes);
-    const resp_bytes = try handleCdcCtrl(req_bytes, a);
-    defer a.free(resp_bytes);
-    var reader: std.Io.Reader = .fixed(resp_bytes);
-    var resp = try protobuf.decode(schema.CdcControlResponse, &reader, a);
-    defer resp.deinit(a);
-    // POST-fix: gate fires before engine logic -> "AUTH_REQUIRED".
-    // PRE-fix: never returns AUTH_REQUIRED (returns OK / NO_ENGINE / UNSUPPORTED).
-    try std.testing.expectEqualStrings("AUTH_REQUIRED", resp.status);
+    const reply = try handleCdcCtrl(req_bytes, a);
+    if (reply == .answer) a.free(reply.answer);
+    // The gate fires before engine logic: refused 28000 (SONNY-6561: the
+    // QUIC handler's refusal; it was an AUTH_REQUIRED answer).
+    try std.testing.expectEqual(CdcReply{ .refused = .unauthenticated }, reply);
 }
 
 test "auth-disabled gRPC cdc_ctrl bypasses the gate (no over-block)" {
@@ -4908,12 +4939,13 @@ test "auth-disabled gRPC cdc_ctrl bypasses the gate (no over-block)" {
     const req = schema.CdcControlRequest{ .action = "RESET_GUARDRAILS" };
     const req_bytes = try encodeMessage(a, req);
     defer a.free(req_bytes);
-    const resp_bytes = try handleCdcCtrl(req_bytes, a);
-    defer a.free(resp_bytes);
-    var reader: std.Io.Reader = .fixed(resp_bytes);
+    const reply = try handleCdcCtrl(req_bytes, a);
+    // When auth is disabled, authorizeAdminSession returns .ok -> gate does NOT fire.
+    try std.testing.expect(reply == .answer);
+    defer a.free(reply.answer);
+    var reader: std.Io.Reader = .fixed(reply.answer);
     var resp = try protobuf.decode(schema.CdcControlResponse, &reader, a);
     defer resp.deinit(a);
-    // When auth is disabled, authorizeAdminSession returns .ok -> gate does NOT fire.
-    // With no engine running, status is "NO_ENGINE" (not "AUTH_REQUIRED").
-    try std.testing.expect(!std.mem.eql(u8, "AUTH_REQUIRED", resp.status));
+    // With no engine running, the status is "NO_ENGINE".
+    try std.testing.expectEqualStrings("NO_ENGINE", resp.status);
 }

@@ -48,7 +48,9 @@ test "GAP-0921: unconvertible string CAST raises InvalidCast" {
     try testing.expectError(error.InvalidCast, h.run("RETURN CAST('abc' AS INTEGER)"));
     try testing.expectError(error.InvalidCast, h.run("RETURN CAST('12.34.56' AS DECIMAL(10,2))"));
     try testing.expectError(error.InvalidCast, h.run("RETURN CAST('notabool' AS BOOLEAN)"));
-    try testing.expectError(error.InvalidCast, h.run("RETURN CAST('not-a-date' AS TIMESTAMP)"));
+    // SONNY-6499: ISO/IEC 39075 20.8 GR k i: a datetime string that does
+    // not parse is 22007 (TimeParse), not 22018.
+    try testing.expectError(error.TimeParse, h.run("RETURN CAST('not-a-date' AS TIMESTAMP)"));
 }
 
 test "GAP-0921: unsupported target type raises UnsupportedCastTarget" {
