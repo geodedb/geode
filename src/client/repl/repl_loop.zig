@@ -424,6 +424,8 @@ pub const ReplState = struct {
     // Ctrl+D) in the same read. The line is handled first; these are the
     // input of the next one, processed before reading the terminal again.
     pending_input: std.ArrayList(u8) = .empty,
+    // SONNY-6863: renderPrompt builds a redraw here and writes it at once.
+    render_buf: std.ArrayList(u8) = .empty,
     content_changed: bool = true, // Track if buffer content changed (need full re-render)
     last_buffer_len: usize = 0, // Track previous buffer length
     last_visual_lines: usize = 0, // Track previous render's visual line count
@@ -446,6 +448,7 @@ pub const ReplState = struct {
         self.search_buffer.deinit(self.allocator);
         self.multi_line_buffer.deinit(self.allocator);
         self.pending_input.deinit(self.allocator);
+        self.render_buf.deinit(self.allocator);
         self.completion_ctx.deinit();
     }
 };
@@ -656,29 +659,30 @@ fn renderPrompt(state: *ReplState) !void {
     // and error-prone with wrapped lines. Can optimize later.
     _ = state.content_changed; // Mark as used
 
-    // Full re-render needed
+    // SONNY-6863: the redraw is built in one buffer and written with one
+    // write. It was written a byte per write(2): a 4 KiB line cost about
+    // 4,096 syscalls per redraw, every key.
+    const a = state.allocator;
+    const out = &state.render_buf;
+    out.clearRetainingCapacity();
+
     // Move cursor up from its current row to line 0 (start of content)
     // We track which row the cursor was on from the previous render
-    if (state.last_cursor_row > 0) {
-        var move_buf: [32]u8 = undefined;
-        const move_str = std.fmt.bufPrint(&move_buf, "\x1b[{d}A", .{state.last_cursor_row}) catch "\x1b[1A";
-        try stdout_file.writeStreamingAll(replIo(), move_str);
-    }
+    if (state.last_cursor_row > 0) try out.print(a, "\x1b[{d}A", .{state.last_cursor_row});
 
     // Move to beginning of line and clear from here to end of screen
     // This clears all our previous content but nothing above where we started
-    try stdout_file.writeStreamingAll(replIo(), "\r\x1b[J");
-
-    try stdout_file.writeStreamingAll(replIo(), prompt);
+    try out.appendSlice(a, "\r\x1b[J");
+    try out.appendSlice(a, prompt);
 
     // Write buffer - let terminal handle wrapping naturally
     // Only handle explicit newlines in the buffer
-    for (state.buffer.items) |c| {
-        if (c == '\n') {
-            try stdout_file.writeStreamingAll(replIo(), "\r\n");
-        } else {
-            try stdout_file.writeStreamingAll(replIo(), &[_]u8{c});
-        }
+    var lines = std.mem.splitScalar(u8, state.buffer.items, '\n');
+    var first_line = true;
+    while (lines.next()) |text| {
+        if (!first_line) try out.appendSlice(a, "\r\n");
+        first_line = false;
+        try out.appendSlice(a, text);
     }
 
     // Calculate current visual lines for tracking
@@ -688,16 +692,12 @@ fn renderPrompt(state: *ReplState) !void {
     const cursor_pos = calculateCursorPosition(prompt.len, state.buffer.items, state.cursor, term_width);
 
     // Move cursor to correct position
-    if (cursor_pos.rows_from_end > 0) {
-        var move_buf: [32]u8 = undefined;
-        const move_str = std.fmt.bufPrint(&move_buf, "\x1b[{d}A", .{cursor_pos.rows_from_end}) catch return;
-        try stdout_file.writeStreamingAll(replIo(), move_str);
-    }
+    if (cursor_pos.rows_from_end > 0) try out.print(a, "\x1b[{d}A", .{cursor_pos.rows_from_end});
 
     // Move to correct column
-    var col_buf: [32]u8 = undefined;
-    const col_str = std.fmt.bufPrint(&col_buf, "\r\x1b[{d}C", .{cursor_pos.col}) catch return;
-    try stdout_file.writeStreamingAll(replIo(), col_str);
+    try out.print(a, "\r\x1b[{d}C", .{cursor_pos.col});
+
+    try stdout_file.writeStreamingAll(replIo(), out.items);
 
     // Update tracking state
     state.content_changed = false;
