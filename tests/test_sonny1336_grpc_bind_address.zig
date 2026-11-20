@@ -248,7 +248,14 @@ fn expectListensOn(extra_args: []const []const u8, grpc_port: u16, want_ip: [4]u
     const ip_text = try std.fmt.bufPrint(&ip_buf, "{d}.{d}.{d}.{d}", .{ want_ip[0], want_ip[1], want_ip[2], want_ip[3] });
     var banner_buf: [160]u8 = undefined;
     const banner = try std.fmt.bufPrint(&banner_buf, "\"transport\":\"grpc\",\"address\":\"{s}\",\"port\":{d}", .{ ip_text, grpc_port });
+    // SONNY-6870: the banner follows the listen; with no hello round trip
+    // (a release build) the check came first. Wait for it.
+    const t0 = nowMillis();
     server.drain();
+    while (!server.saw(banner) and nowMillis() - t0 < startup_deadline_ms and !server.pollExit()) {
+        sleepMs(100);
+        server.drain();
+    }
     if (!server.saw(banner)) {
         std.debug.print("SONNY-1336 {s}: no startup banner containing {s}\n", .{ label, banner });
         server.dump(label);
