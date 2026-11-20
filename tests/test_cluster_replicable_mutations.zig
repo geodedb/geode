@@ -496,10 +496,13 @@ fn assertMutationReplicatesUsing(
         },
         else => return err,
     };
+    // The write's own answer, printed if the followers never converge.
+    var write_answer: []const u8 = "(client timed out)";
     if (out) |response| {
         defer gpa.free(response);
         if (std.mem.indexOf(u8, response, "ClusterNotLeader") != null) return error.ClusterNotLeader;
         if (std.mem.indexOf(u8, response, "ClusterWriteNotReplicable") != null) return error.ClusterWriteNotReplicable;
+        write_answer = try aa.dupe(u8, response[0..@min(response.len, 400)]);
     }
 
     var expected: usize = 0;
@@ -533,6 +536,12 @@ fn assertMutationReplicatesUsing(
         "\n[repl] '{s}' did NOT converge on all {d} healthy follower(s) (expected read '{s}')\n",
         .{ label_for_msg, expected, expect_substr },
     );
+    std.debug.print("[repl] write on leader node {d} answered: {s}\n", .{ li + 1, write_answer });
+    const leader_read: []const u8 = if (runQuery(gpa, io, aa, NODE_IPS[li], read_q)) |r| blk: {
+        defer gpa.free(r);
+        break :blk try aa.dupe(u8, r[0..@min(r.len, 400)]);
+    } else |err| @errorName(err);
+    std.debug.print("[repl] leader node {d} reads: {s}\n", .{ li + 1, leader_read });
     for (0..3) |i| std.debug.print("[repl] node {d} last read: {s}\n", .{ i + 1, last_out[i] });
     return error.ReplicationIncomplete;
 }
