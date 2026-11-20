@@ -517,21 +517,36 @@ fn assertMutationReplicatesUsing(
     const gpa = cluster.gpa;
     const io = cluster.io;
     const aa = cluster.aa;
-    const li = try waitForLeader(cluster);
-    const out: ?[]u8 = mutate(cluster, NODE_IPS[li], mutate_q) catch |err| switch (err) {
-        error.Timeout => blk: {
-            std.debug.print("[repl] '{s}' client timed out; checking the original write without resubmitting\n", .{label_for_msg});
-            break :blk null;
-        },
-        else => return err,
-    };
+    var li: usize = undefined;
     // The write's own answer, printed if the followers never converge.
     var write_answer: []const u8 = "(client timed out)";
-    if (out) |response| {
-        defer gpa.free(response);
-        if (std.mem.indexOf(u8, response, "ClusterNotLeader") != null) return error.ClusterNotLeader;
-        if (std.mem.indexOf(u8, response, "ClusterWriteNotReplicable") != null) return error.ClusterWriteNotReplicable;
-        write_answer = try aa.dupe(u8, response[0..@min(response.len, 400)]);
+    var attempt: usize = 0;
+    while (true) : (attempt += 1) {
+        li = try waitForLeader(cluster);
+        const out: ?[]u8 = mutate(cluster, NODE_IPS[li], mutate_q) catch |err| switch (err) {
+            error.Timeout => blk: {
+                std.debug.print("[repl] '{s}' client timed out; checking the original write without resubmitting\n", .{label_for_msg});
+                break :blk null;
+            },
+            else => return err,
+        };
+        if (out) |response| {
+            defer gpa.free(response);
+            if (std.mem.indexOf(u8, response, "ClusterNotLeader") != null) {
+                // SONNY-6844: ClusterNotLeader is a write applied nowhere (a
+                // follower took it, or a leader deposed before a quorum
+                // stored its entry), so it is resubmitted to the new leader.
+                if (attempt + 1 < 3) {
+                    std.debug.print("[repl] '{s}' answered ClusterNotLeader on node {d}; resubmitting to the new leader\n", .{ label_for_msg, li + 1 });
+                    sleepMs(700);
+                    continue;
+                }
+                return error.ClusterNotLeader;
+            }
+            if (std.mem.indexOf(u8, response, "ClusterWriteNotReplicable") != null) return error.ClusterWriteNotReplicable;
+            write_answer = try aa.dupe(u8, response[0..@min(response.len, 400)]);
+        }
+        break;
     }
 
     var expected: usize = 0;
@@ -572,6 +587,7 @@ fn assertMutationReplicatesUsing(
     } else |err| @errorName(err);
     std.debug.print("[repl] leader node {d} reads: {s}\n", .{ li + 1, leader_read });
     for (0..3) |i| std.debug.print("[repl] node {d} last read: {s}\n", .{ i + 1, last_out[i] });
+    printNodeLogs(cluster);
     return error.ReplicationIncomplete;
 }
 

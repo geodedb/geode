@@ -4,6 +4,18 @@
 
 ### Fixed
 
+- **A cluster leader deposed mid-write no longer answers the write
+  committed (SONNY-6844).** A leader waited for its statement's entry by
+  index only. Deposed before a quorum stored the entry (a starved leader
+  misses its heartbeats), it had that index taken by the next leader's
+  entry, which committed; its commit index then passed the index and the
+  client was told the write committed, though no node ever applied it (both
+  followers of the CI run read 0 for 18 s). A proposal now carries its term
+  (`RaftNode.proposeCommandTracked`), and the wait
+  (`ClusterCoordinator.waitForProposalCommitted`) answers success only when
+  the log holds that term at the index; another term there answers
+  `ClusterNotLeader` (the write was applied nowhere, and a retry on the
+  leader is safe). Regression: `zig build test-sonny6844-superseded-proposal`.
 - **A remote backup or restore gives up on a dead server after 30 s, not
   the whole `--timeout` (SONNY-6769).** SONNY-6606 bounded the QUIC handshake
   of `geode backup create --server` and `geode restore --server` by

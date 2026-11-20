@@ -207,7 +207,7 @@ below for what is left.
   tick. A failure backs off and retries; an in-memory store turns
   snapshots off (`RaftSnapshotNeedsDurableStore`).
 - **What the held applies cost:** a write is acknowledged when it commits
-  (`waitForCommittedThenApplied`), so writes go on during a snapshot; they
+  (`waitForProposalCommitted`: its entry, by index and term, SONNY-6844), so writes go on during a snapshot; they
   become visible on the snapshotting node only once the copy ends and the
   held entries are applied (a read of one's own write on that node can
   miss it for the length of the copy: about 4 s for a 4.4 MB store in a

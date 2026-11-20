@@ -12065,8 +12065,7 @@ pub fn build(b: *std.Build) void {
         mod.addImport("geode", root_mod);
         const tests = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(tests);
-        // Red until the fix: compiled by test-compile, not yet in the aggregate.
-        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6844-superseded-proposal", "Run SONNY-6844 regression (a leader deposed before its entry reached a quorum does not answer the write committed when the new leader's entry at that index commits)").dependOn(&run_tests.step);
     }
     // SONNY-6617 (1): a failed Raft persist is retried; the node takes no

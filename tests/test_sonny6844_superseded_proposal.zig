@@ -175,8 +175,6 @@ fn startCluster(a: std.mem.Allocator, cluster: *Cluster, port_base: u16) !void {
     for (cluster.coords(), 1..) |c, id| c.raft.setInnerTransport(cluster.net.transportFor(id));
 }
 
-const has_fix = @hasDecl(ClusterCoordinator, "waitForProposalCommitted");
-
 test "SONNY-6844: a deposed leader does not answer a write committed when a new leader replaced its entry" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const a = std.testing.allocator;
@@ -192,7 +190,8 @@ test "SONNY-6844: a deposed leader does not answer a write committed when a new 
 
     // The old leader takes the write and appends it: index N, term T.
     const cmd = raft_consensus.Command{ .write = "sonny6844-lost-write" };
-    const proposal = if (has_fix) try coords[old].proposeWriteTracked(cmd) else ProposalShim{ .index = try coords[old].proposeWrite(cmd), .term = old_term };
+    const proposal = try coords[old].proposeWriteTracked(cmd);
+    try std.testing.expectEqual(old_term, proposal.term);
     try std.testing.expectEqual(@as(?u64, old_term), entryTerm(coords[old], proposal.index));
 
     // It is cut off before any follower stores the entry (its AppendEntries
@@ -214,16 +213,18 @@ test "SONNY-6844: a deposed leader does not answer a write committed when a new 
     for (coords) |c| try std.testing.expect(entryTerm(c, proposal.index).? != old_term);
 
     // The write never committed on any node: the wait must not say it did.
-    if (has_fix) {
-        try std.testing.expectError(error.ClusterProposalSuperseded, coords[old].waitForProposalCommitted(proposal, 1000));
-    } else {
-        coords[old].waitForCommittedThenApplied(proposal.index, 1000) catch return;
-        std.debug.print(
-            "the old leader answered its write (index {d}, term {d}) committed; index {d} holds term {?d}, the new leader's\n",
-            .{ proposal.index, proposal.term, proposal.index, entryTerm(coords[old], proposal.index) },
-        );
-        return error.SupersededProposalAnsweredCommitted;
-    }
+    try std.testing.expectError(error.ClusterProposalSuperseded, coords[old].waitForProposalCommitted(proposal, 1000));
+
+    // The leader's own write, committed, is answered as committed.
+    const leader = soleLeader(coords, all) orelse new;
+    const kept = try coords[leader].proposeWriteTracked(.{ .write = "sonny6844-kept-write" });
+    try driveUntil(a, coords, &cluster.net, all, AllCommitted{ .index = kept.index }, AllCommitted.done);
+    try coords[leader].waitForProposalCommitted(kept, 1000);
 }
 
-const ProposalShim = struct { index: u64, term: u64 };
+test "SONNY-6844: proposalIdentity names an entry by its term" {
+    const proposalIdentity = geode.distributed.cluster.proposalIdentity;
+    try std.testing.expectEqual(.ours, proposalIdentity(4, 4));
+    try std.testing.expectEqual(.superseded, proposalIdentity(4, 5));
+    try std.testing.expectEqual(.unknown, proposalIdentity(4, null));
+}

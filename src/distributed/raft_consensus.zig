@@ -3112,6 +3112,10 @@ pub fn deserializeCommand(data: []const u8) !Command {
 
 // ---- RaftNode (wraps external raft library) ----
 
+/// SONNY-6844: a proposed entry: its log index and the term it was
+/// proposed in (`RaftNode.proposeCommandTracked`).
+pub const Proposal = struct { index: u64, term: u64 };
+
 pub const RaftNode = struct {
     allocator: Allocator,
     id: u64,
@@ -3730,6 +3734,16 @@ pub const RaftNode = struct {
     }
 
     pub fn proposeCommand(self: *RaftNode, cmd: Command) !u64 {
+        return (try self.proposeCommandTracked(cmd)).index;
+    }
+
+    // CANARY: REQ=REQ-SONNY-6844-SUPERSEDED-PROPOSAL; FEATURE="DistributedCluster"; ASPECT=ProposalCarriesTerm; STATUS=TESTED; TEST=tests/test_sonny6844_superseded_proposal.zig; OWNER=distributed; UPDATED=2026-11-20
+    /// SONNY-6844: `proposeCommand`, returning the entry's term with its
+    /// index. An index alone does not name an entry: a leader deposed
+    /// before a quorum stored it has the index taken by the next leader's
+    /// entry, which commits. The entry is this one only while the log holds
+    /// `term` at `index` (`entryTerm`).
+    pub fn proposeCommandTracked(self: *RaftNode, cmd: Command) !Proposal {
         // Serialize Command to bytes for the external raft library's propose().
         // Format: 1-byte tag | payload
         // Tags: 0=noop, 1=write, 2=graph_mutation, 3=schema_change,
@@ -3763,9 +3777,20 @@ pub const RaftNode = struct {
         if (self.stalled_ready != null) return error.RaftStoragePersistFailed;
         if (self.inner.role != .leader) return error.NotLeader;
         try self.inner.propose(cmd_bytes);
-        const new_index = self.inner.log.lastIndex();
+        const proposal = Proposal{ .index = self.inner.log.lastIndex(), .term = self.inner.log.lastTerm() };
         self.drainReady();
-        return new_index;
+        return proposal;
+    }
+
+    /// SONNY-6844: the term of the entry this node's log holds at `index`,
+    /// or null when it does not hold one there (compacted into a snapshot,
+    /// or past the end of the log).
+    pub fn entryTerm(self: *RaftNode, index: u64) ?u64 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        if (!self.lockInnerForRequest()) return null;
+        defer self.inner_mutex.unlock(io);
+        if (index == 0 or index > self.inner.log.lastIndex()) return null;
+        return self.inner.log.term(index) catch null;
     }
 
     /// SONNY-6631: hydrate, without `inner_mutex`, the graphs of every entry

@@ -357,6 +357,26 @@ pub fn waitOutcomeForState(
     return if (budget_exhausted) .commit_unknown_timeout else .keep_waiting;
 }
 
+/// SONNY-6844: what the term this node's log holds at a proposal's index
+/// says about the proposal (`entry_term` null: no entry there to read).
+pub const ProposalIdentity = enum {
+    /// The log holds the proposal's term at its index: the entry is ours.
+    ours,
+    /// The log holds another term at the index: a leader of a later term
+    /// put its own entry there, so ours never reached a quorum (Raft's
+    /// leader completeness: a committed entry is in every later leader's
+    /// log) and never will. The write was not applied anywhere.
+    superseded,
+    /// No entry to read (compacted into a snapshot, or the log is shorter).
+    unknown,
+};
+
+// CANARY: REQ=REQ-SONNY-6844-SUPERSEDED-PROPOSAL; FEATURE="DistributedCluster"; ASPECT=ProposalIdentityDecision; STATUS=TESTED; TEST=tests/test_sonny6844_superseded_proposal.zig; OWNER=distributed; UPDATED=2026-11-20
+pub fn proposalIdentity(proposed_term: u64, entry_term: ?u64) ProposalIdentity {
+    const t = entry_term orelse return .unknown;
+    return if (t == proposed_term) .ours else .superseded;
+}
+
 // NOTE: the standalone-path unit test for gateUnreplicatedWrite lives in
 // tests/test_cluster_coordinator_config.zig (named step
 // test-cluster-coord-config). An inline `test` here would force analysis of
@@ -2502,11 +2522,17 @@ pub const ClusterCoordinator = struct {
     ///
     /// Thread-safe: takes `self.raft.inner_mutex` internally.
     pub fn proposeWrite(self: *ClusterCoordinator, command: raft_consensus.Command) !u64 {
+        return (try self.proposeWriteTracked(command)).index;
+    }
+
+    /// SONNY-6844: `proposeWrite`, returning the entry's term with its
+    /// index, for `waitForProposalCommitted`.
+    pub fn proposeWriteTracked(self: *ClusterCoordinator, command: raft_consensus.Command) !raft_consensus.Proposal {
         // SONNY-6547 (4): the graph the entry's apply writes is hydrated
         // here, on the proposing thread, before `inner_mutex` is taken: the
         // apply would otherwise hydrate it under `inner_mutex`.
         raft_apply.prehydrateForApply(command);
-        return self.raft.proposeCommand(command);
+        return self.raft.proposeCommandTracked(command);
     }
 
     // CANARY: REQ=REQ-DIST-CLUSTER-WAIT-APPLIED; FEATURE="ClusterCoordinator Public Propose"; ASPECT=WaitForApplied; STATUS=TESTED; TEST=tests/test_cluster_propose_write.zig; OWNER=distributed; UPDATED=2026-05-26
@@ -2551,6 +2577,9 @@ pub const ClusterCoordinator = struct {
     ///
     /// The decision per poll is the pure `waitOutcomeForState`; this method only
     /// owns the clock, the poll cadence, and the budget. Polls every 2 ms.
+    ///
+    /// SONNY-6844: by INDEX only; whichever entry committed there counts. A
+    /// proposer waits for its own entry with `waitForProposalCommitted`.
     pub fn waitForCommittedThenApplied(self: *ClusterCoordinator, index: u64, deadline_ms: u64) !void {
         const begin_ms = compat_milliTimestamp();
         const deadline = begin_ms +| @as(i64, @intCast(deadline_ms));
@@ -2575,6 +2604,56 @@ pub const ClusterCoordinator = struct {
                 // comes after the drop, and its writes to the graph are
                 // refused when it applies. SONNY-6622: likewise a thread
                 // holding the store lock while a snapshot restore waits for it.
+                .keep_waiting => {
+                    if (graph_storage_adapter.threadMustYieldToReplicatedApply()) return error.Timeout;
+                    compat_sleepNs(2 * std.time.ns_per_ms);
+                },
+            }
+        }
+    }
+
+    // CANARY: REQ=REQ-SONNY-6844-SUPERSEDED-PROPOSAL; FEATURE="DistributedCluster"; ASPECT=WaitChecksProposalTerm; STATUS=TESTED; TEST=tests/test_sonny6844_superseded_proposal.zig; OWNER=distributed; UPDATED=2026-11-20
+    /// SONNY-6844: `waitForCommittedThenApplied` for an entry this node
+    /// proposed, which it names by index AND term. The index-only wait
+    /// answered success once the commit index passed the index, also when
+    /// the entry there was no longer this one: a leader deposed before a
+    /// quorum stored its entry has the index taken by the next leader's
+    /// entry, which commits, and the old leader then learns that commit
+    /// index. Its client was told the write committed, and no node ever
+    /// applied it (the CI failure of SONNY-6844: both followers read 0 for
+    /// 18 s after a write the leader had answered).
+    ///
+    /// Returns `error.ClusterProposalSuperseded` as soon as the log holds
+    /// another term at the index (the write was not applied and never will
+    /// be: a retry is safe); success once the entry, still this one, is
+    /// committed; `error.Timeout` when that cannot be confirmed in budget,
+    /// or when the entry was compacted away before it could be checked
+    /// (the outcome is unknown).
+    pub fn waitForProposalCommitted(self: *ClusterCoordinator, proposal: raft_consensus.Proposal, deadline_ms: u64) !void {
+        const begin_ms = compat_milliTimestamp();
+        const deadline = begin_ms +| @as(i64, @intCast(deadline_ms));
+        while (true) {
+            const applied = self.raft.appliedIndex();
+            const committed = self.raft.committedIndex();
+            const budget_exhausted = compat_milliTimestamp() >= deadline;
+            const identity = proposalIdentity(proposal.term, self.raft.entryTerm(proposal.index));
+            if (identity == .superseded) {
+                log.warn("cluster: a proposed write was replaced by a later leader's entry; it was not applied", &.{
+                    Attr.uint("index", proposal.index),
+                    Attr.uint("proposed_term", proposal.term),
+                });
+                return error.ClusterProposalSuperseded;
+            }
+            switch (waitOutcomeForState(committed, applied, proposal.index, budget_exhausted)) {
+                .applied, .committed_apply_pending => switch (identity) {
+                    .ours => return,
+                    // Committed, and the entry is not in the log to check
+                    // (a snapshot covers it): which entry committed there
+                    // is not known here.
+                    .unknown => return error.Timeout,
+                    .superseded => unreachable,
+                },
+                .commit_unknown_timeout => return error.Timeout,
                 .keep_waiting => {
                     if (graph_storage_adapter.threadMustYieldToReplicatedApply()) return error.Timeout;
                     compat_sleepNs(2 * std.time.ns_per_ms);

@@ -56,6 +56,8 @@ pub const Error = error{ ClusterWriteNotReplicable, ClusterNotLeader, ClusterPro
 fn narrow(err: anyerror) Error {
     return switch (err) {
         error.ClusterNotLeader, error.NotLeader => error.ClusterNotLeader,
+        // SONNY-6844: deposed before a quorum stored the entry; not applied.
+        error.ClusterProposalSuperseded => error.ClusterNotLeader,
         error.GraphNotFound => error.GraphNotFound,
         error.ClusterWriteNotReplicable => error.ClusterWriteNotReplicable,
         error.Timeout => error.Timeout,
@@ -367,9 +369,13 @@ fn proposeNow(cmd_in: raft_consensus.Command) Error!void {
     }
     const coord = cluster_mod.getGlobalClusterCoordinator() orelse return error.ClusterWriteNotReplicable;
     // Lost leadership between the role check and the propose: fail closed.
-    const idx = coord.proposeWrite(cmd) catch |err| return narrow(err);
+    const proposal = coord.proposeWriteTracked(cmd) catch |err| return narrow(err);
     // Commit-aware wait (RC-1, 2026-06-12): success on confirmed COMMIT
     // (apply is then guaranteed); error.Timeout only when commit cannot be
     // confirmed in budget. A proposal is never undone.
-    coord.waitForCommittedThenApplied(idx, 5000) catch |err| return narrow(err);
+    // SONNY-6844: of THIS entry (index and term). A leader deposed before a
+    // quorum stored it sees the next leader's entry commit at its index; the
+    // write was not applied anywhere, and answers ClusterNotLeader (`narrow`):
+    // the client retries on the leader.
+    coord.waitForProposalCommitted(proposal, 5000) catch |err| return narrow(err);
 }
