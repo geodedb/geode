@@ -8640,6 +8640,52 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny6846-repl-typeahead", "Run SONNY-6846 regression (geode shell runs each statement when Enter and the keys typed after it arrive in one read: two statements typed ahead, and a 4 KiB pasted line whose Enter arrives with the next line; real shell through a PTY, stopped while the keys are written)").dependOn(&run_tests.step);
     }
 
+    // SONNY-6861: geode shell misread an escape sequence (the paste end
+    // marker, arrows, Alt+key) split across two terminal reads.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6861_repl_split_escape.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6861-repl-split-escape", "Run SONNY-6861 regression (geode shell reads an escape sequence split across two terminal reads as one key: the bracketed-paste end marker ESC[201~ ends the paste, Left, Ctrl+Left and Alt+B move the cursor; a bare ESC is still ESC; real shell through a PTY, each part written once the shell read the one before)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6862: keys read with Ctrl+R bypassed the reverse history search.
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6862_repl_search_typeahead.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6862-repl-search-typeahead", "Run SONNY-6862 regression (geode shell feeds the keys read in the same read as Ctrl+R to the reverse history search, and the keys after the Enter that ends it to the line; real shell through a PTY, stopped while the keys are written)").dependOn(&run_tests.step);
+    }
+
+    // SONNY-6863: geode shell redrew its input line one byte per write(2).
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6863_repl_redraw_writes.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny6863-repl-redraw-writes", "Run SONNY-6863 regression (geode shell redraws a 4 KiB input line in a few write syscalls, not one per byte, counted from /proc/<pid>/io; real shell through a PTY)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6511 (5): the shell keeps the character after ESC when it is a
     // digit or punctuation; GEODE_AUDIT_*_ENABLED takes 1/0, true/false,
     // yes/no in any case and refuses anything else.
