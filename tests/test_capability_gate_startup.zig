@@ -12,7 +12,10 @@ const geode_test_bin = @import("geode_test_bin");
 // from the build version and hands it over as argv[1].
 fn expectedCanonicalReason() ![]const u8 {
     const label = build_options.version;
-    const running = try std.SemanticVersion.parse(if (std.mem.startsWith(u8, label, "v")) label[1..] else label);
+    // SONNY-6841: a shallow clone with no tag builds a bare commit hash as the
+    // label; the gate refuses an engine version it cannot read.
+    const running = std.SemanticVersion.parse(if (std.mem.startsWith(u8, label, "v")) label[1..] else label) catch
+        return "InvalidEngineVersion";
     const floor: std.SemanticVersion = .{ .major = 0, .minor = 8, .patch = 14 };
     return if (running.order(floor) == .lt) "IncompatibleEngineVersion" else "MandatoryCapabilityUnsupported";
 }
