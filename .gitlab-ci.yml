@@ -11,6 +11,7 @@ include:
     inputs:
       stage: .post
       project_title: Geode
+      tags: [company, dedicated, linux, x86]
   # Zig code formatting and quality check
   # CI-FIX: pinned to project's Zig version (0.16.0). Previously "0.15.2"
   # which caused Exec-format-error on ARM64 runners because that version
@@ -26,6 +27,7 @@ include:
       paths: "src/"
       stage: lint
       allow_failure: false
+      tags: [company, dedicated, linux, x86]
 
   # APT repository publishing (apt.geodedb.com)
   # 2026-05-03: bumped to v1.24.2, which carries upstream fix d393c881
@@ -64,6 +66,8 @@ include:
       sign_needs: verify-packages
       allow_failure: false
   - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@aad997d40e358eeef7ec943f761498341c37c724
+    inputs:
+      tags: [company, dedicated, linux, x86]
   # NOTE: the FIPS dual-mode parity gate is defined INLINE below as
   # `zig-fips-test-0.16.0` (see the "FIPS dual-mode test" section). The
   # ci-catalog `zig-fips-test@v1.29.0` component was removed because its
@@ -107,18 +111,25 @@ stages:
   - publish
 
 # Default configuration applied to all jobs
-# 2026-05-09: added `k8s` to force jobs onto "Company Cluster Runner(s)"
-# (kubernetes-executor, ~10-15s for governance jobs). Without `k8s` the
-# runner picker also matches "Lab Servers" (slow: 5+ min) and "OVH
-# Dedicated Runners" (currently BROKEN: every job hits 1h
-# server_timeout_running, see pipeline #2512528539). Pool tag map:
-#   - Company Cluster Runner(s) -> [company, k8s, linux, amd64, ubuntu, docker]
-#   - OVH Dedicated Runners      -> [company, dedicated, docker, linux, x86, amd64]
-#   - AWS dedicated runner       -> [company, dedicated, docker, linux, x86, amd64]
-# Jobs that need docker:dind override with `[company, dedicated, docker, linux]`.
-# 2026-10-27: moved off `lab`. The Lab Servers runner left the company pool
-# (it no longer carries `company`), so `[company, lab, ...]` matched no runner.
-# `docker` keeps dind jobs off the AWS Spot overflow runner, which lacks it.
+# Runner selection (same scheme as devnw/codepros/sonny; fleet tags are owned
+# by devnw/infra/org components/devnw-runners):
+#   - OVH, AWS and Azure dedicated -> company, dedicated, docker, linux, x86,
+#                                     amd64, kvm (+ local-nvme / go-fast)
+#   - AWS Spot overflow            -> company, dedicated, linux, x86, amd64,
+#                                     aws-spot (2 vCPU / 8 GiB, no kvm/docker)
+#   - Company Cluster Runner(s)    -> company, k8s, linux, amd64
+# Every Linux job requests at least [company, dedicated, linux, x86]. The
+# dedicated hosts poll constantly and the Spot manager only every 45 s, so a
+# dedicated host takes the job first and Spot only takes what is still queued
+# once the dedicated pool is saturated. Compile- and test-heavy jobs add
+# `kvm`, which only the dedicated hosts carry, so they never land on a Spot
+# worker: test-zig-release-safe shards there lost the Docker daemon mid-job
+# ("error during connect", runner_system_failure) four runs in a row in
+# pipeline 3090620963. docker:dind jobs add `docker` for the same reason.
+# Never request `aws-spot`: it is carried only by the Spot runner, so it pins
+# a job to Spot instead of making Spot the fallback.
+.dedicated-kvm-tags: &kvm-tags [company, dedicated, kvm, linux, x86]
+
 default:
   # SRE-173 follow-up (2026-10-14): runners now share an S3 cache, so the
   # pull-push zig cache below really round-trips. `.zig-cache/tmp` holds the
@@ -129,12 +140,8 @@ default:
   # without a bounded writer hook inherit this cleanup.
   after_script:
     - rm -rf .zig-cache/tmp zig-cache/tmp
-  # 2026-10-10: `x86` matched no k8s runner after the Company Cluster Runner
-  # was recreated on 2026-09-27 with [company, k8s, linux, amd64, ubuntu,
-  # docker]; every default-tagged job sat in stuck_pending_no_matching_runners.
-  # The k8s pool's arch tag is `amd64` (the `x86` tag belongs to the OVH and
-  # AWS-spot dedicated pools, which jobs select with `dedicated`).
-  tags: [company, k8s, linux, amd64]
+  # Dedicated hosts first, Spot overflow as the fallback (see above).
+  tags: &dedicated-tags [company, dedicated, linux, x86]
   interruptible: true  # Allow auto-cancel of redundant pipelines on push
   # GLOBAL transient-infra retry: the shared kubernetes runners intermittently
   # fail jobs at POD SETUP with `system failure: etcdserver: leader changed`
@@ -394,9 +401,9 @@ variables:
 
 # Base template: shared stage, variables, rules, and allow_failure default
 .governance-base:
-  # Use autoscaled workers: the Kubernetes pool exhausted its CPU requests
-  # before these container-only checks could start. Keep Go/KVM workers free.
-  tags: [company, aws-spot, linux, amd64]
+  # Light container-only checks: dedicated hosts first, Spot overflow as the
+  # fallback (see the runner-selection note above `default:`).
+  tags: *dedicated-tags
   stage: governance
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
@@ -488,6 +495,7 @@ governance-ci-yaml-lint:
       python3 -m unittest discover -s scripts/ci -p test_zig_fail_fast.py
       python3 -m unittest discover -s scripts/ci -p test_unit_capacity.py
       python3 -m unittest discover -s scripts/ci -p test_workflow_rules.py
+      python3 -m unittest discover -s scripts/ci -p test_runner_tags.py
       echo "✓ CI YAML lints passed"
 
 governance-cross-gate-status:
@@ -524,6 +532,9 @@ governance-zig-package-cache:
 
 governance-match-ops-campaign:
   extends: .governance-zig
+  # Builds and runs the MATCH parity and benchmark campaigns: dedicated hosts
+  # only (`kvm`), where benchmark timings are not Spot noise.
+  tags: *kvm-tags
   retry:
     max: 1
     when:
@@ -828,7 +839,7 @@ test-zig-unit:
   # (the i≡3 cluster splits across indices 3 and 7) with a 3h cap for
   # margin (shard [3] was killed at 2h so its true length is unknown).
   #
-  # Unit shards stay on the Kubernetes pool (see the routing note below).
+  # Unit shards run on the dedicated hosts (see the routing note below).
   # Keep the shard count and timeout unchanged.
   #
   # 2026-05-12: shard [7] hit the 3h cap (pipeline #2520265814) while
@@ -848,9 +859,10 @@ test-zig-unit:
   # NoSpaceLeft in pipeline 3087171277): 16 shards over four slots keep a
   # shard near the 9G it measured before.
   resource_group: "test-zig-unit-slot-$TEST_SLOT"
-  # Keep Kubernetes routing and the shared two-slot capacity bound.
-  # This pool also limits each job to two CPUs; bound build concurrency below.
-  tags: [company, k8s, linux]
+  # Debug compile + test shards: dedicated hosts only (`kvm`), never a Spot
+  # worker. The slot bound above stays. The dedicated hosts also limit each
+  # job to two CPUs; bound build concurrency below.
+  tags: *kvm-tags
   timeout: 6h
   parallel:
     matrix:
@@ -920,10 +932,9 @@ test-cross-build:
   image: $ZIG_IMAGE
   # ARM-musl received SIGKILL on an 8 GiB Spot worker (job 17623966028).
   # The exact CI image/source also OOM-killed its compiler at -j1 with a
-  # 6 GiB/no-swap local limit. Concurrency alone cannot fit that limit.
-  # Route only this target to the existing 64 GiB dedicated Docker hosts;
-  # keep the other four targets on Spot and all release gates required.
-  tags: [company, dedicated, linux, x86, "$CROSS_RUNNER_TAG"]
+  # 6 GiB/no-swap local limit. Every target compiles on the 64 GiB dedicated
+  # hosts (`kvm`), never on a Spot worker.
+  tags: *kvm-tags
   # One shard per release target: the sequential all-targets loop outgrew the
   # 2h job timeout as the dep tree grew (pipeline #1508 timed out mid
   # riscv64-linux-gnu after 4 targets). Shards run in parallel, each finishes
@@ -938,10 +949,8 @@ test-cross-build:
           - x86_64-linux-musl
           - aarch64-linux-gnu
           - riscv64-linux-gnu
-        CROSS_RUNNER_TAG: aws-spot
         ZIG_BUILD_JOBS: "2"
       - ZIG_TARGET: aarch64-linux-musl
-        CROSS_RUNNER_TAG: docker
         ZIG_BUILD_JOBS: "1"
   timeout: 2h
   # Retry runner failures only. Compilation failures stop the pipeline;
@@ -1255,10 +1264,12 @@ test-zig-release-safe:
   resource_group: "test-zig-release-safe-shard-$TEST_SHARD_INDEX"
   # 2026-10-11: every shard dies OOMKilled (exit 137, runner_system_failure)
   # on the k8s pool since 2026-10-10, on main, tags and MRs alike, three
-  # attempts each (pipelines #2934710451, #2935445607). Run on the AWS-spot
-  # docker-autoscaler pool, which has no per-pod memory cap (see the
-  # test-cross-build note).
-  tags: &dedicated-test-tags [company, dedicated, linux, x86, aws-spot]
+  # attempts each (pipelines #2934710451, #2935445607). They then ran pinned
+  # to the AWS Spot pool (`aws-spot`), whose 2-vCPU/8-GiB workers lost the
+  # Docker daemon mid-shard ("error during connect", runner_system_failure)
+  # four runs in a row in pipeline 3090620963. Run on the dedicated hosts
+  # (`kvm`) only, like the other compile- and benchmark-heavy jobs.
+  tags: *kvm-tags
   timeout: 6h
   # 2026-10-19: 8 -> 12 shards. On the AWS-spot pool the 8 shards ran 2-6h
   # each (shard [2]: 213, 310 and 324 min on earlier pipelines), and with a
@@ -1336,7 +1347,7 @@ test-perf-gates-enforced:
     - *zig-protoc-cache
   stage: test
   image: $ZIG_IMAGE
-  tags: *dedicated-test-tags
+  tags: *kvm-tags
   timeout: 3h
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
@@ -1386,7 +1397,7 @@ test-performance-benchmarks:
   cache:
     - *zig-protoc-cache
   stage: test
-  tags: *dedicated-test-tags
+  tags: *kvm-tags
   image: $ZIG_IMAGE
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
@@ -1448,7 +1459,7 @@ test-performance-benchmarks:
 loadtest-regression:
   cache: []  # no Zig build here; see the zig-build-cache note at the top
   stage: test
-  tags: *dedicated-test-tags
+  tags: *kvm-tags
   image: python:3.15-slim
   before_script:
     # Bump UDP rmem so the quic-go client doesn't drop at high concurrency
@@ -1498,7 +1509,7 @@ bench-timeseries:
   cache:
     - *zig-protoc-cache
   stage: test
-  tags: *dedicated-test-tags
+  tags: *kvm-tags
   image: $ZIG_IMAGE
   # Retry runner failures only; a failed benchmark is a required failure.
   retry:
@@ -1540,7 +1551,7 @@ bench-query-path:
   cache:
     - *zig-protoc-cache
   stage: test
-  tags: *dedicated-test-tags
+  tags: *kvm-tags
   image: $ZIG_IMAGE
   # 2026-05-11: was hitting the project-default 1h budget while building
   # four ReleaseFast bench binaries on the CPU-constrained k8s runner
@@ -1693,6 +1704,8 @@ test-code-coverage:
   needs: []
   # LLVM-backend Debug compile + kcov-instrumented run of the shard; same
   # 16-way split as test-zig-unit (see that job for the timeout history).
+  # Dedicated hosts only (`kvm`), like test-zig-unit.
+  tags: *kvm-tags
   timeout: 6h
   parallel:
     matrix:
@@ -1782,7 +1795,7 @@ test-gql-compliance:
   cache:
     - *zig-protoc-cache
   stage: test
-  tags: *dedicated-test-tags
+  tags: *kvm-tags
   image: $ZIG_IMAGE
   # Preserve runner retries. A failed compliance test must stop the pipeline
   # immediately, including timeouts that need a runtime or capacity repair.
@@ -1845,9 +1858,8 @@ test-gql-compliance:
 # =============================================================================
 
 security-secrets:
-  # Use autoscaled workers: the Kubernetes pool exhausted its CPU requests
-  # before these container-only checks could start. Keep Go/KVM workers free.
-  tags: [company, aws-spot, linux, amd64]
+  # Container-only scan: dedicated hosts first, Spot overflow as the fallback.
+  tags: *dedicated-tags
   cache: []  # no Zig build here; see the zig-build-cache note at the top
   stage: security
   needs: []  # Run independently of test stage
@@ -1868,9 +1880,8 @@ security-secrets:
   allow_failure: false
 
 security-trivy:
-  # Use autoscaled workers: the Kubernetes pool exhausted its CPU requests
-  # before these container-only checks could start. Keep Go/KVM workers free.
-  tags: [company, aws-spot, linux, amd64]
+  # Container-only scan: dedicated hosts first, Spot overflow as the fallback.
+  tags: *dedicated-tags
   stage: security
   needs: []  # Run independently of test stage
   # CI-FIX: same entrypoint override as security-secrets above — trivy
@@ -2124,8 +2135,8 @@ dev-image-build:
   image: $ZIG_IMAGE
   # 2026-10-11: OOMKilled on the k8s pool while cross-compiling aarch64
   # (pipelines #2933449996, #2933995936), so main stopped refreshing :dev.
-  # Same move as test-zig-release-safe.
-  tags: [company, dedicated, linux, x86, aws-spot]
+  # Same move as test-zig-release-safe: dedicated hosts only (`kvm`).
+  tags: *kvm-tags
   needs: []
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TAG == null'
@@ -2297,7 +2308,8 @@ dev-image:
 #   -Dfips=false : std.crypto shim backend
 #   -Dfips=true  : validated OpenSSL FIPS provider (OPENSSL_CONF + -Dopenssl_path)
 zig-fips-test-0.16.0:
-  tags: [company, aws-spot, linux, amd64]
+  # Zig build + test: dedicated hosts only (`kvm`).
+  tags: *kvm-tags
   stage: test
   image: registry.gitlab.com/devnw/ci-catalog/zig-fips:0.16.0
   needs: []
@@ -2339,6 +2351,8 @@ dev-image-build-fips:
   after_script: *zig-cache-writer-after-script
   stage: release
   image: registry.gitlab.com/devnw/ci-catalog/zig-fips:0.16.0
+  # FIPS binary build: dedicated hosts only (`kvm`).
+  tags: *kvm-tags
   needs: []
   rules:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TAG == null'
@@ -3052,7 +3066,7 @@ apt-publish-apt-geodedb-com:
 
 # SONNY-4778: tools must not redirect Git operations into this checkout.
 hook-env-regression:
-  tags: [company, aws-spot, linux, amd64]
+  tags: *dedicated-tags
   cache: []  # no Zig build here; see the zig-build-cache note at the top
   stage: lint
   image: python:3.15-slim-bookworm
