@@ -39,7 +39,8 @@ class UnitCapacityTests(unittest.TestCase):
         self.assertIn("-- zig build -j${ZIG_BUILD_JOBS} test ", job)
         # A pipeline/ref/shard suffix here would defeat the shared capacity cap.
         self.assertRegex(job, r'(?m)^  resource_group: "test-zig-unit-slot-\$TEST_SLOT"$')
-        self.assertRegex(job, r"(?m)^  tags: \[company, k8s, linux\]$")
+        # Dedicated hosts only; test_runner_tags.py checks what the alias names.
+        self.assertRegex(job, r"(?m)^  tags: \*kvm-tags$")
         self.assertIn(
             "    - if: '$CI_PIPELINE_SOURCE == \"merge_request_event\"'\n      allow_failure: false",
             job,
