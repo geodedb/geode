@@ -100,6 +100,9 @@ fn quicCount(client: *util.QuicProtoClient, allocator: std.mem.Allocator, query:
 test "SONNY-6658: nothing of an auto-commit statement cut by a kill survives the restart" {
     // SONNY-6770: raw Linux syscalls (SIGSYS on macOS).
     if (builtin.os.tag != .linux) return error.SkipZigTest;
+    // SONNY-6847: the statement kill hook is armed only in a Debug geode
+    // (statement_undo.kill_hook_available); a release build has no crash point.
+    if (builtin.mode != .Debug) return error.SkipZigTest;
     const allocator = testing.allocator;
     const io_fs = std.Io.Threaded.global_single_threaded.io();
     var dir_buf: [96]u8 = undefined;
