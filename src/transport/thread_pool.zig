@@ -519,14 +519,18 @@ test "ThreadPool: statistics tracking" {
 
     // PERF-D / #816: same as above — test-only counter poll, no-signal-source,
     // LEFT ALONE.
-    // Wait for completion
-    var timeout: u32 = 0;
-    while (!completed.load(.acquire) and timeout < 1000) {
+    // The pool counts a task as completed after its function returns, so the
+    // callback's flag can be set before the counter moves: wait for the
+    // counter itself (SONNY-6893).
+    var stats = pool.getStats();
+    var waited_ms: u32 = 0;
+    while (stats.total_completed < 1) : (waited_ms += 1) {
+        if (waited_ms >= 10_000) return error.TaskNotCountedCompleted;
         std.Io.Threaded.global_single_threaded.io().sleep(.fromMilliseconds(1), .awake) catch {}; // SONNY-6463: Zig 0.16 has no std.Thread.sleep
-        timeout += 1;
+        stats = pool.getStats();
     }
 
-    const stats = pool.getStats();
+    try std.testing.expect(completed.load(.acquire));
     try std.testing.expectEqual(@as(u64, 1), stats.total_submitted);
     try std.testing.expectEqual(@as(u64, 1), stats.total_completed);
 }
