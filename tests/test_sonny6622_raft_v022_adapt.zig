@@ -46,6 +46,7 @@ const Message = raft_consensus.Message;
 const io = std.Io.Threaded.global_single_threaded.io();
 const ELECTION_TIMEOUT_MS: u64 = 250;
 const MAX_ROUNDS: usize = 4000;
+const RESTORE_DEADLINE_MS: u64 = 60_000;
 
 fn uniqueDir(allocator: std.mem.Allocator) ![]u8 {
     var rnd: [8]u8 = undefined;
@@ -151,12 +152,26 @@ const LibNet = struct {
         self.queue.deinit(self.a);
     }
 
+    /// Rounds a node spends paused on its restore thread (a wall-clock
+    /// restore) do not count against `MAX_ROUNDS`; each sleeps 1 ms, within
+    /// `RESTORE_DEADLINE_MS` (SONNY-6900).
     fn untilTrue(self: *LibNet, tick: [3]bool, ctx: anytype, comptime done: fn (@TypeOf(ctx)) bool) !void {
         var r: usize = 0;
-        while (!done(ctx)) : (r += 1) {
+        var restoring_ms: u64 = 0;
+        while (!done(ctx)) {
             if (r >= MAX_ROUNDS) return error.Timeout;
             self.round(tick);
+            if (self.restoring()) {
+                if (restoring_ms >= RESTORE_DEADLINE_MS) return error.RestoreTimeout;
+                io.sleep(.fromMilliseconds(1), .awake) catch {};
+                restoring_ms += 1;
+            } else r += 1;
         }
+    }
+
+    fn restoring(self: *LibNet) bool {
+        for (self.nodes) |n| if (n.restoreRunning()) return true;
+        return false;
     }
 };
 

@@ -4261,6 +4261,12 @@ pub const RaftNode = struct {
         self.finishReady(rd);
     }
 
+    /// SONNY-6900: true while the restore thread is restoring a leader's
+    /// snapshot into the state machine (the node is paused meanwhile).
+    pub fn restoreRunning(self: *RaftNode) bool {
+        return @as(RestoreState, @enumFromInt(self.restore_state.load(.acquire))) == .running;
+    }
+
     /// SONNY-6617: true while a failed Raft storage write (or, SONNY-6622, a
     /// failed snapshot restore) is pending retry (the node takes no Raft
     /// input and sends nothing). For health checks.
