@@ -220,6 +220,45 @@ test "SONNY-6378 (1)(2)(8) a debug server writes its startup log.info lines and 
     }
 }
 
+test "SONNY-6895: a server sent SIGTERM the moment it logs 'server ready' shuts down cleanly" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const allocator = testing.allocator;
+
+    for (0..3) |round| {
+        var srv = try LoggedServer.start(allocator);
+        defer srv.stop(allocator);
+        const pid = srv.handle.child.id.?;
+
+        // Signal within ~1 ms of the ready line: an operator (or a
+        // supervisor) may stop the server as soon as it reports ready.
+        const deadline = monoMs() + 120_000;
+        while (true) {
+            if (monoMs() >= deadline) {
+                srv.printLog(allocator);
+                return error.ServerNeverReady;
+            }
+            const text = try srv.log(allocator);
+            defer allocator.free(text);
+            if (std.mem.indexOf(u8, text, "[startup] server ready") != null) break;
+            sleepMs(1);
+        }
+        try std.posix.kill(pid, .TERM);
+
+        const status = waitExit(pid, 120_000) orelse {
+            std.debug.print("SONNY-6895 round {d}: the server did not exit within 120 s of SIGTERM\n", .{round});
+            srv.printLog(allocator);
+            return error.TestUnexpectedResult;
+        };
+        srv.handle.child.id = null; // reaped
+        const exited_zero = std.os.linux.W.IFEXITED(status) and std.os.linux.W.EXITSTATUS(status) == 0;
+        if (!exited_zero) {
+            std.debug.print("SONNY-6895 round {d}: wait status 0x{x} (want exit 0; 0xf is death by SIGTERM before the handler was installed)\n", .{ round, status });
+            srv.printLog(allocator);
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // (3) rotateWithRemoteKms
 // ---------------------------------------------------------------------------

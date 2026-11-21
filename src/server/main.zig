@@ -3823,6 +3823,18 @@ pub fn main() !void {
 
         std.debug.print("[startup] thread pool initialized ({d}ms, {d} workers)\n", .{ compat_milliTimestamp() - phase_start, pool.workers.len });
 
+        // Install SIGTERM/SIGINT handlers so the accept loop exits cleanly
+        // and deferred cleanup (persistence flush, thread join) runs. They
+        // go in before "server ready": a SIGTERM sent once the server says
+        // it is ready must not hit the default disposition (SONNY-6895).
+        const sa = posix.Sigaction{
+            .handler = .{ .handler = handleShutdownSignal },
+            .mask = posix.sigemptyset(),
+            .flags = 0,
+        };
+        posix.sigaction(posix.SIG.TERM, &sa, null);
+        posix.sigaction(posix.SIG.INT, &sa, null);
+
         // GAP-0269: Log total startup time for operator diagnostics (stderr, visible at all log levels)
         std.debug.print("[startup] server ready ({d}ms total)\n", .{compat_milliTimestamp() - startup_begin});
 
@@ -3857,16 +3869,6 @@ pub fn main() !void {
             leaked_registry.shutdown.store(true, .release);
             reaper_pool.deinit();
         }
-
-        // Install SIGTERM/SIGINT handlers so the accept loop exits cleanly
-        // and deferred cleanup (persistence flush, thread join) runs.
-        const sa = posix.Sigaction{
-            .handler = .{ .handler = handleShutdownSignal },
-            .mask = posix.sigemptyset(),
-            .flags = 0,
-        };
-        posix.sigaction(posix.SIG.TERM, &sa, null);
-        posix.sigaction(posix.SIG.INT, &sa, null);
 
         // CANARY: REQ=REQ-GAP-0928-POOL-EXHAUSTED-DIAGNOSTIC; FEATURE="ConnectionPool"; ASPECT=AdmissionDiagnostic; STATUS=TESTED; TEST=test-gap0927; OWNER=transport; UPDATED=2026-11-12
         // GAP-0928: at `--max-connections` capacity the accept loop parks and
