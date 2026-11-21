@@ -4790,7 +4790,7 @@ REQ-SONNY-6327-FLE-READ-POLICY,FieldLevelEncryption,GraphStoreCheckedRead,TESTED
 REQ-SONNY-6327-FLE-READ-POLICY,FieldLevelEncryption,OneReadPolicyForNodesAndEdges,TESTED,,,security,2026-11-11,src/fle_integration.zig,1049
 REQ-SONNY-6327-FLE-READ-POLICY,FieldLevelEncryption,Regression,TESTED,,,security,2026-11-11,tests/test_sonny6327_fle_read_gaps.zig,33
 REQ-SONNY-6327-FLE-READ-POLICY,FieldLevelEncryption,WireEncoding,TESTED,,,security,2026-11-11,src/server/proto_util.zig,1147
-REQ-SONNY-6328-TSAN-INSTRUMENTED,Race Detection,TsanCompanionsInstrumented,TESTED,,,build,2026-11-12,tests/test_sonny6328_tsan_detects_race.zig,11
+REQ-SONNY-6328-TSAN-INSTRUMENTED,Race Detection,TsanCompanionsInstrumented,TESTED,,,build,2026-11-12,tests/test_sonny6328_tsan_detects_race.zig,17
 REQ-SONNY-6329-AUTH-DDL-SERIALIZED,GQL Auth DDL Persistence,AuthDdlMutex,TESTED,,,security,2026-11-12,src/security/auth_ddl_lock.zig,1
 REQ-SONNY-6329-NO-AUTH-REFUSED,ServerCli,NoAuthFlagRefused,TESTED,,,security,2026-11-12,src/server/cli_args.zig,665
 REQ-SONNY-6329-USER-CACHE-LOCK,GQL Auth DDL Persistence,Regression,TESTED,,,security,2026-11-12,tests/test_sonny6329_user_cache_and_ddl_serialization.zig,22
