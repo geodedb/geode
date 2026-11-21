@@ -383,7 +383,11 @@ test "SONNY-6377: geode query --file does not replay a chunk whose request was s
         std.debug.print("fixture did not chunk:\n{s}\n", .{r.output});
         return error.FixtureDidNotChunk;
     }
-    if (!froze) {
+    // SONNY-6918: the Freezer only forces a chunk that was sent and then
+    // timed out. On a loaded host the server can write under 16 KiB before
+    // the 4 s deadline, and the deadline expires without it; the client says
+    // so, and the contract below still applies.
+    if (!froze and !contains(r.output, "got no answer after it was sent")) {
         std.debug.print("the server never started applying the chunk:\n{s}\n", .{r.output});
         return error.FixtureServerNotStopped;
     }
