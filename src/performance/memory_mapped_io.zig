@@ -488,8 +488,14 @@ test "Performance benchmark basic functionality" {
     defer allocator.free(test_file);
     const results = try benchmarkMemoryMappedIO(allocator, test_file, 1024, 2);
 
-    // Basic validation - just ensure we get reasonable results
+    // SONNY-6906: check what the function guarantees, not how fast this
+    // runner is. A 1 KiB, 2-iteration timing is a microsecond per region, so
+    // one preemption moved the ratio under the old `> 0.1` floor on CI.
     try testing.expect(results.mmap_read_ns > 0);
     try testing.expect(results.regular_read_ns > 0);
-    try testing.expect(results.mmap_advantage > 0.1);
+    const expected_advantage = @as(f64, @floatFromInt(results.regular_read_ns)) /
+        @as(f64, @floatFromInt(results.mmap_read_ns));
+    try testing.expectEqual(expected_advantage, results.mmap_advantage);
+    try testing.expect(std.math.isFinite(results.mmap_advantage));
+    try testing.expect(results.mmap_advantage > 0);
 }
