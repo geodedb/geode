@@ -17,6 +17,7 @@
 // (14242-14249) to avoid stepping on any real geode/test listener.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const cluster_bootstrap = @import("cluster_bootstrap");
 const graph_store = @import("geode").graph_store;
 
@@ -32,6 +33,25 @@ const graph_store = @import("geode").graph_store;
 // ClusterCoordinator so each test owns its store from end to end.
 fn resetGlobalGraphStore() void {
     graph_store.deinitGlobalStore();
+}
+
+extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
+extern "c" fn unsetenv(name: [*:0]const u8) c_int;
+
+// A coordinator start opens the intra-cluster QUIC listener, which self-signs
+// the missing test certificate only in dev posture. A release build refuses
+// that (SONNY-2394) unless the operator opts in, so these tests opt in for the
+// duration of the start and restore the environment afterwards (SONNY-6886).
+const autogen_env = "GEODE_TLS_AUTOGENERATE_CERT";
+
+fn allowSelfSignedCert() bool {
+    if (builtin.mode == .Debug or std.c.getenv(autogen_env) != null) return false;
+    _ = setenv(autogen_env, "1", 1);
+    return true;
+}
+
+fn restoreCertPosture(set: bool) void {
+    if (set) _ = unsetenv(autogen_env);
 }
 
 test "maybeStart returns null when GEODE_CLUSTER_TOKEN is absent" {
@@ -84,6 +104,8 @@ test "maybeStart starts a coordinator when env is complete (single node, no peer
     if (std.c.getenv("CI") != null) return error.SkipZigTest;
     resetGlobalGraphStore();
     defer resetGlobalGraphStore();
+    const opted_in = allowSelfSignedCert();
+    defer restoreCertPosture(opted_in);
     const a = std.testing.allocator;
     var env = std.process.Environ.Map.init(a);
     defer env.deinit();
@@ -101,6 +123,8 @@ test "maybeStart parses 2-peer cluster from GEODE_PEERS" {
     if (std.c.getenv("CI") != null) return error.SkipZigTest;
     resetGlobalGraphStore();
     defer resetGlobalGraphStore();
+    const opted_in = allowSelfSignedCert();
+    defer restoreCertPosture(opted_in);
     const a = std.testing.allocator;
     var env = std.process.Environ.Map.init(a);
     defer env.deinit();
@@ -121,6 +145,8 @@ test "maybeStart: CLI peers override GEODE_PEERS env" {
     if (std.c.getenv("CI") != null) return error.SkipZigTest;
     resetGlobalGraphStore();
     defer resetGlobalGraphStore();
+    const opted_in = allowSelfSignedCert();
+    defer restoreCertPosture(opted_in);
     const a = std.testing.allocator;
     var env = std.process.Environ.Map.init(a);
     defer env.deinit();
@@ -199,6 +225,8 @@ test "maybeStart: derives node_id from $HOSTNAME when GEODE_NODE_ID is unset (k8
     if (std.c.getenv("CI") != null) return error.SkipZigTest;
     resetGlobalGraphStore();
     defer resetGlobalGraphStore();
+    const opted_in = allowSelfSignedCert();
+    defer restoreCertPosture(opted_in);
     const a = std.testing.allocator;
     var env = std.process.Environ.Map.init(a);
     defer env.deinit();
@@ -222,6 +250,8 @@ test "maybeStart: $HOSTNAME position overrides a mismatched GEODE_NODE_ID (the k
     if (std.c.getenv("CI") != null) return error.SkipZigTest;
     resetGlobalGraphStore();
     defer resetGlobalGraphStore();
+    const opted_in = allowSelfSignedCert();
+    defer restoreCertPosture(opted_in);
     const a = std.testing.allocator;
     var env = std.process.Environ.Map.init(a);
     defer env.deinit();
