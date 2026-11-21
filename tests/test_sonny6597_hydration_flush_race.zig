@@ -55,30 +55,39 @@ const opts: gsa.hydration_scan.ScanOptions = .{
 };
 
 /// Keeps every worker of a graph's shared engine thread pool busy until
-/// `open` is called.
+/// `open` is called. The gate lives on the caller's stack, so `open` waits
+/// until every task it submitted has left `run` and no worker can read it
+/// after the frame is gone (SONNY-6891).
 const PoolGate = struct {
     release: std.atomic.Value(bool) = .init(false),
     started: std.atomic.Value(usize) = .init(0),
-    workers: usize = 0,
+    finished: std.atomic.Value(usize) = .init(0),
+    submitted: usize = 0,
 
     fn run(ctx: *anyopaque, _: TaskCtxPtr) void {
         const self: *PoolGate = @ptrCast(@alignCast(ctx));
         _ = self.started.fetchAdd(1, .acq_rel);
         while (!self.release.load(.acquire)) io.sleep(.fromMilliseconds(1), .awake) catch {};
+        _ = self.finished.fetchAdd(1, .acq_rel);
     }
 
     fn close(self: *PoolGate, pool: *ThreadPool) !void {
-        self.workers = pool.core.workers.len;
-        for (0..self.workers) |_| _ = try pool.submit(run, @ptrCast(self), .{});
+        const workers = pool.core.workers.len;
+        for (0..workers) |_| {
+            _ = try pool.submit(run, @ptrCast(self), .{});
+            self.submitted += 1;
+        }
         var waited: usize = 0;
-        while (self.started.load(.acquire) < self.workers) : (waited += 1) {
+        while (self.started.load(.acquire) < workers) : (waited += 1) {
             if (waited > 10_000) return error.PoolGateTimeout;
             try io.sleep(.fromMilliseconds(1), .awake);
         }
     }
 
+    /// Idempotent.
     fn open(self: *PoolGate) void {
         self.release.store(true, .release);
+        while (self.finished.load(.acquire) < self.submitted) io.sleep(.fromMilliseconds(1), .awake) catch {};
     }
 };
 
@@ -154,13 +163,17 @@ fn scanDuringCheckpointWrite(adapter: *gsa.StorageAdapter, graph: []const u8, ke
     try std.testing.expect(dirtyFrames(mg) > 0);
 
     var gate: PoolGate = .{};
+    defer gate.open();
     try gate.close(mg.engine.shared_thread_pool);
-    var gate_open = false;
-    defer if (!gate_open) gate.open();
 
     var cp: CheckpointThread = .{ .adapter = adapter, .graph = graph };
     const thread = try std.Thread.spawn(.{}, CheckpointThread.run, .{&cp});
-    defer thread.join();
+    // The checkpoint's page writes run on the gated pool: open the gate
+    // before joining, on the error paths too.
+    defer {
+        gate.open();
+        thread.join();
+    }
 
     // The checkpoint has taken every dirty page for writing.
     var waited: usize = 0;
@@ -174,8 +187,6 @@ fn scanDuringCheckpointWrite(adapter: *gsa.StorageAdapter, graph: []const u8, ke
 
     // The window was still open when the scan ran: the writes had not started.
     try std.testing.expect(!cp.done.load(.acquire));
-    gate.open();
-    gate_open = true;
     return r;
 }
 
