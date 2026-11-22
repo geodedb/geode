@@ -64,6 +64,52 @@ pub const default_page_rows: usize = 128;
 /// lock acquire/release across the batch.
 const materialize_batch_nodes: usize = 512;
 
+// CANARY: REQ=REQ-SONNY-6924-SCAN-NODE-READ-SHARD-EXCLUSION; FEATURE="NodeScanStream"; ASPECT=ScanReadsUnderShardLock; STATUS=TESTED; TEST=tests/test_sonny6924_scan_node_read_shard_exclusion.zig; OWNER=storage; UPDATED=2026-11-22
+/// SONNY-6924: the shard lock (SHARED) under which this file reads a node's
+/// record, labels and properties (`materializeNode`,
+/// `materializeNodeProjected`, `nodeMatchesPattern`). Those adapter reads take
+/// no shard lock, and an insert on the same shard (holding it EXCLUSIVE) can
+/// grow the shard's page bitmap under them: a live node then reads as absent,
+/// NodeNotFound for a WHERE + LIMIT query and a dropped row for a paged one
+/// (see `StorageAdapter.NodeShardReadLock`). The paging scan holds only the
+/// graph lock SHARED, as the insert does, and slot collection holds nothing.
+///
+/// `cover` is called before each node's reads. It keeps the lock across up to
+/// `shard_read_batch_nodes` consecutive nodes of one shard, as the label scan
+/// does (`label_scan_batch_slots`), so a scan beside a sustained ingest waits
+/// for an insert once per batch rather than once per node, and an insert
+/// waits at most one batch. A node is never read across a release. No caller
+/// in this file holds a shard lock; a hold is released before the graph lock
+/// it nests in.
+const ShardReadHold = struct {
+    graph_name: []const u8,
+    held: ?graph_storage_adapter.StorageAdapter.NodeShardReadLock = null,
+    nodes: usize = 0,
+
+    fn cover(self: *ShardReadHold, slot_id: u64) void {
+        const shard = gs.shard_count.shardOfNode(slot_id);
+        if (self.held) |h| {
+            if (h.shard == shard and self.nodes < shard_read_batch_nodes) {
+                self.nodes += 1;
+                return;
+            }
+            self.release();
+        }
+        const adapter = graph_store.getGlobalAdapter() orelse return;
+        // A missing graph is left to the read, which reports it.
+        self.held = adapter.lockNodeShardForRead(self.graph_name, slot_id) catch null;
+        self.nodes = 1;
+    }
+
+    fn release(self: *ShardReadHold) void {
+        if (self.held) |h| h.release();
+        self.held = null;
+        self.nodes = 0;
+    }
+};
+
+const shard_read_batch_nodes: usize = 256;
+
 /// Test-observability counter: total nodes materialized by the streaming
 /// path (lazy per-page `materializeNode`). Bounded scans materialize
 /// O(result); count(label) materializes ZERO (served from the label index).
@@ -385,6 +431,10 @@ pub const NodeScanStream = struct {
         var lock = graph_store.acquireGraphReadLockTagged(self.graph_name, .misc);
         var lock_held = true;
         errdefer if (lock_held) graph_store.releaseGraphLock(lock);
+        // SONNY-6924: the node reads run under their shard's lock too, nested
+        // in the graph lock and released before it.
+        var hold = ShardReadHold{ .graph_name = self.graph_name };
+        defer hold.release();
         var batch_count: usize = 0;
         // SONNY-2656: each node's WHERE runs on this arena, reset after it.
         var scratch = std.heap.ArenaAllocator.init(allocator);
@@ -409,6 +459,7 @@ pub const NodeScanStream = struct {
             // cursor make the release/reacquire gap safe (no re-collect, no
             // duplicate; a node deleted in the gap fails materializeNode below).
             if (batch_count == materialize_batch_nodes) {
+                hold.release();
                 graph_store.releaseGraphLock(lock);
                 // FIX #1 (scan cancellation): the batch boundary is the natural
                 // cancellation point — the lock is already dropped and the
@@ -437,12 +488,12 @@ pub const NodeScanStream = struct {
             // ONLY those keys (cheap per-key directory lookup) instead of
             // decoding+duping every persisted property.
             const node = if (self.needed_keys) |keys|
-                materializeNodeProjected(allocator, self.graph_name, slot_id, keys) catch |err| {
+                materializeNodeProjected(allocator, &hold, self.graph_name, slot_id, keys) catch |err| {
                     if (eval.isResourceLimitError(err)) return err; // SONNY-3349
                     continue;
                 }
             else
-                materializeNode(allocator, self.graph_name, slot_id) catch |err| {
+                materializeNode(allocator, &hold, self.graph_name, slot_id) catch |err| {
                     if (eval.isResourceLimitError(err)) return err; // SONNY-3349
                     continue;
                 };
@@ -473,6 +524,7 @@ pub const NodeScanStream = struct {
             rows.appendAssumeCapacity(row);
             self.rows_emitted += 1;
         }
+        hold.release();
         graph_store.releaseGraphLock(lock);
         lock_held = false;
 
@@ -712,6 +764,9 @@ pub const NodeScanStream = struct {
                 var lock = graph_store.acquireGraphReadLockTagged(self.graph_name, .misc);
                 var count_lock_held = true;
                 errdefer if (count_lock_held) graph_store.releaseGraphLock(lock);
+                // SONNY-6924: as in `buildNextPage`.
+                var hold = ShardReadHold{ .graph_name = self.graph_name };
+                defer hold.release();
                 var batch_count: usize = 0;
                 // SONNY-2656: each node's WHERE runs on this arena, reset
                 // after it.
@@ -719,6 +774,7 @@ pub const NodeScanStream = struct {
                 defer scratch.deinit();
                 for (self.slot_ids) |slot_id| {
                     if (batch_count == materialize_batch_nodes) {
+                        hold.release();
                         graph_store.releaseGraphLock(lock);
                         // FIX #1 (scan cancellation): same batch-boundary bail as
                         // buildNextPage. If the client's stream has closed (or
@@ -736,12 +792,12 @@ pub const NodeScanStream = struct {
                     // GAP-0902: a filtered count needs ONLY the predicate's keys
                     // (no projection, no node escape), so read just those keys.
                     const node = if (self.needed_keys) |keys|
-                        materializeNodeProjected(allocator, self.graph_name, slot_id, keys) catch |err| {
+                        materializeNodeProjected(allocator, &hold, self.graph_name, slot_id, keys) catch |err| {
                             if (eval.isResourceLimitError(err)) return err; // SONNY-3349
                             continue;
                         }
                     else
-                        materializeNode(allocator, self.graph_name, slot_id) catch |err| {
+                        materializeNode(allocator, &hold, self.graph_name, slot_id) catch |err| {
                             if (eval.isResourceLimitError(err)) return err; // SONNY-3349
                             continue;
                         };
@@ -749,6 +805,7 @@ pub const NodeScanStream = struct {
                     if (try self.evalPredicate(&scratch, where_expr, node)) matched += 1;
                 }
                 // Released already if we bailed at a batch boundary on cancel.
+                hold.release();
                 if (count_lock_held) graph_store.releaseGraphLock(lock);
                 break :blk matched;
             }
@@ -1834,6 +1891,10 @@ fn collectMatchingSlotIds(
     if (required_rows) |cap| if (cap == 0) return try allocator.alloc(u64, 0);
 
     const row_cap = required_rows orelse std.math.maxInt(usize);
+    // SONNY-6924: the node reads below run under their shard's lock. Released
+    // before every adapter call that takes a shard lock itself.
+    var hold = ShardReadHold{ .graph_name = graph_name };
+    defer hold.release();
     var result = try std.ArrayList(u64).initCapacity(allocator, if (required_rows) |cap| @min(cap, 1024) else 256);
     errdefer result.deinit(allocator);
 
@@ -1911,7 +1972,7 @@ fn collectMatchingSlotIds(
                     // Re-verify against the REAL pattern (NOT seek_pattern): the
                     // synthetic WHERE props are seek-only; the WHERE predicate is
                     // re-applied by the caller's tally/paging.
-                    if (!try nodeMatchesPattern(allocator, adapter, graph_name, slot_id, pattern, param_names, param_values, context)) continue;
+                    if (!try nodeMatchesPattern(allocator, adapter, &hold, graph_name, slot_id, pattern, param_names, param_values, context)) continue;
                     try result.append(allocator, slot_id);
                     if (result.items.len >= row_cap) break;
                 }
@@ -1946,14 +2007,15 @@ fn collectMatchingSlotIds(
                 outer: while (shard_idx < cursor.shard_count) : (shard_idx += 1) {
                     var chunk = std.ArrayList(u64).empty;
                     defer chunk.deinit(allocator);
+                    hold.release(); // the shard scan takes the shard lock
                     try adapter.appendLabelScanShard(cursor, shard_idx, allocator, &chunk);
                     for (chunk.items) |slot_id| {
                         // Verify the full pattern (extra labels / inline props)
                         // first — cheaper than predicate eval — then the WHERE
                         // predicate. Only predicate-passing slots count toward
                         // `match_cap`; capping on raw slots would under-return.
-                        if (!try nodeMatchesPattern(allocator, adapter, graph_name, slot_id, pattern, param_names, param_values, context)) continue;
-                        if (!try slotMatchesPredicate(allocator, &scratch, graph_name, slot_id, wp.where_expr, wp.var_name, param_names, param_values, context)) continue;
+                        if (!try nodeMatchesPattern(allocator, adapter, &hold, graph_name, slot_id, pattern, param_names, param_values, context)) continue;
+                        if (!try slotMatchesPredicate(allocator, &scratch, &hold, graph_name, slot_id, wp.where_expr, wp.var_name, param_names, param_values, context)) continue;
                         try result.append(allocator, slot_id);
                         if (result.items.len >= wp.match_cap) break :outer;
                     }
@@ -1973,20 +2035,22 @@ fn collectMatchingSlotIds(
         // so we collect ALL slots (cap = null) and let the `row_cap` break below
         // bound the matched rows — capping slot collection would under-return.
         const collect_cap: ?usize = if (pattern.props == null and required_rows != null) row_cap else null;
+        hold.release(); // the scan takes the shard locks
         const slots = try adapter.getNodesByLabelCapped(graph_name, pattern.labels[0], collect_cap, allocator);
         defer allocator.free(slots);
 
         for (slots) |slot_id| {
-            if (!try nodeMatchesPattern(allocator, adapter, graph_name, slot_id, pattern, param_names, param_values, context)) continue;
+            if (!try nodeMatchesPattern(allocator, adapter, &hold, graph_name, slot_id, pattern, param_names, param_values, context)) continue;
             try result.append(allocator, slot_id);
             if (result.items.len >= row_cap) break;
         }
     } else {
+        hold.release(); // the scan takes the shard locks
         const entries = try adapter.scanAllNodes(graph_name, allocator);
         defer allocator.free(entries);
 
         for (entries) |entry| {
-            if (!try nodeMatchesPattern(allocator, adapter, graph_name, entry.slot_id, pattern, param_names, param_values, context)) continue;
+            if (!try nodeMatchesPattern(allocator, adapter, &hold, graph_name, entry.slot_id, pattern, param_names, param_values, context)) continue;
             try result.append(allocator, entry.slot_id);
             if (result.items.len >= row_cap) break;
         }
@@ -2115,6 +2179,7 @@ fn seekIndexedCandidates(
 fn nodeMatchesPattern(
     allocator: std.mem.Allocator,
     adapter: *graph_storage_adapter.StorageAdapter,
+    hold: *ShardReadHold,
     graph_name: []const u8,
     slot_id: u64,
     pattern: ast.NodePattern,
@@ -2123,6 +2188,7 @@ fn nodeMatchesPattern(
     context: ExecutionContext,
 ) !bool {
     if (pattern.labels.len > 0 or pattern.props != null) {
+        hold.cover(slot_id); // SONNY-6924
         const labels = try adapter.getNodeLabels(graph_name, slot_id, allocator);
         defer {
             for (labels) |label| allocator.free(label);
@@ -2175,6 +2241,7 @@ fn nodeMatchesPattern(
 fn slotMatchesPredicate(
     allocator: std.mem.Allocator,
     scratch: *std.heap.ArenaAllocator,
+    hold: *ShardReadHold,
     graph_name: []const u8,
     slot_id: u64,
     where_expr: ast.Expr,
@@ -2183,7 +2250,7 @@ fn slotMatchesPredicate(
     param_values: []const Value,
     context: ExecutionContext,
 ) !bool {
-    const node = materializeNode(allocator, graph_name, slot_id) catch |err| {
+    const node = materializeNode(allocator, hold, graph_name, slot_id) catch |err| {
         if (eval.isResourceLimitError(err)) return err; // SONNY-3349
         return false;
     };
@@ -2249,9 +2316,10 @@ fn predicateAllocator(scratch: *std.heap.ArenaAllocator) std.mem.Allocator {
 /// LIMIT enumeration). It became a row the query did not return.
 pub threadlocal var test_materialize_error: ?error{ OutOfMemory, NodeNotFound } = null;
 
-fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64) !*graph_store.Node {
+fn materializeNode(allocator: std.mem.Allocator, hold: *ShardReadHold, graph_name: []const u8, slot_id: u64) !*graph_store.Node {
     if (test_materialize_error) |err| return err;
     _ = g_nodes_materialized_total.fetchAdd(1, .monotonic);
+    hold.cover(slot_id); // SONNY-6924
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
     const node = try newNode(allocator, adapter, graph_name, slot_id);
     // SONNY-2463: the node owns everything put into it from here on, so a
@@ -2317,8 +2385,10 @@ fn putProperty(allocator: std.mem.Allocator, node: *graph_store.Node, key: []con
 /// full (`materializeNode`), so a test can drive it under a failing
 /// allocator. Free the result with `destroyNodeForTest`.
 pub fn materializeNodeForTest(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64, needed_keys: ?[]const []const u8) !*graph_store.Node {
-    if (needed_keys) |keys| return materializeNodeProjected(allocator, graph_name, slot_id, keys);
-    return materializeNode(allocator, graph_name, slot_id);
+    var hold = ShardReadHold{ .graph_name = graph_name };
+    defer hold.release();
+    if (needed_keys) |keys| return materializeNodeProjected(allocator, &hold, graph_name, slot_id, keys);
+    return materializeNode(allocator, &hold, graph_name, slot_id);
 }
 
 /// SONNY-3350 (round 17): a test seam: `resolveExternalNodeId`.
@@ -2345,12 +2415,14 @@ pub fn destroyNodeForTest(allocator: std.mem.Allocator, node: *graph_store.Node)
 /// `materializeNode`. Engine-direct: never touches the node cache.
 fn materializeNodeProjected(
     allocator: std.mem.Allocator,
+    hold: *ShardReadHold,
     graph_name: []const u8,
     slot_id: u64,
     needed_keys: []const []const u8,
 ) !*graph_store.Node {
     if (test_materialize_error) |err| return err; // SONNY-3349
     _ = g_nodes_materialized_total.fetchAdd(1, .monotonic);
+    hold.cover(slot_id); // SONNY-6924
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
     const node = try newNode(allocator, adapter, graph_name, slot_id);
     // SONNY-2463: as in `materializeNode`, a failure part way (an allocation,

@@ -8340,6 +8340,46 @@ pub const StorageAdapter = struct {
         _om13dn.recordNodeMutation(.delete, graph_name, .success);
     }
 
+    // CANARY: REQ=REQ-SONNY-6924-SCAN-NODE-READ-SHARD-EXCLUSION; FEATURE="NodeScanStream"; ASPECT=NodeShardReadLock; STATUS=TESTED; TEST=tests/test_sonny6924_scan_node_read_shard_exclusion.zig; OWNER=storage; UPDATED=2026-11-22
+    /// SONNY-6924: the shard lock of a node, held SHARED by a reader of the
+    /// node's record, labels or properties (`getNodeLabels`,
+    /// `getAllNodeProperties`, `getNodeProperty`, which take no shard lock).
+    ///
+    /// An insert holds its shard's lock EXCLUSIVE and can grow the shard's
+    /// node-page free-space bitmap (`NodeStore.putNode` ->
+    /// `FreeSpaceManager.ensureCapacity`, a `std.DynamicBitSet.resize` that
+    /// frees the old mask array). `NodeStore.getNode` consults that bitmap
+    /// before it reads the record, so a read beside the insert can find a live
+    /// node's page unallocated and the node absent.
+    pub const NodeShardReadLock = struct {
+        mg: *ManagedGraph,
+        shard: usize,
+
+        pub fn release(self: NodeShardReadLock) void {
+            self.mg.shard_locks[self.shard].unlockShared(std.Io.Threaded.global_single_threaded.io());
+        }
+    };
+
+    comptime {
+        std.debug.assert(gs.sharded_engine.SHARD_COUNT == sharded_store.SHARD_COUNT);
+    }
+
+    /// SONNY-6924: take the shard lock of engine slot `node_id` SHARED (see
+    /// `NodeShardReadLock`). The graph lookup's `self.mutex` is released
+    /// before the lock is taken. The caller must hold no shard lock: a second
+    /// SHARED acquire parks behind a pending EXCLUSIVE one, which waits for
+    /// the first.
+    pub fn lockNodeShardForRead(self: *StorageAdapter, graph_name: []const u8, node_id: u64) !NodeShardReadLock {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        const shard = gs.shard_count.shardOfNode(node_id);
+        mg.shard_locks[shard].lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        return .{ .mg = mg, .shard = shard };
+    }
+
     /// Retrieve the string labels for a node. Caller owns the returned
     /// slice and must free both the slice and each string inside it.
     pub fn getNodeLabels(self: *StorageAdapter, graph_name: []const u8, node_id: u64, allocator: Allocator) ![][]const u8 {

@@ -797,7 +797,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6924-scan-node-read-shard-exclusion", .reason = "intentionally red TDD reproduction (SONNY-6924, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -16158,8 +16157,8 @@ pub fn build(b: *std.Build) void {
     sonny6924_mod.addImport("geode", root_mod);
     const sonny6924_tests = b.addTest(.{ .root_module = sonny6924_mod });
     const run_sonny6924_tests = b.addRunArtifact(sonny6924_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6924_tests.step);
-    const sonny6924_step = b.step("test-sonny6924-scan-node-read-shard-exclusion", "Run SONNY-6924 red reproduction (the engine-direct scan reads a node beside a write on the node's shard)");
+    shardDep(test_step, &run_sonny6924_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny6924_step = b.step("test-sonny6924-scan-node-read-shard-exclusion", "Run SONNY-6924 regression (the engine-direct scan's node reads wait for a write on the node's shard)");
     sonny6924_step.dependOn(&run_sonny6924_tests.step);
 
     // H1 (where-limit-lazy): WHERE+LIMIT must bound label-slot enumeration by
