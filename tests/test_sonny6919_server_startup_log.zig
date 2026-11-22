@@ -44,3 +44,44 @@ test "SONNY-6919: a server that exits during startup is reported at once, with i
         return error.TestUnexpectedResult;
     }
 }
+
+// SONNY-6922: on a loaded CI runner a healthy server took over ten seconds
+// to answer its first HELLO (main pipeline 3099161904, release-safe shard
+// 14: 8.2 s between storage load and audit key generation that take 36 ms
+// on an idle host), and spawnServerRandom gave up on it. A server that has
+// exited is reported at once (above), so the deadline only bounds a live
+// server, and must outlast a starved one. Starve it for real: stop the
+// process for 12 seconds before it can answer, then let it continue.
+const stall_ms: u64 = 12_000;
+
+fn resumeAfterStall(pid: std.posix.pid_t) void {
+    var ts: std.posix.timespec = .{ .sec = @intCast(stall_ms / 1000), .nsec = 0 };
+    _ = std.os.linux.nanosleep(&ts, null);
+    _ = std.os.linux.kill(pid, std.os.linux.SIG.CONT);
+}
+
+test "SONNY-6922: a server stalled for 12 seconds during startup is still awaited" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const port = try util.getRandomPort();
+    const addr = try util.formatAddr(testing.allocator, port);
+
+    var handle = util.spawnServerWithAddr(testing.allocator, addr, null) catch |err| {
+        testing.allocator.free(addr);
+        return err;
+    };
+    // The handle owns the address from here (deinit frees it), as in
+    // spawnServerRandom.
+    handle.port = port;
+    handle.addr = addr;
+    defer handle.deinit();
+    const pid = handle.child.id orelse return error.NoChildPid;
+    _ = std.os.linux.kill(pid, std.os.linux.SIG.STOP);
+    const resumer = try std.Thread.spawn(.{}, resumeAfterStall, .{pid});
+    defer resumer.join();
+
+    util.waitForSpawnedServer(&handle, util.SPAWN_STARTUP_TIMEOUT_MS) catch |err| {
+        handle.reportStartupFailure(err);
+        return err;
+    };
+}

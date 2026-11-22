@@ -289,6 +289,13 @@ pub fn waitForGrpcServerReady(allocator: std.mem.Allocator, addr: []const u8, ti
     return error.ServerStartupTimeout;
 }
 
+/// How long a spawned server that is still running may take to answer its
+/// first HELLO (`spawnServerRandom`). SONNY-6922: a server that exits is
+/// reported at once (`waitForSpawnedServer`), so this bounds only a live
+/// one, and a loaded CI runner starved a healthy server's 0.13 s startup to
+/// over ten seconds.
+pub const SPAWN_STARTUP_TIMEOUT_MS: u64 = 10_000;
+
 /// SONNY-6919: wait until the server in `handle` answers a HELLO, and stop
 /// at once with ServerExitedDuringStartup if its process has exited (a
 /// failed bind, a refused configuration), rather than polling a dead server
@@ -343,7 +350,7 @@ pub fn spawnServerRandom(
     handle.port = port;
     handle.addr = addr;
 
-    waitForSpawnedServer(&handle, 10000) catch |err| {
+    waitForSpawnedServer(&handle, SPAWN_STARTUP_TIMEOUT_MS) catch |err| {
         handle.reportStartupFailure(err);
         // SONNY-6542: the errdefer above frees addr; deinit must not free it
         // again (a server that missed the deadline crashed the test binary).
