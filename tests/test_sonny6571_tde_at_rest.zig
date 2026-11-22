@@ -406,7 +406,10 @@ fn killNodes(nodes: []Node, gpa: std.mem.Allocator, io: std.Io) void {
 }
 
 /// Spawn the single server on `data_dir` and wait until a query answers.
-fn startSingle(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io, certs: Certs, needles: Needles, data_dir: []const u8, port: u16, node: *Node) !void {
+/// SONNY-6925: `stall_ms` > 0 stops the server (SIGSTOP) right after it is
+/// spawned and lets it continue that much later: a server starved past one
+/// readiness probe's timeout, as on a loaded CI runner.
+fn startSingle(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io, certs: Certs, needles: Needles, data_dir: []const u8, port: u16, node: *Node, stall_ms: u64) !void {
     const listen = try std.fmt.allocPrint(aa, "{s}:{d}", .{ SINGLE_IP, port });
     const env = try aa.create(std.process.Environ.Map);
     env.* = std.process.Environ.Map.init(aa);
@@ -417,6 +420,13 @@ fn startSingle(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io, certs:
         .child = try spawnServe(io, &.{ BINARY_PATH, "serve", "--listen", listen, "--data-dir", data_dir, "--cert", certs.leaf, "--key", certs.key }, env),
         .data_dir = data_dir,
     };
+    var resumer: ?std.Thread = null;
+    defer if (resumer) |t| t.join();
+    if (stall_ms > 0) {
+        const pid = node.child.id orelse return error.NoServerPid;
+        _ = std.os.linux.kill(pid, std.os.linux.SIG.STOP);
+        resumer = try std.Thread.spawn(.{}, resumeAfter, .{ pid, stall_ms });
+    }
     const deadline = nowMillis() + STARTUP_DEADLINE_MS;
     while (true) {
         node.drain(gpa, io);
@@ -478,7 +488,7 @@ fn singleNodeScan(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io) !Sc
         stopNodes(nodes[0..spawned], gpa, io);
         for (nodes[0..spawned]) |*n| n.capture.buf.deinit(gpa);
     }
-    try startSingle(gpa, aa, io, certs, needles, data_dir, port, &nodes[0]);
+    try startSingle(gpa, aa, io, certs, needles, data_dir, port, &nodes[0], 0);
     spawned = 1;
 
     const writes = [_][]const u8{
@@ -505,7 +515,7 @@ fn singleNodeScan(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io) !Sc
     // and everything reads back; then a clean stop checkpoints.
     nodes[0].capture.buf.deinit(gpa);
     spawned = 0;
-    try startSingle(gpa, aa, io, certs, needles, data_dir, port, &nodes[0]);
+    try startSingle(gpa, aa, io, certs, needles, data_dir, port, &nodes[0], 0);
     spawned = 1;
     try expectSingleReads(gpa, aa, io, certs, needles, port, &nodes[0]);
     try scanTree(gpa, aa, io, data_dir, needles, "restart", &findings, &scanned);
@@ -513,6 +523,46 @@ fn singleNodeScan(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io) !Sc
     try scanTree(gpa, aa, io, data_dir, needles, "stopped", &findings, &scanned);
     report("single node, TDE on", findings.items, scanned);
     return .{ .findings = findings.items, .files_scanned = scanned };
+}
+
+fn resumeAfter(pid: std.posix.pid_t, ms: u64) void {
+    sleepMs(ms);
+    _ = std.os.linux.kill(pid, std.os.linux.SIG.CONT);
+}
+
+// SONNY-6925: main pipeline 3099546736 (test-zig-unit [1, 1]) failed this
+// file's single-node test in startSingle: a `RETURN 1 AS ready` probe ran
+// past its 15 s timeout on a starved runner and the error.Timeout ended the
+// test, though the 45 s startup deadline had not passed. A server stopped for
+// 17 s right after it starts must still be awaited.
+test "single node: a server stalled past one readiness probe's timeout is still awaited" {
+    if (builtin.os.tag != .linux or !binaryPresent()) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    var threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const certs = try makeCerts(aa, io);
+    defer std.Io.Dir.cwd().deleteTree(io, certs.dir) catch {};
+    const needles = try Needles.make(aa);
+    const port = try test_ports.freeUdpPort();
+    const data_dir = try std.fmt.allocPrint(aa, "{s}/data", .{certs.dir});
+    try std.Io.Dir.cwd().createDirPath(io, data_dir);
+
+    var nodes: [1]Node = undefined;
+    var spawned: usize = 0;
+    defer {
+        stopNodes(nodes[0..spawned], gpa, io);
+        for (nodes[0..spawned]) |*n| n.capture.buf.deinit(gpa);
+    }
+    startSingle(gpa, aa, io, certs, needles, data_dir, port, &nodes[0], 17_000) catch |err| {
+        spawned = 1;
+        return err;
+    };
+    spawned = 1;
 }
 
 test "single node: with TDE on, no written plaintext appears anywhere under the data directory" {
