@@ -2076,8 +2076,13 @@ pub fn build(b: *std.Build) void {
     // schema_version-2 VarianceEnvelope + VARIANCE_OK/VARIANCE_FAIL token per
     // scenario for the CI bench gate (GAP-0244). Imports fts_storage_lib only,
     // so it compiles cheaply without dragging in the geode root module.
+    // SONNY-2439: the storage benchmarks' envelope claims on the median / IQR
+    // of the per-position fastest of several passes (min-of-N), so one stall
+    // on a shared runner cannot breach it.
+    const robust_variance_envelope_mod = b.createModule(.{ .root_source_file = b.path("benchmarks/robust_variance_envelope.zig"), .target = target, .optimize = optimize });
     const fts_storage_bench_exe = b.addExecutable(.{ .name = "benchmark_fts_storage", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_fts_storage.zig"), .target = target, .optimize = optimize }) });
     fts_storage_bench_exe.root_module.addImport("fts_storage_lib", fts_storage_ext_mod);
+    fts_storage_bench_exe.root_module.addImport("robust_variance_envelope", robust_variance_envelope_mod);
     const run_fts_storage_bench = b.addRunArtifact(fts_storage_bench_exe);
     bench_step.dependOn(&run_fts_storage_bench.step);
     // Also attached to the CI `benchmark` aggregate below (after that step is
@@ -2091,6 +2096,7 @@ pub fn build(b: *std.Build) void {
     // benchmark_fts_storage above.
     const ts_storage_bench_exe = b.addExecutable(.{ .name = "benchmark_ts_storage", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_ts_storage.zig"), .target = target, .optimize = optimize }) });
     ts_storage_bench_exe.root_module.addImport("geode", root_mod);
+    ts_storage_bench_exe.root_module.addImport("robust_variance_envelope", robust_variance_envelope_mod);
     const run_ts_storage_bench = b.addRunArtifact(ts_storage_bench_exe);
     bench_step.dependOn(&run_ts_storage_bench.step);
     // Dedicated step to run ONLY the timeseries-storage variance bench in
@@ -12262,14 +12268,22 @@ pub fn build(b: *std.Build) void {
     // SONNY-2439: the fts-storage VarianceEnvelope (the CI benchmark gate's
     // flaky fts_index_batch) holds while the host is contended.
     {
+        const rve_mod = b.createModule(.{ .root_source_file = b.path("benchmarks/robust_variance_envelope.zig"), .target = target, .optimize = optimize });
         const bench_mod = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_fts_storage.zig"), .target = target, .optimize = optimize });
         bench_mod.addImport("fts_storage_lib", fts_storage_ext_mod);
+        bench_mod.addImport("robust_variance_envelope", rve_mod);
         const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2439_fts_variance_contention.zig"), .target = target, .optimize = optimize });
         mod.addImport("fts_bench", bench_mod);
         const tests = b.addTest(.{ .root_module = mod });
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
-        b.step("test-sonny2439-fts-variance-contention", "Run SONNY-2439 fts-storage variance regression (fts_index_batch and fts_search_term report VARIANCE_OK while the benchmark shares its CPU with bursty CPU hogs and another thread fsyncs)").dependOn(&run_tests.step);
+        // The envelope's own statistics (min-of-rounds, median / IQR, emit).
+        const rve_tests = b.addTest(.{ .root_module = rve_mod });
+        const run_rve_tests = b.addRunArtifact(rve_tests);
+        shardDep(test_step, &run_rve_tests.step, 1, test_shard_loads, test_shard_index);
+        const step = b.step("test-sonny2439-fts-variance-contention", "Run SONNY-2439 fts-storage variance regression (fts_index_batch and fts_search_term report VARIANCE_OK in each of three runs while the benchmark shares its CPU with bursty CPU hogs and two threads dirty and fsync files; the min-of-rounds median/IQR envelope statistics)");
+        step.dependOn(&run_tests.step);
+        step.dependOn(&run_rve_tests.step);
     }
 
     // SONNY-6386 item 6: the JSON and scheduler latency bounds SONNY-2439 left

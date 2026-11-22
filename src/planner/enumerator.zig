@@ -88,16 +88,26 @@ pub const PlanEnumerator = struct {
     fn generateUnmanaged(self: *PlanEnumerator, node: LogicalPlan, gpa: std.mem.Allocator, list: *std.ArrayListUnmanaged(CandidatePlan), depth: usize) !void {
         self.stats.explored_levels = @max(self.stats.explored_levels, depth + 1);
         const max_plans = self.config.max_plans;
+        // estimateCost walks the whole subtree; the prune check reuses the
+        // cost of the candidate just appended instead of walking it again
+        // (SONNY-2439: the second walk made pruned enumeration ~16% slower
+        // than full enumeration on a tree it prunes nothing from).
+        var node_cost: ?f64 = null;
         if (list.items.len < max_plans) {
             const sig = self.signatureOf(node);
-            try list.append(gpa, .{ .cost = self.estimateCost(node), .plan = node, .signature = sig });
+            const cost = self.estimateCost(node);
+            node_cost = cost;
+            try list.append(gpa, .{ .cost = cost, .plan = node, .signature = sig });
             self.stats.generated += 1;
-            if (list.items[list.items.len - 1].cost < self.best_cost) self.best_cost = list.items[list.items.len - 1].cost;
+            if (cost < self.best_cost) self.best_cost = cost;
             if (node.op == .join) _ = try self.join_sig_set.put(sig, {});
         }
         if (self.config.enable_prune and self.best_cost < std.math.inf(f64)) {
-            const projected = self.estimateCost(node);
-            if (projected > self.best_cost * self.config.prune_factor) return;
+            const projected = node_cost orelse self.estimateCost(node);
+            if (projected > self.best_cost * self.config.prune_factor) {
+                self.stats.pruned += 1;
+                return;
+            }
         }
         for (node.children) |child| try self.generateUnmanaged(child, gpa, list, depth + 1);
         if (node.op == .join and node.children.len == 2 and self.config.enable_join_commutativity and list.items.len < max_plans) {

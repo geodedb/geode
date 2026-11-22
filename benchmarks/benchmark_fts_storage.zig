@@ -12,14 +12,22 @@
 //   - fts_search_term:  K single-term TermIterator searches over an M-doc
 //                       index — ns/query.
 //
+// SONNY-2439: each scenario runs `robust_variance_envelope.default_rounds`
+// independent passes and the envelope claims on the median / IQR of the
+// per-position fastest pass (benchmarks/robust_variance_envelope.zig), so a
+// batch that lands on a preempted vCPU or a contended fsync on the shared CI
+// runner cannot breach it. tests/test_sonny2439_fts_variance_contention.zig
+// runs both scenarios under real CPU + fsync contention.
+//
 // The bench is intentionally lean: it imports `fts_storage_lib` + std only, so
 // it compiles in seconds rather than dragging in the geode root module.
 //
-// CANARY: REQ=REQ-GQL-FTS-STORAGE-PERF-001; FEATURE="FtsStorageBackend"; ASPECT=VarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_FTS_STORAGE_PERF_001_FtsStorageVarianceEnvelope; OWNER=storage; UPDATED=2026-05-31
+// CANARY: REQ=REQ-GQL-FTS-STORAGE-PERF-001; FEATURE="FtsStorageBackend"; ASPECT=VarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_FTS_STORAGE_PERF_001_FtsStorageVarianceEnvelope; OWNER=storage; UPDATED=2026-11-22
 
 const std = @import("std");
 const builtin = @import("builtin");
 const fts = @import("fts_storage_lib");
+const rve = @import("robust_variance_envelope");
 
 // Zig 0.16 compat: std.time.nanoTimestamp removed; use clock_gettime(MONOTONIC).
 fn nowNs() u64 {
@@ -32,129 +40,9 @@ fn nowNs() u64 {
     return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
 }
 
-const Stats = struct {
-    mean_ns: f64,
-    min_ns: u64,
-    max_ns: u64,
-    p95_ns: u64,
-    cv: f64,
-    p95_over_mean: f64,
-    sample_count: usize,
-};
-
-fn computeStats(samples: []u64) Stats {
-    std.sort.heap(u64, samples, {}, comptime struct {
-        fn lt(_: void, a: u64, b: u64) bool {
-            return a < b;
-        }
-    }.lt);
-    var sum: u128 = 0;
-    for (samples) |s| sum += s;
-    const mean = @as(f64, @floatFromInt(sum)) / @as(f64, @floatFromInt(samples.len));
-    var diff: f64 = 0;
-    for (samples) |s| {
-        const d = @as(f64, @floatFromInt(s)) - mean;
-        diff += d * d;
-    }
-    const variance = diff / @as(f64, @floatFromInt(samples.len));
-    const stddev = @sqrt(variance);
-    const cv = if (mean == 0) 0 else stddev / mean;
-    const p95_idx = (samples.len * 95) / 100;
-    const p95 = samples[if (p95_idx >= samples.len) samples.len - 1 else p95_idx];
-    const p95_over_mean = if (mean == 0) 0 else @as(f64, @floatFromInt(p95)) / mean;
-    return .{
-        .mean_ns = mean,
-        .min_ns = samples[0],
-        .max_ns = samples[samples.len - 1],
-        .p95_ns = p95,
-        .cv = cv,
-        .p95_over_mean = p95_over_mean,
-        .sample_count = samples.len,
-    };
-}
-
-inline fn scaledPpm(val: f64) u64 {
-    if (val <= 0) return 0;
-    const scaled = val * 10000.0;
-    if (scaled > 9.2e18) return 9_200_000_000_000_000_000;
-    return @intFromFloat(scaled);
-}
-
-// Variance thresholds (General class, generous for a single-core wall-clock
-// micro-bench that touches the WAL/fsync path). Scaled by 1e4 like the rest of
-// the variance suite. These are NOT enforced unless FTS_STORAGE_ENFORCE=1 is
-// set (opt-in enforcement, like the other variance benchmarks) — the
-// envelope is informational on noisy shared CI, and the VARIANCE_OK/FAIL token
-// reflects the threshold evaluation either way.
-const CV_MAX_PPM: u64 = 20000; // cv <= 2.00
-const P95_OVER_MEAN_MAX_PPM: u64 = 50000; // p95/mean <= 5.0
-
-fn emitEnvelope(
-    out: *std.ArrayListUnmanaged(u8),
-    allocator: std.mem.Allocator,
-    name: []const u8,
-    st: Stats,
-    warmup: usize,
-) !bool {
-    const cv_ppm = scaledPpm(st.cv);
-    const p95om_ppm = scaledPpm(st.p95_over_mean);
-    const cv_pass = cv_ppm <= CV_MAX_PPM;
-    const p95_pass = p95om_ppm <= P95_OVER_MEAN_MAX_PPM;
-    const pass = cv_pass and p95_pass;
-    const jitter_class: []const u8 = if (st.cv < 0.10) "low" else if (st.cv < 0.20) "medium" else "high";
-
-    const line = try std.fmt.allocPrint(
-        allocator,
-        "{{\"schema_version\":2,\"kind\":\"VarianceEnvelope\",\"benchmark\":\"{s}\"," ++
-            "\"mean_ns\":{d},\"min_ns\":{d},\"max_ns\":{d},\"sample_count\":{d},\"warmup_count\":{d}," ++
-            "\"cv_scaled_ppm\":{d},\"p95_ns\":{d},\"p95_over_mean_scaled_ppm\":{d}," ++
-            "\"cv_max_scaled_ppm\":{d},\"p95_over_mean_max_scaled_ppm\":{d},\"jitter_class\":\"{s}\"," ++
-            "\"thresholds_evaluated\":[" ++
-            "{{\"metric\":\"cv_scaled_ppm\",\"actual\":{d},\"max\":{d},\"pass\":{s}}}," ++
-            "{{\"metric\":\"p95_over_mean_scaled_ppm\",\"actual\":{d},\"max\":{d},\"pass\":{s}}}]," ++
-            "\"pass\":{s}}}\n",
-        .{
-            name,
-            @as(u64, @intFromFloat(st.mean_ns)),
-            st.min_ns,
-            st.max_ns,
-            st.sample_count,
-            warmup,
-            cv_ppm,
-            st.p95_ns,
-            p95om_ppm,
-            CV_MAX_PPM,
-            P95_OVER_MEAN_MAX_PPM,
-            jitter_class,
-            cv_ppm,
-            CV_MAX_PPM,
-            if (cv_pass) "true" else "false",
-            p95om_ppm,
-            P95_OVER_MEAN_MAX_PPM,
-            if (p95_pass) "true" else "false",
-            if (pass) "true" else "false",
-        },
-    );
-    defer allocator.free(line);
-    try out.appendSlice(allocator, line);
-
-    const token = try std.fmt.allocPrint(
-        allocator,
-        "{s} {s} mean_ns={d} cv={d:.4} p95_over_mean={d:.4} n={d}\n",
-        .{
-            if (pass) "VARIANCE_OK" else "VARIANCE_FAIL",
-            name,
-            @as(u64, @intFromFloat(st.mean_ns)),
-            st.cv,
-            st.p95_over_mean,
-            st.sample_count,
-        },
-    );
-    defer allocator.free(token);
-    try out.appendSlice(allocator, token);
-
-    return pass;
-}
+/// The envelope both scenarios claim (relative IQR and p95 / median of the
+/// per-position minimums over the rounds).
+pub const bounds: rve.Bounds = .{ .max_rel_iqr = 0.50, .max_p95_over_median = 3.0 };
 
 // Open a fresh, unique scratch dir for an engine instance. Returns the opened
 // std.Io.Dir; caller closes it (engine.deinit does NOT close base_dir) and is
@@ -166,8 +54,7 @@ fn openScratchDir(io: std.Io, name: []const u8) !std.Io.Dir {
 // Build a small deterministic term set for a doc. Each doc gets a handful of
 // terms drawn from a fixed vocabulary plus one doc-unique term, exercising both
 // common (high-df) and rare (low-df) posting lists.
-fn termsForDoc(buf: []fts.TermPosting, id: u64, common_pos: []const u32, uniq_term: []const u8, uniq_pos: []const u32) []fts.TermPosting {
-    _ = id;
+fn termsForDoc(buf: []fts.TermPosting, common_pos: []const u32, uniq_term: []const u8, uniq_pos: []const u32) []fts.TermPosting {
     buf[0] = .{ .term = "alpha", .positions = common_pos };
     buf[1] = .{ .term = "beta", .positions = common_pos };
     buf[2] = .{ .term = "gamma", .positions = common_pos };
@@ -175,133 +62,120 @@ fn termsForDoc(buf: []fts.TermPosting, id: u64, common_pos: []const u32, uniq_te
     return buf[0..4];
 }
 
-pub fn runIndexBatch(io: std.Io, allocator: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8)) !bool {
-    const doc_count: usize = 3000;
-    const samples_n: usize = 30; // 30 batches of 100 docs
-    const warmup_n: usize = 3;
-    const batch_size: usize = 100;
+const common_positions = [_]u32{ 1, 4, 9 };
+const uniq_positions = [_]u32{2};
 
-    const common_pos = [_]u32{ 1, 4, 9 };
-    const uniq_pos = [_]u32{2};
+/// `doc_count` pre-built DocBatch entries, so the timed region only measures
+/// the engine's index path, not our scratch allocation.
+const Corpus = struct {
+    allocator: std.mem.Allocator,
+    doc_terms: [][4]fts.TermPosting,
+    uniq_terms: [][24]u8,
+    batches: []fts.DocBatch,
 
-    var samples = try allocator.alloc(u64, samples_n);
-    defer allocator.free(samples);
-
-    // Pre-build all DocBatch entries so the timed region only measures the
-    // engine's index path, not our scratch allocation.
-    var doc_terms = try allocator.alloc([4]fts.TermPosting, doc_count);
-    defer allocator.free(doc_terms);
-    var uniq_terms = try allocator.alloc([24]u8, doc_count);
-    defer allocator.free(uniq_terms);
-    var batches = try allocator.alloc(fts.DocBatch, doc_count);
-    defer allocator.free(batches);
-
-    var d: usize = 0;
-    while (d < doc_count) : (d += 1) {
-        const ut = try std.fmt.bufPrint(&uniq_terms[d], "doc{d}", .{d});
-        const slice = termsForDoc(&doc_terms[d], d, &common_pos, ut, &uniq_pos);
-        batches[d] = .{ .doc_id = @intCast(d + 1), .terms = slice };
+    fn init(allocator: std.mem.Allocator, doc_count: usize) !Corpus {
+        const doc_terms = try allocator.alloc([4]fts.TermPosting, doc_count);
+        errdefer allocator.free(doc_terms);
+        const uniq_terms = try allocator.alloc([24]u8, doc_count);
+        errdefer allocator.free(uniq_terms);
+        const batches = try allocator.alloc(fts.DocBatch, doc_count);
+        for (0..doc_count) |d| {
+            const ut = std.fmt.bufPrint(&uniq_terms[d], "doc{d}", .{d}) catch unreachable;
+            batches[d] = .{ .doc_id = @intCast(d + 1), .terms = termsForDoc(&doc_terms[d], &common_positions, ut, &uniq_positions) };
+        }
+        return .{ .allocator = allocator, .doc_terms = doc_terms, .uniq_terms = uniq_terms, .batches = batches };
     }
 
-    var dir = try openScratchDir(io, ".bench-fts-index-tmp");
-    defer dir.close(io);
-    defer std.Io.Dir.cwd().deleteTree(io, ".bench-fts-index-tmp") catch {};
+    fn deinit(self: *Corpus) void {
+        self.allocator.free(self.batches);
+        self.allocator.free(self.uniq_terms);
+        self.allocator.free(self.doc_terms);
+    }
+};
 
+const index_samples: usize = 30; // 30 timed batches of 100 docs per round
+const index_warmup: usize = 3;
+const index_batch: usize = 100;
+
+/// One pass: a fresh engine indexes the corpus in `index_batch`-doc batches;
+/// `samples` receives the ns/doc of each timed batch.
+fn indexRound(io: std.Io, allocator: std.mem.Allocator, corpus: *const Corpus, samples: []u64) !void {
+    const dir_name = ".bench-fts-index-tmp";
+    std.Io.Dir.cwd().deleteTree(io, dir_name) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dir_name) catch {};
+    var dir = try openScratchDir(io, dir_name);
+    defer dir.close(io);
     var engine = try fts.Engine.init(io, allocator, dir);
     defer engine.deinit();
 
-    var s: usize = 0;
-    var doc_cursor: usize = 0;
-    while (s < samples_n + warmup_n) : (s += 1) {
-        // Each iteration indexes `batch_size` distinct docs in one batched
+    for (0..index_samples + index_warmup) |s| {
+        // Each iteration indexes `index_batch` distinct docs in one batched
         // call (one fsync amortized across the batch — the real hot path).
-        const lo = doc_cursor;
-        const hi = @min(lo + batch_size, doc_count);
-        if (hi <= lo) break;
-        const this_batch = batches[lo..hi];
-        const n_docs = hi - lo;
-        doc_cursor = hi;
-
+        const batch = corpus.batches[s * index_batch ..][0..index_batch];
         const t0 = nowNs();
-        try engine.indexDocumentBatch(this_batch);
+        try engine.indexDocumentBatch(batch);
         const elapsed = nowNs() - t0;
-
-        if (s >= warmup_n) {
-            // Record per-doc latency so the metric is stable across batch sizes.
-            samples[s - warmup_n] = elapsed / @as(u64, @intCast(n_docs));
-        }
-        if (doc_cursor >= doc_count) doc_cursor = 0; // wrap (re-index is fine)
+        // Per-doc latency so the metric is stable across batch sizes.
+        if (s >= index_warmup) samples[s - index_warmup] = elapsed / index_batch;
     }
-
-    const st = computeStats(samples);
-    return emitEnvelope(out, allocator, "fts_index_batch", st, warmup_n);
 }
 
+pub fn runIndexBatch(io: std.Io, allocator: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8)) !bool {
+    var corpus = try Corpus.init(allocator, (index_samples + index_warmup) * index_batch);
+    defer corpus.deinit();
+
+    var rounds = try rve.Rounds.init(allocator, rve.default_rounds, index_samples);
+    defer rounds.deinit();
+    for (0..rve.default_rounds) |r| try indexRound(io, allocator, &corpus, rounds.round(r));
+
+    const st = try rounds.summarize(allocator);
+    return rve.emit(out, allocator, "fts_index_batch", st, index_warmup, bounds);
+}
+
+const search_docs: usize = 2000;
+const search_samples: usize = 200;
+const search_warmup: usize = 10;
+const search_batch: usize = 8; // queries per sample
+
 pub fn runSearchTerm(io: std.Io, allocator: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8)) !bool {
-    const doc_count: usize = 2000;
-    const samples_n: usize = 200;
-    const warmup_n: usize = 10;
-
-    const common_pos = [_]u32{ 1, 4, 9 };
-    const uniq_pos = [_]u32{2};
-
-    var dir = try openScratchDir(io, ".bench-fts-search-tmp");
+    const dir_name = ".bench-fts-search-tmp";
+    std.Io.Dir.cwd().deleteTree(io, dir_name) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dir_name) catch {};
+    var dir = try openScratchDir(io, dir_name);
     defer dir.close(io);
-    defer std.Io.Dir.cwd().deleteTree(io, ".bench-fts-search-tmp") catch {};
-
     var engine = try fts.Engine.init(io, allocator, dir);
     defer engine.deinit();
 
     // Build the corpus in one batch then flush so searches hit segments.
-    var doc_terms = try allocator.alloc([4]fts.TermPosting, doc_count);
-    defer allocator.free(doc_terms);
-    var uniq_terms = try allocator.alloc([24]u8, doc_count);
-    defer allocator.free(uniq_terms);
-    var batches = try allocator.alloc(fts.DocBatch, doc_count);
-    defer allocator.free(batches);
-
-    var d: usize = 0;
-    while (d < doc_count) : (d += 1) {
-        const ut = try std.fmt.bufPrint(&uniq_terms[d], "doc{d}", .{d});
-        const slice = termsForDoc(&doc_terms[d], d, &common_pos, ut, &uniq_pos);
-        batches[d] = .{ .doc_id = @intCast(d + 1), .terms = slice };
-    }
-    try engine.indexDocumentBatch(batches);
+    var corpus = try Corpus.init(allocator, search_docs);
+    defer corpus.deinit();
+    try engine.indexDocumentBatch(corpus.batches);
     try engine.flush();
 
-    var samples = try allocator.alloc(u64, samples_n);
-    defer allocator.free(samples);
-
-    // DCE sink: every search's hit count is folded in here and observed below
-    // so the compiler cannot elide the search loop (std.mem.doNotOptimizeAway is
-    // not available in this toolchain).
-    var sink: u64 = 0;
-
-    var s: usize = 0;
-    while (s < samples_n + warmup_n) : (s += 1) {
-        const t0 = nowNs();
-        // A single-term search: open the iterator and drain its matches. For
-        // the common term this walks the full posting list (doc_count docs).
-        var it = try fts.TermIterator.init(allocator, engine, "alpha");
-        var hits: usize = 0;
-        while (try it.next()) |_| {
-            hits += 1;
-        }
-        it.deinit();
-        const elapsed = nowNs() - t0;
-        sink +%= hits;
-
-        if (s >= warmup_n) {
-            samples[s - warmup_n] = elapsed;
+    var rounds = try rve.Rounds.init(allocator, rve.default_rounds, search_samples);
+    defer rounds.deinit();
+    for (0..rve.default_rounds) |r| {
+        const samples = rounds.round(r);
+        for (0..search_samples + search_warmup) |s| {
+            const t0 = nowNs();
+            for (0..search_batch) |_| {
+                // A single-term search: open the iterator and drain its
+                // matches. For the common term this walks the full posting
+                // list (search_docs docs).
+                var it = try fts.TermIterator.init(allocator, engine, "alpha");
+                var hits: usize = 0;
+                while (try it.next()) |_| hits += 1;
+                it.deinit();
+                if (hits != search_docs) return error.UnexpectedSearchHits;
+                std.mem.doNotOptimizeAway(hits);
+            }
+            const elapsed = nowNs() - t0;
+            if (s >= search_warmup) samples[s - search_warmup] = elapsed / search_batch;
         }
     }
 
-    // Observe the sink so the search loop cannot be elided. "alpha" is in every
-    // doc, so sink is large; this branch is never taken.
-    if (sink == 0) return error.NoSearchHits;
-
-    const st = computeStats(samples);
-    return emitEnvelope(out, allocator, "fts_search_term", st, warmup_n);
+    const st = try rounds.summarize(allocator);
+    return rve.emit(out, allocator, "fts_search_term", st, search_warmup, bounds);
 }
 
 pub fn main() !void {
@@ -319,11 +193,9 @@ pub fn main() !void {
 
     // Both scenarios emit their VarianceEnvelope JSON + VARIANCE_OK/VARIANCE_FAIL
     // token into `out`; the pass/fail booleans are intentionally not used to
-    // fail the process. Like benchmark_tde_encrypt_pages, this bench always
-    // exits 0 on a clean run — the VARIANCE_OK / VARIANCE_FAIL token is the
-    // signal the CI bench gate greps for (GAP-0244), and enforcement on a noisy
-    // single-core shared runner would be a flaky gate. The threshold verdict is
-    // recorded in the emitted token + the `"pass"` field of the envelope.
+    // fail the process. The VARIANCE_OK / VARIANCE_FAIL token is the signal the
+    // CI bench gate greps for (GAP-0244); the verdict is also recorded in the
+    // `"pass"` field of the envelope.
     _ = try runIndexBatch(io, allocator, &out);
     _ = try runSearchTerm(io, allocator, &out);
 

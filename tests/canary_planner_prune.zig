@@ -140,5 +140,6 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationCostPruneVarianceEnvelope" {
     try perf_gate.robustEnvelope("full enumeration", sf, 0.30, 2.55);
     // Expect pruning to be no worse than 1.15x full enumeration (medians).
     const prune_over_full = if (sf.median > 0) sp.median / sf.median else 0;
+    std.debug.print("CANARY_PRUNE median_pruned={d:.1}ns median_full={d:.1}ns pruned/full={d:.3}\n", .{ sp.median, sf.median, prune_over_full });
     try perf_gate.check("pruned median <= 1.15x full", prune_over_full <= 1.15, "pruned/full={d:.3}", .{prune_over_full});
 }
