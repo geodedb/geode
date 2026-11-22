@@ -204,10 +204,10 @@ fn runDisconnectScenario(starved: bool) !void {
     // SONNY-6923: how much CPU the join gets depends on the host (a loaded
     // runner gave it 31 ticks a second), so "running" means clearly busier
     // than at rest, and "idle again" is judged against what it got.
-    const running = busy_ticks >= 50;
+    const running = busy_ticks >= 10 and busy_ticks >= 3 * (rest_ticks + 1);
     if (!running) std.debug.print("SONNY-3390: the join spent only {d} ticks in its second second (at rest {d})\n", .{ busy_ticks, rest_ticks });
     try testing.expect(running);
-    const idle_ticks: u64 = 30;
+    const idle_ticks: u64 = @min(30, busy_ticks / 3);
 
     // Close the connection: CONNECTION_CLOSE on the wire (what a client that
     // gives up and closes sends), then free the client.
