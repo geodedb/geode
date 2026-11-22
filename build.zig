@@ -12259,6 +12259,19 @@ pub fn build(b: *std.Build) void {
         b.step("test-sonny2439-perf-methodology", "Run SONNY-2439 partial regression (every gated perf claim times with a monotonic clock; the gated benchmarks of test-local code are gone; every step the enforced perf-gate job runs exists)").dependOn(&run_tests.step);
     }
 
+    // SONNY-2439: the fts-storage VarianceEnvelope (the CI benchmark gate's
+    // flaky fts_index_batch) holds while the host is contended.
+    {
+        const bench_mod = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_fts_storage.zig"), .target = target, .optimize = optimize });
+        bench_mod.addImport("fts_storage_lib", fts_storage_ext_mod);
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2439_fts_variance_contention.zig"), .target = target, .optimize = optimize });
+        mod.addImport("fts_bench", bench_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        const run_tests = b.addRunArtifact(tests);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
+        b.step("test-sonny2439-fts-variance-contention", "Run SONNY-2439 fts-storage variance regression (fts_index_batch and fts_search_term report VARIANCE_OK while the benchmark shares its CPU with bursty CPU hogs and another thread fsyncs)").dependOn(&run_tests.step);
+    }
+
     // SONNY-6386 item 6: the JSON and scheduler latency bounds SONNY-2439 left
     // open are batched through tests/perf_gate.zig from the production
     // allocator and claim on the median.

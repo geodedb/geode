@@ -175,7 +175,7 @@ fn termsForDoc(buf: []fts.TermPosting, id: u64, common_pos: []const u32, uniq_te
     return buf[0..4];
 }
 
-fn runIndexBatch(io: std.Io, allocator: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8)) !bool {
+pub fn runIndexBatch(io: std.Io, allocator: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8)) !bool {
     const doc_count: usize = 3000;
     const samples_n: usize = 30; // 30 batches of 100 docs
     const warmup_n: usize = 3;
@@ -237,7 +237,7 @@ fn runIndexBatch(io: std.Io, allocator: std.mem.Allocator, out: *std.ArrayListUn
     return emitEnvelope(out, allocator, "fts_index_batch", st, warmup_n);
 }
 
-fn runSearchTerm(io: std.Io, allocator: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8)) !bool {
+pub fn runSearchTerm(io: std.Io, allocator: std.mem.Allocator, out: *std.ArrayListUnmanaged(u8)) !bool {
     const doc_count: usize = 2000;
     const samples_n: usize = 200;
     const warmup_n: usize = 10;
