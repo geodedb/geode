@@ -797,6 +797,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6924-scan-node-read-shard-exclusion", .reason = "intentionally red TDD reproduction (SONNY-6924, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -16149,6 +16150,17 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_where_scan_progress_tests.step, 5, test_shard_loads, test_shard_index);
     const where_scan_progress_step = b.step("test-where-scan-writer-progress", "Run where-scan-writer-progress concurrency regression (sparse WHERE scan must not starve per-shard apply)");
     where_scan_progress_step.dependOn(&run_where_scan_progress_tests.step);
+
+    // SONNY-6924: the engine-direct scan's node reads must wait for a write
+    // on the node's shard (the writer grows the shard's page bitmap, which a
+    // read consults; read beside the write, a live node read as absent).
+    const sonny6924_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6924_scan_node_read_shard_exclusion.zig"), .target = target, .optimize = optimize });
+    sonny6924_mod.addImport("geode", root_mod);
+    const sonny6924_tests = b.addTest(.{ .root_module = sonny6924_mod });
+    const run_sonny6924_tests = b.addRunArtifact(sonny6924_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6924_tests.step);
+    const sonny6924_step = b.step("test-sonny6924-scan-node-read-shard-exclusion", "Run SONNY-6924 red reproduction (the engine-direct scan reads a node beside a write on the node's shard)");
+    sonny6924_step.dependOn(&run_sonny6924_tests.step);
 
     // H1 (where-limit-lazy): WHERE+LIMIT must bound label-slot enumeration by
     // predicate MATCHES (offset+limit), not enumerate every live slot up front.
