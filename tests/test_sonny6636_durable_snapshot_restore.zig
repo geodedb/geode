@@ -47,6 +47,18 @@ const Peer = raft_consensus.Peer;
 const io = std.Io.Threaded.global_single_threaded.io();
 const ELECTION_TIMEOUT_MS: u64 = 250;
 const MAX_ROUNDS: usize = 6000;
+/// SONNY-6920: how long `untilApplied` waits, in wall-clock time. A round
+/// count was no time bound: a round takes about 10 ms while the leader
+/// re-streams its snapshot to the paused follower and well under 1 ms after
+/// it stops, so 6000 rounds ran out after about 12 s, while a loaded CI
+/// runner took 11.5 s to restore the snapshot.
+const APPLY_WAIT_MS: i64 = 120_000;
+
+fn monoMs() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
 
 const G = "g6636durable";
 const EMPTY = "e6636durable";
@@ -139,9 +151,9 @@ const LibNet = struct {
     }
 
     fn untilApplied(self: *LibNet, node: *RaftNode, index: u64) !void {
-        var r: usize = 0;
-        while (node.appliedIndex() < index) : (r += 1) {
-            if (r >= MAX_ROUNDS) return error.Timeout;
+        const deadline = monoMs() + APPLY_WAIT_MS;
+        while (node.appliedIndex() < index) {
+            if (monoMs() >= deadline) return error.Timeout;
             self.round();
         }
     }
