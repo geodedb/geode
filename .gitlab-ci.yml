@@ -1888,7 +1888,7 @@ security-trivy:
   # image's ENTRYPOINT is the `trivy` binary so the runner's `sh -c ...`
   # wrap becomes `trivy sh -c "..."`. Override to empty string.
   image:
-    name: aquasec/trivy:0.76.0
+    name: aquasec/trivy:0.76.2
     entrypoint: [""]
   # The scan skips .zig-cache/ and zig-cache/, so it doesn't need the global
   # zig build cache. Inheriting it (pull-push) restored a multi-GB branch

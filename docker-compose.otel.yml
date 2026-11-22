@@ -17,7 +17,7 @@
 #   GEODE_OTEL_PASSWORD="Otel Compose $(openssl rand -hex 12) Passphrase" docker compose ... up
 services:
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.162.0
+    image: otel/opentelemetry-collector-contrib:0.165.0
     container_name: geode-otel-collector
     # Run as root so the file exporters can create *.jsonl under the root-owned
     # `otel-output` named volume (the contrib image's default UID 10001 cannot
