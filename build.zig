@@ -627,24 +627,44 @@ fn checkTestSourcesReachable(b: *std.Build) void {
 /// SONNY-6926: in build-runner mode a failing test is reported only through
 /// its error return trace, which a ReleaseSafe artifact does not collect by
 /// default, so test-zig-release-safe printed "failed without output". Turn
-/// error tracing on for the root module of every aggregate test, except a
-/// module the geode executable also builds (some tests use the shared `geode`
-/// module as their root): the executable keeps the build's own setting.
-/// Runs once, when build() returns.
-fn traceAggregateTests(b: *std.Build, exe: *std.Build.Step.Compile) void {
-    var in_exe: std.AutoHashMapUnmanaged(*std.Build.Module, void) = .empty;
-    var stack: std.ArrayListUnmanaged(*std.Build.Module) = .empty;
-    stack.append(b.allocator, exe.root_module) catch @panic("OOM");
-    while (stack.pop()) |m| {
-        const seen = in_exe.getOrPut(b.allocator, m) catch @panic("OOM");
-        if (seen.found_existing) continue;
-        for (m.import_table.values()) |dep| stack.append(b.allocator, dep) catch @panic("OOM");
+/// error tracing on for the root module of every aggregate test that no other
+/// module imports. SONNY-6927: Zig 0.16.0 ReleaseSafe hangs in
+/// `Dir.readFileAlloc` when a traced module is imported under an untraced
+/// root (the geode executable under its shared `geode` module), so a module
+/// anything imports keeps the build's own setting. Runs once, when build()
+/// returns.
+fn traceAggregateTests(b: *std.Build) void {
+    const gpa = b.allocator;
+    var seen_steps: std.AutoHashMapUnmanaged(*std.Build.Step, void) = .empty;
+    var pending_steps: std.ArrayList(*std.Build.Step) = .empty;
+    for (b.top_level_steps.values()) |tls| pending_steps.append(gpa, &tls.step) catch @panic("OOM");
+    var agg = g_aggregate_runs.keyIterator();
+    while (agg.next()) |run| pending_steps.append(gpa, run.*) catch @panic("OOM");
+    var seen_mods: std.AutoHashMapUnmanaged(*std.Build.Module, void) = .empty;
+    var imported: std.AutoHashMapUnmanaged(*std.Build.Module, void) = .empty;
+    var pending_mods: std.ArrayList(*std.Build.Module) = .empty;
+    while (pending_steps.items.len > 0 or pending_mods.items.len > 0) {
+        while (pending_steps.pop()) |step| {
+            const gop = seen_steps.getOrPut(gpa, step) catch @panic("OOM");
+            if (gop.found_existing) continue;
+            pending_steps.appendSlice(gpa, step.dependencies.items) catch @panic("OOM");
+            const compile = step.cast(std.Build.Step.Compile) orelse continue;
+            pending_mods.append(gpa, compile.root_module) catch @panic("OOM");
+        }
+        while (pending_mods.pop()) |mod| {
+            const gop = seen_mods.getOrPut(gpa, mod) catch @panic("OOM");
+            if (gop.found_existing) continue;
+            for (mod.import_table.values()) |dep| {
+                imported.put(gpa, dep, {}) catch @panic("OOM");
+                pending_mods.append(gpa, dep) catch @panic("OOM");
+            }
+        }
     }
     var it = g_aggregate_runs.keyIterator();
     while (it.next()) |step| {
         const run = step.*.cast(std.Build.Step.Run) orelse continue;
         const artifact = run.producer orelse continue;
-        if (in_exe.contains(artifact.root_module)) continue;
+        if (imported.contains(artifact.root_module)) continue;
         artifact.root_module.error_tracing = true;
     }
 }
@@ -4526,7 +4546,7 @@ pub fn build(b: *std.Build) void {
     // SONNY-2772: deferred so it sees every named step and shardDep call.
     defer checkNamedTestStepsInAggregate(b);
     // SONNY-6926: error return traces for aggregate tests (ReleaseSafe CI).
-    defer traceAggregateTests(b, geode_exe);
+    defer traceAggregateTests(b);
     // SONNY-6332: deferred so it sees every Run step of a geode-spawning test.
     defer disableEmbeddedLspForTestServers(b);
     // SONNY-6535: deferred so it sees every Run step of a test artifact.
