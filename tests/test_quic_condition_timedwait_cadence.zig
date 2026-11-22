@@ -1772,7 +1772,7 @@ test "quic empty mutation success responses use batched writes" {
     try testing.expect(std.mem.indexOf(u8, handler_content, "REQ=REQ-QUIC-HC-089") != null);
     try testing.expect(std.mem.indexOf(u8, handler_content, "fn sendEmptySuccessResult") != null);
     try testing.expect(std.mem.indexOf(u8, handler_content, "try sendQuicMessagesBatched(ra, stream, &batched)") != null);
-    try testing.expect(countOccurrences(handler_content, "try sendEmptySuccessResult(gpa, stream);") >= 3);
+    try testing.expect(countOccurrences(handler_content, "try sendEmptySuccessResult(gpa, stream, ") >= 3);
 
     const create_idx = std.mem.indexOf(u8, handler_content, "fn executeBulkSimpleCreate") orelse return error.MissingBulkCreate;
     const create_body = handler_content[create_idx..];
