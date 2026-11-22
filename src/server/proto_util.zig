@@ -955,11 +955,24 @@ pub fn buildDataPage(
             .final = true,
             .ordered = ordered,
             .order_keys = try dupOrderKeys(allocator, order_keys),
+            .update_counts = updateCountsToProto(result.update_counts), // SONNY-2822
         };
     }
 
     const end = @min(start + page_len, result.rows.len);
-    return buildDataPageFromRows(allocator, result.rows[start..end], end == result.rows.len, ordered, order_keys);
+    var page = try buildDataPageFromRows(allocator, result.rows[start..end], end == result.rows.len, ordered, order_keys);
+    if (page.final) page.update_counts = updateCountsToProto(result.update_counts); // SONNY-2822
+    return page;
+}
+
+// CANARY: REQ=REQ-SONNY-2822-UPDATE-COUNTS; FEATURE="WireProtocol"; ASPECT=FinalPageUpdateCounts; STATUS=TESTED; TEST=tests/test_sonny2822_update_counts.zig; OWNER=transport; UPDATED=2026-11-22
+/// SONNY-2822: a statement's update counts as the final DataPage carries
+/// them. Every final page has them (all zeros for a read: a client can tell
+/// a server that reports counts from one that predates them).
+pub fn updateCountsToProto(counts: execution.UpdateCounts) schema.UpdateCounts {
+    var out: schema.UpdateCounts = .{};
+    inline for (@typeInfo(execution.UpdateCounts).@"struct".fields) |f| @field(out, f.name) = @field(counts, f.name);
+    return out;
 }
 
 pub fn buildDataPageFromRows(
@@ -995,6 +1008,10 @@ pub fn buildDataPageFromRows(
         .final = final,
         .ordered = ordered,
         .order_keys = try dupOrderKeys(allocator, order_keys),
+        // SONNY-2822: rows with no executor result behind them (a streamed
+        // read, an empty answer) changed nothing; a caller with counts sets
+        // its own (`buildDataPage`, the QUIC write fast paths).
+        .update_counts = if (final) .{} else null,
     };
 }
 

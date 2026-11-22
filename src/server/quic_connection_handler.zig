@@ -722,7 +722,11 @@ fn executeBulkSimpleCreate(
     adoptBulkVectorDims(query_graph_name, node_pattern.labels, kvs);
     maintainBulkAdvancedIndexes(eval_allocator, query_graph_name, node_pattern.labels, created_node_id, kvs);
 
-    try sendEmptySuccessResult(gpa, stream);
+    try sendEmptySuccessResult(gpa, stream, .{
+        .nodes_created = 1,
+        .labels_added = node_pattern.labels.len,
+        .properties_set = bulkPropertiesWritten(kvs, &.{}),
+    });
 
     mut_sample.record("bulk_simple_create");
 
@@ -759,8 +763,41 @@ fn refuseQuarantinedAnswer(gpa: std.mem.Allocator, stream: *quic_transport.QuicS
 fn sendBulkEdgeSuccessResponse(
     gpa: std.mem.Allocator,
     stream: *quic_transport.QuicStream,
+    counts: execution.UpdateCounts,
 ) !void {
-    try sendEmptySuccessResult(gpa, stream);
+    try sendEmptySuccessResult(gpa, stream, counts);
+}
+
+// CANARY: REQ=REQ-SONNY-2822-UPDATE-COUNTS; FEATURE="WireProtocol"; ASPECT=FastPathUpdateCounts; STATUS=TESTED; TEST=tests/test_sonny2822_update_counts.zig; OWNER=transport; UPDATED=2026-11-22
+/// SONNY-2822: the properties a fast path wrote from `kvs` (a NULL value
+/// sets no property), skipping a key `already` wrote.
+fn bulkPropertiesWritten(kvs: []const geode.graph_storage_adapter.StorageAdapter.PropKV, already: []const geode.graph_storage_adapter.StorageAdapter.PropKV) u64 {
+    var n: u64 = 0;
+    outer: for (kvs) |kv| {
+        if (kv.value == .Null) continue;
+        for (already) |a| if (std.mem.eql(u8, a.key, kv.key)) continue :outer;
+        n += 1;
+    }
+    return n;
+}
+
+/// SONNY-2822: the update counts of a node MERGE fast path's op: a created
+/// node with its label and the properties its merge keys and SET clauses
+/// wrote; a matched node the SET clauses it applied (`wrote`: an on-match
+/// `SET`), or nothing.
+fn bulkNodeMergeCounts(
+    created: bool,
+    wrote: bool,
+    merge_kvs: []const geode.graph_storage_adapter.StorageAdapter.PropKV,
+    kvs: []const geode.graph_storage_adapter.StorageAdapter.PropKV,
+) execution.UpdateCounts {
+    if (created) return .{
+        .nodes_created = 1,
+        .labels_added = 1,
+        .properties_set = bulkPropertiesWritten(merge_kvs, &.{}) + bulkPropertiesWritten(kvs, merge_kvs),
+    };
+    if (wrote) return .{ .properties_set = bulkPropertiesWritten(kvs, &.{}) };
+    return .{};
 }
 
 // CANARY: REQ=REQ-SONNY-6429-MATCH-CREATE-EDGE-SUMMARY; FEATURE="WriteFastPathParity"; ASPECT=MatchCreateEdgeSummaryRow; STATUS=TESTED; TEST=tests/test_sonny6429_sole_holder_tenant_wire.zig; OWNER=transport; UPDATED=2026-11-12
@@ -773,11 +810,17 @@ fn sendBulkEdgeSuccessResponse(
 fn sendMatchCreateEdgeSummary(
     gpa: std.mem.Allocator,
     stream: *quic_transport.QuicStream,
+    kvs: []const geode.graph_storage_adapter.StorageAdapter.PropKV,
 ) !void {
     var columns = [_][]const u8{ "nodes_created", "relationships_created" };
     var row = [_]geode.value_types.Value{ .{ .Int = 0 }, .{ .Int = 1 } };
     var rows = [_][]geode.value_types.Value{&row};
-    var result: execution.ExecutionResult = .{ .columns = &columns, .rows = &rows, .flags = .empty };
+    // SONNY-2822: the summary row stays for old clients; the counts ride
+    // the final page.
+    var result: execution.ExecutionResult = .{ .columns = &columns, .rows = &rows, .flags = .empty, .update_counts = .{
+        .relationships_created = 1,
+        .properties_set = bulkPropertiesWritten(kvs, &.{}),
+    } };
     try sendSinglePageExecutionResultBatched(gpa, stream, &result);
 }
 
@@ -910,9 +953,9 @@ fn executeBulkMatchCreateEdge(
         mut_sample.markLockReleased();
 
         if (result_id == 0) {
-            try sendBulkEdgeSuccessResponse(gpa, stream);
+            try sendBulkEdgeSuccessResponse(gpa, stream, .{});
         } else {
-            try sendMatchCreateEdgeSummary(gpa, stream);
+            try sendMatchCreateEdgeSummary(gpa, stream, kvs);
         }
         if (result_id == 0) {
             mut_sample.record("bulk_match_create_edge_skipped");
@@ -969,7 +1012,7 @@ fn executeBulkMatchCreateEdge(
     };
 
     if (resolved == null) {
-        try sendBulkEdgeSuccessResponse(gpa, stream);
+        try sendBulkEdgeSuccessResponse(gpa, stream, .{});
         mut_sample.record("bulk_match_create_edge_skipped");
         auditQueryExecution(query_graph_name, "bulk_match_create_edge_skipped", true);
         syncGraphFromSession(state);
@@ -1019,7 +1062,7 @@ fn executeBulkMatchCreateEdge(
             graph_store.releaseGraphLock(lock_handle);
             switch (err) {
                 error.SourceNodeNotFound, error.TargetNodeNotFound => {
-                    try sendBulkEdgeSuccessResponse(gpa, stream);
+                    try sendBulkEdgeSuccessResponse(gpa, stream, .{});
                     mut_sample.record("bulk_match_create_edge_skipped_race");
                     auditQueryExecution(query_graph_name, "bulk_match_create_edge_skipped_race", true);
                     syncGraphFromSession(state);
@@ -1041,7 +1084,7 @@ fn executeBulkMatchCreateEdge(
 
     // Wire response: the executor's summary row for the edge it wrote
     // (SONNY-6429).
-    try sendMatchCreateEdgeSummary(gpa, stream);
+    try sendMatchCreateEdgeSummary(gpa, stream, kvs);
 
     mut_sample.record("bulk_match_create_edge");
 
@@ -1167,7 +1210,7 @@ fn executeBulkMatchMergeEdge(
     };
 
     if (resolved == null) {
-        try sendBulkEdgeSuccessResponse(gpa, stream);
+        try sendBulkEdgeSuccessResponse(gpa, stream, .{});
         mut_sample.record("bulk_match_merge_edge_skipped");
         auditQueryExecution(query_graph_name, "bulk_match_merge_edge_skipped", true);
         syncGraphFromSession(state);
@@ -1178,6 +1221,11 @@ fn executeBulkMatchMergeEdge(
     const target_id = resolved.?.dst;
 
     // Phase 2: apply the deduped MERGE under the endpoint shard locks.
+    // SONNY-2822: whether it created the edge, and whether it merged one at
+    // all (an endpoint that vanished before the apply merged none), for the
+    // update counts.
+    var edge_created = false;
+    var edge_merged = true;
     if (group_commit.isEnabled()) {
         const coord = group_commit.getOrStartCoordinator(graph_store.global_allocator(), adapter, query_graph_name) catch |err| {
             const info = proto_util.mapError(err);
@@ -1192,21 +1240,23 @@ fn executeBulkMatchMergeEdge(
             .props = kvs,
             .result = .{},
         } };
-        _ = coord.submit(&op) catch |err| {
+        const merged_edge_id = coord.submit(&op) catch |err| {
             const info = proto_util.mapError(err);
             try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
             return true;
         };
         mut_sample.markExecuteDone();
         mut_sample.markLockReleased();
+        edge_merged = merged_edge_id != 0;
+        edge_created = op.resultPtr().created;
     } else {
         // Non-coordinator path: call the shard-locked merge directly. No
         // whole-graph EXCLUSIVE — the primitive takes graph SHARED + the
         // endpoint shards EXCLUSIVE itself.
         mut_sample.markLockAcquired();
-        _ = adapter.bulkMergeEdgeWithIdsShardLocked(query_graph_name, source_id, target_id, spec.rel_type, kvs) catch |err| switch (err) {
+        _ = adapter.bulkMergeEdgeWithIdsShardLockedReportingCreate(query_graph_name, source_id, target_id, spec.rel_type, kvs, &edge_created) catch |err| switch (err) {
             error.SourceNodeNotFound, error.TargetNodeNotFound => {
-                try sendBulkEdgeSuccessResponse(gpa, stream);
+                try sendBulkEdgeSuccessResponse(gpa, stream, .{});
                 mut_sample.record("bulk_match_merge_edge_skipped_race");
                 auditQueryExecution(query_graph_name, "bulk_match_merge_edge_skipped_race", true);
                 syncGraphFromSession(state);
@@ -1223,7 +1273,13 @@ fn executeBulkMatchMergeEdge(
         mut_sample.markLockReleased();
     }
 
-    try sendBulkEdgeSuccessResponse(gpa, stream);
+    // SONNY-2822: a created edge with its properties; a matched one the
+    // properties the merge applied to it (`applyEdgePropsLocked`).
+    const props_written = if (edge_merged) bulkPropertiesWritten(kvs, &.{}) else 0;
+    try sendBulkEdgeSuccessResponse(gpa, stream, if (edge_created)
+        .{ .relationships_created = 1, .properties_set = props_written }
+    else
+        .{ .properties_set = props_written });
     mut_sample.record("bulk_match_merge_edge");
     auditQueryExecution(query_graph_name, "bulk_match_merge_edge", true);
     execution.ensureAutoIndexes(gpa, &.{spec.rel_type});
@@ -1488,6 +1544,8 @@ fn executeBulkSimpleMerge(
     // if/else settles and every lock is released.
     var merged_node_id: u64 = 0;
     var fts_should_maintain = false;
+    // SONNY-2822: the merge created its node (else it matched one).
+    var merge_created = false;
     if (!spec.apply_on_match and merge_kvs.len == 1) {
         const read_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .bulk_merge);
         defer graph_store.releaseGraphLock(read_handle);
@@ -1566,6 +1624,7 @@ fn executeBulkSimpleMerge(
             // idempotent re-MERGE hit reports wrote=false and must not
             // re-append into the append-only FTS index.
             fts_should_maintain = op.resultPtr().wrote;
+            merge_created = op.resultPtr().created;
         } else if (merge_kvs.len > 1) {
             mut_sample.markLockAcquired();
             const store = graph_store.getGlobalStore(graph_store.global_allocator());
@@ -1592,6 +1651,7 @@ fn executeBulkSimpleMerge(
             // duplicating FTS postings on every idempotent re-MERGE. Gate on
             // the primitive's `wrote` signal instead.
             fts_should_maintain = merge_result.wrote;
+            merge_created = merge_result.created;
         } else {
             const write_lock_timeout_ns = mutationWriteLockTimeoutNs(state);
             const deadline = monoNanosNow() + write_lock_timeout_ns;
@@ -1642,6 +1702,7 @@ fn executeBulkSimpleMerge(
             // before this call's internal re-probe (wrote=false, no
             // double-append). Gate on the primitive's signal either way.
             fts_should_maintain = merge_result.wrote;
+            merge_created = merge_result.created;
         }
     } else {
         // Phase 1 hit on the ON-CREATE-SET-only path: the merge id is
@@ -1687,7 +1748,7 @@ fn executeBulkSimpleMerge(
     }
 
     quic_response_metrics.recordFirstStreamMutationQueryExecute(mut_sample.execute_done_ns -| mut_sample.lock_acquire_start_ns);
-    try sendEmptySuccessResult(gpa, stream);
+    try sendEmptySuccessResult(gpa, stream, bulkNodeMergeCounts(merge_created, fts_should_maintain, merge_kvs, kvs));
 
     mut_sample.record("bulk_simple_merge");
 
@@ -1887,7 +1948,7 @@ fn executeBatchSimpleMerge(
     // idempotent re-MERGE in a batch. `bulkMergeNode*(ForTenant)` re-probe
     // the merge index inside the write critical section regardless, so
     // `wrote` is accurate even for a same-batch duplicate key.
-    const OpOutcome = struct { id: u64 = 0, ok: bool = false, wrote: bool = false };
+    const OpOutcome = struct { id: u64 = 0, ok: bool = false, wrote: bool = false, created: bool = false };
     const outcomes = try ba.alloc(OpOutcome, submitted);
     for (outcomes) |*o| o.* = .{};
 
@@ -1899,7 +1960,7 @@ fn executeBatchSimpleMerge(
             if (first_op_err == null) first_op_err = err;
             continue;
         };
-        outcomes[k] = .{ .id = id, .ok = true, .wrote = ops[k].resultPtr().wrote };
+        outcomes[k] = .{ .id = id, .ok = true, .wrote = ops[k].resultPtr().wrote, .created = ops[k].resultPtr().created };
         succeeded += 1;
     }
 
@@ -1935,6 +1996,15 @@ fn executeBatchSimpleMerge(
         };
     }
 
+    // SONNY-2822: the batch's update counts, summed over its ops, before
+    // the arena holding their properties goes (sent only if every op
+    // succeeded, below).
+    var batch_counts: execution.UpdateCounts = .{};
+    for (outcomes, 0..) |o, i| {
+        if (!o.ok) continue;
+        batch_counts.add(bulkNodeMergeCounts(o.created, o.wrote, all_merge_kvs[i], all_set_kvs[i]));
+    }
+
     // Auto-index every distinct merge label (idempotent), mirroring the
     // single-merge path's `ensureAutoIndexes` hook.
     execution.ensureAutoIndexes(gpa, labels);
@@ -1955,7 +2025,7 @@ fn executeBatchSimpleMerge(
     // No-RETURN success shape: same empty schema + final data page the
     // single-statement merge fast path emits. `succeeded` is the count of
     // applied merges (all of them when no error fired).
-    try sendEmptySuccessResult(gpa, stream);
+    try sendEmptySuccessResult(gpa, stream, batch_counts);
 
     mut_sample.record("batch_simple_merge");
     auditQueryExecution(query_graph_name, "batch_simple_merge", true);
@@ -2484,6 +2554,7 @@ fn sendQuicMessagesBatched(
 fn sendEmptySuccessResult(
     allocator: std.mem.Allocator,
     stream: *quic_transport.QuicStream,
+    counts: execution.UpdateCounts, // SONNY-2822: what the write fast path changed
 ) !void {
     var response_arena = std.heap.ArenaAllocator.init(allocator);
     defer response_arena.deinit();
@@ -2498,7 +2569,8 @@ fn sendEmptySuccessResult(
         .payload = .{ .schema = schema_def },
     };
 
-    const page = try proto_util.buildDataPageFromRows(ra, &.{}, true, false, &.{});
+    var page = try proto_util.buildDataPageFromRows(ra, &.{}, true, false, &.{});
+    page.update_counts = proto_util.updateCountsToProto(counts);
     const page_status = try proto_util.buildStatus(ra, "00000", &.{});
     const page_resp = schema.ExecutionResponse{
         .status = page_status,

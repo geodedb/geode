@@ -6829,6 +6829,30 @@ pub const StorageAdapter = struct {
             rel_type,
             props,
             fle_integration.tenantPreferringActiveContext(),
+            null,
+        );
+    }
+
+    /// SONNY-2822: `bulkMergeEdgeWithIdsShardLocked`, telling the caller
+    /// whether it created the edge (`created`), for the statement's update
+    /// counts.
+    pub fn bulkMergeEdgeWithIdsShardLockedReportingCreate(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        source_id: u64,
+        target_id: u64,
+        rel_type: []const u8,
+        props: []const PropKV,
+        created: *bool,
+    ) !u64 {
+        return self.bulkMergeEdgeWithIdsShardLockedForTenant(
+            graph_name,
+            source_id,
+            target_id,
+            rel_type,
+            props,
+            fle_integration.tenantPreferringActiveContext(),
+            created,
         );
     }
 
@@ -6840,6 +6864,7 @@ pub const StorageAdapter = struct {
         rel_type: []const u8,
         props: []const PropKV,
         request_tenant: []const u8,
+        created: ?*bool,
     ) !u64 {
         try graph_store.refuseIfFleConfigured(); // SONNY-6327: before any engine write
         // SONNY-3121: pinned for the whole op (see `pinOrCreateGraph`).
@@ -6881,7 +6906,7 @@ pub const StorageAdapter = struct {
 
         mg.shard_locks[src_shard].lockUncancelable(io);
         defer mg.shard_locks[src_shard].unlock(io);
-        return self.bulkMergeEdgeInnerShardLocked(mg, store, graph_name, source_id, target_id, rel_type, props, request_tenant);
+        return self.bulkMergeEdgeInnerShardLocked(mg, store, graph_name, source_id, target_id, rel_type, props, request_tenant, created);
     }
 
     fn bulkMergeEdgeInnerShardLocked(
@@ -6894,7 +6919,9 @@ pub const StorageAdapter = struct {
         rel_type: []const u8,
         props: []const PropKV,
         request_tenant: []const u8,
+        created: ?*bool, // SONNY-2822: set true when this call created the edge
     ) !u64 {
+        if (created) |c| c.* = false;
         // Re-check endpoint existence under the shard locks (orphan skip if a
         // prior batch deleted one — same as the insert inner). Use the
         // eviction-INDEPENDENT IdMap oracle, NOT the bounded node cache: under a
@@ -6987,6 +7014,7 @@ pub const StorageAdapter = struct {
         mg.string_indexes_mutex.unlock(io);
         const edge_id = try create_result;
 
+        if (created) |c| c.* = true;
         if (props.len > 0) try self.applyEdgePropsLocked(store, edge_id, props);
         _ = self.pending_bulk_ops.fetchAdd(1, .monotonic);
         return edge_id;
@@ -7008,6 +7036,8 @@ pub const StorageAdapter = struct {
         tenant: []const u8,
         out_id: u64 = 0,
         out_err: ?anyerror = null,
+        /// SONNY-2822: the merge created the edge (it did not exist).
+        out_created: bool = false,
     };
 
     /// Apply a batch of relationship MERGEs under amortized locking.
@@ -7099,7 +7129,7 @@ pub const StorageAdapter = struct {
         graph_name: []const u8,
         e: *BatchMergeEdge,
     ) void {
-        if (self.bulkMergeEdgeInnerShardLocked(mg, store, graph_name, e.source_id, e.target_id, e.rel_type, e.props, e.tenant)) |id| {
+        if (self.bulkMergeEdgeInnerShardLocked(mg, store, graph_name, e.source_id, e.target_id, e.rel_type, e.props, e.tenant, &e.out_created)) |id| {
             e.out_id = id;
             e.out_err = null;
         } else |err| switch (err) {
@@ -7143,6 +7173,10 @@ pub const StorageAdapter = struct {
     pub const MergeResult = struct {
         id: u64,
         wrote: bool,
+        /// SONNY-2822: the merge created the node (no node matched), for
+        /// the statement's update counts. `wrote` alone cannot tell an
+        /// on-match `SET` from a create.
+        created: bool = false,
     };
 
     /// Phase 2 shard-locked MERGE variant.  Serialize only same-tuple
@@ -7328,7 +7362,7 @@ pub const StorageAdapter = struct {
             combined_props,
             request_tenant,
         );
-        return .{ .id = new_id, .wrote = true };
+        return .{ .id = new_id, .wrote = true, .created = true };
     }
 
     /// Multi-property MERGE fast path for no-RETURN node patterns such as:
@@ -7528,7 +7562,7 @@ pub const StorageAdapter = struct {
             combined_props,
             request_tenant,
         );
-        return .{ .id = new_id, .wrote = true };
+        return .{ .id = new_id, .wrote = true, .created = true };
     }
 
     /// Key + value pair accepted by `bulkInsertNode`.  The caller owns both
@@ -8141,7 +8175,7 @@ pub const StorageAdapter = struct {
         }
 
         if (stmt_txn_open) try stmt_txn.commit();
-        return .{ .id = node_id, .wrote = true };
+        return .{ .id = node_id, .wrote = true, .created = true };
     }
 
     // CANARY: REQ=REQ-PERF-QPS-0815; FEATURE="BatchCreate"; ASPECT=AdapterBulkSlots; STATUS=TESTED; TEST=tests/test_gap0815_deep_bulk_create.zig; OWNER=performance; UPDATED=2026-04-20

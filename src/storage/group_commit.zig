@@ -381,6 +381,10 @@ pub const ApplyResult = struct {
     /// postings into the append-only fts-storage engine. Unused (stays
     /// `false`) for op kinds that never drive FTS maintenance.
     wrote: bool = false,
+    /// SONNY-2822: the op created its node or relationship (a merge that
+    /// matched leaves it false), for the statement's update counts. Set for
+    /// `bulk_merge_node`, `bulk_merge_node_props` and `bulk_merge_edge`.
+    created: bool = false,
     /// CLOCK_MONOTONIC timestamp set immediately before queue insertion.
     enqueued_ns: u64 = 0,
     /// 0 = pending, 1 = done.  Waited on by submitter via `futexWait`.
@@ -893,6 +897,7 @@ pub const ShardedCoordinator = struct {
                     const res = op.resultPtr();
                     res.node_or_edge_id = entry.out_id;
                     res.err = entry.out_err;
+                    res.created = entry.out_created; // SONNY-2822
                 }
             } else |e| {
                 // A whole-batch failure (e.g. getOrCreateGraph) — surface to every
@@ -989,6 +994,7 @@ pub const ShardedCoordinator = struct {
                     )) |merge_result| {
                         res.node_or_edge_id = merge_result.id;
                         res.wrote = merge_result.wrote;
+                        res.created = merge_result.created; // SONNY-2822
                     } else |e| {
                         res.err = e;
                     }
@@ -1005,6 +1011,7 @@ pub const ShardedCoordinator = struct {
                     )) |merge_result| {
                         res.node_or_edge_id = merge_result.id;
                         res.wrote = merge_result.wrote;
+                        res.created = merge_result.created; // SONNY-2822
                     } else |e| {
                         res.err = e;
                     }

@@ -40,6 +40,9 @@ pub const ResultAccumulator = struct {
     error_status: []const u8 = "58000",
     error_message_allocated: bool = false,
     error_status_allocated: bool = false,
+    /// SONNY-2822: the statement's update counts, from its final page
+    /// (null from a server that predates them).
+    update_counts: ?schema.UpdateCounts = null,
 
     pub fn init(allocator: std.mem.Allocator, format: []const u8) !ResultAccumulator {
         const wants_json = std.mem.eql(u8, format, "json");
@@ -243,6 +246,7 @@ pub const ResultAccumulator = struct {
             },
             .page => |page| blk: {
                 try self.captureOrderMeta(page);
+                if (page.update_counts) |counts| self.update_counts = counts;
                 if (self.wants_json) {
                     if (self.rows_json) |*rows| try appendPageJson(self.allocator, page, rows);
                 } else if (self.rows_text) |*rows| {

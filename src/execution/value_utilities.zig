@@ -119,6 +119,7 @@ pub fn duplicateResult(allocator: std.mem.Allocator, original: ExecutionResult) 
         .rows = rows,
         .flags = flags,
         .owns_value_memory = true, // Duplicated result owns its value memory
+        .update_counts = original.update_counts, // SONNY-2822
     };
 }
 

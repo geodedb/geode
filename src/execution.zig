@@ -15,6 +15,8 @@ const fle_catalog = @import("schema/fle_catalog.zig");
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=EXEMPT; OWNER=execution; UPDATED=2026-01-24
 const logging = @import("logging");
 const statement_undo = @import("statement_undo.zig");
+pub const update_counts = @import("update_counts.zig");
+pub const UpdateCounts = update_counts.UpdateCounts;
 const undo_index_repair = @import("execution/undo_index_repair.zig");
 // SONNY-3348 (round 19): a statement's replicated writes, one entry or none.
 const statement_proposals = @import("distributed/statement_proposals.zig");
@@ -1113,6 +1115,10 @@ pub const ExecutionResult = struct {
     column_buffer: ?[]u8 = null, // Single buffer for all column strings (reduces N allocations to 1)
     // Tracks ownership of materialized graph entities (nodes/edges) for lifetime management
     owned_graph_entities: ?*OwnedGraphEntities = null,
+    /// SONNY-2822: what the program that produced this result committed
+    /// (`executeProgramWithContext`); a transport sends it on the final
+    /// DataPage (`proto_util.buildDataPage`).
+    update_counts: UpdateCounts = .{},
 
     /// SONNY-6613: keep what `from`'s tracker owns (the path arrays,
     /// nodes and relationships its rows hold) alive with this result, for
@@ -1780,8 +1786,19 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
     var scratch: query_arena.StatementScratch = .{};
     scratch.open(allocator);
     defer scratch.close();
+    // CANARY: REQ=REQ-SONNY-2822-UPDATE-COUNTS; FEATURE="WireProtocol"; ASPECT=ProgramUpdateCounts; STATUS=TESTED; TEST=tests/test_sonny2822_update_counts.zig; OWNER=execution; UPDATED=2026-11-22
+    // SONNY-2822: the counts of the statements this program committed
+    // (`statement_undo.finishSucceeded`), on its result. A failed program
+    // answers its error and reports none.
+    const outer_counts = update_counts.beginProgram();
+    var counts_open = true;
+    defer if (counts_open) {
+        _ = update_counts.endProgram(outer_counts);
+    };
     var result = try executeProgramInScratch(allocator, program, context);
     try detachFromStatementScratch(allocator, &scratch, &result);
+    counts_open = false;
+    result.update_counts = update_counts.endProgram(outer_counts);
     return result;
 }
 
@@ -1897,6 +1914,11 @@ fn executeProgramInScratch(allocator: std.mem.Allocator, program: *const ast.Pro
     // the end of the batch) can report the abort instead of committing.
     var txn_failure: ?anyerror = null;
 
+    // SONNY-2822: the update counts when this program's transaction began (a
+    // transaction open before the program: none of its counts), so a
+    // ROLLBACK takes back what its body counted.
+    var txn_counts_mark: UpdateCounts = .{};
+
     for (program.statements, 0..) |stmt, stmt_idx| {
         // Determine if this statement is transaction control
         const is_transaction_control = switch (stmt) {
@@ -2005,10 +2027,15 @@ fn executeProgramInScratch(allocator: std.mem.Allocator, program: *const ast.Pro
                 // If body exists, transaction auto-commits/rollbacks internally
                 if (txn.body == null) {
                     current_context.transaction_state = .Active;
+                    txn_counts_mark = update_counts.committed(); // SONNY-2822
                 }
             },
-            .Commit, .Rollback => {
+            .Commit => {
                 current_context.transaction_state = .None;
+            },
+            .Rollback => {
+                current_context.transaction_state = .None;
+                update_counts.restore(txn_counts_mark); // SONNY-2822
             },
             else => {},
         }

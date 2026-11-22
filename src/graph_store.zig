@@ -6151,6 +6151,7 @@ pub const GraphStore = struct {
         self.dirty.store(true, .release);
         incrementMutationEpoch();
         statement_undo.appendCreated(self, .{ .CreateNode = .{ .node_id = reserved_id, .graph_name = "" } }); // SONNY-3348 (round 18)
+        statement_undo.noteCreatedNodeLabels(labels.len); // SONNY-2822
     }
 
     /// The structures of `insertReservedNodeInMemory`, failure-atomic, with
@@ -6441,6 +6442,7 @@ pub const GraphStore = struct {
             try self.insertNodeInMemory(public_id, labels, graph_name, tenant);
 
             statement_undo.appendCreated(self, .{ .CreateNode = .{ .node_id = public_id, .graph_name = "" } }); // SONNY-3348 (round 18)
+            statement_undo.noteCreatedNodeLabels(labels.len); // SONNY-2822
         }
 
         self.dirty.store(true, .release);

@@ -4,6 +4,18 @@
 
 ### Fixed
 
+- **A client can tell how many rows a write statement changed
+  (SONNY-2822).** The wire protocol had no field for update counts, so a
+  driver's RowsAffected() was 0 for `MATCH ... SET`, `DELETE` and a `CREATE`
+  with no RETURN although the write was applied. The final `DataPage` of a
+  successful result now carries `update_counts` (field 5, message
+  `UpdateCounts`: nodes and relationships created and deleted, properties
+  set, labels added and removed) on QUIC and gRPC, all zeros for a read;
+  counted by the executor's write hooks and by the QUIC write fast paths,
+  never from result rows. A failed statement reports none, and a ROLLBACK in
+  the same program takes back its body's. Older clients ignore the field;
+  the `MATCH ... CREATE` summary row stays (docs/BINARY_PROTOCOL.md "Update
+  counts"). Regression: `zig build test-sonny2822-update-counts`.
 - **A cluster leader deposed mid-write no longer answers the write
   committed (SONNY-6844).** A leader waited for its statement's entry by
   index only. Deposed before a quorum stored the entry (a starved leader

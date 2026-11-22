@@ -65,6 +65,42 @@ Constraints:
 - PROFILE: first `PULL` after `SCHEMA` returns a `PROFILE` frame (not BINDINGS) and completes the statement (`NoResult` thereafter).
 - `ordered` / `order_keys` propagate logical ordering guarantees; server does not reorder inside a page. `ordered` is true exactly when the statement that returns the rows ends in an ORDER BY (14.10; a UNION's trailing ORDER BY, 14.2), whatever its shape (a query, a chain's last part, FOR, `CALL ... RETURN`), and `order_keys` are that ORDER BY's keys; a WITH's ORDER BY earlier in a chain orders nothing in the result (SONNY-6562).
 
+## Update counts
+
+The final `DataPage` of a successful statement's result (`final: true`)
+carries `update_counts` (`DataPage` field 5, message `UpdateCounts` in
+`src/proto/geode.proto`, SONNY-2822), on QUIC and gRPC alike:
+
+| Field | Number | Counts |
+|---|---|---|
+| `nodes_created` | 1 | nodes the statement created |
+| `nodes_deleted` | 2 | nodes it deleted |
+| `relationships_created` | 3 | relationships it created |
+| `relationships_deleted` | 4 | relationships it deleted, a `DETACH DELETE`'s included |
+| `properties_set` | 5 | property assignments: each `SET` of a property (to the value it holds too), each `REMOVE` of a property the element has, and each property a created node or relationship is given |
+| `labels_added` | 6 | labels a `SET` added that the node lacked, and the labels of each created node |
+| `labels_removed` | 7 | labels a `REMOVE` took that the node had |
+
+The semantics are the openCypher / Bolt query statistics. `MATCH ... SET`
+over N rows assigning k properties reports `properties_set = N * k`; a
+statement that matches no row and a pure read report all zeros (the message
+is present, so a client can tell a server that reports counts from one that
+predates them, which leaves the field absent). For a program of several
+statements the counts are the sum of the statements it committed; a
+`ROLLBACK` in the program takes back what its transaction body counted. A
+statement inside a transaction opened by an earlier request reports what it
+changed; the `ROLLBACK` that undoes it reports zeros. A failed statement
+answers an `ERROR` frame and reports nothing.
+
+The counts are made where the writes are, never derived from the result's
+rows: the executor's write hooks (the statement undo record,
+`src/statement_undo.zig`, `src/update_counts.zig`) and the QUIC write fast
+paths (no-RETURN `CREATE`, node `MERGE` and `/*+BATCH*/` `MERGE`, the
+key-resolved relationship `CREATE` and `MERGE`). A fast-path relationship
+`MERGE` that matches an existing relationship counts the properties it
+applied to it. The `nodes_created` / `relationships_created` summary row a
+`MATCH ... CREATE` with no RETURN answers is still sent, for older clients.
+
 ## Extended Frames
 
 `EXPLAIN` / `PROFILE` carry a JSON payload under `result.json`. Format is additive; consumers must ignore unknown keys.

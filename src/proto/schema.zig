@@ -258,15 +258,44 @@ pub const DataPage = struct {
     final: bool = false,
     ordered: bool = false,
     order_keys: std.ArrayList([]const u8),
+    /// SONNY-2822: set on the final page of a successful result.
+    update_counts: ?UpdateCounts = null,
 
     pub const _desc_table = .{
         .rows = fd(1, .{ .repeated = .{ .submessage = {} } }),
         .final = fd(2, .{ .scalar = .bool }),
         .ordered = fd(3, .{ .scalar = .bool }),
         .order_keys = fd(4, .{ .repeated = .{ .scalar = .string } }),
+        .update_counts = fd(5, .{ .submessage = {} }),
     };
 
     pub fn deinit(self: *DataPage, allocator: std.mem.Allocator) void {
+        protobuf.deinit(allocator, self);
+    }
+};
+
+// CANARY: REQ=REQ-SONNY-2822-UPDATE-COUNTS; FEATURE="WireProtocol"; ASPECT=UpdateCountsMessage; STATUS=TESTED; TEST=tests/test_sonny2822_update_counts.zig; OWNER=transport; UPDATED=2026-11-22
+/// SONNY-2822: what a statement changed (geode.proto `UpdateCounts`).
+pub const UpdateCounts = struct {
+    nodes_created: u64 = 0,
+    nodes_deleted: u64 = 0,
+    relationships_created: u64 = 0,
+    relationships_deleted: u64 = 0,
+    properties_set: u64 = 0,
+    labels_added: u64 = 0,
+    labels_removed: u64 = 0,
+
+    pub const _desc_table = .{
+        .nodes_created = fd(1, .{ .scalar = .uint64 }),
+        .nodes_deleted = fd(2, .{ .scalar = .uint64 }),
+        .relationships_created = fd(3, .{ .scalar = .uint64 }),
+        .relationships_deleted = fd(4, .{ .scalar = .uint64 }),
+        .properties_set = fd(5, .{ .scalar = .uint64 }),
+        .labels_added = fd(6, .{ .scalar = .uint64 }),
+        .labels_removed = fd(7, .{ .scalar = .uint64 }),
+    };
+
+    pub fn deinit(self: *UpdateCounts, allocator: std.mem.Allocator) void {
         protobuf.deinit(allocator, self);
     }
 };

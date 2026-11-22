@@ -597,6 +597,8 @@ pub const ExecResult = struct {
     order_keys: [][]const u8,
     error_code: ?[]const u8 = null,
     error_message: ?[]const u8 = null,
+    /// SONNY-2822: the update counts the final page carried (null: none).
+    update_counts: ?schema.UpdateCounts = null,
 
     pub fn deinit(self: *ExecResult, allocator: std.mem.Allocator) void {
         allocator.free(self.status_class);
@@ -758,6 +760,7 @@ fn execResultFromAccumulator(
         .order_keys = try dupeStringSliceList(allocator, result.order_keys.items),
         .error_code = if (result.has_error and result.error_status.len > 0) try allocator.dupe(u8, result.error_status) else null,
         .error_message = if (result.has_error and result.error_message.len > 0) try allocator.dupe(u8, result.error_message) else null,
+        .update_counts = result.update_counts,
     };
 }
 

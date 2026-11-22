@@ -67,6 +67,7 @@ const builtin = @import("builtin");
 const graph_store = @import("graph_store.zig");
 const txn_undo_log = @import("txn_undo_log.zig");
 const write_budget = @import("write_budget.zig");
+const update_counts = @import("update_counts.zig");
 const txn_durable_undo = @import("txn_durable_undo.zig");
 const logging = @import("logging");
 const log = logging.scoped("statement_undo");
@@ -109,6 +110,9 @@ pub const Record = struct {
     /// SONNY-6658: create intents (`noteCreateIntents`) not on disk yet. They
     /// own no memory (the graph's name is not kept).
     intents: std.ArrayListUnmanaged(UndoEntry) = .empty,
+    /// SONNY-2822: the changes recorded so far, for the statement's update
+    /// counts once it succeeds (`finishSucceeded`).
+    counts: update_counts.UpdateCounts = .{},
 
     fn lock(self: *Record) void {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -438,8 +442,12 @@ pub fn finishFailed(owns: bool) bool {
 pub fn finishSucceeded(owns: bool) error{ OutOfMemory, StatementUndoIncomplete }!void {
     if (!owns or t_attached) return;
     t_record = null;
+    // SONNY-2822: its counts are the program's once it is done (not when
+    // its record cannot join the transaction and it is undone instead).
+    const counts = t_own.counts;
     if (t_own.entries.items.len == 0 or !txn_undo_log.threadInTxn()) {
         discardAll();
+        update_counts.noteCommitted(counts);
         return;
     }
     txn_undo_log.getGlobalUndoLog(allocator).adoptStatementEntries(t_own.entries.items) catch |err| {
@@ -447,6 +455,7 @@ pub fn finishSucceeded(owns: bool) error{ OutOfMemory, StatementUndoIncomplete }
         return err;
     };
     discardAll();
+    update_counts.noteCommitted(counts);
 }
 
 /// Room for `n` more entries, so a create can record itself after it
@@ -492,6 +501,7 @@ pub fn append(store: *graph_store.GraphStore, entry: UndoEntry) error{OutOfMemor
     };
     rec.entries.appendAssumeCapacity(entry);
     rec.bytes += bytes;
+    rec.counts.countEntry(entry); // SONNY-2822
     if (rec.store == null) rec.store = store;
 }
 
@@ -528,7 +538,20 @@ pub fn appendCreated(store: *graph_store.GraphStore, entry: UndoEntry) void {
         };
     }
     rec.bytes += bytes;
+    rec.counts.countEntry(entry); // SONNY-2822
     if (rec.store == null) rec.store = store;
+}
+
+// CANARY: REQ=REQ-SONNY-2822-UPDATE-COUNTS; FEATURE="WireProtocol"; ASPECT=CreatedNodeLabels; STATUS=TESTED; TEST=tests/test_sonny2822_update_counts.zig; OWNER=storage; UPDATED=2026-11-22
+/// SONNY-2822: a node the open statement created carries `n` labels: they
+/// count as labels added (its properties count as they are set). Recorded
+/// with the node's `appendCreated`; nothing outside a statement's record.
+pub fn noteCreatedNodeLabels(n: usize) void {
+    if (!capturing() or n == 0) return;
+    const rec = t_record.?;
+    rec.lock();
+    defer rec.unlock();
+    rec.counts.labels_added +|= n;
 }
 
 /// Undo the record newest first, through the store's logged write methods,
@@ -571,6 +594,7 @@ fn discardAll() void {
     t_own.intents.clearAndFree(allocator); // SONNY-6658
     t_own.durable_id = 0;
     t_own.logged = 0;
+    t_own.counts = .{}; // SONNY-2822
 }
 
 /// Entries the open record holds (tests).

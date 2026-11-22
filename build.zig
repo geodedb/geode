@@ -751,7 +751,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-cli-file-chunked", .reason = "subprocess e2e (geode serve + geode query --file on real ports); promotion owes a green run" },
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
-    .{ .name = "test-sonny2822-update-counts", .reason = "intentionally red TDD reproduction (SONNY-2822, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
@@ -10979,8 +10978,8 @@ pub fn build(b: *std.Build) void {
     const sonny2822_tests = b.addTest(.{ .root_module = sonny2822_test_mod });
     const run_sonny2822_tests = b.addRunArtifact(sonny2822_tests);
     spawnsBuiltGeode(sonny2822_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny2822_tests.step);
-    const sonny2822_step = b.step("test-sonny2822-update-counts", "Run SONNY-2822 red reproduction against a real server with QUIC and plaintext gRPC listeners: every write path (executor and fast-path CREATE, MATCH ... SET over N rows and over none, the point-write fast path, SET and REMOVE of labels and properties, DETACH DELETE, executor, bulk and /*+BATCH*/ MERGE created and matched, the key-resolved edge CREATE and MERGE) reports its update counts on the final DataPage, a pure read and a failed or rolled-back statement report nothing, and MATCH ... CREATE keeps its summary row");
+    shardDep(test_step, &run_sonny2822_tests.step, 1, test_shard_loads, test_shard_index);
+    const sonny2822_step = b.step("test-sonny2822-update-counts", "Run SONNY-2822 regression against a real server with QUIC and plaintext gRPC listeners: every write path (executor and fast-path CREATE, MATCH ... SET over N rows and over none, the point-write fast path, SET and REMOVE of labels and properties, DETACH DELETE, executor, bulk and /*+BATCH*/ MERGE created and matched, the key-resolved edge CREATE and MERGE) reports its update counts on the final DataPage, a pure read and a failed or rolled-back statement report nothing, and MATCH ... CREATE keeps its summary row");
     sonny2822_step.dependOn(&run_sonny2822_tests.step);
 
     // SONNY-6595 item 3: a DELETE with no MATCH is refused, and so is one in a

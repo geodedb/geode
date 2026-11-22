@@ -24,9 +24,10 @@
 // runs on both transports, on its own labels: QUIC serves the no-RETURN
 // CREATE, MERGE, `/*+BATCH*/` MERGE and the key-resolved edge writes by its
 // write fast paths (`quic_connection_handler.zig`), gRPC by the executor, so
-// the two must agree. The point-write fast path (`pointWriteFastPath`, an
-// exact-index `MATCH ... WHERE n.k = 'lit' SET`) is inside the executor, on
-// both.
+// the two must agree; the server's mutation timing log
+// (GEODE_MUTATION_TIMING_LOG) shows each QUIC fast path served a statement.
+// The point-write fast path (`pointWriteFastPath`, an exact-index
+// `MATCH ... WHERE n.k = 'lit' SET`) is inside the executor, on both.
 //
 // CANARY: REQ=REQ-SONNY-2822-UPDATE-COUNTS; FEATURE="WireProtocol"; ASPECT=UpdateCountsWireMatrix; STATUS=TESTED; TEST=tests/test_sonny2822_update_counts.zig; OWNER=transport; UPDATED=2026-11-22
 
@@ -81,7 +82,10 @@ const Server = struct {
         errdefer allocator.free(grpc_addr);
         const cmd = try std.fmt.allocPrint(allocator, "exec '{s}' serve --listen {s} --listen-grpc {s} --data-dir '{s}' 2>>'{s}'", .{ geode_test_bin.geode_exe, quic_addr, grpc_addr, data_dir, log_path });
         defer allocator.free(cmd);
-        var handle = try util.spawnServer(allocator, &.{ "/bin/sh", "-c", cmd, "--data-dir" }, util.TestEnv.grpcPlaintext());
+        // GEODE_MUTATION_TIMING_LOG: each QUIC write fast path logs its name
+        // (`mutation_timing`), so the test can tell it served the statement.
+        const plain = util.TestEnv.grpcPlaintext();
+        var handle = try util.spawnServer(allocator, &.{ "/bin/sh", "-c", cmd, "--data-dir" }, &.{ plain[0], plain[1], "GEODE_MUTATION_TIMING_LOG=1" });
         errdefer handle.deinit();
         try util.waitForServerReady(allocator, quic_addr, 30000);
         return .{ .handle = handle, .quic_addr = quic_addr, .grpc_addr = grpc_addr };
@@ -299,6 +303,22 @@ fn runTransport(allocator: std.mem.Allocator, server: *Server, t: Transport) !us
     return failed;
 }
 
+/// The QUIC write fast paths the cases mean to exercise did serve them: each
+/// logs its name in the server's mutation timing log.
+fn checkFastPathsServed(allocator: std.mem.Allocator, log_path: []const u8) !void {
+    const log = try std.Io.Dir.cwd().readFileAlloc(io(), log_path, allocator, .limited(64 << 20));
+    defer allocator.free(log);
+    const fast_paths = [_][]const u8{ "bulk_simple_create", "bulk_simple_merge", "batch_simple_merge", "bulk_match_create_edge", "bulk_match_merge_edge" };
+    var missing: usize = 0;
+    for (fast_paths) |name| {
+        if (std.mem.indexOf(u8, log, name) == null) {
+            std.debug.print("SONNY-2822 | quic | the {s} fast path served no statement\n", .{name});
+            missing += 1;
+        }
+    }
+    try testing.expectEqual(@as(usize, 0), missing);
+}
+
 /// The MATCH ... CREATE summary row is still sent beside the counts.
 fn checkSummaryRow(allocator: std.mem.Allocator, server: *Server, t: Transport) !void {
     var client = try Client.connect(allocator, server, t);
@@ -352,6 +372,7 @@ test "SONNY-2822: every write path reports its update counts on QUIC and gRPC" {
         std.debug.print("SONNY-2822 | {s:<4} | {d} step(s) failed\n", .{ @tagName(t), n });
         failed += n;
         try checkSummaryRow(allocator, &server, t);
+        if (t == .quic) try checkFastPathsServed(allocator, log_path);
     }
     try testing.expectEqual(@as(usize, 0), failed);
 }
