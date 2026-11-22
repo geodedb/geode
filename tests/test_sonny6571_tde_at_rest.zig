@@ -207,6 +207,20 @@ fn runQuery(gpa: std.mem.Allocator, io: std.Io, aa: std.mem.Allocator, ca: []con
     return res.stdout;
 }
 
+/// SONNY-6925: `runQuery` for a poll that waits for something to become true
+/// (a server answering, a write replicating). A probe that runs past its
+/// timeout says only "not yet", so it returns null and the caller's own
+/// deadline decides; single statements and writes keep using `runQuery`.
+fn probeQuery(gpa: std.mem.Allocator, io: std.Io, aa: std.mem.Allocator, ca: []const u8, ip: []const u8, port: u16, q: []const u8) !?[]u8 {
+    return runQuery(gpa, io, aa, ca, ip, port, q) catch |err| switch (err) {
+        error.Timeout => {
+            std.debug.print("[probe] {s} on {s}:{d} timed out; polling again\n", .{ q, ip, port });
+            return null;
+        },
+        else => return err,
+    };
+}
+
 // ---------------------------------------------------------------------------
 // Child processes: spawn, log capture, clean stop.
 // ---------------------------------------------------------------------------
@@ -430,9 +444,10 @@ fn startSingle(gpa: std.mem.Allocator, aa: std.mem.Allocator, io: std.Io, certs:
     const deadline = nowMillis() + STARTUP_DEADLINE_MS;
     while (true) {
         node.drain(gpa, io);
-        const out = try runQuery(gpa, io, aa, certs.ca, SINGLE_IP, port, "RETURN 1 AS ready");
-        defer gpa.free(out);
-        if (std.mem.indexOf(u8, out, "ready") != null) return;
+        if (try probeQuery(gpa, io, aa, certs.ca, SINGLE_IP, port, "RETURN 1 AS ready")) |out| {
+            defer gpa.free(out);
+            if (std.mem.indexOf(u8, out, "ready") != null) return;
+        }
         if (nowMillis() > deadline) {
             std.debug.print("server never answered; log tail:\n{s}\n", .{node.tail()});
             return error.ServerStartupTimeout;
@@ -686,9 +701,10 @@ fn expectOnEveryNode(spec: ClusterSpec, gpa: std.mem.Allocator, aa: std.mem.Allo
         var seen = false;
         var poll: usize = 0;
         while (poll < 20 and !seen) : (poll += 1) {
-            const out = try runQuery(gpa, io, aa, spec.certs.ca, NODE_IPS[i], spec.client_port, read_q);
-            defer gpa.free(out);
-            seen = std.mem.indexOf(u8, out, want) != null;
+            if (try probeQuery(gpa, io, aa, spec.certs.ca, NODE_IPS[i], spec.client_port, read_q)) |out| {
+                defer gpa.free(out);
+                seen = std.mem.indexOf(u8, out, want) != null;
+            }
             if (!seen) sleepMs(500);
         }
         if (!seen) {
