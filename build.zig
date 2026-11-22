@@ -751,6 +751,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-cli-file-chunked", .reason = "subprocess e2e (geode serve + geode query --file on real ports); promotion owes a green run" },
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
+    .{ .name = "test-sonny2822-update-counts", .reason = "intentionally red TDD reproduction (SONNY-2822, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
@@ -10965,6 +10966,22 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6595_vec_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6595_vec_step = b.step("test-sonny6595-vector-write-paths", "Run SONNY-6595 items 1-2 against a real server with QUIC and plaintext gRPC listeners: after CREATE INDEX ... USING vector, every node write path (index backfill, executor and fast-path MERGE ON CREATE SET and SET, a replaced vector, executor MERGE, /*+BATCH*/ bulk MERGE, MATCH ... SET) leaves knn() answering each node for its own vector, immediately, after a SIGKILL and restart, and after a checkpoint and restart; and every path refuses a wrong-dimension vector with the executor's error");
     sonny6595_vec_step.dependOn(&run_sonny6595_vec_tests.step);
+
+    // SONNY-2822: every write path reports its update counts (nodes and
+    // relationships created and deleted, properties set, labels added and
+    // removed) on the final DataPage, over QUIC and gRPC (a real server).
+    const sonny2822_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny2822_update_counts.zig"), .target = target, .optimize = optimize });
+    sonny2822_test_mod.link_libc = true;
+    sonny2822_test_mod.addImport("geode", root_mod);
+    sonny2822_test_mod.addImport("protobuf", protobuf_mod);
+    sonny2822_test_mod.addImport("schema", schema_mod);
+    sonny2822_test_mod.addImport("transport/quic", transport_quic_mod);
+    const sonny2822_tests = b.addTest(.{ .root_module = sonny2822_test_mod });
+    const run_sonny2822_tests = b.addRunArtifact(sonny2822_tests);
+    spawnsBuiltGeode(sonny2822_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny2822_tests.step);
+    const sonny2822_step = b.step("test-sonny2822-update-counts", "Run SONNY-2822 red reproduction against a real server with QUIC and plaintext gRPC listeners: every write path (executor and fast-path CREATE, MATCH ... SET over N rows and over none, the point-write fast path, SET and REMOVE of labels and properties, DETACH DELETE, executor, bulk and /*+BATCH*/ MERGE created and matched, the key-resolved edge CREATE and MERGE) reports its update counts on the final DataPage, a pure read and a failed or rolled-back statement report nothing, and MATCH ... CREATE keeps its summary row");
+    sonny2822_step.dependOn(&run_sonny2822_tests.step);
 
     // SONNY-6595 item 3: a DELETE with no MATCH is refused, and so is one in a
     // CALL subquery (the context.bindings branch of executeDelete was unreachable).
