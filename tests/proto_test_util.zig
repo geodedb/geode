@@ -294,7 +294,7 @@ pub fn waitForGrpcServerReady(allocator: std.mem.Allocator, addr: []const u8, ti
 /// reported at once (`waitForSpawnedServer`), so this bounds only a live
 /// one, and a loaded CI runner starved a healthy server's 0.13 s startup to
 /// over ten seconds.
-pub const SPAWN_STARTUP_TIMEOUT_MS: u64 = 10_000;
+pub const SPAWN_STARTUP_TIMEOUT_MS: u64 = 60_000;
 
 /// SONNY-6919: wait until the server in `handle` answers a HELLO, and stop
 /// at once with ServerExitedDuringStartup if its process has exited (a
