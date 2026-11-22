@@ -133,7 +133,9 @@ fn writerThread(sh: *Shared) void {
     };
     while (!sh.stop.load(.acquire)) {
         const reserved = reserveIdOnTargetShard(sh.store);
-        _ = sh.adapter.bulkInsertNodeWithReservedId(GRAPH, reserved, &labels, &props) catch {
+        _ = sh.adapter.bulkInsertNodeWithReservedId(GRAPH, reserved, &labels, &props) catch |err| {
+            // SONNY-6924: say why, so a CI failure can be triaged.
+            std.debug.print("where-scan-writer-progress: writer insert failed after {d} ops: {s}\n", .{ sh.ops_applied.load(.monotonic), @errorName(err) });
             sh.writer_err.store(true, .release);
             return;
         };
@@ -434,9 +436,18 @@ test "sparse WHERE-predicate scan returns the correct rows under concurrent inge
 
     // Every run must return exactly the 3 pre-seeded 'target' rows — the writer
     // only ever adds 'other' nodes, so the matched set is stable under ingest.
+    // SONNY-6924: a failure in main pipeline 3099350732 (release-safe shard 9)
+    // printed no detail; report which scan, what it returned, and how far the
+    // writer had got.
     var n: usize = 0;
     while (n < 4) : (n += 1) {
-        const matched = try runWhereScanOnce(allocator, ctx);
+        const matched = runWhereScanOnce(allocator, ctx) catch |err| {
+            std.debug.print("where-scan correctness: scan {d} failed: {s} (writer ops {d})\n", .{ n, @errorName(err), sh.ops_applied.load(.monotonic) });
+            return err;
+        };
+        if (matched != TARGET_COUNT) {
+            std.debug.print("where-scan correctness: scan {d} returned {d} rows, expected {d} (writer ops {d})\n", .{ n, matched, TARGET_COUNT, sh.ops_applied.load(.monotonic) });
+        }
         try testing.expectEqual(TARGET_COUNT, matched);
     }
     try testing.expect(!sh.writer_err.load(.acquire));
