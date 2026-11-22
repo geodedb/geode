@@ -136,6 +136,40 @@ pub const ServerHandle = struct {
     env_map: ?std.process.Environ.Map = null,
     port: u16 = 0,
     addr: []const u8 = "",
+    /// SONNY-6919: the file the server's stdout and stderr go to (empty
+    /// when they are inherited, under GEODE_TEST_INHERIT_SERVER_STDERR).
+    log_path_buf: [256]u8 = undefined,
+    log_path_len: usize = 0,
+
+    pub fn logPath(self: *const ServerHandle) []const u8 {
+        return self.log_path_buf[0..self.log_path_len];
+    }
+
+    /// The last `max_bytes` of the server's output (empty when it has none).
+    pub fn readLogTail(self: *ServerHandle, allocator: std.mem.Allocator, max_bytes: usize) ![]u8 {
+        if (self.log_path_len == 0) return allocator.alloc(u8, 0);
+        const io = self.threaded.io();
+        const file = try std.Io.Dir.cwd().openFile(io, self.logPath(), .{});
+        defer file.close(io);
+        const size = try file.length(io);
+        const want: usize = @intCast(@min(size, max_bytes));
+        const buf = try allocator.alloc(u8, want);
+        errdefer allocator.free(buf);
+        const got = try file.readPositionalAll(io, buf, size - want);
+        return allocator.realloc(buf, got);
+    }
+
+    /// Print the end of the server's output and whether it is still running,
+    /// for a test that gives up on it.
+    pub fn reportStartupFailure(self: *ServerHandle, err: anyerror) void {
+        const alive = if (self.child.id) |pid| processAlive(pid) else false;
+        std.debug.print("geode serve on {s} did not come up ({s}; process {s}); output in {s}\n", .{
+            self.addr, @errorName(err), if (alive) "still running" else "exited", self.logPath(),
+        });
+        const tail = self.readLogTail(self.allocator, 8 * 1024) catch return;
+        defer self.allocator.free(tail);
+        std.debug.print("--- last {d} bytes of server output ---\n{s}\n--- end of server output ---\n", .{ tail.len, tail });
+    }
 
     pub fn deinit(self: *ServerHandle) void {
         // Zig 0.16: kill/wait take an Io parameter.  proto_test_util is
@@ -255,6 +289,26 @@ pub fn waitForGrpcServerReady(allocator: std.mem.Allocator, addr: []const u8, ti
     return error.ServerStartupTimeout;
 }
 
+/// SONNY-6919: wait until the server in `handle` answers a HELLO, and stop
+/// at once with ServerExitedDuringStartup if its process has exited (a
+/// failed bind, a refused configuration), rather than polling a dead server
+/// until the deadline.
+pub fn waitForSpawnedServer(handle: *ServerHandle, timeout_ms: u64) !void {
+    const deadline = compat_milliTimestamp() + @as(i64, @intCast(timeout_ms));
+    while (compat_milliTimestamp() < deadline) {
+        if (handle.child.id) |pid| {
+            if (!processAlive(pid)) return error.ServerExitedDuringStartup;
+        }
+        var client = QuicProtoClient.connect(handle.allocator, handle.addr) catch {
+            compat_sleep(100 * std.time.ns_per_ms);
+            continue;
+        };
+        client.deinit();
+        return;
+    }
+    return error.ServerStartupTimeout;
+}
+
 /// Wait for server to be ready by attempting to connect
 pub fn waitForServerReady(allocator: std.mem.Allocator, addr: []const u8, timeout_ms: u64) !void {
     const start = compat_milliTimestamp();
@@ -289,8 +343,8 @@ pub fn spawnServerRandom(
     handle.port = port;
     handle.addr = addr;
 
-    // Wait for server to be ready
-    waitForServerReady(allocator, addr, 10000) catch |err| {
+    waitForSpawnedServer(&handle, 10000) catch |err| {
+        handle.reportStartupFailure(err);
         // SONNY-6542: the errdefer above frees addr; deinit must not free it
         // again (a server that missed the deadline crashed the test binary).
         handle.addr = "";
@@ -355,6 +409,8 @@ fn envPairsContainTruthy(pairs: ?[]const []const u8, name: []const u8) bool {
     }
     return false;
 }
+
+var server_log_counter = std.atomic.Value(u32).init(0);
 
 pub fn spawnServer(
     allocator: std.mem.Allocator,
@@ -432,22 +488,39 @@ pub fn spawnServer(
         break :blk false;
     };
 
+    // SONNY-6919: otherwise the output goes to a file in the scratch root
+    // (removed with it), not a pipe, so a server that logs heavily never
+    // blocks on a reader, and a test that gives up on it can print the end.
+    var log_path_buf: [256]u8 = undefined;
+    var log_path: []const u8 = "";
+    var log_file: ?std.Io.File = null;
+    defer if (log_file) |f| f.close(io);
+    if (!inherit_server_stdio) {
+        const n = server_log_counter.fetchAdd(1, .monotonic);
+        log_path = try std.fmt.bufPrint(&log_path_buf, "{s}/server-{d}.log", .{ try test_scratch.processRoot(), n });
+        log_file = try std.Io.Dir.cwd().createFile(io, log_path, .{});
+    }
+    const out: std.process.SpawnOptions.StdIo = if (inherit_server_stdio) .inherit else .{ .file = log_file.? };
+
     const child = try std.process.spawn(io, .{
         .argv = args,
         .environ_map = &map,
         // Zig 0.16: SpawnOptions renamed `*_behavior` to bare
         // `stdin` / `stdout` / `stderr` of `StdIo` enum.
         .stdin = .ignore,
-        .stdout = if (inherit_server_stdio) .inherit else .ignore,
-        .stderr = if (inherit_server_stdio) .inherit else .ignore,
+        .stdout = out,
+        .stderr = out,
     });
 
-    return ServerHandle{
+    var handle = ServerHandle{
         .allocator = allocator,
         .threaded = threaded,
         .child = child,
         .env_map = map,
     };
+    @memcpy(handle.log_path_buf[0..log_path.len], log_path);
+    handle.log_path_len = log_path.len;
+    return handle;
 }
 
 const Addr = struct {
