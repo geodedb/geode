@@ -19,8 +19,10 @@
 //
 // SONNY-2439: like benchmark_fts_storage.zig, each scenario runs
 // `robust_variance_envelope.default_rounds` passes and claims on the median /
-// IQR of the per-position fastest pass (benchmarks/robust_variance_envelope.zig),
-// so one preempted sample on the shared CI runner cannot breach the envelope.
+// IQR of the per-position fastest pass of each sample's thread CPU time
+// (benchmarks/robust_variance_envelope.zig), so neither a preempted sample nor
+// sustained load on the shared CI runner can breach the envelope. Wall time is
+// reported alongside, as information.
 //
 // The bench imports `geode` (for the timeseries re-export) + std only, mirroring
 // src/benchmarks/bench_timeseries.zig's import + Store.init(allocator) API.
@@ -31,17 +33,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const ts = @import("geode").timeseries;
 const rve = @import("robust_variance_envelope");
-
-// Zig 0.16 compat: std.time.nanoTimestamp removed; use clock_gettime(MONOTONIC).
-fn nowNs() u64 {
-    var t: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime builtin.os.tag == .linux) {
-        _ = std.os.linux.clock_gettime(.MONOTONIC, &t);
-    } else {
-        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &t);
-    }
-    return @as(u64, @intCast(t.sec)) * 1_000_000_000 + @as(u64, @intCast(t.nsec));
-}
 
 /// The envelope both scenarios claim (relative IQR and p95 / median of the
 /// per-position minimums over the rounds).
@@ -64,11 +55,10 @@ pub fn runIngestBatch(allocator: std.mem.Allocator, out: *std.ArrayListUnmanaged
     const pts = try allocator.alloc(ts.Point, batch_size);
     defer allocator.free(pts);
 
-    var rounds = try rve.Rounds.init(allocator, rve.default_rounds, samples_n);
-    defer rounds.deinit();
+    var sampler = try rve.Sampler.init(allocator, rve.default_rounds, samples_n);
+    defer sampler.deinit();
 
     for (0..rve.default_rounds) |r| {
-        const samples = rounds.round(r);
         var ts_cursor: i64 = 0;
         for (0..samples_n + warmup_n) |s| {
             var store = ts.Store.init(allocator);
@@ -78,18 +68,16 @@ pub fn runIngestBatch(allocator: std.mem.Allocator, out: *std.ArrayListUnmanaged
             for (pts, 0..) |*p, i| p.* = ts.Point{ .ts = ts_cursor + @as(i64, @intCast(i)), .value = @intCast(i % 100) };
             ts_cursor += @intCast(batch_size);
 
-            const t0 = nowNs();
+            const t0 = rve.Sampler.start();
             try store.insertMany(key, pts);
-            const elapsed = nowNs() - t0;
 
             // Whole-batch ns: per-point ns (~25) is too coarse an integer for
             // the IQR (SONNY-2439).
-            if (s >= warmup_n) samples[s - warmup_n] = elapsed;
+            if (s >= warmup_n) sampler.record(r, s - warmup_n, t0, 1);
         }
     }
 
-    const st = try rounds.summarize(allocator);
-    return rve.emit(out, allocator, "ts_ingest_batch", st, warmup_n, bounds);
+    return sampler.emit(out, allocator, "ts_ingest_batch", warmup_n, bounds);
 }
 
 // Scenario 2: range query — Store.queryRange over a populated series. This is
@@ -113,14 +101,13 @@ pub fn runRangeQuery(allocator: std.mem.Allocator, out: *std.ArrayListUnmanaged(
         try store.insertMany(key, pts);
     }
 
-    var rounds = try rve.Rounds.init(allocator, rve.default_rounds, samples_n);
-    defer rounds.deinit();
+    var sampler = try rve.Sampler.init(allocator, rve.default_rounds, samples_n);
+    defer sampler.deinit();
     const end_ts: i64 = @intCast(series_points - 1);
 
     for (0..rve.default_rounds) |r| {
-        const samples = rounds.round(r);
         for (0..samples_n + warmup_n) |s| {
-            const t0 = nowNs();
+            const t0 = rve.Sampler.start();
             for (0..queries_per_sample) |_| {
                 // queryRange allocates the Point slice with `allocator`; it is
                 // freed inside the timed region, as a caller would free it.
@@ -130,13 +117,11 @@ pub fn runRangeQuery(allocator: std.mem.Allocator, out: *std.ArrayListUnmanaged(
                 if (n != series_points) return error.UnexpectedRangeRows;
                 std.mem.doNotOptimizeAway(n);
             }
-            const elapsed = nowNs() - t0;
-            if (s >= warmup_n) samples[s - warmup_n] = elapsed / queries_per_sample;
+            if (s >= warmup_n) sampler.record(r, s - warmup_n, t0, queries_per_sample);
         }
     }
 
-    const st = try rounds.summarize(allocator);
-    return rve.emit(out, allocator, "ts_range_query", st, warmup_n, bounds);
+    return sampler.emit(out, allocator, "ts_range_query", warmup_n, bounds);
 }
 
 pub fn main() !void {

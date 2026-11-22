@@ -2233,7 +2233,7 @@ REQ-GQL-FTS-E2E-001,Fulltext CREATE/DROP + search end-to-end,E2E,TESTED,,,index,
 REQ-GQL-FTS-PROC-001,"CALL geode.fts.search YIELD node,score",Dispatch,TESTED,,,index,2026-05-31,src/execution/procedure_registry.zig,254
 REQ-GQL-FTS-PROC-001,"CALL geode.fts.search YIELD node,score",ReadOnlyClassification,TESTED,,,index,2026-05-31,src/execution/procedure_access.zig,87
 REQ-GQL-FTS-STORAGE-PERF-001,FtsStorageBackend,SearchLatencyGate,TESTED,,,storage,2026-05-31,tests/test_fts_latency.zig,1
-REQ-GQL-FTS-STORAGE-PERF-001,FtsStorageBackend,VarianceEnvelope,BENCHED,,,storage,2026-11-22,benchmarks/benchmark_fts_storage.zig,25
+REQ-GQL-FTS-STORAGE-PERF-001,FtsStorageBackend,VarianceEnvelope,BENCHED,,,storage,2026-11-22,benchmarks/benchmark_fts_storage.zig,27
 REQ-GQL-FTS-TEST,FTS Test Suite,Testing,TESTED,,,test,2026-05-30,tests/test_fulltext_bm25.zig,12
 REQ-GQL-GEO-FUNC-001,GeographicFunctions,BuiltinFunctions,TESTED,,,types,2025-10-19,src/types/geographic.zig,301
 REQ-GQL-GEO-FUNC-EVAL-001,GeographicFunctionsEvaluation,BuiltinFunctions,TESTED,,,eval,2025-10-19,src/eval_extended.zig,1322
@@ -2537,7 +2537,7 @@ REQ-GQL-TRIANGLE-COUNT-001,TriangleCounting,Statistics,TESTED,,,graph,2026-01-03
 REQ-GQL-TS-PROC-001,CALL geode.ts.* native timeseries surface,Dispatch,TESTED,,,timeseries,2026-05-31,src/execution/procedure_registry.zig,262
 REQ-GQL-TS-PROC-001,CALL geode.ts.* read procedures,ReadOnlyClassification,TESTED,,,timeseries,2026-05-31,src/execution/procedure_access.zig,92
 REQ-GQL-TS-STORAGE-PERF-001,TimeseriesStorageBackend,RangeLatencyGate,TESTED,,,storage,2026-05-31,tests/test_ts_latency.zig,1
-REQ-GQL-TS-STORAGE-PERF-001,TimeseriesStorageBackend,VarianceEnvelope,BENCHED,,,storage,2026-11-22,benchmarks/benchmark_ts_storage.zig,28
+REQ-GQL-TS-STORAGE-PERF-001,TimeseriesStorageBackend,VarianceEnvelope,BENCHED,,,storage,2026-11-22,benchmarks/benchmark_ts_storage.zig,30
 REQ-GQL-TYPE-CONV-001,TypeConversionFunctions,Functionality,TESTED,,,eval,2025-01-05,docs/TYPE_CONVERSION_FUNCTIONS.md,164
 REQ-GQL-TYPE-CONV-001,TypeConversionFunctions,Functionality,TESTED,,,eval,"2025-01-05""",tests/type_conversion_functions_regression_test.sh,71
 REQ-GQL-TYPES,NetworkTypes,Implementation,TESTED,,,types-team,2025-10-03,src/types/network.zig,2

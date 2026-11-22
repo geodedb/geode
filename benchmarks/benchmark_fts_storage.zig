@@ -14,9 +14,11 @@
 //
 // SONNY-2439: each scenario runs `robust_variance_envelope.default_rounds`
 // independent passes and the envelope claims on the median / IQR of the
-// per-position fastest pass (benchmarks/robust_variance_envelope.zig), so a
-// batch that lands on a preempted vCPU or a contended fsync on the shared CI
-// runner cannot breach it. tests/test_sonny2439_fts_variance_contention.zig
+// per-position fastest pass of each sample's THREAD CPU time
+// (benchmarks/robust_variance_envelope.zig). fts_index_batch's wall time is
+// one fsync per batch on whatever disk the host shares, which no in-test
+// statistic can bound; its CPU time is the engine's own work. Wall time is
+// reported alongside, as information. tests/test_sonny2439_fts_variance_contention.zig
 // runs both scenarios under real CPU + fsync contention.
 //
 // The bench is intentionally lean: it imports `fts_storage_lib` + std only, so
@@ -29,19 +31,8 @@ const builtin = @import("builtin");
 const fts = @import("fts_storage_lib");
 const rve = @import("robust_variance_envelope");
 
-// Zig 0.16 compat: std.time.nanoTimestamp removed; use clock_gettime(MONOTONIC).
-fn nowNs() u64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    if (comptime builtin.os.tag == .linux) {
-        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
-    } else {
-        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
-    }
-    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
-}
-
 /// The envelope both scenarios claim (relative IQR and p95 / median of the
-/// per-position minimums over the rounds).
+/// per-position minimums of thread CPU time over the rounds).
 pub const bounds: rve.Bounds = .{ .max_rel_iqr = 0.50, .max_p95_over_median = 3.0 };
 
 // Open a fresh, unique scratch dir for an engine instance. Returns the opened
@@ -98,8 +89,8 @@ const index_warmup: usize = 3;
 const index_batch: usize = 100;
 
 /// One pass: a fresh engine indexes the corpus in `index_batch`-doc batches;
-/// `samples` receives the ns/doc of each timed batch.
-fn indexRound(io: std.Io, allocator: std.mem.Allocator, corpus: *const Corpus, samples: []u64) !void {
+/// pass `r` of `sampler` receives the ns/doc of each timed batch.
+fn indexRound(io: std.Io, allocator: std.mem.Allocator, corpus: *const Corpus, sampler: *rve.Sampler, r: usize) !void {
     const dir_name = ".bench-fts-index-tmp";
     std.Io.Dir.cwd().deleteTree(io, dir_name) catch {};
     defer std.Io.Dir.cwd().deleteTree(io, dir_name) catch {};
@@ -112,11 +103,10 @@ fn indexRound(io: std.Io, allocator: std.mem.Allocator, corpus: *const Corpus, s
         // Each iteration indexes `index_batch` distinct docs in one batched
         // call (one fsync amortized across the batch — the real hot path).
         const batch = corpus.batches[s * index_batch ..][0..index_batch];
-        const t0 = nowNs();
+        const t0 = rve.Sampler.start();
         try engine.indexDocumentBatch(batch);
-        const elapsed = nowNs() - t0;
-        // Per-doc latency so the metric is stable across batch sizes.
-        if (s >= index_warmup) samples[s - index_warmup] = elapsed / index_batch;
+        // Per-doc cost so the metric is stable across batch sizes.
+        if (s >= index_warmup) sampler.record(r, s - index_warmup, t0, index_batch);
     }
 }
 
@@ -124,12 +114,11 @@ pub fn runIndexBatch(io: std.Io, allocator: std.mem.Allocator, out: *std.ArrayLi
     var corpus = try Corpus.init(allocator, (index_samples + index_warmup) * index_batch);
     defer corpus.deinit();
 
-    var rounds = try rve.Rounds.init(allocator, rve.default_rounds, index_samples);
-    defer rounds.deinit();
-    for (0..rve.default_rounds) |r| try indexRound(io, allocator, &corpus, rounds.round(r));
+    var sampler = try rve.Sampler.init(allocator, rve.default_rounds, index_samples);
+    defer sampler.deinit();
+    for (0..rve.default_rounds) |r| try indexRound(io, allocator, &corpus, &sampler, r);
 
-    const st = try rounds.summarize(allocator);
-    return rve.emit(out, allocator, "fts_index_batch", st, index_warmup, bounds);
+    return sampler.emit(out, allocator, "fts_index_batch", index_warmup, bounds);
 }
 
 const search_docs: usize = 2000;
@@ -152,12 +141,11 @@ pub fn runSearchTerm(io: std.Io, allocator: std.mem.Allocator, out: *std.ArrayLi
     try engine.indexDocumentBatch(corpus.batches);
     try engine.flush();
 
-    var rounds = try rve.Rounds.init(allocator, rve.default_rounds, search_samples);
-    defer rounds.deinit();
+    var sampler = try rve.Sampler.init(allocator, rve.default_rounds, search_samples);
+    defer sampler.deinit();
     for (0..rve.default_rounds) |r| {
-        const samples = rounds.round(r);
         for (0..search_samples + search_warmup) |s| {
-            const t0 = nowNs();
+            const t0 = rve.Sampler.start();
             for (0..search_batch) |_| {
                 // A single-term search: open the iterator and drain its
                 // matches. For the common term this walks the full posting
@@ -169,13 +157,11 @@ pub fn runSearchTerm(io: std.Io, allocator: std.mem.Allocator, out: *std.ArrayLi
                 if (hits != search_docs) return error.UnexpectedSearchHits;
                 std.mem.doNotOptimizeAway(hits);
             }
-            const elapsed = nowNs() - t0;
-            if (s >= search_warmup) samples[s - search_warmup] = elapsed / search_batch;
+            if (s >= search_warmup) sampler.record(r, s - search_warmup, t0, search_batch);
         }
     }
 
-    const st = try rounds.summarize(allocator);
-    return rve.emit(out, allocator, "fts_search_term", st, search_warmup, bounds);
+    return sampler.emit(out, allocator, "fts_search_term", search_warmup, bounds);
 }
 
 pub fn main() !void {
