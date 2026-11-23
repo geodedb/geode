@@ -797,6 +797,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6942-statement-threads", .reason = "intentionally red TDD reproduction (SONNY-6942, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -11781,6 +11782,21 @@ pub fn build(b: *std.Build) void {
     const run_sonny6942_tests = b.addRunArtifact(sonny6942_tests);
     shardDep(test_step, &run_sonny6942_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6942-detach-delete-shards", "Run SONNY-6942 regression (in-process, durable undo log installed: MATCH ... DETACH DELETE and MATCH ... SET over nodes on every engine shard, and a failed one, commit at most one engine transaction per shard, not one per node with a txn_undo.wal fsync before each)").dependOn(&run_sonny6942_tests.step);
+
+    // SONNY-6942: the threads of a statement that writes over every engine
+    // shard: UNION ALL arms that write, and a thread working for the
+    // statement (statement_undo.attach), write in its shard transactions
+    // (graph-storage refuses a second open writer of a page, WriteConflict).
+    const sonny6942t_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6942_statement_threads.zig"), .target = target, .optimize = optimize });
+    sonny6942t_test_mod.link_libc = true;
+    sonny6942t_test_mod.addImport("geode", root_mod);
+    sonny6942t_test_mod.addImport("logging", logging_mod);
+    sonny6942t_test_mod.addImport("rls", rls_mod);
+    sonny6942t_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6942t_tests = b.addTest(.{ .root_module = sonny6942t_test_mod });
+    const run_sonny6942t_tests = b.addRunArtifact(sonny6942t_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6942t_tests.step);
+    b.step("test-sonny6942-statement-threads", "Run SONNY-6942 red reproduction (in-process, durable undo log installed: UNION ALL arms that write over every shard, and a thread working for the statement, write in the statement's shard transactions instead of failing with WriteConflict beside them)").dependOn(&run_sonny6942t_tests.step);
 
     // SONNY-6659: a write made while a statement or session engine
     // transaction is open on its shard joins it (graph-storage v0.4.25 refuses
