@@ -94,7 +94,7 @@ jobs:
         run: |
           mkdir -p reports
           log=reports/zig-test.log
-          cmd="zig build $JOBS_ARG test $SHARD_ARGS --summary all --error-style verbose"
+          cmd="zig build $JOBS_ARG test $SHARD_ARGS --summary all"
           echo "+ $cmd"
           set +e
           if [ -f scripts/ci/zig_fail_fast.py ]; then
