@@ -7,10 +7,11 @@
 //     a `MATCH ... SET` of one node (whose changes each used to commit an
 //     engine transaction of their own).
 //   * A statement whose changes land on several shards writes its undo to
-//     the log before the first change that commits on its own, seals itself
-//     with COMMITTED when it ends, and leaves the log empty.
-//   * A failed one is undone, sealed with ROLLED_BACK, and leaves the log
-//     empty.
+//     the log before the first of its engine transactions commits, seals
+//     itself with COMMITTED when it ends, and leaves the log empty.
+//   * A failed one is undone and leaves the log empty. SONNY-6942: it writes
+//     nothing to the log: its changes on every shard wait in its engine
+//     transaction there, which commits them with their undo.
 //
 // The crash itself is `test-sonny6658-autocommit-crash-atomicity` (a real
 // server killed mid-statement). Counted with the engine's `txn_committed`
@@ -103,16 +104,17 @@ test "SONNY-6658: the durable undo log for auto-commit statements: free on one s
         try testing.expectEqual(@as(u32, 0), l.open_txns.count());
     }
 
-    // A failed multi-shard statement: undone, sealed, the log emptied.
+    // A failed multi-shard statement: undone, nothing logged (SONNY-6942: no
+    // change of it committed before it failed), the log empty.
     {
         const r0 = records();
         if (s.execAs(null, "MATCH (n:Many6658) SET n.w = 1 RETURN CASE WHEN n.i = 20 THEN 1 / 0 ELSE 1 END AS e")) |_| {
             return error.ExpectedStatementToFail;
         } else |_| {}
         const dr = records() - r0;
-        if (dr < 2) {
-            std.debug.print("a failed multi-shard statement wrote {d} undo log records (want its entries and ROLLED_BACK)\n", .{dr});
-            return error.FailedStatementNotLogged;
+        if (dr != 0) {
+            std.debug.print("a failed multi-shard statement wrote {d} undo log records (want 0: its changes and their undo commit together on each shard)\n", .{dr});
+            return error.FailedStatementLogged;
         }
         try testing.expectEqual(@as(u64, 0), try logBytes(l));
         try testing.expectEqual(@as(u32, 0), l.open_txns.count());

@@ -2283,13 +2283,14 @@ pub fn endStatementSucceeded(owns: bool, catalog: *catalog_mod.Catalog) (stateme
 // CANARY: REQ=REQ-SONNY-6658-AUTOCOMMIT-ATOMIC; FEATURE="TransactionManagement"; ASPECT=StatementSeal; STATUS=TESTED; TEST=tests/test_sonny6658_autocommit_crash_atomicity.zig; OWNER=storage; UPDATED=2026-11-16
 /// SONNY-6658: the end of an auto-commit statement that succeeded, still
 /// under the graph lock it holds. When a change of it committed an engine
-/// transaction of its own (it went durable), what of its undo is not on disk
-/// yet is written; its engine transaction commits (one commit for its
+/// transaction of its own (it went durable), or it has engine transactions
+/// on several shards (SONNY-6942), what of its undo is not on disk yet is
+/// written; its engine transaction commits (one commit for its
 /// changes on that shard); then a COMMITTED record seals it, its commit
 /// point. An error fails the statement, which undoes its changes
 /// (`endStatementFailed`). No-op in an explicit transaction.
 fn commitAutoCommitStatement() (statement_undo.DurableError || error{StatementCommitFailed})!void {
-    try statement_undo.flushBeforeStatementCommit();
+    try statement_undo.flushBeforeStatementCommit(storage_adapter.autoStatementSpansShards());
     storage_adapter.commitAutoStatementTxn() catch |err| {
         log.warn("an auto-commit statement's engine transaction did not commit", &.{Attr.string("error", @errorName(err))});
         return error.StatementCommitFailed;

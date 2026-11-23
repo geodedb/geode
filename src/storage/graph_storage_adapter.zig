@@ -4053,14 +4053,83 @@ pub fn settleFailedStatementTxn() void {
 // executor that opened it returns (`StatementTxn.commit` hands it over), and
 // a statement that has none opens one at its first write, on that write's
 // shard (`openAutoStatementTxn`). Its changes on that shard so commit as one
-// unit, last; a change on another shard commits its own engine transaction
-// and puts the statement's undo on disk first
-// (`statement_undo.beforeOwnEngineCommit`), so a crash before the statement
-// ends is undone at the restart (`txn_durable_undo`). A change used to commit
-// its own engine transaction wherever the statement had none (`MATCH ...
-// SET`), and a kill mid-statement left those changes in place.
+// unit, last; a change on another shard joins the statement's transaction on
+// that shard (`t_auto_shard_txns`, SONNY-6942), and a change that still
+// commits an engine transaction of its own puts the statement's undo on disk
+// first (`statement_undo.beforeOwnEngineCommit`), so a crash before the
+// statement ends is undone at the restart (`txn_durable_undo`). A change used
+// to commit its own engine transaction wherever the statement had none
+// (`MATCH ... SET`), and a kill mid-statement left those changes in place.
 threadlocal var t_auto_statement_txn: ?*StatementTxn = null;
 threadlocal var t_auto_statement_txn_storage: StatementTxn = undefined;
+
+// CANARY: REQ=REQ-SONNY-6942-STATEMENT-SHARD-TXNS; FEATURE="TransactionManagement"; ASPECT=StatementShardTxns; STATUS=TESTED; TEST=tests/test_sonny6942_detach_delete_shards.zig; OWNER=storage; UPDATED=2026-11-23
+/// SONNY-6942: the auto-commit statement's engine transactions on the shards
+/// other than its own (`t_auto_statement_txn`'s), ShardedGraphEngine-encoded,
+/// opened at the statement's first write there (`autoStatementShardTxn`) and
+/// committed with it when it ends (`commitAutoStatementTxn`). A change on
+/// another shard committed an engine transaction of its own, a WAL fsync, and
+/// the statement's undo went to `txn_undo.wal` with a second fsync before it:
+/// `MATCH (n) DETACH DELETE n` over nodes on every shard paid two fsyncs a
+/// node. Now it pays one per shard, and one undo log write
+/// (`execution.commitAutoCommitStatement`). The statement holds its graph's
+/// write lock throughout, as it does for its own shard's transaction.
+threadlocal var t_auto_shard_txns: [gs.sharded_engine.SHARD_COUNT]?gs.TxnId = @splat(null);
+
+/// SONNY-6942: the auto-commit statement's transaction on `shard`, opened now
+/// if it has none there. Null when `s` is not the auto-commit statement's
+/// transaction (a session's, or a statement transaction an executor opened).
+fn autoStatementShardTxn(s: *const StatementTxn, shard: usize) !?gs.TxnId {
+    if (!isAutoStatementTxn(s)) return null;
+    if (shard == shardedTxnShard(s.txn_id)) return shardedTxnLocal(s.txn_id);
+    if (t_auto_shard_txns[shard]) |t| return shardedTxnLocal(t);
+    const local = try s.mg.engine.shards[shard].beginTxn();
+    t_auto_shard_txns[shard] = encodeShardedTxn(shard, local);
+    return local;
+}
+
+/// SONNY-6942: the auto-commit statement's transaction on `shard` when it
+/// has one open there, null otherwise.
+fn openAutoStatementShardTxn(s: *const StatementTxn, shard: usize) ?gs.TxnId {
+    if (!isAutoStatementTxn(s)) return null;
+    const t = t_auto_shard_txns[shard] orelse return null;
+    return shardedTxnLocal(t);
+}
+
+/// SONNY-6942: has the auto-commit statement a transaction open on a shard
+/// besides its own? Its changes then commit in several engine transactions,
+/// so its undo goes to disk before the first of them
+/// (`statement_undo.flushBeforeStatementCommit`).
+pub fn autoStatementSpansShards() bool {
+    if (t_auto_statement_txn == null) return false;
+    for (t_auto_shard_txns) |t| if (t != null) return true;
+    return false;
+}
+
+/// SONNY-6942: commit the auto-commit statement's transactions on the other
+/// shards, now, before a write that opens an engine transaction of its own
+/// on any shard (which graph-storage would refuse, `WriteConflict`, on a page
+/// one of them wrote). The statement's undo goes to disk first.
+fn settleAutoShardTxns() !void {
+    if (!autoStatementSpansShards()) return;
+    try statement_undo.beforeOwnEngineCommit();
+    try commitAutoShardTxns(t_auto_statement_txn.?.mg);
+}
+
+/// SONNY-6942: commit every transaction of `t_auto_shard_txns` (each one
+/// that fails is aborted and quarantines the graph, `commitMirroredTxn`);
+/// none is left open. Returns the first failure.
+fn commitAutoShardTxns(mg: *ManagedGraph) !void {
+    var first: ?anyerror = null;
+    for (&t_auto_shard_txns) |*slot| {
+        const t = slot.* orelse continue;
+        slot.* = null;
+        commitMirroredTxn(mg, t, "auto-commit statement shard") catch |err| {
+            if (first == null) first = err;
+        };
+    }
+    if (first) |err| return err;
+}
 
 /// SONNY-6658: is this thread's statement an auto-commit one whose engine
 /// transaction is committed at its end? Not with a session engine transaction
@@ -4080,12 +4149,15 @@ fn isAutoStatementTxn(txn: *const StatementTxn) bool {
 /// there is one: at the statement's end, after its undo is on disk when it
 /// went durable, or after a failed statement's undo replayed (its
 /// compensations joined it). A commit that fails aborts it and quarantines
-/// the graph (`commitMirroredTxn`).
+/// the graph (`commitMirroredTxn`). SONNY-6942: its transactions on the other
+/// shards commit first, and all of them are ended even when one fails.
 pub fn commitAutoStatementTxn() !void {
     const txn = t_auto_statement_txn orelse return;
+    const shards_result = commitAutoShardTxns(txn.mg);
     t_auto_statement_txn = null;
     if (t_current_statement_txn == txn) t_current_statement_txn = null;
     try commitMirroredTxn(txn.mg, txn.txn_id, "auto-commit statement");
+    try shards_result;
 }
 
 /// SONNY-6658: the end of a request with an auto-commit statement's engine
@@ -6486,9 +6558,13 @@ pub const StorageAdapter = struct {
         // SONNY-6659: the transaction first, then the slot from it
         // (`allocNodeTxn`, a node page of its own while another transaction
         // is open on the shard; see `createNode`).
+        // SONNY-6942: on another shard, the auto-commit statement's there when
+        // it has one open (a node its failed DELETE takes back is restored
+        // on the shard whose open transaction deleted it). None is opened
+        // for the insert: it commits on its own, as it did.
         const stmt_txn = currentStatementTxnForGraph(graph_name);
         const stmt_local: ?gs.TxnId = if (stmt_txn) |s|
-            (if (shardedTxnShard(s.txn_id) == idx) shardedTxnLocal(s.txn_id) else null)
+            (if (shardedTxnShard(s.txn_id) == idx) shardedTxnLocal(s.txn_id) else openAutoStatementShardTxn(s, idx))
         else
             null;
         const local_txn: gs.TxnId = stmt_local orelse try node_shard.beginTxn();
@@ -8242,6 +8318,9 @@ pub const StorageAdapter = struct {
         // the per-node auto-commit path.  Shards with no nodes in this batch
         // are skipped.
         const shard_count = gs.sharded_engine.SHARD_COUNT;
+        // SONNY-6942: the batch opens transactions of its own on the other
+        // shards; the auto-commit statement's there commit first.
+        try settleAutoShardTxns();
         var shard_txns: [shard_count]?gs.TxnId = [_]?gs.TxnId{null} ** shard_count;
         // CANARY: REQ=REQ-SONNY-6659-SINGLE-WRITER; FEATURE="TransactionManagement"; ASPECT=NodeBatchJoins; STATUS=TESTED; TEST=tests/test_sonny6659_geode_single_writer.zig; OWNER=storage; UPDATED=2026-11-16
         // SONNY-6659: on the shard of the statement's or session's engine
@@ -14477,13 +14556,17 @@ pub const StorageAdapter = struct {
 
     /// SONNY-6658: the engine transaction a write on node slot `slot` (a
     /// relationship's: its source's) of `graph_name` joins: the statement's or
-    /// the session's when it is on the slot's shard, or an auto-commit
-    /// statement's opened now (`openAutoStatementTxn`). Null: the write
-    /// commits an engine transaction of its own, and the statement's undo is
-    /// on disk first (`statement_undo.beforeOwnEngineCommit`).
+    /// the session's when it is on the slot's shard, an auto-commit
+    /// statement's on the slot's shard (SONNY-6942, `autoStatementShardTxn`),
+    /// or an auto-commit statement's opened now (`openAutoStatementTxn`).
+    /// Null: the write commits an engine transaction of its own, and the
+    /// statement's undo is on disk first
+    /// (`statement_undo.beforeOwnEngineCommit`).
     fn statementLocalTxn(self: *StorageAdapter, graph_name: []const u8, slot: u64) !?gs.TxnId {
         if (currentStatementTxnForGraph(graph_name)) |s| {
             if (shardLocalTxnForNode(s.txn_id, slot)) |local| return local;
+            // SONNY-6942: the auto-commit statement's on the slot's shard.
+            if (try autoStatementShardTxn(s, gs.shard_count.shardOfNode(slot))) |local| return local;
         } else if (try self.openAutoStatementTxn(graph_name, gs.shard_count.shardOfNode(slot))) |s| {
             return shardLocalTxnForNode(s.txn_id, slot);
         }

@@ -405,9 +405,11 @@ pub fn beforeOwnEngineCommit() DurableError!void {
 
 /// The open auto-commit statement of this thread succeeded: when it went
 /// durable, what is not on disk yet is written, before its engine
-/// transaction commits. Its workers have joined.
-pub fn flushBeforeStatementCommit() DurableError!void {
-    if (t_own.durable_id == 0) return;
+/// transaction commits. Its workers have joined. SONNY-6942: when its
+/// changes commit in engine transactions on several shards (`spans_shards`)
+/// it goes durable here, with one write for all of them.
+pub fn flushBeforeStatementCommit(spans_shards: bool) DurableError!void {
+    if (t_own.durable_id == 0 and !spans_shards) return;
     t_own.lock();
     defer t_own.unlock();
     try flushLocked(&t_own);
