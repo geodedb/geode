@@ -820,8 +820,13 @@
             // fix/sonny-6700-scrub-var-slab-orphans).
             // 2026-11-18: v0.4.30 (ccd73b5, SONNY-6630) — re-released on otel
             // v0.1.30 / thread-pool v0.2.11 (one dependency tree).
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.30#ccd73b5118c266b0f4cb08afae4e4a81a2144545",
-            .hash = "graph_storage-0.4.30-9UyJS9AOOAAWdZCcHhGeN5jLrUYwnZeT0XxuNCc19SsG",
+            // 2026-11-22: v0.4.31 (4771f9a, SONNY-6938) — the free-space
+            // bitmap is safe for lock-free readers while a writer grows it
+            // (DynamicBitSet.resize freed the word array under readers, so
+            // getNode reported a live node missing). Same dependencies as
+            // v0.4.30.
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git?ref=v0.4.31#4771f9a0872d6571fc972e202c81d90358178c1e",
+            .hash = "graph_storage-0.4.31-9UyJS-IvOAAN90kxJVtSWE4bihGHOpnMT5ZQ7kEyN3Ms",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
