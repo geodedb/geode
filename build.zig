@@ -796,6 +796,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     .{ .name = "test-cli-file-chunked", .reason = "subprocess e2e (geode serve + geode query --file on real ports); promotion owes a green run" },
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
+    .{ .name = "test-sonny6941-explain-index-seek", .reason = "intentionally red TDD reproduction (SONNY-6941, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
@@ -13385,6 +13386,20 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_sonny6276_tests.step, 1, test_shard_loads, test_shard_index);
     const sonny6276_step = b.step("test-sonny6276-explain-access-path", "Run SONNY-6276 regression (EXPLAIN says IndexSeek exactly where PROFILE reports the executor seeked a catalog btree/hash index: not for a fulltext index, an index on another label or property, an equality under an AND, a dropped index, or the tenant-bound legacy executor; no U:HeuristicIndexSelection flag for a plain equality; gRPC in process)");
     sonny6276_step.dependOn(&run_sonny6276_tests.step);
+
+    // SONNY-6941: EXPLAIN of a parameterised equality on a btree-indexed key plans an index seek (tenant-bound and unscoped sessions). See tests/test_sonny6941_explain_index_seek.zig.
+    const sonny6941_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6941_explain_index_seek.zig"), .target = target, .optimize = optimize });
+    sonny6941_test_mod.link_libc = true;
+    sonny6941_test_mod.addImport("geode", root_mod);
+    sonny6941_test_mod.addImport("schema", schema_mod);
+    sonny6941_test_mod.addImport("protobuf", protobuf_mod);
+    sonny6941_test_mod.addImport("grpc_impl", sonny1560_shim_mod);
+    sonny6941_test_mod.addImport("logging", logging_mod);
+    const sonny6941_tests = b.addTest(.{ .root_module = sonny6941_test_mod });
+    const run_sonny6941_tests = b.addRunArtifact(sonny6941_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6941_tests.step);
+    const sonny6941_step = b.step("test-sonny6941-explain-index-seek", "Run SONNY-6941 regression (EXPLAIN of a parameterised equality on a btree-indexed key plans an IndexSeek and no Expand for a relationship-free pattern; the unindexed control scans; PROFILE agrees; tenant-bound and unscoped sessions; gRPC in process)");
+    sonny6941_step.dependOn(&run_sonny6941_tests.step);
 
     // SONNY-3181, SONNY-3189: an operator chain longer than the parser's cap
     // (max_expr_links) is refused with 42000; up to it, the query analysis,
