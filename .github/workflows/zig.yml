@@ -90,7 +90,7 @@ jobs:
       - name: zig build test
         env:
           SHARD_ARGS: -Dtest-shard-total=16 -Dtest-shard-index=${{ matrix.shard }}
-          JOBS_ARG: ""
+          JOBS_ARG: "-j1"
         run: |
           mkdir -p reports
           log=reports/zig-test.log
