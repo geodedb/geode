@@ -797,6 +797,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6942-detach-delete-shards", .reason = "intentionally red TDD reproduction (SONNY-6942, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -11766,6 +11767,21 @@ pub fn build(b: *std.Build) void {
     const run_sonny6658l_tests = b.addRunArtifact(sonny6658l_tests);
     shardDep(test_step, &run_sonny6658l_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6658-statement-undo-log", "Run SONNY-6658 regression (in-process, durable undo log installed: a one-shard auto-commit statement, CREATE or MATCH ... SET of one node, commits one engine transaction and writes nothing to txn_undo.wal; a multi-shard one is logged and sealed with COMMITTED, a failed one undone and sealed with ROLLED_BACK, and the log is left empty)").dependOn(&run_sonny6658l_tests.step);
+
+    // SONNY-6942: an auto-commit statement over nodes on every engine shard
+    // (MATCH ... DETACH DELETE, MATCH ... SET, a failed one) commits at most
+    // one engine transaction per shard, not one per node with an undo log
+    // fsync before each.
+    const sonny6942_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6942_detach_delete_shards.zig"), .target = target, .optimize = optimize });
+    sonny6942_test_mod.link_libc = true;
+    sonny6942_test_mod.addImport("geode", root_mod);
+    sonny6942_test_mod.addImport("logging", logging_mod);
+    sonny6942_test_mod.addImport("rls", rls_mod);
+    sonny6942_test_mod.addImport("rls_types", rls_types_mod);
+    const sonny6942_tests = b.addTest(.{ .root_module = sonny6942_test_mod });
+    const run_sonny6942_tests = b.addRunArtifact(sonny6942_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6942_tests.step);
+    b.step("test-sonny6942-detach-delete-shards", "Run SONNY-6942 red reproduction (in-process, durable undo log installed: MATCH ... DETACH DELETE and MATCH ... SET over nodes on every engine shard, and a failed one, commit at most one engine transaction per shard, not one per node with a txn_undo.wal fsync before each)").dependOn(&run_sonny6942_tests.step);
 
     // SONNY-6659: a write made while a statement or session engine
     // transaction is open on its shard joins it (graph-storage v0.4.25 refuses
