@@ -4089,6 +4089,32 @@ threadlocal var t_auto_shard_txns: [gs.sharded_engine.SHARD_COUNT]?gs.TxnId = @s
 const AutoStatement = struct {
     txn: *StatementTxn,
     shards: *[gs.sharded_engine.SHARD_COUNT]?gs.TxnId,
+    /// Writes made in `shards` since they last committed.
+    writes: *u32,
+
+    /// The transaction a write on `shard` joins. Past
+    /// `auto_shard_write_cap` writes the ones on the other shards commit
+    /// first (`settle`): an open transaction keeps every page it wrote, so a
+    /// statement over many nodes held memory in proportion to them until it
+    /// ended.
+    fn writeTxn(self: AutoStatement, shard: usize) !gs.TxnId {
+        if (shard != shardedTxnShard(self.txn.txn_id)) {
+            if (self.writes.* >= auto_shard_write_cap.load(.monotonic)) {
+                _ = auto_shard_cap_settles_total.fetchAdd(1, .monotonic);
+                try self.settle();
+            }
+            self.writes.* += 1;
+        }
+        return self.shardTxn(shard);
+    }
+
+    /// Commit the transactions on the other shards now, the statement's undo
+    /// on disk first.
+    fn settle(self: AutoStatement) !void {
+        if (!self.spansShards()) return;
+        try statement_undo.beforeOwnEngineCommit();
+        try self.commitShardTxns();
+    }
 
     /// The transaction on `shard`, opened now if there is none there.
     fn shardTxn(self: AutoStatement, shard: usize) !gs.TxnId {
@@ -4129,9 +4155,19 @@ const AutoStatement = struct {
                 if (first == null) first = err;
             };
         }
+        self.writes.* = 0;
         if (first) |err| return err;
     }
 };
+
+/// SONNY-6942: writes an auto-commit statement makes in its transactions on
+/// the other shards before they commit mid-statement (`AutoStatement.writeTxn`):
+/// a few commits per shard for a statement over many nodes, and the memory
+/// its open transactions hold stays bounded. A variable for tests.
+pub var auto_shard_write_cap: std.atomic.Value(u32) = .init(4096);
+/// SONNY-6942: times a statement reached `auto_shard_write_cap`.
+pub var auto_shard_cap_settles_total: std.atomic.Value(u64) = .init(0);
+threadlocal var t_auto_shard_writes: u32 = 0;
 
 /// SONNY-6942 fault injection for tests: when N > 0, the Nth commit from now
 /// of an auto-commit statement's transaction on another shard fails before
@@ -4153,14 +4189,14 @@ threadlocal var t_auto_published: AutoStatement = undefined;
 
 /// SONNY-6942: `t_auto_statement_txn` was just set: publish it.
 fn publishAutoStatement() void {
-    t_auto_published = .{ .txn = t_auto_statement_txn.?, .shards = &t_auto_shard_txns };
+    t_auto_published = .{ .txn = t_auto_statement_txn.?, .shards = &t_auto_shard_txns, .writes = &t_auto_shard_writes };
     statement_undo.publishEngineTxns(@ptrCast(&t_auto_published));
 }
 
 /// SONNY-6942: the auto-commit statement this thread writes for: its own, or
 /// the one of the statement it works for (`statement_undo.attach`).
 fn autoStatement() ?AutoStatement {
-    if (t_auto_statement_txn) |t| return .{ .txn = t, .shards = &t_auto_shard_txns };
+    if (t_auto_statement_txn) |t| return .{ .txn = t, .shards = &t_auto_shard_txns, .writes = &t_auto_shard_writes };
     const p = statement_undo.attachedEngineTxns() orelse return null;
     const a: *const AutoStatement = @ptrCast(@alignCast(p));
     return a.*;
@@ -4199,9 +4235,7 @@ pub fn autoStatementSpansShards() bool {
 /// one of them wrote). The statement's undo goes to disk first.
 fn settleAutoShardTxns() !void {
     const a = autoStatement() orelse return;
-    if (!a.spansShards()) return;
-    try statement_undo.beforeOwnEngineCommit();
-    try a.commitShardTxns();
+    try a.settle();
 }
 
 /// SONNY-6658: is this thread's statement an auto-commit one whose engine
@@ -4226,7 +4260,7 @@ fn isAutoStatementTxn(txn: *const StatementTxn) bool {
 /// shards commit first, and all of them are ended even when one fails.
 pub fn commitAutoStatementTxn() !void {
     const txn = t_auto_statement_txn orelse return;
-    const shards_result = (AutoStatement{ .txn = txn, .shards = &t_auto_shard_txns }).commitShardTxns();
+    const shards_result = (AutoStatement{ .txn = txn, .shards = &t_auto_shard_txns, .writes = &t_auto_shard_writes }).commitShardTxns();
     statement_undo.publishEngineTxns(null);
     t_auto_statement_txn = null;
     if (t_current_statement_txn == txn) t_current_statement_txn = null;
@@ -14642,7 +14676,7 @@ pub const StorageAdapter = struct {
         if (currentStatementTxnForGraph(graph_name) orelse attachedAutoStatementTxn(graph_name)) |s| {
             if (shardLocalTxnForNode(s.txn_id, slot)) |local| return local;
             // SONNY-6942: the auto-commit statement's on the slot's shard.
-            if (autoStatementOf(s)) |a| return try a.shardTxn(gs.shard_count.shardOfNode(slot));
+            if (autoStatementOf(s)) |a| return try a.writeTxn(gs.shard_count.shardOfNode(slot));
         } else if (try self.openAutoStatementTxn(graph_name, gs.shard_count.shardOfNode(slot))) |s| {
             return shardLocalTxnForNode(s.txn_id, slot);
         }

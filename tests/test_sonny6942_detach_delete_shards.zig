@@ -219,3 +219,50 @@ test "SONNY-6942: a shard commit that fails mid-statement: statement failed, not
     try h.expectRows(&s, &f, "MATCH (n:Fail6942) WHERE n.v IS NOT NULL RETURN count(n)", &.{"0"});
     try f.finish("SONNY-6942 failed shard commit, after the restart");
 }
+
+// An open engine transaction keeps every page it wrote until it ends, so the
+// statement's transactions on the other shards commit mid-statement every
+// `auto_shard_write_cap` writes (the undo on disk first): the memory a
+// statement over many nodes holds stays bounded, at a few commits per shard.
+test "SONNY-6942: a statement past the write cap commits its shard transactions mid-statement" {
+    h.silenceEngineLogs();
+    var s = try h.Session.init(.no_policy);
+    defer s.deinit();
+    const l = try durable.Log.open(testing.allocator, s.data_dir, null);
+    durable.install(l);
+    defer {
+        _ = durable.uninstall();
+        l.close();
+    }
+    for (0..node_count) |i| {
+        var buf: [64]u8 = undefined;
+        try s.execAs(null, try std.fmt.bufPrint(&buf, "CREATE (:Cap6942 {{i: {d}}})", .{i}));
+    }
+
+    const cap: u32 = 64;
+    const saved = gsa.auto_shard_write_cap.load(.monotonic);
+    defer gsa.auto_shard_write_cap.store(saved, .monotonic);
+    gsa.auto_shard_write_cap.store(cap, .monotonic);
+    // It commits its shard transactions once every `cap` writes on the other
+    // shards (at least once here: hundreds of writes), so at most one commit
+    // per shard for each `cap` writes, plus the end's.
+    const max_commits: u64 = (node_count / cap + 1) * shard_count;
+    for ([_][]const u8{ "MATCH (n:Cap6942) SET n.v = 1", "MATCH (n:Cap6942) WHERE n.i % 2 = 0 DETACH DELETE n" }) |q| {
+        const settles0 = gsa.auto_shard_cap_settles_total.load(.monotonic);
+        const m = try measure(&s, q);
+        const settles = gsa.auto_shard_cap_settles_total.load(.monotonic) - settles0;
+        if (settles == 0 or m.commits > max_commits) {
+            std.debug.print("{s} with a write cap of {d}: {d} mid-statement commits of its shard transactions (want at least 1), {d} engine commits (want at most {d})\n", .{ q, cap, settles, m.commits, max_commits });
+            return error.WriteCapNotApplied;
+        }
+        try testing.expectEqual(@as(u64, 0), try logBytes(l));
+        try testing.expectEqual(@as(u32, 0), l.open_txns.count());
+    }
+
+    var f: h.Failures = .{};
+    var want: [16]u8 = undefined;
+    const half = try std.fmt.bufPrint(&want, "{d}", .{node_count / 2});
+    try h.expectRows(&s, &f, "MATCH (n:Cap6942) RETURN count(n)", &.{half});
+    try h.expectRows(&s, &f, "MATCH (n:Cap6942) WHERE n.v = 1 RETURN count(n)", &.{half});
+    try f.finish("SONNY-6942 write cap");
+}
