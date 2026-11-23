@@ -139,6 +139,7 @@ const gs = @import("graph_storage");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
+const planned_read_runtime = @import("planned_read_runtime.zig");
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
 const Binding = execution.Binding;
@@ -2087,15 +2088,16 @@ pub fn propertyAggregateFastPath(
 /// SONNY-6587 item 2: the exact-property seek `pointWriteFastPath` served a
 /// statement with, for that statement's PROFILE: the label and key (borrowed
 /// from the query) and the nodes the seek returned. Per thread: the
-/// transport runs the statement and reads it on the same thread.
-pub const PointWriteSeek = struct { label: []const u8, key: []const u8, rows: u64 };
-threadlocal var point_write_seek: ?PointWriteSeek = null;
+/// transport runs the statement and reads it on the same thread. SONNY-6941:
+/// the simple-node read's seek (`planned_read_runtime.legacyStartSeek`) too.
+pub const ExactSeek = struct { label: []const u8, key: []const u8, rows: u64 };
+threadlocal var exact_seek: ?ExactSeek = null;
 
 /// The seek the last statement on this thread was served by, cleared. A
 /// transport clears it before a PROFILE'd statement runs and reads it after.
-pub fn takePointWriteSeek() ?PointWriteSeek {
-    const seek = point_write_seek;
-    point_write_seek = null;
+pub fn takeExactSeek() ?ExactSeek {
+    const seek = exact_seek;
+    exact_seek = null;
     return seek;
 }
 
@@ -2232,7 +2234,7 @@ pub fn pointWriteFastPath(
             break :blk cols;
         };
         _ = g_point_write_fastpath_total.fetchAdd(1, .monotonic);
-        point_write_seek = .{ .label = head.labels[0], .key = where_pred.key, .rows = 0 };
+        exact_seek = .{ .label = head.labels[0], .key = where_pred.key, .rows = 0 };
         return ExecutionResult{
             .columns = columns,
             .rows = try allocator.alloc([]Value, 0),
@@ -2336,7 +2338,7 @@ pub fn pointWriteFastPath(
     }
 
     _ = g_point_write_fastpath_total.fetchAdd(1, .monotonic);
-    point_write_seek = .{ .label = head.labels[0], .key = where_pred.key, .rows = 1 };
+    exact_seek = .{ .label = head.labels[0], .key = where_pred.key, .rows = 1 };
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
@@ -10514,12 +10516,30 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             defer simple_node_candidates.deinit(allocator);
             var use_label_candidates = false;
 
+            // CANARY: REQ=REQ-SONNY-6941-LEGACY-START-SEEK; FEATURE="EXPLAIN"; ASPECT=LegacyExecutorSeek; STATUS=TESTED; TEST=tests/test_sonny6941_explain_index_seek.zig; OWNER=engine; UPDATED=2026-11-23
+            // SONNY-6941: start from the exact property index, as the planned
+            // runtime does for the same pattern; a tenant-bound or RLS
+            // session's read comes here and scanned the whole label. Every
+            // candidate passes the checks below like a scanned node. The
+            // seek is recorded for PROFILE after the loop, with the nodes
+            // the session may see (the index's postings are every tenant's);
+            // EXPLAIN asks the same decision
+            // (`planned_read_runtime.legacyStartUsesIndex`).
+            const start_seek: ?planned_read_runtime.LegacyStartSeek = if (has_relationship)
+                null
+            else
+                try planned_read_runtime.legacyStartSeek(allocator, store, filter_graph, &q, param_names, param_values);
+            defer if (start_seek) |seek| allocator.free(seek.node_ids);
+            const seek_ids: ?[]const u64 = if (start_seek) |seek| seek.node_ids else null;
+            var seek_visible: u64 = 0;
+
             // GAP-0808 point-read fast path also lives here (mirrors the one
             // in planned_read_runtime.collectStartSlots) for queries routed
             // through this legacy path.
             var fastpath_hit: ?u64 = null;
             var fastpath_authoritative = false;
-            if (!has_relationship and
+            if (seek_ids == null and
+                !has_relationship and
                 match_labels.len == 1 and
                 match_props != null and
                 match_props.?.len == 1 and
@@ -10567,7 +10587,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 } else |_| {}
             }
 
-            if (fastpath_authoritative) {
+            if (seek_ids) |ids| {
+                try simple_node_candidates.appendSlice(allocator, ids);
+                use_label_candidates = true;
+            } else if (fastpath_authoritative) {
                 if (fastpath_hit) |nid| {
                     try simple_node_candidates.append(allocator, nid);
                 }
@@ -10613,6 +10636,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
                 if (!passesTenantFilter(node.*, filter_tenant)) continue;
                 if (!passesRLSFilter(&rls_row_local, node.*)) continue;
+                if (seek_ids != null) seek_visible += 1;
 
                 // Filter by labels if specified.
                 // When label-indexed candidates are used, the posting list is
@@ -10932,6 +10956,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     return err;
                 };
             }
+            if (start_seek) |seek| exact_seek = .{ .label = match_labels[0], .key = seek.key, .rows = seek_visible };
         }
 
         // For OPTIONAL MATCH, if no rows were matched, return a single row with NULL values

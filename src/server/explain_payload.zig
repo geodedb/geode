@@ -210,7 +210,10 @@ fn buildOps(allocator: std.mem.Allocator, traits: query_traits.QueryTraits) ![]c
     defer list.deinit(allocator);
 
     try list.append(allocator, .{ .kind = if (traits.has_index_seek) .IndexSeek else .Scan });
-    try list.append(allocator, .{ .kind = .Expand });
+    // SONNY-6941: a pattern with no relationship expands nothing.
+    if (traits.has_relationship) {
+        try list.append(allocator, .{ .kind = .Expand });
+    }
     if (traits.has_where_eq or traits.has_filter_eq) {
         try list.append(allocator, .{ .kind = .Filter });
     }

@@ -12,7 +12,8 @@
 //   * the legacy EXPLAIN of the QUIC and gRPC handlers (`whereHasIndexedEq`
 //     and the inline-property loop beside it, the version-1 payload a
 //     tenant-bound or RLS session gets) did the same, although the legacy
-//     executor behind it never reports a catalog index seek;
+//     executor behind it never reported a catalog index seek (SONNY-6941:
+//     it now seeks an indexed inline equality, and both report that);
 //   * every query with a WHERE or FILTER equality carried the response flag
 //     `U:HeuristicIndexSelection`, index or not.
 //
@@ -149,7 +150,7 @@ test "SONNY-6276: a planned EXPLAIN names the access path PROFILE reports" {
     try fails.finish("SONNY-6276 planned EXPLAIN");
 }
 
-test "SONNY-6276: a tenant-bound EXPLAIN (the legacy executor) claims no index seek, as its PROFILE does" {
+test "SONNY-6276: a tenant-bound EXPLAIN (the legacy executor) names the access path its PROFILE reports" {
     var f: fx.Fixture = undefined;
     try f.init();
     defer f.deinit();
@@ -162,8 +163,11 @@ test "SONNY-6276: a tenant-bound EXPLAIN (the legacy executor) claims no index s
 
     try fails.check(ga, t, "tenant, no index", eq_where, false);
     try fx.expectRuns(ga, admin, "CREATE INDEX pp_note FOR (n:PlanProbe) ON (n.note)");
+    // SONNY-6941: the legacy executor seeks an indexed inline equality (its
+    // simple-node branch starts from the exact index); a WHERE equality
+    // scans.
     try fails.check(ga, t, "tenant, btree index", eq_where, false);
-    try fails.check(ga, t, "tenant, btree index", eq_inline, false);
+    try fails.check(ga, t, "tenant, btree index", eq_inline, true);
     try fails.check(ga, t, "tenant, btree index", eq_and, false);
 
     try fails.finish("SONNY-6276 tenant EXPLAIN");

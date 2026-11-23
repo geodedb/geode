@@ -3785,6 +3785,81 @@ fn nodeCanUseIndex(allocator: std.mem.Allocator, context: ExecutionContext, node
     return name != null;
 }
 
+// CANARY: REQ=REQ-SONNY-6941-LEGACY-START-SEEK; FEATURE="EXPLAIN"; ASPECT=LegacyExecutorSeek; STATUS=TESTED; TEST=tests/test_sonny6941_explain_index_seek.zig; OWNER=engine; UPDATED=2026-11-23
+/// SONNY-6941: the node pattern of a read the legacy executor serves from its
+/// simple-node branch (`match_operations.executeMatchQueryImpl`) and can start
+/// with an exact-index seek: a storage-native shape (`buildPlanIfSupported`
+/// demotes it for a tenant-bound or RLS session) of one non-optional chain of
+/// one node with one label and an inline property map, projected with no
+/// WITH, aggregate, grouping, DISTINCT or ORDER BY (the legacy executor sends
+/// each of those to a fast path or the shared projection first). Null for any
+/// other shape.
+fn legacySeekPattern(q: *const ast.Query) ?ast.NodePattern {
+    if (!isStorageNativeQuery(q)) return null;
+    if (q.match.chains.len != 1) return null;
+    const chain = q.match.chains[0];
+    if (chain.is_optional or chain.hops.len != 0) return null;
+    const head = chain.head orelse return null;
+    if (head.labels.len != 1 or head.props == null) return null;
+    if (q.with_clause != null or q.group_by != null or q.order_by != null or q.ret.distinct) return null;
+    if (q.returnStageGroupBy() != null or q.returnStageHaving() != null) return null;
+    if (hasAggregationItems(q.ret.items)) return null;
+    return head;
+}
+
+/// SONNY-6941: whether the legacy executor starts `q` with an index seek, as
+/// its PROFILE reports it: `legacyStartSeek` seeks (the seed decision of
+/// `chooseStartSeed`) and a catalog btree or hash index covers the label and
+/// key (`equalityIndexName`). The legacy EXPLAIN asks it.
+pub fn legacyStartUsesIndex(allocator: std.mem.Allocator, context: ExecutionContext, q: *const ast.Query) bool {
+    const head = legacySeekPattern(q) orelse return false;
+    return nodeCanUseIndex(allocator, context, head, null);
+}
+
+/// SONNY-6941: the start nodes `legacyStartSeek` found, and the key it seeked.
+pub const LegacyStartSeek = struct {
+    /// Borrowed from the query.
+    key: []const u8,
+    /// Public node ids, owned by the caller.
+    node_ids: []u64,
+};
+
+/// SONNY-6941: the candidate start nodes of a `legacySeekPattern` read, from
+/// the exact property index on the key `chooseStartSeed` picks (the seed the
+/// planned runtime starts the same pattern with), instead of the label's
+/// whole posting list. A tenant-bound session's `MATCH (n:L {k: $p})` scanned
+/// every `L` node although the index named the few that can match. The
+/// candidates are a superset of the matches (the index is complete for a key
+/// `chooseStartSeed` accepts); the caller re-checks each one exactly as it
+/// checks a scanned node (graph, tenant, RLS, inline map, WHERE). Null when
+/// the shape or the key does not qualify, or the index cannot answer: the
+/// caller scans.
+pub fn legacyStartSeek(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    graph_name: []const u8,
+    q: *const ast.Query,
+    param_names: []const []const u8,
+    param_values: []const Value,
+) !?LegacyStartSeek {
+    const head = legacySeekPattern(q) orelse return null;
+    const adapter = graph_store.getGlobalAdapter() orelse return null;
+    if (!adapter.graphExists(graph_name)) return null;
+    const seed = chooseStartSeed(allocator, adapter, graph_name, head, param_names, param_values, null) orelse return null;
+    const slots = adapter.getCandidateNodesByLabelAndProperty(graph_name, head.labels[0], seed.key, seed.pv, allocator) catch return null;
+    defer allocator.free(slots);
+    var ids = try std.ArrayList(u64).initCapacity(allocator, slots.len);
+    errdefer ids.deinit(allocator);
+    for (slots) |slot_id| {
+        const id = resolveExternalNodeId(allocator, adapter, store, graph_name, slot_id) catch |err| switch (err) {
+            error.NodeNotFound => continue, // deleted since the index named it
+            else => return err,
+        };
+        ids.appendAssumeCapacity(id);
+    }
+    return .{ .key = seed.key, .node_ids = try ids.toOwnedSlice(allocator) };
+}
+
 fn resolveGraphName(context: ExecutionContext) []const u8 {
     return if (context.session_state) |session|
         session.graph orelse graph_store.DEFAULT_GRAPH_NAME

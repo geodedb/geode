@@ -7758,13 +7758,13 @@ fn handleClientMessage(
             const catalog = try execution.ensureCatalogInstance(gpa);
 
             // SONNY-6276: a legacy EXPLAIN (no plan; the version-1 payload)
-            // claims no index seek. It said IndexSeek for any catalog index on
-            // an inline property or an equality anywhere in the WHERE (a
-            // fulltext index, an AND), while the legacy executor behind it never
-            // reports one (SONNY-1335). A planned EXPLAIN asks the executor's
-            // own seek decision (planned_read_runtime.nodeCanUseIndex), and the
-            // response flag U:HeuristicIndexSelection, set for every WHERE or
-            // FILTER equality, is no longer sent.
+            // said IndexSeek for any catalog index on an inline property or an
+            // equality anywhere in the WHERE (a fulltext index, an AND). Both
+            // EXPLAINs now ask the executor's own seek decision: a planned one
+            // planned_read_runtime.nodeCanUseIndex, a legacy one
+            // legacyStartUsesIndex (SONNY-6941: the legacy executor seeks the
+            // exact index too). The response flag U:HeuristicIndexSelection,
+            // set for every WHERE or FILTER equality, is no longer sent.
             // Issue #452/#460: Consult shared optimizer for plan hints
             // CANARY: REQ=REQ-PERF-SHARED-OPT-001; FEATURE="SharedQueryOptimizer"; ASPECT=HintExtraction; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
             var plan_handle: ?query_plan_cache.SharedPlanHandle = null;
@@ -8711,6 +8711,9 @@ fn handleClientMessage(
             switch (analysis.kind) {
                 .explain => {
                     const explain_msg = blk: {
+                        // SONNY-6941: the legacy executor's start, for the
+                        // version-1 plan of a query the planned runtime declines.
+                        var legacy_traits = traits;
                         if (analysis.target) |target| {
                             if (target.* == .Query) {
                                 var planned_query = target.Query;
@@ -8719,11 +8722,12 @@ fn handleClientMessage(
                                     defer owned_plan.deinit(gpa);
                                     break :blk try explain_payload.buildExplainPayloadFromPlan(gpa, owned_plan);
                                 }
+                                legacy_traits.has_index_seek = planned_read_runtime.legacyStartUsesIndex(gpa, exec_context, &planned_query);
                             }
                         }
                         break :blk try explain_payload.buildExplainPayload(
                             gpa,
-                            traits,
+                            legacy_traits,
                             analysis.union_part_count,
                             normalized.explain_calibrated,
                         );
@@ -8838,7 +8842,7 @@ fn handleClientMessage(
 
                     // SONNY-6596: the version-1 PROFILE reports this measured time.
                     const legacy_start_ns = profile_payload.monotonicNs();
-                    _ = execution.takePointWriteSeek();
+                    _ = execution.takeExactSeek();
                     var exec_result = execution.executeStatementWithContext(gpa, target_stmt.*, exec_context) catch |err| {
                         failed_in_txn = true;
                         const info = proto_util.mapError(err);
@@ -8850,7 +8854,7 @@ fn handleClientMessage(
                     // SONNY-6587 item 2: the catalog index the point-write seek
                     // used, as the version-2 trace names one (SONNY-1335).
                     var point_seek_rows: u64 = 0;
-                    const point_seek_index: ?[]u8 = if (execution.takePointWriteSeek()) |seek| blk: {
+                    const point_seek_index: ?[]u8 = if (execution.takeExactSeek()) |seek| blk: {
                         point_seek_rows = seek.rows;
                         break :blk try planned_read_runtime.equalityIndexName(gpa, exec_context, seek.label, seek.key);
                     } else null;

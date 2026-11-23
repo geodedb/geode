@@ -1382,14 +1382,21 @@ pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, c
                 if (chain.head != null) {
                     // SONNY-6276: this plan is built only when the planned
                     // runtime declines the query (above), so the legacy
-                    // executor runs it, and it scans: it never reports a
-                    // catalog index seek (SONNY-1335). It said IndexSeek for
-                    // any catalog index on the first inline property or an
-                    // indexed equality anywhere in the WHERE.
-                    // NodeScan base cost: 100 per node
-                    const node_cost: i64 = 100;
-                    total_cost += node_cost;
-                    try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "NodeScan (cost: {})", .{node_cost}), .cost = node_cost });
+                    // executor runs it. It said IndexSeek for any catalog
+                    // index on the first inline property or an indexed
+                    // equality anywhere in the WHERE. SONNY-6941: it seeks
+                    // where the legacy executor does (`legacyStartUsesIndex`,
+                    // what its PROFILE reports), and scans otherwise.
+                    if (planned_read_runtime.legacyStartUsesIndex(allocator, context, &q)) {
+                        const index_cost: i64 = 10;
+                        total_cost += index_cost;
+                        try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "IndexSeek (cost: {})", .{index_cost}), .cost = index_cost });
+                    } else {
+                        // NodeScan base cost: 100 per node
+                        const node_cost: i64 = 100;
+                        total_cost += node_cost;
+                        try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "NodeScan (cost: {})", .{node_cost}), .cost = node_cost });
+                    }
                 }
                 if (chain.hops.len > 0) {
                     // ExpandRelationships cost: 50 per hop

@@ -17,7 +17,12 @@ pub const QueryTraits = struct {
     offset: ?usize = null,
     has_where_eq: bool = false,
     has_filter_eq: bool = false,
+    /// SONNY-6941: the legacy executor starts the pattern with an index seek
+    /// (`planned_read_runtime.legacyStartUsesIndex`); set by the transport,
+    /// which has the session.
     has_index_seek: bool = false,
+    /// SONNY-6941: a MATCH pattern has a relationship to expand.
+    has_relationship: bool = false,
 };
 
 pub const ProgramAnalysis = struct {
@@ -353,6 +358,14 @@ fn preambleGraphSelectorName(stmt: *const ast.Statement) ?[]const u8 {
     return s;
 }
 
+/// SONNY-6941: whether any chain of the query's MATCH has a relationship.
+fn matchHasRelationship(q: *const ast.Query) bool {
+    for (q.match.chains) |chain| {
+        if (chain.hops.len > 0) return true;
+    }
+    return false;
+}
+
 fn analyzeStatement(stmt: *const ast.Statement, analysis: *ProgramAnalysis) void {
     switch (stmt.*) {
         .Query => |q| {
@@ -363,6 +376,7 @@ fn analyzeStatement(stmt: *const ast.Statement, analysis: *ProgramAnalysis) void
             analysis.traits.distinct = q.ret.distinct;
             analysis.traits.has_where_eq = hasEqExpr(q.where_clause);
             analysis.traits.has_filter_eq = hasEqExpr(q.filter_clause);
+            analysis.traits.has_relationship = matchHasRelationship(&q);
             analysis.traits.has_union = false;
             analysis.union_part_count = 1;
             analysis.is_store_free = isStoreFreeQuery(&q);
@@ -374,6 +388,10 @@ fn analyzeStatement(stmt: *const ast.Statement, analysis: *ProgramAnalysis) void
             analysis.traits.limit = if (u.limit) |l| @as(?usize, @intCast(l)) else null;
             analysis.traits.offset = if (u.offset) |o| @as(?usize, @intCast(o)) else null;
             analysis.union_part_count = u.tails.len + 1;
+            analysis.traits.has_relationship = matchHasRelationship(&u.first);
+            for (u.tails) |part| {
+                if (matchHasRelationship(&part.query)) analysis.traits.has_relationship = true;
+            }
             analysis.traits.distinct = false;
             var mode: UnionMode = .all;
             var saw_intersect = false;

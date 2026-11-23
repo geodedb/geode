@@ -171,6 +171,22 @@ fn keysFor(ga: std.mem.Allocator, session: []const u8, p: []const u8) ![]const [
     return keys.items;
 }
 
+/// The rows of the index operator `PROFILE indexed` reports with `$p` bound
+/// to `p`.
+fn seekRows(ga: std.mem.Allocator, session: []const u8, p: []const u8) !u64 {
+    const q = "PROFILE " ++ indexed;
+    const resp = try executeWith(ga, session, q, p, null);
+    try expectOk(resp, q);
+    const prof = switch (resp.payload.?) {
+        .profile => |pp| pp,
+        else => return error.ExpectedProfile,
+    };
+    for (prof.ops.items) |op| {
+        if (op.index_name.len > 0) return @intCast(op.rows);
+    }
+    return error.NoIndexOperator;
+}
+
 test "SONNY-6941: the tenant-bound seek returns the tenant's own node and no other tenant's" {
     var f: fx.Fixture = undefined;
     try f.init();
@@ -188,6 +204,9 @@ test "SONNY-6941: the tenant-bound seek returns the tenant's own node and no oth
     try testing.expectEqualStrings("a", own[0]);
     try testing.expectEqual(@as(usize, 0), (try keysFor(ga, b, "a")).len);
     try testing.expectEqual(@as(usize, 0), (try keysFor(ga, a, "zz")).len);
+    // Nor does tenant_b's PROFILE count tenant_a's node among the seek's rows.
+    try testing.expectEqual(@as(u64, 1), try seekRows(ga, a, "a"));
+    try testing.expectEqual(@as(u64, 0), try seekRows(ga, b, "a"));
 
     // tenant_b MERGEs its own 'a': each tenant sees exactly its own.
     const q = "MERGE (n:PlanProbe {k: $p}) ON CREATE SET n.note = $n";
