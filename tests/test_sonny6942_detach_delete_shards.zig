@@ -26,6 +26,8 @@ const h = @import("rls_session_harness.zig");
 
 const graph_store = geode.graph_store;
 const durable = geode.txn_durable_undo;
+const execution = geode.execution;
+const gsa = geode.graph_storage_adapter;
 const shard_count = geode.sharded_store.SHARD_COUNT;
 
 /// Nodes the statements change: many per shard, so a per-node commit and a
@@ -139,4 +141,81 @@ test "SONNY-6942: a statement over every shard commits once per shard, not once 
     try h.expectRows(&s, &f, "MATCH (n:Keep6942) WHERE n.w IS NOT NULL RETURN count(n)", &.{"0"});
     try h.expectRows(&s, &f, "MATCH (n:After6942) WHERE n.v = 2 RETURN count(n)", &.{after});
     try f.finish("SONNY-6942 statement contents");
+}
+
+// A commit of one of the statement's shard transactions fails in the middle
+// of the statement's end (`AutoStatement.commitShardTxns`; injected before
+// the engine commit as a failed WAL append or fsync would,
+// `auto_shard_commit_fault_countdown`, and then aborted in the engine). The
+// statement fails, every engine transaction is ended, the graph is
+// quarantined (its in-memory copy and the engine disagree until it is
+// reopened), and after the restart (store reopened, durable undo log
+// recovered) nothing the other shards committed is left.
+test "SONNY-6942: a shard commit that fails mid-statement: statement failed, nothing left open, graph quarantined, undone at restart" {
+    h.silenceEngineLogs();
+    var s = try h.Session.init(.no_policy);
+    defer s.deinit();
+    var l = try durable.Log.open(testing.allocator, s.data_dir, null);
+    durable.install(l);
+    var installed = true;
+    defer if (installed) {
+        _ = durable.uninstall();
+        l.close();
+    };
+    for (0..node_count) |i| {
+        var buf: [64]u8 = undefined;
+        try s.execAs(null, try std.fmt.bufPrint(&buf, "CREATE (:Fail6942 {{i: {d}}})", .{i}));
+    }
+
+    // The third shard commit fails: two have committed, the rest commit
+    // after it.
+    defer gsa.auto_shard_commit_fault_countdown.store(0, .monotonic);
+    gsa.auto_shard_commit_fault_countdown.store(3, .monotonic);
+    if (s.execAs(null, "MATCH (n:Fail6942) SET n.v = 1")) |_| {
+        return error.ExpectedCommitFailure;
+    } else |err| {
+        if (err != error.StatementCommitFailed) {
+            std.debug.print("the statement failed with {s} (want StatementCommitFailed)\n", .{@errorName(err)});
+            return err;
+        }
+    }
+    try testing.expectEqual(@as(u32, 0), gsa.auto_shard_commit_fault_countdown.load(.monotonic));
+
+    const adapter = graph_store.getGlobalAdapter() orelse return error.NoAdapter;
+    const mg = try adapter.lookupManagedGraph(graph_store.DEFAULT_GRAPH_NAME);
+    for (mg.engine.shards, 0..) |shard, i| {
+        if (shard.txn_manager.activeCount() != 0) {
+            std.debug.print("shard {d}: {d} engine transactions left open\n", .{ i, shard.txn_manager.activeCount() });
+            return error.TxnLeaked;
+        }
+    }
+    try testing.expectEqual(@intFromEnum(gsa.Quarantine.commit_failed), mg.quarantine.load(.acquire));
+
+    // Restart: the store reopened at its committed state, then the durable
+    // undo log recovered, as `geode serve` starts.
+    _ = durable.uninstall();
+    l.close();
+    installed = false;
+    execution.cleanupCatalogInstance();
+    geode.index_manager.cleanupGlobalIndexManager();
+    graph_store.deinitGlobalStore();
+    const store = graph_store.getGlobalStore(testing.allocator);
+    s.ctx.catalog = try execution.ensureCatalogInstance(testing.allocator);
+    l = try durable.Log.open(testing.allocator, s.data_dir, null);
+    durable.install(l);
+    installed = true;
+    const report = try durable.recoverAtStartup(l, store);
+    // The failed statement's undo replayed before it answered (a
+    // `commit_failed` quarantine lets the statement's own undo through) and
+    // sealed it ROLLED_BACK, so recovery finds nothing left to undo; what
+    // the other shards committed is undone either way.
+    try testing.expectEqual(@as(usize, 0), report.failed_entries);
+    try testing.expectEqual(@as(u64, 0), try logBytes(l));
+
+    var f: h.Failures = .{};
+    var want: [16]u8 = undefined;
+    const all = try std.fmt.bufPrint(&want, "{d}", .{node_count});
+    try h.expectRows(&s, &f, "MATCH (n:Fail6942) RETURN count(n)", &.{all});
+    try h.expectRows(&s, &f, "MATCH (n:Fail6942) WHERE n.v IS NOT NULL RETURN count(n)", &.{"0"});
+    try f.finish("SONNY-6942 failed shard commit, after the restart");
 }

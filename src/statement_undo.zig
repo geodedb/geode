@@ -113,6 +113,11 @@ pub const Record = struct {
     /// SONNY-2822: the changes recorded so far, for the statement's update
     /// counts once it succeeds (`finishSucceeded`).
     counts: update_counts.UpdateCounts = .{},
+    /// SONNY-6942: the auto-commit statement's engine transactions
+    /// (`graph_storage_adapter`'s, opaque here), published by the thread that
+    /// owns them so a thread working for the statement (`attach`) writes in
+    /// them rather than beside them. Null when it has none.
+    engine_txns: ?*anyopaque = null,
 
     fn lock(self: *Record) void {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
@@ -597,6 +602,25 @@ fn discardAll() void {
     t_own.durable_id = 0;
     t_own.logged = 0;
     t_own.counts = .{}; // SONNY-2822
+    t_own.engine_txns = null; // SONNY-6942
+}
+
+/// SONNY-6942: publish (or, null, withdraw) the engine transactions of the
+/// auto-commit statement open on this thread (`Record.engine_txns`).
+pub fn publishEngineTxns(p: ?*anyopaque) void {
+    t_own.lock();
+    defer t_own.unlock();
+    t_own.engine_txns = p;
+}
+
+/// SONNY-6942: the engine transactions of the statement this thread works
+/// for (`attach`), published by its own thread; null on that thread itself.
+pub fn attachedEngineTxns() ?*anyopaque {
+    const rec = t_record orelse return null;
+    if (rec == &t_own) return null;
+    rec.lock();
+    defer rec.unlock();
+    return rec.engine_txns;
 }
 
 /// Entries the open record holds (tests).
