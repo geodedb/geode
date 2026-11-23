@@ -22,6 +22,7 @@ const pattern_helpers = @import("pattern_helpers.zig");
 // through the tenant-aware path. The common single-tenant case (null/"default"
 // scope) keeps the fast path with zero overhead.
 const tenancy = @import("tenancy.zig");
+const tenant_visibility = @import("tenant_visibility.zig");
 const catalog_mod = @import("../schema/catalog.zig");
 // GAP-ENT-0044/0045 (T5): read-executor budget + cancel. Polled at every
 // row-materialization boundary (right before g_path_rows_materialized ticks),
@@ -3719,8 +3720,12 @@ fn estimateScanRows(allocator: std.mem.Allocator, graph_name: []const u8, patter
 /// graph-scoped): the index SHOW INDEXES lists for the label and property in
 /// that graph, an engine-wide legacy row included, never another graph's.
 pub fn equalityIndexName(allocator: std.mem.Allocator, context: ExecutionContext, label: []const u8, prop: []const u8) !?[]u8 {
-    const cat = context.catalog;
-    const graph_name = resolveGraphName(context);
+    return equalityIndexNameIn(allocator, context.catalog, resolveGraphName(context), label, prop);
+}
+
+/// `equalityIndexName` for `graph_name` in `cat` (SONNY-6941: the legacy
+/// executor has the graph and the catalog, not an `ExecutionContext`).
+fn equalityIndexNameIn(allocator: std.mem.Allocator, cat: *catalog_mod.Catalog, graph_name: []const u8, label: []const u8, prop: []const u8) !?[]u8 {
     cat.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer cat.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
     var best: ?[]const u8 = null;
@@ -3808,9 +3813,9 @@ fn legacySeekPattern(q: *const ast.Query) ?ast.NodePattern {
 }
 
 /// SONNY-6941: whether the legacy executor starts `q` with an index seek, as
-/// its PROFILE reports it: `legacyStartSeek` seeks (the seed decision of
-/// `chooseStartSeed`) and a catalog btree or hash index covers the label and
-/// key (`equalityIndexName`). The legacy EXPLAIN asks it.
+/// its PROFILE reports it: the decision `legacyStartSeek` takes
+/// (`chooseStartSeed`'s seed, on a key a catalog btree or hash index covers:
+/// `nodeCanUseIndex`). The legacy EXPLAIN asks it.
 pub fn legacyStartUsesIndex(allocator: std.mem.Allocator, context: ExecutionContext, q: *const ast.Query) bool {
     const head = legacySeekPattern(q) orelse return false;
     return nodeCanUseIndex(allocator, context, head, null);
@@ -3828,29 +3833,57 @@ pub const LegacyStartSeek = struct {
 /// the exact property index on the key `chooseStartSeed` picks (the seed the
 /// planned runtime starts the same pattern with), instead of the label's
 /// whole posting list. A tenant-bound session's `MATCH (n:L {k: $p})` scanned
-/// every `L` node although the index named the few that can match. The
-/// candidates are a superset of the matches (the index is complete for a key
-/// `chooseStartSeed` accepts); the caller re-checks each one exactly as it
-/// checks a scanned node (graph, tenant, RLS, inline map, WHERE). Null when
-/// the shape or the key does not qualify, or the index cannot answer: the
-/// caller scans.
+/// every `L` node although the index named the few that can match.
+///
+/// It seeks only on a key a catalog btree or hash index covers, so PROFILE
+/// and EXPLAIN (`legacyStartUsesIndex`) name every seek it takes (SONNY-6276:
+/// EXPLAIN describes the access path the executor takes); without one the
+/// caller scans, as before.
+///
+/// It reads the graph through the same gate as the scan
+/// (`GraphStore.getNodesByLabels`): `ensureGraphHydrated` builds a graph
+/// deferred at open before its ids are resolved, and notes a quarantined one
+/// for the executor, which fails the statement.
+///
+/// A posting of a node the session's tenant may not see (`filter_tenant`,
+/// hierarchy-aware) is dropped on its engine tenant tag, before its id is
+/// resolved or its node read, as the scan's posting list is tenant-filtered
+/// before the loop reads a node: another tenant's postings cost one tag read
+/// each, and nothing of theirs can fail this read. The caller re-checks every
+/// candidate as it checks a scanned node (graph, tenant, RLS, inline map,
+/// WHERE); an RLS-denied candidate is read before RLS drops it, as on the scan.
+///
+/// Null when the shape or the key does not qualify, or the index cannot
+/// answer now (busy building, over an FLE-encrypted field, the graph gone):
+/// the caller scans. Cancellation, a spent read budget and any other read
+/// error fail the read.
 pub fn legacyStartSeek(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
     graph_name: []const u8,
+    filter_tenant: ?[]const u8,
     q: *const ast.Query,
     param_names: []const []const u8,
     param_values: []const Value,
 ) !?LegacyStartSeek {
     const head = legacySeekPattern(q) orelse return null;
     const adapter = graph_store.getGlobalAdapter() orelse return null;
+    const cat = execution.getCatalogInstanceIfPresent() orelse return null;
+    store.ensureGraphHydrated(graph_name);
     if (!adapter.graphExists(graph_name)) return null;
     const seed = chooseStartSeed(allocator, adapter, graph_name, head, param_names, param_values, null) orelse return null;
-    const slots = adapter.getCandidateNodesByLabelAndProperty(graph_name, head.labels[0], seed.key, seed.pv, allocator) catch return null;
+    const index_name = (try equalityIndexNameIn(allocator, cat, graph_name, head.labels[0], seed.key)) orelse return null;
+    allocator.free(index_name);
+    const slots = adapter.getCandidateNodesByLabelAndProperty(graph_name, head.labels[0], seed.key, seed.pv, allocator) catch |err| switch (err) {
+        error.ExactIndexBusy, error.IndexOverEncryptedField, error.GraphNotFound => return null,
+        else => return err,
+    };
     defer allocator.free(slots);
     var ids = try std.ArrayList(u64).initCapacity(allocator, slots.len);
     errdefer ids.deinit(allocator);
     for (slots) |slot_id| {
+        try read_budget.check();
+        if (filter_tenant != null and !try slotVisibleToTenant(allocator, adapter, graph_name, slot_id, filter_tenant)) continue;
         const id = resolveExternalNodeId(allocator, adapter, store, graph_name, slot_id) catch |err| switch (err) {
             error.NodeNotFound => continue, // deleted since the index named it
             else => return err,
@@ -3858,6 +3891,29 @@ pub fn legacyStartSeek(
         ids.appendAssumeCapacity(id);
     }
     return .{ .key = seed.key, .node_ids = try ids.toOwnedSlice(allocator) };
+}
+
+/// SONNY-6941: whether the session's tenant scope may see the node at
+/// `slot_id`, on its engine tenant tag (a node with none is the default
+/// tenant's, as `GraphStore.nodeExistsPassingTenantExact` reads it). False
+/// for a node deleted since the index named it.
+fn slotVisibleToTenant(
+    allocator: std.mem.Allocator,
+    adapter: *graph_storage_adapter.StorageAdapter,
+    graph_name: []const u8,
+    slot_id: u64,
+    filter_tenant: ?[]const u8,
+) !bool {
+    const tag = adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_TENANT_ID_PROPERTY_KEY, allocator) catch |err| switch (err) {
+        error.NodeNotFound, error.GraphNotFound => return false,
+        else => return err,
+    };
+    defer if (tag) |t| freeStoragePropertyValue(allocator, t);
+    const node_tenant: []const u8 = if (tag) |t| switch (t) {
+        .string => |text| text,
+        else => graph_store.DEFAULT_TENANT_ID,
+    } else graph_store.DEFAULT_TENANT_ID;
+    return tenant_visibility.passesTenantFilterSlice(node_tenant, filter_tenant);
 }
 
 fn resolveGraphName(context: ExecutionContext) []const u8 {

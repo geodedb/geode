@@ -10517,10 +10517,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             var use_label_candidates = false;
 
             // CANARY: REQ=REQ-SONNY-6941-LEGACY-START-SEEK; FEATURE="EXPLAIN"; ASPECT=LegacyExecutorSeek; STATUS=TESTED; TEST=tests/test_sonny6941_explain_index_seek.zig; OWNER=engine; UPDATED=2026-11-23
-            // SONNY-6941: start from the exact property index, as the planned
-            // runtime does for the same pattern; a tenant-bound or RLS
-            // session's read comes here and scanned the whole label. Every
-            // candidate passes the checks below like a scanned node. The
+            // SONNY-6941: start from the exact property index on a key a
+            // catalog btree or hash index covers, as the planned runtime does
+            // for the same pattern; a tenant-bound or RLS session's read comes
+            // here and scanned the whole label. The seek drops another
+            // tenant's postings before reading them; every candidate passes
+            // the checks below like a scanned node. The
             // seek is recorded for PROFILE after the loop, with the nodes
             // the session may see (the index's postings are every tenant's);
             // EXPLAIN asks the same decision
@@ -10528,7 +10530,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             const start_seek: ?planned_read_runtime.LegacyStartSeek = if (has_relationship)
                 null
             else
-                try planned_read_runtime.legacyStartSeek(allocator, store, filter_graph, &q, param_names, param_values);
+                try planned_read_runtime.legacyStartSeek(allocator, store, filter_graph, filter_tenant, &q, param_names, param_values);
             defer if (start_seek) |seek| allocator.free(seek.node_ids);
             const seek_ids: ?[]const u64 = if (start_seek) |seek| seek.node_ids else null;
             var seek_visible: u64 = 0;
