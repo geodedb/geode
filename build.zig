@@ -734,6 +734,7 @@ fn checkNamedTestStepsInAggregate(b: *std.Build) void {
 const NotInAggregate = struct { name: []const u8, reason: []const u8 };
 const not_in_aggregate_steps = [_]NotInAggregate{
     // Aggregators of other named steps.
+    .{ .name = "test-sonny6956-startup-wait-floor", .reason = "intentionally red TDD reproduction (SONNY-6956): waitForServerReady gives up on a live server after the 10 s its caller asked for; registered in shardDep by the fix" },
     .{ .name = "test-all", .reason = "aggregator: the aggregate test step plus test-e2e (Makefile test-all)" },
     .{ .name = "test-e2e", .reason = "aggregator: the end-to-end lane (spawned QUIC servers, fuzz targets, benchmarks; Makefile test-e2e)" },
     .{ .name = "test-perf", .reason = "aggregator: perf harness and timing tests; host-load sensitive" },
@@ -13067,6 +13068,20 @@ pub fn build(b: *std.Build) void {
     const run_sonny6956_tests = b.addRunArtifact(sonny6956_tests);
     shardDep(test_step, &run_sonny6956_tests.step, 1, test_shard_loads, test_shard_index);
     b.step("test-sonny6956-restore-sync-scope", "Run SONNY-6956 regression (a durable restore of a 200-file archive syncs each file and directory it wrote, and the parent of its directory, once each, on several threads, and nothing else: no filesystem-wide syncfs waiting for other writers)").dependOn(&run_sonny6956_tests.step);
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6956_startup_wait_floor.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("geode_mcp", mcp_cli_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        b.step("test-sonny6956-startup-wait-floor", "Run SONNY-6956 regression (waitForServerReady waits for a live server stopped for 12 s although its caller asked for 10 s: a server gets at least SPAWN_STARTUP_TIMEOUT_MS to start)").dependOn(&run_tests.step);
+    }
 
     const sonny6300_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6300_staged_restore_paths.zig"), .target = target, .optimize = optimize });
     sonny6300_test_mod.link_libc = true;
