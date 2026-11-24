@@ -27,9 +27,13 @@ on:
     branches: ['**']
     tags: ['**']
   schedule:
-    # The GitLab kcov coverage schedule's slot (Sunday 03:17 UTC). Runs the
-    # schedule-only lanes: enforced perf gates, and the coverage lane when
-    # the repository variable GEODE_COVERAGE_LANE is "1".
+    # The slot of GitLab's only schedule (4491545, Sunday 03:17 UTC), which
+    # is INACTIVE. A scheduled run therefore runs nothing by default; it runs
+    # only the schedule-only lanes switched on by repository variables:
+    # GEODE_PERF_GATES_LANE=1 (enforced perf gates) and GEODE_COVERAGE_LANE=1
+    # (kcov coverage, the GitLab schedule's own variable). Both are unset.
+    # The default-branch suite is not repeated on a schedule: every push to
+    # main already runs it.
   - cron: 17 3 * * 0
   workflow_dispatch:
     inputs:
@@ -95,6 +99,7 @@ jobs:
   # ---------------------------------------------------------------------------
   zig-format:
     # ci-catalog zig-format component: every pipeline.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -120,6 +125,7 @@ jobs:
 
   hook-env-regression:
     # SONNY-4778. GitLab: python:3.15-slim-bookworm, every pipeline.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     container: python:3.15-slim-bookworm@sha256:96599df822d0e1c6bb700014a05c7f3c8cabc6e0f7ff3c4f9f69cee033b4b5d9
     timeout-minutes: 15
@@ -135,6 +141,7 @@ jobs:
   # after an earlier one failed; allow_failure jobs are continue-on-error.
   # ---------------------------------------------------------------------------
   governance:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     container: python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
     timeout-minutes: 30
@@ -260,7 +267,7 @@ jobs:
   governance-zig:
     # governance-conformance-sync (Zig) and governance-canaryscan-verify (Go,
     # golang:1.27.3-alpine as on GitLab). GitLab: MR and default branch.
-    if: github.ref_type == 'branch'
+    if: github.event_name != 'schedule' && (github.ref_type == 'branch')
     needs: [deps-linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -303,7 +310,7 @@ jobs:
         jq -c 'del(.. | arrays? | select(length > 20))' /tmp/conformance_report.json 2>/dev/null | head -c 4000 || head -c 4000 /tmp/conformance_report.json
 
   governance-match-ops-campaign:
-    if: github.ref_type == 'branch'
+    if: github.event_name != 'schedule' && (github.ref_type == 'branch')
     needs: [deps-linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -375,6 +382,7 @@ jobs:
   # the matrix jobs below restore an exact key and never race to save it.
   # ---------------------------------------------------------------------------
   deps-linux:
+    if: github.event_name != 'schedule' || vars.GEODE_PERF_GATES_LANE == '1' || vars.GEODE_COVERAGE_LANE == '1'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -390,6 +398,7 @@ jobs:
     - *cache-sizes
 
   deps-macos:
+    if: github.event_name != 'schedule'
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -405,6 +414,7 @@ jobs:
   # ---------------------------------------------------------------------------
   test-zig-release-safe:
     # REQ-0008. GitLab: MR + default branch (blocking), tags (allow_failure).
+    if: github.event_name != 'schedule'
     needs: [deps-linux, zig-format]
     runs-on: ubuntu-24.04
     timeout-minutes: 360
@@ -442,6 +452,7 @@ jobs:
 
   test-zig-unit:
     # GAP-0219. GitLab: MR + any branch pipeline (blocking), tags (allow_failure).
+    if: github.event_name != 'schedule'
     needs: [deps-linux, zig-format]
     runs-on: ubuntu-24.04
     timeout-minutes: 360
@@ -472,6 +483,7 @@ jobs:
 
   test-cross-build:
     # Every release target compiles (ReleaseSafe). GitLab: MR, default branch, tags.
+    if: github.event_name != 'schedule'
     needs: [deps-linux, zig-format]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -545,6 +557,7 @@ jobs:
 
   test-macos-unit:
     # Native macOS Debug tests. GitLab: MR, default branch, tags; allow_failure.
+    if: github.event_name != 'schedule'
     needs: [deps-macos, zig-format]
     runs-on: macos-15
     timeout-minutes: 120
@@ -597,7 +610,7 @@ jobs:
   test-perf-gates-enforced:
     # SONNY-2394 / SONNY-2439: perf claims are enforced (GEODE_PERF_GATES=enforce,
     # ReleaseFast). GitLab: schedule pipelines only.
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.lanes == 'perf-gates' || inputs.lanes == 'all'))
+    if: (github.event_name == 'schedule' && vars.GEODE_PERF_GATES_LANE == '1') || (github.event_name == 'workflow_dispatch' && (inputs.lanes == 'perf-gates' || inputs.lanes == 'all'))
     needs: [deps-linux]
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -644,6 +657,7 @@ jobs:
 
   test-performance-benchmarks:
     # REQ-0009 / GAP-0244. GitLab: MR, default branch, tags; allow_failure.
+    if: github.event_name != 'schedule'
     needs: [deps-linux, zig-format]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -685,7 +699,7 @@ jobs:
   loadtest-regression:
     # GitLab: MR and default branch. Compares a Go loadtest report against the
     # baseline when one exists; CI runners do not run the Go loadtest.
-    if: github.ref_type == 'branch'
+    if: github.event_name != 'schedule' && (github.ref_type == 'branch')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -705,7 +719,7 @@ jobs:
 
   bench-timeseries:
     # GAP-0287. GitLab: MR and default branch; blocking.
-    if: github.ref_type == 'branch'
+    if: github.event_name != 'schedule' && (github.ref_type == 'branch')
     needs: [deps-linux, zig-format]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -732,7 +746,7 @@ jobs:
   bench-query-path:
     # M6.1. GitLab: MR and default branch; allow_failure. The baseline
     # comparison is advisory (cross-host against a frozen baseline).
-    if: github.ref_type == 'branch'
+    if: github.event_name != 'schedule' && (github.ref_type == 'branch')
     needs: [deps-linux, zig-format]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
@@ -784,7 +798,7 @@ jobs:
 
   test-gql-compliance:
     # GAP-0167: geodetestlab GQL compliance spec. GitLab: MR and default branch.
-    if: github.ref_type == 'branch'
+    if: github.event_name != 'schedule' && (github.ref_type == 'branch')
     needs: [deps-linux, zig-format]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -833,7 +847,7 @@ jobs:
   zig-fips-test:
     # zig-fips-test-0.16.0: test-fips-seam under both crypto backends.
     # GitLab: default branch (not tags) and MR.
-    if: github.ref_type == 'branch'
+    if: github.event_name != 'schedule' && (github.ref_type == 'branch')
     needs: [deps-linux, zig-format]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -961,6 +975,7 @@ jobs:
   # Security stage (public images, pinned by digest). GitLab: MR, default branch, tags.
   # ---------------------------------------------------------------------------
   security-secrets:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -972,6 +987,7 @@ jobs:
           detect --source . --config .gitleaks.toml --redact --no-git --exit-code 1
 
   security-trivy:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -991,7 +1007,7 @@ jobs:
   # ---------------------------------------------------------------------------
   zig-version-tag-check:
     # ci-catalog zig-version-tag-check component: tags only.
-    if: github.ref_type == 'tag'
+    if: github.event_name != 'schedule' && (github.ref_type == 'tag')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
