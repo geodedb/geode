@@ -3112,6 +3112,27 @@ pub fn deserializeCommand(data: []const u8) !Command {
 
 // ---- RaftNode (wraps external raft library) ----
 
+/// SONNY-6956: bytes of snapshots received from a leader that `drainReady`
+/// synced with `inner_mutex` released (raft v0.2.6 staged installs,
+/// SONNY-6665), and bytes `advancePersist()` was left to write or sync under
+/// it: a staged snapshot not synced off the lock, or one received whole.
+/// Process-wide; tests compare them before and after an install.
+pub var received_snapshot_bytes_synced_unlocked_total: std.atomic.Value(u64) = .init(0);
+pub var received_snapshot_bytes_persisted_locked_total: std.atomic.Value(u64) = .init(0);
+
+/// SONNY-6956: the bytes of `rd`'s received snapshot that `advancePersist()`
+/// writes or syncs under `inner_mutex`.
+fn snapshotBytesPersistedLocked(rd: raft_lib.Ready) u64 {
+    if (rd.staged_snapshot) |staged| return if (staged.synced) 0 else staged.size;
+    if (rd.snapshot) |snap| return snap.data.len;
+    return 0;
+}
+
+fn noteSnapshotPersistLocked(rd: raft_lib.Ready) void {
+    const n = snapshotBytesPersistedLocked(rd);
+    if (n > 0) _ = received_snapshot_bytes_persisted_locked_total.fetchAdd(n, .monotonic);
+}
+
 /// SONNY-6844: a proposed entry: its log index and the term it was
 /// proposed in (`RaftNode.proposeCommandTracked`).
 pub const Proposal = struct { index: u64, term: u64 };
@@ -3992,12 +4013,16 @@ pub const RaftNode = struct {
             const synced = self.inner.storage.syncStagedSnapshot(staged);
             self.inner_mutex.lockUncancelable(io);
             self.draining = false;
+            if (synced) |_| {
+                _ = received_snapshot_bytes_synced_unlocked_total.fetchAdd(staged.size, .monotonic);
+            } else |_| {}
             // advancePersist() syncs it under the lock if this failed.
             synced catch |err| log.warn("raft: received snapshot not synced off the lock; advancePersist syncs it", &.{
                 Attr.string("error", @errorName(err)),
                 Attr.uint("snapshot_index", staged.metadata.index),
             });
         }
+        noteSnapshotPersistLocked(rd);
         const persist_start = std.Io.Clock.awake.now(std.Io.Threaded.global_single_threaded.io());
         const persisted = self.inner.advancePersist();
         self.notePersist(persist_start);
@@ -4219,6 +4244,7 @@ pub const RaftNode = struct {
         }
         const retried: anyerror!void = blk: {
             if (!self.stalled_persisted) {
+                noteSnapshotPersistLocked(rd);
                 self.inner.advancePersist() catch |err| break :blk err;
                 self.stalled_persisted = true;
                 // SONNY-6636 (3): the restore runs on the restore thread.
