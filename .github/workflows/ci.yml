@@ -398,9 +398,14 @@ jobs:
     - *cache-sizes
 
   deps-macos:
+    # Feeds only test-macos-unit (allow_failure), so it is optional too: on
+    # 2026-11-24 no hosted macOS arm64 runner took it for 73 minutes
+    # ("capacity constraints"), which must not fail or cancel the gating
+    # status of an otherwise green run.
     if: github.event_name != 'schedule'
     runs-on: macos-15
     timeout-minutes: 30
+    continue-on-error: true
     steps:
     - *checkout
     - *setup-zig
@@ -1059,7 +1064,7 @@ jobs:
       run: |
         # GitLab allow_failure jobs (continue-on-error here) never decide the
         # result; on tags the unit and ReleaseSafe shards are allow_failure too.
-        optional="start test-macos-unit test-performance-benchmarks bench-query-path test-code-coverage test-code-coverage-report"
+        optional="start deps-macos test-macos-unit test-performance-benchmarks bench-query-path test-code-coverage test-code-coverage-report"
         if [ "$IS_TAG" = true ]; then optional="$optional test-zig-unit test-zig-release-safe"; fi
         table=$(jq -r 'to_entries[] | "\(.key) \(.value.result)"' <<<"$NEEDS")
         echo "$table" | column -t
