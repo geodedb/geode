@@ -1764,10 +1764,12 @@ test-code-coverage:
     - |
       set -euo pipefail
       kcov --version
-      # The kcov image has no TLS roots, curl or xz; these three are the only
-      # additions (no fallback chain) and the Zig tarball is sha256-pinned.
+      # The kcov image has no TLS roots, curl or xz; the Zig tarball is
+      # sha256-pinned. geode links libssl/libcrypto (libssl-dev, pkg-config)
+      # and its tests call strace and openssl (SONNY-6850), as in the Debug
+      # shards; without them `compile exe geode` failed under kcov (ENG-7539).
       apt-get update -qq
-      apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils >/dev/null
+      apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils libssl-dev pkg-config strace openssl >/dev/null
       curl -fsSL --retry 3 --retry-all-errors -o /tmp/zig.tar.xz "${ZIG_DIST_URL}"
       echo "${ZIG_DIST_SHA256}  /tmp/zig.tar.xz" | sha256sum -c -
       mkdir -p /opt/zig && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
