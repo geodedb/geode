@@ -67,6 +67,21 @@ fn io() std.Io {
 
 const Transport = enum { quic, grpc };
 
+/// How long a live server may take to accept a QUIC connection.
+const STARTUP_TIMEOUT_MS: u64 = 120_000;
+
+/// The last lines the servers wrote to `log_path`, for a server that did
+/// not come up.
+fn printLogTail(log_path: []const u8) void {
+    const data = std.Io.Dir.cwd().readFileAlloc(io(), log_path, std.heap.page_allocator, .limited(64 * 1024 * 1024)) catch |err| {
+        std.debug.print("SONNY-6547: server log {s} unreadable: {s}\n", .{ log_path, @errorName(err) });
+        return;
+    };
+    defer std.heap.page_allocator.free(data);
+    const tail = data[data.len -| 4096..];
+    std.debug.print("SONNY-6547: the server did not come up; the end of {s}:\n{s}\n", .{ log_path, tail });
+}
+
 const Server = struct {
     handle: util.ServerHandle,
     quic_addr: []u8,
@@ -86,7 +101,15 @@ const Server = struct {
         const env: []const []const u8 = if (bulk) &.{ plain[0], plain[1], "GEODE_BULK_INGEST=1" } else plain;
         var handle = try util.spawnServer(allocator, &.{ "/bin/sh", "-c", cmd, "--data-dir" }, env);
         errdefer handle.deinit();
-        try util.waitForServerReady(allocator, quic_addr, 30000);
+        // SONNY-6956: a server that exits fails at once; a live one gets
+        // STARTUP_TIMEOUT_MS (one took over 30 s on a loaded CI runner).
+        handle.addr = quic_addr;
+        util.waitForSpawnedServer(&handle, STARTUP_TIMEOUT_MS) catch |err| {
+            handle.addr = "";
+            printLogTail(log_path);
+            return err;
+        };
+        handle.addr = "";
         return .{ .handle = handle, .quic_addr = quic_addr, .grpc_addr = grpc_addr };
     }
 
