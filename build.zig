@@ -734,7 +734,6 @@ fn checkNamedTestStepsInAggregate(b: *std.Build) void {
 const NotInAggregate = struct { name: []const u8, reason: []const u8 };
 const not_in_aggregate_steps = [_]NotInAggregate{
     // Aggregators of other named steps.
-    .{ .name = "test-sonny6956-startup-wait-floor", .reason = "intentionally red TDD reproduction (SONNY-6956): waitForServerReady gives up on a live server after the 10 s its caller asked for; registered in shardDep by the fix" },
     .{ .name = "test-all", .reason = "aggregator: the aggregate test step plus test-e2e (Makefile test-all)" },
     .{ .name = "test-e2e", .reason = "aggregator: the end-to-end lane (spawned QUIC servers, fuzz targets, benchmarks; Makefile test-e2e)" },
     .{ .name = "test-perf", .reason = "aggregator: perf harness and timing tests; host-load sensitive" },
@@ -13079,7 +13078,7 @@ pub fn build(b: *std.Build) void {
         const tests = b.addTest(.{ .root_module = mod });
         spawnsBuiltGeode(tests);
         const run_tests = b.addRunArtifact(tests);
-        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6956-startup-wait-floor", "Run SONNY-6956 regression (waitForServerReady waits for a live server stopped for 12 s although its caller asked for 10 s: a server gets at least SPAWN_STARTUP_TIMEOUT_MS to start)").dependOn(&run_tests.step);
     }
 

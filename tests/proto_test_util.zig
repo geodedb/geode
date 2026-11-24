@@ -316,10 +316,15 @@ pub fn waitForSpawnedServer(handle: *ServerHandle, timeout_ms: u64) !void {
     return error.ServerStartupTimeout;
 }
 
-/// Wait for server to be ready by attempting to connect
+/// Wait until a server at `addr` answers. SONNY-6956: how long a live
+/// server may take to start is a property of the runner, not the test (a
+/// loaded CI runner starved one past the 10 s 35 callers asked for), so the
+/// wait lasts at least SPAWN_STARTUP_TIMEOUT_MS whatever `timeout_ms` says.
+/// With a ServerHandle, prefer waitForSpawnedServer: it reports a server
+/// that has exited at once instead of waiting out the budget.
 pub fn waitForServerReady(allocator: std.mem.Allocator, addr: []const u8, timeout_ms: u64) !void {
     const start = compat_milliTimestamp();
-    const deadline = start + @as(i64, @intCast(timeout_ms));
+    const deadline = start + @as(i64, @intCast(@max(timeout_ms, SPAWN_STARTUP_TIMEOUT_MS)));
 
     while (compat_milliTimestamp() < deadline) {
         // Try to connect
