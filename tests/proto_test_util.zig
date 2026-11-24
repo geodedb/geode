@@ -159,6 +159,13 @@ pub const ServerHandle = struct {
         return allocator.realloc(buf, got);
     }
 
+    /// Whether the server exited because its listen port was already bound.
+    pub fn lostPort(self: *ServerHandle) bool {
+        const tail = self.readLogTail(self.allocator, 64 * 1024) catch return false;
+        defer self.allocator.free(tail);
+        return std.mem.indexOf(u8, tail, "error: BindFailed") != null;
+    }
+
     /// Print the end of the server's output and whether it is still running,
     /// for a test that gives up on it.
     pub fn reportStartupFailure(self: *ServerHandle, err: anyerror) void {
@@ -351,33 +358,48 @@ pub fn spawnServerRandom(
 /// Where spawnServerPickingPort gets the port the server listens on.
 pub const PortPicker = *const fn () anyerror!u16;
 
-/// spawnServerRandom with the port drawn from `pick`.
+/// How many ports spawnServerPickingPort draws before it gives up on a
+/// server that keeps losing its port.
+pub const SPAWN_BIND_ATTEMPTS: usize = 5;
+
+/// spawnServerRandom with the port drawn from `pick`. SONNY-6956: the port
+/// is free when drawn and released before geode binds it, so another
+/// process can take it in between; a server that exits with BindFailed has
+/// not started, and is started again on a newly drawn port.
 pub fn spawnServerPickingPort(
     allocator: std.mem.Allocator,
     env: ?[]const []const u8,
     pick: PortPicker,
 ) !ServerHandle {
-    const port = try pick();
-    const addr = try formatAddr(allocator, port);
-    errdefer allocator.free(addr);
+    var attempt: usize = 1;
+    while (true) : (attempt += 1) {
+        const port = try pick();
+        const addr = try formatAddr(allocator, port);
 
-    progress("Starting server on port {d}...", .{port});
+        progress("Starting server on port {d}...", .{port});
 
-    var handle = try spawnServerWithAddr(allocator, addr, env);
-    handle.port = port;
-    handle.addr = addr;
+        var handle = spawnServerWithAddr(allocator, addr, env) catch |err| {
+            allocator.free(addr);
+            return err;
+        };
+        handle.port = port;
+        // The handle owns addr from here: deinit frees it.
+        handle.addr = addr;
 
-    waitForSpawnedServer(&handle, SPAWN_STARTUP_TIMEOUT_MS) catch |err| {
-        handle.reportStartupFailure(err);
-        // SONNY-6542: the errdefer above frees addr; deinit must not free it
-        // again (a server that missed the deadline crashed the test binary).
-        handle.addr = "";
-        handle.deinit();
-        return err;
-    };
+        waitForSpawnedServer(&handle, SPAWN_STARTUP_TIMEOUT_MS) catch |err| {
+            if (err == error.ServerExitedDuringStartup and attempt < SPAWN_BIND_ATTEMPTS and handle.lostPort()) {
+                progress("port {d} was taken before the server bound it; drawing another", .{port});
+                handle.deinit();
+                continue;
+            }
+            handle.reportStartupFailure(err);
+            handle.deinit();
+            return err;
+        };
 
-    progress("Server ready on {s}", .{addr});
-    return handle;
+        progress("Server ready on {s}", .{addr});
+        return handle;
+    }
 }
 
 /// Spawn a server with a specific address
