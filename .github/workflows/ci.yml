@@ -266,6 +266,13 @@ jobs:
     timeout-minutes: 30
     steps:
     - *checkout
+    - name: governance-canaryscan-verify
+      # Scans the whole checkout: run it before zig-cache/ (fetched
+      # packages) exists, as on GitLab where this job has no Zig cache.
+      run: |
+        docker run --rm -v "$PWD:/src" -w /src/tools/canaryscan -e GOTOOLCHAIN=auto \
+          golang:1.27.3-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 \
+          sh -c 'go build -o /tmp/canaryscan . && /tmp/canaryscan --root ../.. --verify ../../docs/GAP_ANALYSIS.md'
     - *setup-zig
     - &zig-env
       name: Zig cache locations
@@ -294,12 +301,6 @@ jobs:
           exit 1
         }
         jq -c 'del(.. | arrays? | select(length > 20))' /tmp/conformance_report.json 2>/dev/null | head -c 4000 || head -c 4000 /tmp/conformance_report.json
-    - name: governance-canaryscan-verify
-      if: ${{ !cancelled() }}
-      run: |
-        docker run --rm -v "$PWD:/src" -w /src/tools/canaryscan -e GOTOOLCHAIN=auto \
-          golang:1.27.3-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 \
-          sh -c 'go build -o /tmp/canaryscan . && /tmp/canaryscan --root ../.. --verify ../../docs/GAP_ANALYSIS.md'
 
   governance-match-ops-campaign:
     if: github.ref_type == 'branch'
@@ -310,9 +311,16 @@ jobs:
     - &free-disk
       name: Free disk space
       run: |
-        # Standard runners start with ~14 GB free; geode's builds need more.
-        # Drop preinstalled toolchains no Zig job uses (~30 GB).
+        # A cold Debug shard's .zig-cache reaches 11 GB. Runners have started
+        # with ~14 GB free (2026-11-21: "No space left on device") and, since,
+        # with ~89 GB; drop preinstalled toolchains no Zig job uses (~30 GB,
+        # about 3 minutes) only when less than 40 GB is free.
         df -h / | tail -1
+        avail_kb=$(df -Pk / | awk 'NR==2 {print $4}')
+        if [ "$avail_kb" -ge $((40 * 1024 * 1024)) ]; then
+          echo "enough free disk; nothing removed"
+          exit 0
+        fi
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
           /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/boost /usr/local/julia* || true
         sudo docker image prune --all --force >/dev/null 2>&1 || true
@@ -327,6 +335,11 @@ jobs:
         sudo apt-get update -qq
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
           strace openssl libssl-dev pkg-config python3 jq xz-utils >/dev/null
+        # Ubuntu runners pipe core dumps to apport, which kept a SIGABRTed
+        # ReleaseSafe geode alive past the 30 s that
+        # tests/test_datadir_lock_subprocess.zig (SONNY-6447) allows it to
+        # exit. Container runners (GitLab) write no core; neither do these.
+        echo '|/bin/false' | sudo tee /proc/sys/kernel/core_pattern >/dev/null
     - *zig-env
     - *zig-pkg-cache
     - *zig-fetch
@@ -377,7 +390,6 @@ jobs:
     - *cache-sizes
 
   deps-macos:
-    if: github.event_name != 'schedule'
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -533,7 +545,6 @@ jobs:
 
   test-macos-unit:
     # Native macOS Debug tests. GitLab: MR, default branch, tags; allow_failure.
-    if: github.event_name != 'schedule'
     needs: [deps-macos, zig-format]
     runs-on: macos-15
     timeout-minutes: 120

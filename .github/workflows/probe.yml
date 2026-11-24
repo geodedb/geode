@@ -1,0 +1,21 @@
+# TEMPORARY (ENG-7539): checks whether the org allowlist entry actions/cache@*
+# also admits the actions/cache/restore and actions/cache/save sub-actions.
+name: probe
+on:
+  push:
+    branches: [feat/github-actions-ci]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: probe
+        key: probe-never-exists
+    - run: mkdir -p probe && date > probe/x
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: probe
+        key: probe-${{ github.run_id }}

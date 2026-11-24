@@ -27,7 +27,7 @@ case "$VER" in
   *) echo "no pinned SHA-256 for OpenSSL ${VER}; add it to $0" >&2; exit 1 ;;
 esac
 # OpenSSL release signing keys (https://openssl-library.org/source/).
-KEYS="B146647E45A7B33947AB226B2A2C87D161692D40 BA5473A2B0587B07FB27CF2D216094DFD0CB81EF"
+KEYS="B146647E45A7B33947AB226B2A2C87D161692D40 BA5473A2B0587B07FB27CF2D216094DFD0CB81EF"  # gitleaks:allow -- public PGP key fingerprints, not credentials
 
 log() { printf '==> %s\n' "$*"; }
 
@@ -83,13 +83,16 @@ esac
 tar xzf "$tarball"
 cd "openssl-${VER}"
 log "Configuring enable-fips (prefix ${PREFIX})"
-./Configure enable-fips --prefix="${PREFIX}" --openssldir="${PREFIX}/ssl" \
-  -Wl,-rpath,"${PREFIX}/lib64" -Wl,-rpath,"${PREFIX}/lib" >"$work/build.log" 2>&1 || { tail -50 "$work/build.log"; exit 1; }
+# --libdir=lib: geode's build adds ${PREFIX}/lib to the library path (a
+# missing directory is a link error); lib64 is kept as a link for tools that
+# expect the x86_64 default.
+./Configure enable-fips --prefix="${PREFIX}" --openssldir="${PREFIX}/ssl" --libdir=lib \
+  -Wl,-rpath,"${PREFIX}/lib" >"$work/build.log" 2>&1 || { tail -50 "$work/build.log"; exit 1; }
 make -j"${JOBS}" >>"$work/build.log" 2>&1 || { tail -50 "$work/build.log"; exit 1; }
 make install_sw install_ssldirs install_fips >>"$work/build.log" 2>&1 || { tail -50 "$work/build.log"; exit 1; }
 
-libdir="${PREFIX}/lib64"
-[ -d "${libdir}/ossl-modules" ] || libdir="${PREFIX}/lib"
+libdir="${PREFIX}/lib"
+[ -e "${PREFIX}/lib64" ] || ln -s lib "${PREFIX}/lib64"
 "${PREFIX}/bin/openssl" fipsinstall -out "${PREFIX}/ssl/fipsmodule.cnf" -module "${libdir}/ossl-modules/fips.so" \
   >"$work/fipsinstall.log" 2>&1 || { cat "$work/fipsinstall.log"; exit 1; }
 tail -1 "$work/fipsinstall.log"
