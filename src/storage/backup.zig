@@ -57,7 +57,7 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
 const geode = @import("geode");
 // SONNY-6636: the archive code lives in the geode module (the storage
 // adapter and the Raft layer use it; this file is its own module).
-const graph_archive = geode.graph_archive;
+pub const graph_archive = geode.graph_archive;
 const graph_store = geode.graph_store;
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Storage; STATUS=EXEMPT; OWNER=storage; UPDATED=2026-01-24
@@ -799,9 +799,9 @@ fn validateArchive(allocator: std.mem.Allocator, payload: []const u8) !ArchiveSt
 /// With `durable`, everything written is on disk before this returns.
 /// SONNY-6300: each file used to be fsynced as it was written (about 700
 /// fsyncs for a tiny two-graph store, over 10 s on a loaded disk). On Linux
-/// the filesystem holding `dir` is now synced once (syncfs(2): every dirty
-/// file and directory entry of that filesystem); elsewhere each file is
-/// still synced. Returns the number of sync calls made.
+/// every file and directory is synced once after all are written, on several
+/// threads (SONNY-6956; `graph_archive.writeTree`); elsewhere each file as it
+/// is written. Returns the number of sync calls made.
 // CANARY: REQ=REQ-BACKUP-PER-GRAPH-002; FEATURE="PerGraphRestore"; ASPECT=Storage; STATUS=TESTED; TEST=tests/test_sonny6280_cli_restore_writes_data.zig; OWNER=storage; UPDATED=2026-11-12
 fn writeArchiveTree(allocator: std.mem.Allocator, dir: []const u8, payload: []const u8, durable: bool) !u32 {
     _ = try validateArchive(allocator, payload);
@@ -824,8 +824,8 @@ pub const StagedRestore = struct {
     target_dir: []u8,
     stats: ArchiveStats,
     committed: bool = false,
-    /// Sync calls made to put the restore on disk (SONNY-6300: a constant,
-    /// not one per file, on Linux).
+    /// Sync calls made to put the restore on disk (SONNY-6956: one per file
+    /// and directory, after the writes, on several threads, on Linux).
     syncs: u32 = 0,
 
     /// Rename the staging directory onto the target, then sync the parent

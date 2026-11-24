@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-SONNY-6300-STAGED-RESTORE-ONLY; FEATURE="Backup Restore"; ASPECT=NoInPlaceRestoreOneSyncTimeouts; STATUS=TESTED; TEST=tests/test_sonny6300_staged_restore_paths.zig; OWNER=storage; UPDATED=2026-11-12
+// CANARY: REQ=REQ-SONNY-6300-STAGED-RESTORE-ONLY; FEATURE="Backup Restore"; ASPECT=NoInPlaceRestoreOneSyncTimeouts; STATUS=TESTED; TEST=tests/test_sonny6300_staged_restore_paths.zig; OWNER=storage; UPDATED=2026-11-24
 //
 // SONNY-6300:
 //   (1) BackupManager.restoreToPointInTime still wrote a backup over the
@@ -19,9 +19,11 @@
 //   - BackupManager has no in-place restore; its restore goes through the
 //     staged, verified path: into a new or empty directory only, never over a
 //     store (the live data directory is refused and left byte for byte);
-//   - a staged restore makes the archive durable with a constant number of
-//     sync calls (one filesystem sync of the staging copy, one directory sync
-//     after the rename), not one per file;
+//   - a staged restore makes the archive durable without an fsync per file
+//     as it writes each one: every file and directory is synced once after
+//     all are written, on several threads (SONNY-6956: until then one syncfs
+//     of the staging copy's filesystem, which waited for every other writer's
+//     dirty pages there), and one directory sync after the rename;
 //   - `geode restore --server` and `geode backup create` take --timeout
 //     <seconds> for the server's answer; a value that is not a positive
 //     number of seconds is a usage error.
@@ -168,7 +170,7 @@ test "SONNY-6300 (1) BackupManager has no in-place restore: its restore writes o
 // (3) one sync, not one per file
 // ===========================================================================
 
-test "SONNY-6300 (3) a staged restore of 700 files makes them durable with a constant number of syncs, not one per file" {
+test "SONNY-6300 (3) a staged restore of 700 files makes them durable after writing them, on several threads, not one fsync after another" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const allocator = testing.allocator;
     var root = try test_scratch.ScratchDir.create("sonny6300-sync");
@@ -226,10 +228,11 @@ test "SONNY-6300 (3) a staged restore of 700 files makes them durable with a con
         std.debug.print("SONNY-6300: a staged restore of {d} files syncs each file it writes (src/storage/backup.zig restorePerGraphPayload: out.sync per file); there is no count of its syncs\n", .{decoded.stats.files});
         return error.TestUnexpectedResult;
     } else {
-        if (staged.syncs > 4) {
-            std.debug.print("SONNY-6300: a staged restore of {d} files issued {d} sync calls\n", .{ decoded.stats.files, staged.syncs });
-            return error.TestUnexpectedResult;
-        }
+        // SONNY-6956: each file and directory synced once after the writes
+        // (plus the rename's directory sync), on several threads.
+        std.debug.print("SONNY-6300: a staged restore of {d} files issued {d} sync calls on {d} threads\n", .{ decoded.stats.files, staged.syncs, backup.graph_archive.durableSyncWorkers(decoded.stats.files) });
+        try testing.expect(staged.syncs > decoded.stats.files);
+        try testing.expect(backup.graph_archive.durableSyncWorkers(decoded.stats.files) > 1);
         // Every file is there (the restore is not weakened).
         var restored = try snapshotTree(allocator, target);
         defer freeSnapshot(allocator, &restored);

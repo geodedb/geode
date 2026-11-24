@@ -797,7 +797,6 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
-    .{ .name = "test-sonny6956-restore-sync-scope", .reason = "intentionally red TDD reproduction (SONNY-6956, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -13066,8 +13065,8 @@ pub fn build(b: *std.Build) void {
     sonny6956_test_mod.addImport("geode", root_mod);
     const sonny6956_tests = b.addTest(.{ .root_module = sonny6956_test_mod });
     const run_sonny6956_tests = b.addRunArtifact(sonny6956_tests);
-    if (g_test_compile_step) |c| c.dependOn(&sonny6956_tests.step);
-    b.step("test-sonny6956-restore-sync-scope", "Run SONNY-6956 red reproduction (a durable restore of a 200-file archive syncs each file and directory it wrote once, on several threads, and never the whole filesystem with syncfs)").dependOn(&run_sonny6956_tests.step);
+    shardDep(test_step, &run_sonny6956_tests.step, 1, test_shard_loads, test_shard_index);
+    b.step("test-sonny6956-restore-sync-scope", "Run SONNY-6956 regression (a durable restore of a 200-file archive syncs each file and directory it wrote, and the parent of its directory, once each, on several threads, and nothing else: no filesystem-wide syncfs waiting for other writers)").dependOn(&run_sonny6956_tests.step);
 
     const sonny6300_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6300_staged_restore_paths.zig"), .target = target, .optimize = optimize });
     sonny6300_test_mod.link_libc = true;
@@ -13077,7 +13076,7 @@ pub fn build(b: *std.Build) void {
     const run_sonny6300_tests = b.addRunArtifact(sonny6300_tests);
     spawnsBuiltGeode(sonny6300_tests);
     shardDep(test_step, &run_sonny6300_tests.step, 1, test_shard_loads, test_shard_index);
-    const sonny6300_step = b.step("test-sonny6300-staged-restore-paths", "Run SONNY-6300 regression (BackupManager has no in-place restore: its restore refuses the live data directory, leaving it byte for byte, and restores a new directory staged and verified; a staged restore of 700 files issues a constant number of syncs; geode restore --server and geode backup create take --timeout <seconds> and refuse a non-positive one)");
+    const sonny6300_step = b.step("test-sonny6300-staged-restore-paths", "Run SONNY-6300 regression (BackupManager has no in-place restore: its restore refuses the live data directory, leaving it byte for byte, and restores a new directory staged and verified; a staged restore of 700 files syncs them after writing them, on several threads; geode restore --server and geode backup create take --timeout <seconds> and refuse a non-positive one)");
     sonny6300_step.dependOn(&run_sonny6300_tests.step);
 
     // SONNY-6323: a local backup is written once, at --output; the dead

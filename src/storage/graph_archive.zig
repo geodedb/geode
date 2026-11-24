@@ -205,15 +205,35 @@ const file_perms: std.Io.File.Permissions = if (builtin.os.tag == .windows) .def
 /// subdirectories. The whole archive is validated first (names cannot escape
 /// `dir`). Files are created 0600. A `.geode.lock` entry is never written.
 ///
-/// With `durable`, everything written is on disk before this returns: on
-/// Linux the filesystem holding `dir` is synced once (syncfs(2), SONNY-6300),
-/// elsewhere each file. Returns the number of sync calls made.
+/// With `durable`, everything written is on disk before this returns. On
+/// Linux every file and every directory written (and `dir`'s parent, for
+/// `dir`'s own entry) is fsynced once after all of them are written, on up
+/// to `max_sync_workers` threads (SONNY-6956);
+/// elsewhere each file as it is written. Returns the number of sync calls
+/// made.
+///
+/// SONNY-6300: an fsync per file as it was written took over 10 s for a
+/// tiny store's 700 files on a loaded disk, so the filesystem was synced
+/// once instead (syncfs(2)). SONNY-6956: syncfs writes back every dirty page
+/// of the filesystem, other processes' too, so a restore took as long as
+/// the machine's other writers made it (5.6 s instead of 0.9 s with 7.6 GB
+/// pending; past 120 s on loaded CI runners). Synced after the writes, the
+/// files' journal commits batch, and in parallel 700 small files sync in
+/// about 0.2 s, whatever else the filesystem holds.
 pub fn writeTree(allocator: std.mem.Allocator, dir: []const u8, payload: []const u8, prefix: []const u8, durable: bool) !u32 {
     _ = try validateArchive(allocator, payload);
 
     const io = std.Io.Threaded.global_single_threaded.io();
-    const sync_once = comptime builtin.os.tag == .linux;
+    const sync_after = comptime builtin.os.tag == .linux;
     var syncs: u32 = 0;
+    // SONNY-6956: what to sync once everything is written (Linux).
+    var written: SyncSet = .{};
+    defer written.deinit(allocator);
+    if (durable and sync_after) {
+        try written.addDir(allocator, dir);
+        // `dir`'s own entry, as syncfs made it durable.
+        if (std.fs.path.dirname(dir)) |parent| try written.addDir(allocator, parent);
+    }
     var it = try ArchiveIterator.init(payload);
     while (try it.next()) |entry| {
         if (std.mem.eql(u8, entry.name, lock_file_name)) continue;
@@ -230,19 +250,127 @@ pub fn writeTree(allocator: std.mem.Allocator, dir: []const u8, payload: []const
         const out = try std.Io.Dir.cwd().createFile(io, full_path, .{ .permissions = file_perms });
         defer out.close(io);
         try out.writeStreamingAll(io, entry.data);
-        if (durable and !sync_once) {
+        if (durable and !sync_after) {
             try out.sync(io);
             syncs += 1;
         }
+        if (durable and sync_after) try written.addFile(allocator, dir, full_path);
     }
-    if (durable and sync_once) {
-        // A real descriptor (iterate), not O_PATH: syncfs and fsync refuse O_PATH.
-        var d = try std.Io.Dir.cwd().openDir(io, dir, .{ .iterate = true });
-        defer d.close(io);
-        if (std.os.linux.errno(std.os.linux.syncfs(d.handle)) != .SUCCESS) return error.RestoreSyncFailed;
-        syncs += 1;
-    }
+    if (durable and sync_after) syncs += try written.syncAll();
     return syncs;
+}
+
+/// SONNY-6956: the most threads a durable `writeTree` syncs on. fsync waits
+/// on the disk, not the CPU, and concurrent fsyncs on one filesystem share
+/// its journal commits: 700 small files took 3.5 s one after another, 0.9 s
+/// on 8 threads and 0.2 s on 32.
+pub const max_sync_workers: usize = 32;
+
+/// SONNY-6956: the threads a durable `writeTree` syncs `paths` paths on.
+pub fn durableSyncWorkers(paths: usize) usize {
+    return @max(1, @min(paths, max_sync_workers));
+}
+
+/// SONNY-6956: the files and directories a durable `writeTree` wrote, synced
+/// after all of them are written. Linux only.
+const SyncSet = struct {
+    files: std.ArrayList([:0]u8) = .empty,
+    dirs: std.ArrayList([:0]u8) = .empty,
+    seen_dirs: std.StringHashMapUnmanaged(void) = .empty,
+
+    fn deinit(self: *SyncSet, allocator: std.mem.Allocator) void {
+        for (self.files.items) |p| allocator.free(p);
+        self.files.deinit(allocator);
+        for (self.dirs.items) |p| allocator.free(p);
+        self.dirs.deinit(allocator);
+        self.seen_dirs.deinit(allocator);
+    }
+
+    fn addDir(self: *SyncSet, allocator: std.mem.Allocator, path: []const u8) !void {
+        if (self.seen_dirs.contains(path)) return;
+        try self.dirs.ensureUnusedCapacity(allocator, 1);
+        try self.seen_dirs.ensureUnusedCapacity(allocator, 1);
+        const owned = try allocator.dupeZ(u8, path);
+        self.dirs.appendAssumeCapacity(owned);
+        self.seen_dirs.putAssumeCapacityNoClobber(owned, {});
+    }
+
+    /// `full_path`, under `root`, and every directory between them: a new
+    /// file's directory entry is durable once its directory is synced.
+    fn addFile(self: *SyncSet, allocator: std.mem.Allocator, root: []const u8, full_path: []const u8) !void {
+        try self.files.ensureUnusedCapacity(allocator, 1);
+        self.files.appendAssumeCapacity(try allocator.dupeZ(u8, full_path));
+        var parent = full_path;
+        while (std.mem.lastIndexOfScalar(u8, parent, '/')) |slash| {
+            parent = parent[0..slash];
+            if (parent.len <= root.len) break;
+            try self.addDir(allocator, parent);
+        }
+    }
+
+    /// Syncs every file, then every directory; returns how many.
+    fn syncAll(self: *SyncSet) !u32 {
+        try syncPaths(self.files.items, false);
+        try syncPaths(self.dirs.items, true);
+        return @intCast(self.files.items.len + self.dirs.items.len);
+    }
+};
+
+const SyncJob = struct {
+    paths: []const [:0]u8,
+    directory: bool,
+    next: std.atomic.Value(usize) = .init(0),
+    failed: std.atomic.Value(bool) = .init(false),
+
+    fn run(self: *SyncJob) void {
+        while (!self.failed.load(.acquire)) {
+            const i = self.next.fetchAdd(1, .monotonic);
+            if (i >= self.paths.len) return;
+            if (!fsyncPath(self.paths[i], self.directory)) self.failed.store(true, .release);
+        }
+    }
+};
+
+fn fsyncPath(path: [:0]const u8, directory: bool) bool {
+    const linux = std.os.linux;
+    const rc = while (true) {
+        const r = linux.open(path.ptr, .{ .ACCMODE = .RDONLY, .CLOEXEC = true, .DIRECTORY = directory }, 0);
+        switch (linux.errno(r)) {
+            .SUCCESS => break r,
+            .INTR => continue,
+            else => |e| {
+                std.log.err("durable write: open {s} for fsync failed: {s}", .{ path, @tagName(e) });
+                return false;
+            },
+        }
+    };
+    const fd: linux.fd_t = @intCast(rc);
+    defer _ = linux.close(fd);
+    while (true) switch (linux.errno(linux.fsync(fd))) {
+        .SUCCESS => return true,
+        .INTR => continue,
+        else => |e| {
+            std.log.err("durable write: fsync {s} failed: {s}", .{ path, @tagName(e) });
+            return false;
+        },
+    };
+}
+
+/// fsync each of `paths` once, on `durableSyncWorkers` threads (this one
+/// included); error.RestoreSyncFailed if any open or fsync failed.
+fn syncPaths(paths: []const [:0]u8, directory: bool) !void {
+    if (paths.len == 0) return;
+    var job: SyncJob = .{ .paths = paths, .directory = directory };
+    var threads: [max_sync_workers - 1]std.Thread = undefined;
+    var spawned: usize = 0;
+    const extra = durableSyncWorkers(paths.len) - 1;
+    while (spawned < extra) : (spawned += 1) {
+        // A thread that cannot start leaves its share to the others.
+        threads[spawned] = std.Thread.spawn(.{}, SyncJob.run, .{&job}) catch break;
+    }
+    job.run();
+    for (threads[0..spawned]) |t| t.join();
+    if (job.failed.load(.acquire)) return error.RestoreSyncFailed;
 }
 
 /// `name` without `prefix` and its slash, or null when it is not under it
