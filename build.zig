@@ -797,6 +797,7 @@ const not_in_aggregate_steps = [_]NotInAggregate{
     // Failing: listed in docs/KNOWN_TEST_ISSUES.md.
     .{ .name = "test-slab-packing-geode", .reason = "failing: does not finish in 30 min (50,000-node durable ingest, Debug); KNOWN_TEST_ISSUES" },
     .{ .name = "test-sonny2848-tenant-subquery-aggregation", .reason = "intentionally red TDD reproduction (SONNY-2848, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
+    .{ .name = "test-sonny6956-restore-sync-scope", .reason = "intentionally red TDD reproduction (SONNY-6956, KNOWN_TEST_ISSUES); compiled by test-compile; register it through shardDep in the commit that fixes it" },
 };
 
 /// SRE-187: see g_test_coverage. Prefixes the selected Run step's argv with
@@ -13057,6 +13058,17 @@ pub fn build(b: *std.Build) void {
     // staged, verified one, into a new or empty directory only); a staged
     // restore syncs the filesystem once instead of every file; the CLI's
     // wait for a server's backup/restore answer takes --timeout.
+    // SONNY-6956: a durable restore (graph_archive.writeTree) syncs the files
+    // and directories it wrote, never the whole filesystem (syncfs waited for
+    // every other writer's dirty pages on it).
+    const sonny6956_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6956_restore_sync_scope.zig"), .target = target, .optimize = optimize });
+    sonny6956_test_mod.link_libc = true;
+    sonny6956_test_mod.addImport("geode", root_mod);
+    const sonny6956_tests = b.addTest(.{ .root_module = sonny6956_test_mod });
+    const run_sonny6956_tests = b.addRunArtifact(sonny6956_tests);
+    if (g_test_compile_step) |c| c.dependOn(&sonny6956_tests.step);
+    b.step("test-sonny6956-restore-sync-scope", "Run SONNY-6956 red reproduction (a durable restore of a 200-file archive syncs each file and directory it wrote once, on several threads, and never the whole filesystem with syncfs)").dependOn(&run_sonny6956_tests.step);
+
     const sonny6300_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6300_staged_restore_paths.zig"), .target = target, .optimize = optimize });
     sonny6300_test_mod.link_libc = true;
     sonny6300_test_mod.addImport("geode", root_mod);
