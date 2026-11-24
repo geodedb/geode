@@ -223,7 +223,7 @@ make loadtest-save-baseline
 - p50 latency: regression if current > baseline * 1.2 (20% increase)
 - Error rate: regression if current > 10% and baseline was < 5%
 
-**CI**: The `loadtest-regression` job in `.gitlab-ci.yml` runs comparison on MRs and main branch pushes (`allow_failure: true` initially).
+**CI**: The `loadtest-regression` job runs the comparison on MRs and main branch pushes. Verification jobs (build, test, scan) run on GitHub Actions (`.github/workflows/ci.yml`, on the github.com/geodedb/geode mirror) while `GEODE_VERIFY_ON` in `.gitlab-ci.yml` is `github`; GitLab keeps the release/publish jobs and gates them on the `github-actions/geode` commit status (`github-verify-gate`). Set `GEODE_VERIFY_ON` to `gitlab` to run verification on GitLab again.
 
 **Updating baselines**: After performance improvements, run `make loadtest-save-baseline` to update the baseline. Commit the updated `baseline.jsonl` with the performance change.
 

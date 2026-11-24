@@ -223,6 +223,14 @@ cache: []
         files: [build.zig.zon]
 
 variables:
+  # ENG-7539: where the build/test/scan (verification) jobs run. "github": on
+  # GitHub Actions (.github/workflows/ci.yml on the github.com/geodedb/geode
+  # mirror), which reports ONE commit status `github-actions/geode` back to
+  # this project; every verification job below starts with a
+  # `$GEODE_VERIFY_ON == "github"` -> never rule, and the release/publish jobs
+  # need `github-verify-gate` instead. Any other value (e.g. "gitlab")
+  # restores the GitLab verification jobs and drops the gate.
+  GEODE_VERIFY_ON: "github"
   DOCKER_BUILDKIT: 1
   ZIG_VERSION: "0.16.0"
   ZIG_GLOBAL_CACHE_DIR: "${CI_PROJECT_DIR}/zig-cache"
@@ -408,6 +416,8 @@ variables:
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   allow_failure: false
@@ -514,6 +524,8 @@ governance-cross-gate-status:
       python3 tests/test_sonny4920_prepush_shard_budget.py
       echo "✓ zig-test shards fit the CPU budget and propagate failures"
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_COMMIT_TAG'
@@ -599,6 +611,8 @@ governance-release-manifests:
       python3 tests/test_sonny4885_fips_release_runtime_compat.py
       echo "✓ Release manifests are in sync"
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_COMMIT_TAG'
@@ -617,6 +631,8 @@ governance-docker-healthcheck:
       python3 tests/test_dockerfile_health_check.py
       echo "✓ Docker health check probe contract holds"
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_COMMIT_TAG'
@@ -764,6 +780,8 @@ migration-guard:
   cache: []  # no Zig build here; see the zig-build-cache note at the top
   extends: .governance-python
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: '$CI_MERGE_REQUEST_ID'
       changes:
         - "migrations/**/*.gql"
@@ -786,6 +804,8 @@ harness-rerun-selftest:
   cache: []  # no Zig build here; see the zig-build-cache note at the top
   extends: .governance-python
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: '$CI_MERGE_REQUEST_ID'
       changes:
         - "scripts/ci/harness_rerun.py"
@@ -894,6 +914,8 @@ test-zig-unit:
     # release the other shards. Real failures are not automatically retried.
     - python3 scripts/ci/zig_fail_fast.py --log reports/zig_test_shard_${TEST_SHARD_INDEX}.log -- zig build -j${ZIG_BUILD_JOBS} test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all --error-style verbose
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     # SRE-187 (MR admission): merge_request_event pipelines have no
     # CI_COMMIT_BRANCH, so before this rule the MR pipeline -- the one that
     # gates the merge -- never ran these shards; its only Debug test run was the
@@ -1045,6 +1067,8 @@ test-cross-build:
         fi
       done
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_COMMIT_TAG'
@@ -1205,6 +1229,8 @@ test-macos-unit:
     paths:
       - reports/zig_test_macos_shard_*.log
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_COMMIT_TAG'
@@ -1318,6 +1344,8 @@ test-zig-release-safe:
     paths:
       - reports/zig_test_release_safe_shard_*.log
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: '$CI_MERGE_REQUEST_ID'
       allow_failure: false
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
@@ -1376,6 +1404,8 @@ test-perf-gates-enforced:
       done
       exit "${rc}"
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       allow_failure: false
   artifacts:
@@ -1434,6 +1464,8 @@ test-performance-benchmarks:
       echo "✓ GAP-0244: Performance benchmarks executed"
       echo "✓ REQ-0009 Performance budget enforcement active"
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_COMMIT_TAG'
@@ -1487,6 +1519,8 @@ loadtest-regression:
   # returns non-zero) now block MRs. The SKIP branch above keeps us from
   # blocking on the much more common "loadtest didn't run here" case.
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   artifacts:
@@ -1528,6 +1562,8 @@ bench-timeseries:
       echo "=== Timeseries benchmarks complete ==="
   # allow_failure: true removed -- this gate is now blocking.
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   artifacts:
@@ -1634,6 +1670,8 @@ bench-query-path:
       fi
   allow_failure: true
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   artifacts:
@@ -1688,6 +1726,8 @@ bench-query-path:
 
 .coverage-lane-rules: &coverage-lane-rules
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: '$CI_PIPELINE_SOURCE == "schedule" && $GEODE_COVERAGE_LANE == "1"'
     - if: '$CI_PIPELINE_SOURCE == "web" && $GEODE_COVERAGE_LANE == "1"'
     - if: '$CI_PIPELINE_SOURCE == "api" && $GEODE_COVERAGE_LANE == "1"'
@@ -1756,6 +1796,8 @@ test-code-coverage-report:
   stage: test
   <<: *coverage-lane-image
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: '$CI_PIPELINE_SOURCE == "schedule" && $GEODE_COVERAGE_LANE == "1"'
       when: always
     - if: '$CI_PIPELINE_SOURCE == "web" && $GEODE_COVERAGE_LANE == "1"'
@@ -1849,6 +1891,8 @@ test-gql-compliance:
       junit: compliance-results.xml
     expire_in: 1 week
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   allow_failure: false
@@ -1874,6 +1918,8 @@ security-secrets:
   script:
     - gitleaks detect --source . --config .gitleaks.toml --redact --no-git --exit-code 1
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_COMMIT_TAG'
@@ -1900,10 +1946,82 @@ security-trivy:
   script:
     - trivy fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 --no-progress --db-repository public.ecr.aws/aquasecurity/trivy-db --db-repository ghcr.io/aquasecurity/trivy-db --java-db-repository public.ecr.aws/aquasecurity/trivy-java-db --java-db-repository ghcr.io/aquasecurity/trivy-java-db --skip-dirs .zig-cache --skip-dirs zig-cache --skip-dirs docker/zig-packages --skip-dirs test_logs --skip-files certs/server.key --skip-files data/server.key .
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_COMMIT_TAG'
   allow_failure: false
+
+# =============================================================================
+# GitHub Actions verification gate (ENG-7539)
+# With GEODE_VERIFY_ON=github every build/test/scan job above runs on GitHub
+# Actions (.github/workflows/ci.yml) against the github.com/geodedb/geode
+# mirror (gitlab.com -> gitlab.devnw.com -> GitHub, all branches and tags),
+# and the workflow's `report` job posts ONE commit status
+# `github-actions/geode` (ref = branch or tag) to this commit. This job waits
+# for that status and passes or fails with it; release/publish jobs need it.
+#
+# No secrets: the commit-statuses API needs authentication even on this
+# public project, but statuses posted through the API form an "external"
+# pipeline for (sha, ref) whose status is readable anonymously. Generous
+# deadline: mirror delay plus a queue behind other runs plus up to 6 h jobs.
+# A GitHub re-run reports again; retry this job to pick up the new result.
+# =============================================================================
+github-verify-gate:
+  stage: test
+  image: alpine:3.24
+  tags: *dedicated-tags
+  cache: []
+  needs: []
+  timeout: 8h
+  variables:
+    GIT_STRATEGY: none
+    GITHUB_REPO: geodedb/geode
+    VERIFY_POLL_SECONDS: "90"
+    VERIFY_DEADLINE_SECONDS: "28200"  # 7 h 50 min, inside the 8 h job timeout
+  rules:
+    - if: '$GEODE_VERIFY_ON == "github" && $CI_MERGE_REQUEST_ID'
+    - if: '$GEODE_VERIFY_ON == "github" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$GEODE_VERIFY_ON == "github" && $CI_COMMIT_TAG'
+  before_script:
+    - apk add --no-cache curl jq >/dev/null
+  script:
+    - |
+      set -eu
+      # MR pipelines test the source branch head; GitHub reports with the
+      # branch (or tag) name as the ref.
+      sha="${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
+      ref="${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME:-${CI_COMMIT_TAG:-$CI_COMMIT_BRANCH}}"
+      url="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/pipelines?source=external&order_by=id&sort=desc&per_page=1"
+      echo "Waiting for github-actions/geode on ${sha} (ref ${ref})"
+      echo "GitHub run: https://github.com/${GITHUB_REPO}/commit/${sha}/checks"
+      start=$(date +%s)
+      last=""
+      while :; do
+        if body=$(curl -fsS --retry 3 --retry-all-errors --connect-timeout 20 -G "$url" \
+            --data-urlencode "sha=${sha}" --data-urlencode "ref=${ref}"); then
+          state=$(printf '%s' "$body" | jq -r '.[0].status // "none"' 2>/dev/null) || state="unparseable"
+        else
+          state="unreachable"
+        fi
+        elapsed=$(( $(date +%s) - start ))
+        if [ "$state" != "$last" ] || [ $(( elapsed % 900 )) -lt "$VERIFY_POLL_SECONDS" ]; then
+          echo "$(date -u +%H:%M:%S) +$((elapsed / 60))m github-actions/geode: ${state}"
+          last=$state
+        fi
+        case "$state" in
+          success) echo "GitHub Actions verification passed"; exit 0 ;;
+          failed|canceled|skipped)
+            echo "GitHub Actions verification ${state}: https://github.com/${GITHUB_REPO}/commit/${sha}/checks"
+            exit 1 ;;
+        esac
+        if [ "$elapsed" -ge "$VERIFY_DEADLINE_SECONDS" ]; then
+          echo "Timed out after $((elapsed / 60)) min waiting for github-actions/geode (last: ${state})"
+          exit 1
+        fi
+        sleep "$VERIFY_POLL_SECONDS"
+      done
 
 # =============================================================================
 # Release Stage - GoReleaser with Zig Cross-Compilation
@@ -1920,18 +2038,29 @@ snapshot:
   # All needs set artifacts: false — release jobs build from scratch and
   # downloaded artifacts pollute the workspace (causing GoReleaser dirty-git
   # failures, e.g. harness-reports/ from test-harness-integration).
+  # ENG-7539: with GEODE_VERIFY_ON=github the quality gates run on GitHub
+  # Actions and github-verify-gate stands in for them; otherwise the gate is
+  # absent and the GitLab jobs below exist. Exactly one side exists in any
+  # pipeline, so `optional: true` never drops a gate that should be there.
   needs:
+    - job: github-verify-gate
+      artifacts: false
+      optional: true
     - job: test-zig-unit
       artifacts: false
+      optional: true
     - job: test-zig-release-safe
       artifacts: false
+      optional: true
     - job: test-performance-benchmarks
       artifacts: false
       optional: true  # Flaky SIMD benchmarks should not block snapshot builds
     - job: security-secrets
       artifacts: false
+      optional: true
     - job: security-trivy
       artifacts: false
+      optional: true
   # 2026-05-01: added `linux` tag — pipeline #1009 (v0.5.2 tag) got
   # this job assigned to a Windows PowerShell runner that also has
   # `company,dedicated` tags, producing PowerShell parser errors
@@ -2323,6 +2452,8 @@ zig-fips-test-0.16.0:
     - *zig-fips-build-cache
     - *zig-protoc-cache
   rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && $CI_COMMIT_TAG == null'
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   variables:
@@ -2568,18 +2699,27 @@ build-release:
   # All needs set artifacts: false — release jobs build from scratch and
   # downloaded artifacts pollute the workspace (causing GoReleaser dirty-git
   # failures, e.g. harness-reports/ from test-harness-integration).
+  # ENG-7539: github-verify-gate (GEODE_VERIFY_ON=github) or the GitLab
+  # verification jobs (any other value); see the snapshot job's note.
   needs:
+    - job: github-verify-gate
+      artifacts: false
+      optional: true
     - job: test-zig-unit
       artifacts: false
+      optional: true
     - job: test-zig-release-safe
       artifacts: false
+      optional: true
     - job: test-performance-benchmarks
       artifacts: false
-      optional: false  # GAP-0252: Benchmarks required for release builds to detect regressions
+      optional: true  # GAP-0252: on GitLab it always exists on tags; github-verify-gate covers it otherwise
     - job: security-secrets
       artifacts: false
+      optional: true
     - job: security-trivy
       artifacts: false
+      optional: true
   # 2026-05-01: added `linux` tag — pipeline #1009 (v0.5.2 tag) got
   # this job assigned to a Windows PowerShell runner that also has
   # `company,dedicated` tags, producing PowerShell parser errors
@@ -3064,11 +3204,32 @@ apt-sign-apt-geodedb-com:
 apt-publish-apt-geodedb-com:
   tags: [company, linux, amd64]
 
+# ENG-7539: the component-provided verification jobs run on GitHub Actions
+# too (.github/workflows/ci.yml jobs zig-format and zig-version-tag-check)
+# unless GEODE_VERIFY_ON is set to something other than "github". The rules
+# after the first reproduce the components' own (zig-format has none:
+# every pipeline; zig-version-tag-check: tags).
+zig-format:
+  rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
+    - when: on_success
+
+zig-version-tag-check:
+  rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
+    - if: '$CI_COMMIT_TAG'
+
 # SONNY-4778: tools must not redirect Git operations into this checkout.
 hook-env-regression:
   tags: *dedicated-tags
   cache: []  # no Zig build here; see the zig-build-cache note at the top
   stage: lint
+  rules:
+    - if: '$GEODE_VERIFY_ON == "github"'  # runs on GitHub Actions instead
+      when: never
+    - when: on_success
   image: python:3.15-slim-bookworm
   before_script:
     - apt-get update -qq && apt-get install -y --no-install-recommends git
