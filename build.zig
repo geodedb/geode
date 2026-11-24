@@ -734,6 +734,7 @@ fn checkNamedTestStepsInAggregate(b: *std.Build) void {
 const NotInAggregate = struct { name: []const u8, reason: []const u8 };
 const not_in_aggregate_steps = [_]NotInAggregate{
     // Aggregators of other named steps.
+    .{ .name = "test-sonny6956-port-taken-retry", .reason = "intentionally red TDD reproduction (SONNY-6956): a spawned server whose port was taken before it bound fails the test; registered in shardDep by the fix" },
     .{ .name = "test-all", .reason = "aggregator: the aggregate test step plus test-e2e (Makefile test-all)" },
     .{ .name = "test-e2e", .reason = "aggregator: the end-to-end lane (spawned QUIC servers, fuzz targets, benchmarks; Makefile test-e2e)" },
     .{ .name = "test-perf", .reason = "aggregator: perf harness and timing tests; host-load sensitive" },
@@ -13080,6 +13081,20 @@ pub fn build(b: *std.Build) void {
         const run_tests = b.addRunArtifact(tests);
         shardDep(test_step, &run_tests.step, 1, test_shard_loads, test_shard_index);
         b.step("test-sonny6956-startup-wait-floor", "Run SONNY-6956 regression (waitForServerReady waits for a live server stopped for 12 s although its caller asked for 10 s: a server gets at least SPAWN_STARTUP_TIMEOUT_MS to start)").dependOn(&run_tests.step);
+    }
+    {
+        const mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6956_port_taken_retry.zig"), .target = target, .optimize = optimize });
+        mod.link_libc = true;
+        mod.addImport("geode", root_mod);
+        mod.addImport("geode_mcp", mcp_cli_mod);
+        mod.addImport("protobuf", protobuf_mod);
+        mod.addImport("schema", schema_mod);
+        mod.addImport("transport/quic", transport_quic_mod);
+        const tests = b.addTest(.{ .root_module = mod });
+        spawnsBuiltGeode(tests);
+        const run_tests = b.addRunArtifact(tests);
+        if (g_test_compile_step) |c| c.dependOn(&tests.step);
+        b.step("test-sonny6956-port-taken-retry", "Run SONNY-6956 regression (a test server whose port another process bound first exits with BindFailed; spawnServerRandom starts it again on another port)").dependOn(&run_tests.step);
     }
 
     const sonny6300_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sonny6300_staged_restore_paths.zig"), .target = target, .optimize = optimize });

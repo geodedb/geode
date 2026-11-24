@@ -345,7 +345,19 @@ pub fn spawnServerRandom(
     allocator: std.mem.Allocator,
     env: ?[]const []const u8,
 ) !ServerHandle {
-    const port = try getRandomPort();
+    return spawnServerPickingPort(allocator, env, getRandomPort);
+}
+
+/// Where spawnServerPickingPort gets the port the server listens on.
+pub const PortPicker = *const fn () anyerror!u16;
+
+/// spawnServerRandom with the port drawn from `pick`.
+pub fn spawnServerPickingPort(
+    allocator: std.mem.Allocator,
+    env: ?[]const []const u8,
+    pick: PortPicker,
+) !ServerHandle {
+    const port = try pick();
     const addr = try formatAddr(allocator, port);
     errdefer allocator.free(addr);
 
