@@ -11,11 +11,18 @@
 //
 // 1. A follower on TDE Raft storage installs a 64 MiB snapshot from the
 //    leader (three real Raft nodes exchanging geode Raft frames) while a
-//    probe thread takes its `inner_mutex` over and over: no take may wait a
-//    quarter of the election timeout, the bound
-//    test-sonny6665-install-lock-hold puts on plaintext storage.
+//    probe thread takes its `inner_mutex` over and over. No byte of it may
+//    be sealed whole (`TdeRaftStorage.saveSnapshot`, which raft calls under
+//    `inner_mutex`): it goes through the staged calls. And no take may wait
+//    a quarter of the election timeout, the bound
+//    test-sonny6665-install-lock-hold puts on plaintext storage, unless
+//    that wait is also under a quarter of the install's own time: holding
+//    the lock across the seal held it for most of the install (2683 ms),
+//    while a loaded CI runner stalled the probe thread itself for up to
+//    389 ms of a several-second install with the lock never held long
+//    (SONNY-6956).
 // 2. The leader on TDE Raft storage takes a 64 MiB snapshot of its own
-//    state machine, its `inner_mutex` probed the same way, same bound.
+//    state machine, its `inner_mutex` probed the same way, same bounds.
 // 3. On the storage itself: a staged snapshot is in a staged file on disk
 //    and holds no plaintext; a crash between stage and commit (the staged
 //    files left behind, the storage reopened) leaves the previous snapshot,
@@ -24,7 +31,7 @@
 //    plaintext either. The previous snapshot was saved in the older
 //    one-record format, which still reads.
 //
-// CANARY: REQ=REQ-SONNY-6670-TDE-STAGED-SNAPSHOT; FEATURE="TDEFileLevelEncryption"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6670_tde_staged_snapshot.zig; OWNER=distributed; UPDATED=2026-11-16
+// CANARY: REQ=REQ-SONNY-6670-TDE-STAGED-SNAPSHOT; FEATURE="TDEFileLevelEncryption"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6670_tde_staged_snapshot.zig; OWNER=distributed; UPDATED=2026-11-24
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -175,6 +182,20 @@ fn ownSnapshot(allocator: std.mem.Allocator, index: u64, term: u64) anyerror![]u
     return allocator.dupe(u8, own_payload);
 }
 
+/// SONNY-6956: the snapshot was never sealed whole under `inner_mutex`
+/// (none of its bytes went through `saveSnapshot` since `sealed_before`),
+/// and no take of `inner_mutex` waited both a quarter of the election
+/// timeout and a quarter of the snapshot's own `ns`: the seal held under the
+/// lock is most of the snapshot's time, a runner stalling the probe thread
+/// is not.
+fn expectNotHeldAcrossSnapshot(probe: *const Probe, ns: u64, sealed_before: u64) !void {
+    const sealed = raft_tde.TdeRaftStorage.whole_snapshot_bytes_sealed_total.load(.acquire) - sealed_before;
+    std.debug.print("SONNY-6670: {d} bytes sealed whole under inner_mutex\n", .{sealed});
+    try testing.expectEqual(@as(u64, 0), sealed);
+    try testing.expect(probe.takes > 0);
+    try testing.expect(probe.max_wait_ns < HOLD_BUDGET_NS or probe.max_wait_ns < ns / 4);
+}
+
 fn report(what: []const u8, ns: u64, probe: *const Probe) void {
     std.debug.print("SONNY-6670: {s}: {d} MiB under TDE in {d} ms; {d} takes of its inner_mutex meanwhile, the longest waited {d} ms (budget {d} ms)\n", .{
         what, SNAPSHOT_BYTES / (1024 * 1024), ns / std.time.ns_per_ms, probe.takes, probe.max_wait_ns / std.time.ns_per_ms, HOLD_BUDGET_NS / std.time.ns_per_ms,
@@ -218,6 +239,7 @@ test "SONNY-6670: a follower on TDE Raft storage installs a 64 MiB snapshot with
         thread.join();
     };
     net.cut[3] = false;
+    const sealed0 = raft_tde.TdeRaftStorage.whole_snapshot_bytes_sealed_total.load(.acquire);
     const t0 = now();
     r = 0;
     while (follower.snapshotIndex() < snap_index) : (r += 1) {
@@ -229,8 +251,7 @@ test "SONNY-6670: a follower on TDE Raft storage installs a 64 MiB snapshot with
     thread.join();
     joined = true;
     report("node 3 installed the leader's snapshot", ns, &probe);
-    try testing.expect(probe.takes > 0);
-    try testing.expect(probe.max_wait_ns < HOLD_BUDGET_NS);
+    try expectNotHeldAcrossSnapshot(&probe, ns, sealed0);
     const held = (try follower.localSnapshotData(a)) orelse return error.NoSnapshot;
     defer a.free(held);
     try testing.expect(std.mem.eql(u8, payload, held));
@@ -260,6 +281,7 @@ test "SONNY-6670: a leader on TDE Raft storage takes a 64 MiB snapshot of its ow
         probe.stop.store(true, .release);
         thread.join();
     };
+    const sealed0 = raft_tde.TdeRaftStorage.whole_snapshot_bytes_sealed_total.load(.acquire);
     const t0 = now();
     for (0..5) |_| _ = try leader.proposeCommand(.{ .write = "sonny6670" });
     var r: usize = 0;
@@ -273,8 +295,7 @@ test "SONNY-6670: a leader on TDE Raft storage takes a 64 MiB snapshot of its ow
     thread.join();
     joined = true;
     report("the leader took its own snapshot", ns, &probe);
-    try testing.expect(probe.takes > 0);
-    try testing.expect(probe.max_wait_ns < HOLD_BUDGET_NS);
+    try expectNotHeldAcrossSnapshot(&probe, ns, sealed0);
     const held = (try leader.localSnapshotData(a)) orelse return error.NoSnapshot;
     defer a.free(held);
     try testing.expect(std.mem.eql(u8, payload, held));

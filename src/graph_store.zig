@@ -26,6 +26,20 @@ const value_types = @import("value_types.zig");
 
 /// SONNY-6567 (6c): depth of `GraphStore.enterReplicatedApply` on this thread.
 threadlocal var t_replicated_apply_depth: u32 = 0;
+
+/// SONNY-6956: this thread is applying a Raft entry (under the Raft node's
+/// `inner_mutex`).
+pub fn inReplicatedApply() bool {
+    return t_replicated_apply_depth > 0;
+}
+
+// CANARY: REQ=REQ-SONNY-6631-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=HydrationsDuringApplyCounted; STATUS=TESTED; TEST=tests/test_sonny6631_apply_hydration_off_mutex.zig; OWNER=distributed; UPDATED=2026-11-24
+/// SONNY-6956: graph builds (first-touch hydrations) run on a thread applying
+/// a Raft entry, so under the Raft node's `inner_mutex`. Each one stops the
+/// node for the length of a graph scan; the propose and receive paths
+/// hydrate an entry's graphs before the lock (SONNY-6547, SONNY-6631), so
+/// this stays 0 unless a path misses one.
+pub var replicated_apply_hydrations_total: std.atomic.Value(u64) = .init(0);
 const txn_undo = @import("txn_undo_log.zig");
 // GAP (write-path OOM, 2026-07-04): working-set budget hooks for the legacy
 // write executor. `chargeStoreBytes` is a no-op unless the query dispatcher
@@ -14102,6 +14116,7 @@ pub const GraphStore = struct {
             self.removeHydrationCounterContributionsForGraph(graph_name);
             entry.needs_reset = false;
         }
+        if (t_replicated_apply_depth > 0) _ = replicated_apply_hydrations_total.fetchAdd(1, .monotonic);
         const outcome: ?HydrationBuildOutcome = self.loadOneGraphFromAdapterFull(adapter, graph_name) catch |err| blk: {
             if (transientHydrationError(err)) |terr| {
                 // SONNY-6605: not a property of the graph's data. Fail this

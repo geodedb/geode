@@ -3143,8 +3143,17 @@ pub const ManagedGraph = struct {
     }
 };
 
+// CANARY: REQ=REQ-SONNY-6633-INTERN-LABELS-BEFORE-APPLY; FEATURE="DistributedCluster"; ASPECT=AssignmentsDuringApplyCounted; STATUS=TESTED; TEST=tests/test_sonny6631_apply_hydration_off_mutex.zig; OWNER=distributed; UPDATED=2026-11-24
+/// SONNY-6956: label and relationship-type names first assigned an id on a
+/// thread applying a Raft entry, so written to every shard's labels.dict
+/// (with fsyncs) under the Raft node's `inner_mutex`. The receive and
+/// propose paths intern an entry's names before the lock
+/// (`internNamesForReplicatedApply`, SONNY-6633 item 4).
+pub var replicated_apply_label_assignments_total: std.atomic.Value(u64) = .init(0);
+
 fn resolvePersistedLabelId(mg: *ManagedGraph, label: []const u8) !gs.LabelId {
     if (mg.label_dict.getId(label)) |id| return id;
+    if (graph_store.inReplicatedApply()) _ = replicated_apply_label_assignments_total.fetchAdd(1, .monotonic);
     // CANARY: REQ=REQ-QUIC-HC-171; FEATURE="High-Concurrency Mutations"; ASPECT=LabelDictionaryCheckpoint; STATUS=IMPL; TEST=tests/perf/test_group_commit_coordinator.zig; OWNER=storage; UPDATED=2026-05-29
     //
     // LabelStringDict is a view over shard 0's dictionary and only reads

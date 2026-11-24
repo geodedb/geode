@@ -221,6 +221,14 @@ pub const TdeRaftStorage = struct {
         self.allocator.destroy(self.inner);
     }
 
+    // CANARY: REQ=REQ-SONNY-6670-TDE-STAGED-SNAPSHOT; FEATURE="TDEFileLevelEncryption"; ASPECT=WholeSnapshotSealsCounted; STATUS=TESTED; TEST=tests/test_sonny6670_tde_staged_snapshot.zig; OWNER=distributed; UPDATED=2026-11-24
+    /// SONNY-6956: snapshot bytes sealed whole by `saveSnapshot`, process-wide.
+    /// raft calls it under the node's `inner_mutex` (sealing, writing and
+    /// fsyncing all of it there, SONNY-6670); a node's own and a received
+    /// snapshot go through the staged calls instead, sealed and written off
+    /// the lock.
+    pub var whole_snapshot_bytes_sealed_total: std.atomic.Value(u64) = .init(0);
+
     pub fn storage(self: *TdeRaftStorage) raft_lib.Storage {
         return .{ .ptr = @ptrCast(self), .vtable = &vtable_inst };
     }
@@ -370,6 +378,7 @@ pub const TdeRaftStorage = struct {
 
     fn saveSnapshot(ptr: *anyopaque, snap: raft_lib.Snapshot) anyerror!void {
         const self = cast(ptr);
+        _ = whole_snapshot_bytes_sealed_total.fetchAdd(snap.data.len, .monotonic);
         const sealed = try self.seal(snap.data, SNAPSHOT_AAD_CONTEXT);
         defer self.allocator.free(sealed);
         var copy = snap;

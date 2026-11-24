@@ -19,10 +19,14 @@
 // (`RaftNode.handleMessage`, the call the cluster's frame reader makes), and
 // a one-voter coordinator with durable Raft storage restarted on its data
 // directory, its driver thread ticking it, while one spinning thread per CPU
-// loads the machine. The longest a Ready's committed entries took to apply
-// (`RaftNode.stats.apply_max_ns`, the apply critical section) must stay at
-// or under 50 ms, well under the 250 ms election timeout; every entry must
-// apply. A probe thread reading the node's term (`RaftNode.currentTerm`,
+// loads the machine. No graph may be built (hydrated) on the applying thread
+// (`graph_store.replicated_apply_hydrations_total`) and no label or
+// relationship type first assigned its id there
+// (`graph_storage_adapter.replicated_apply_label_assignments_total`): both
+// are what held `inner_mutex` (SONNY-6956: a 50 ms wall-clock bound on the
+// apply critical section, `RaftNode.stats.apply_max_ns`, failed on loaded CI
+// runners at 96 ms with neither happening; it is still reported). Every
+// entry must apply. A probe thread reading the node's term (`RaftNode.currentTerm`,
 // which takes `inner_mutex`) every millisecond measures the whole hold. It
 // also covers the Raft log's own write and fsync (persist before apply,
 // SONNY-6611), whose time is the disk's, not the apply's: SONNY-6667 saw
@@ -36,7 +40,7 @@
 // names an entry writes were interned with its graphs' hydration, before
 // `inner_mutex` (SONNY-6633 item 4, SONNY-6636).
 //
-// CANARY: REQ=REQ-SONNY-6631-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6631_apply_hydration_off_mutex.zig; OWNER=distributed; UPDATED=2026-11-15
+// CANARY: REQ=REQ-SONNY-6631-APPLY-HYDRATION-OFF-RAFT-MUTEX; FEATURE="DistributedCluster"; ASPECT=Regression; STATUS=TESTED; TEST=tests/test_sonny6631_apply_hydration_off_mutex.zig; OWNER=distributed; UPDATED=2026-11-24
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -49,12 +53,11 @@ const raft_apply = geode.distributed.raft_apply;
 const raft_consensus = geode.distributed.raft_consensus;
 const raft_lib = geode.distributed.raft;
 const cr = geode.distributed.cluster_replication;
+const adapter_mod = geode.graph_storage_adapter;
 const ClusterCoordinator = geode.distributed.cluster.ClusterCoordinator;
 
 const NODES: usize = 20_000;
 const HOLD_MS: i64 = 3_000;
-/// The apply critical section's budget: well under the election timeout.
-const CRITICAL_SECTION_MS: i64 = 50;
 const ELECTION_TIMEOUT_MS: u64 = 250;
 
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
@@ -153,6 +156,30 @@ fn createCmd(allocator: std.mem.Allocator, graph: []const u8, label: []const u8)
     return cr.serializeNodeCreate(allocator, graph, &labels, &props);
 }
 
+/// The work that held the Raft node's `inner_mutex` in an apply, counted
+/// process-wide; a test compares the counts before and after its applies.
+const ApplyWork = struct {
+    hydrations: u64,
+    label_assignments: u64,
+
+    fn now() ApplyWork {
+        return .{
+            .hydrations = graph_store.replicated_apply_hydrations_total.load(.acquire),
+            .label_assignments = adapter_mod.replicated_apply_label_assignments_total.load(.acquire),
+        };
+    }
+
+    /// No graph built and no name first assigned on an applying thread since `before`.
+    fn expectNoneSince(before: ApplyWork) !void {
+        const after = now();
+        std.debug.print("SONNY-6631: during the applies, {d} graph builds and {d} first label assignments ran on the applying thread\n", .{
+            after.hydrations - before.hydrations, after.label_assignments - before.label_assignments,
+        });
+        try testing.expectEqual(before.hydrations, after.hydrations);
+        try testing.expectEqual(before.label_assignments, after.label_assignments);
+    }
+};
+
 fn countLabel(store: *graph_store.GraphStore, graph: []const u8, label: []const u8) usize {
     return store.countNodesByLabel(graph, label, null);
 }
@@ -243,6 +270,7 @@ test "SONNY-6631: a follower applies a batch entry writing another graph not hyd
     sleepMs(20);
 
     // The leader's AppendEntries carrying the entry and committing it.
+    const work0 = ApplyWork.now();
     const t0 = nowMs();
     try c.raft.handleMessage(1, .{ .append_entries = .{
         .term = 1,
@@ -266,12 +294,12 @@ test "SONNY-6631: a follower applies a batch entry writing another graph not hyd
 
     const apply_ms: i64 = @intCast(c.raft.stats.apply_max_ns / std.time.ns_per_ms);
     const persist_ms: i64 = @intCast(c.raft.stats.persist_max_ns / std.time.ns_per_ms);
-    std.debug.print("SONNY-6631 follower: AppendEntries handled in {d} ms (hydration included); apply critical section {d} ms (budget {d} ms); inner_mutex unavailable for up to {d} ms, of which Raft persistence up to {d} ms ({d} probes, {d} spinning threads; election timeout {d} ms)\n", .{
-        handled_ms, apply_ms, CRITICAL_SECTION_MS, probe.max_wait_ms, persist_ms, probe.samples, spinners, ELECTION_TIMEOUT_MS,
+    std.debug.print("SONNY-6631 follower: AppendEntries handled in {d} ms (hydration included); apply critical section {d} ms; inner_mutex unavailable for up to {d} ms, of which Raft persistence up to {d} ms ({d} probes, {d} spinning threads; election timeout {d} ms)\n", .{
+        handled_ms, apply_ms, probe.max_wait_ms, persist_ms, probe.samples, spinners, ELECTION_TIMEOUT_MS,
     });
     try testing.expectEqual(@as(u64, 1), c.raft.appliedIndex());
     try testing.expectEqual(@as(usize, 2), countLabel(store, "gb", "F6631"));
-    try testing.expect(apply_ms <= CRITICAL_SECTION_MS);
+    try ApplyWork.expectNoneSince(work0);
     try testing.expect(probe.max_wait_ms - persist_ms < ELECTION_TIMEOUT_MS);
 }
 
@@ -380,6 +408,7 @@ test "SONNY-6631: a node replaying its committed log after a restart does not hy
     var probe: Probe = .{ .raft = one.c.raft };
     const pt = try std.Thread.spawn(.{}, Probe.run, .{&probe});
     sleepMs(20);
+    const work0 = ApplyWork.now();
     const t0 = nowMs();
     try one.start();
     const replayed = one.waitApplied(index);
@@ -393,13 +422,13 @@ test "SONNY-6631: a node replaying its committed log after a restart does not hy
 
     const apply_ms: i64 = @intCast(one.c.raft.stats.apply_max_ns / std.time.ns_per_ms);
     const persist_ms: i64 = @intCast(one.c.raft.stats.persist_max_ns / std.time.ns_per_ms);
-    std.debug.print("SONNY-6631 replay: entries 1..{d} replayed in {d} ms after the restart; apply critical section {d} ms (budget {d} ms); inner_mutex unavailable for up to {d} ms, of which Raft persistence up to {d} ms ({d} probes, {d} spinning threads; election timeout {d} ms)\n", .{
-        one.c.raft.appliedIndex(), replay_ms, apply_ms, CRITICAL_SECTION_MS, probe.max_wait_ms, persist_ms, probe.samples, spinners, ELECTION_TIMEOUT_MS,
+    std.debug.print("SONNY-6631 replay: entries 1..{d} replayed in {d} ms after the restart; apply critical section {d} ms; inner_mutex unavailable for up to {d} ms, of which Raft persistence up to {d} ms ({d} probes, {d} spinning threads; election timeout {d} ms)\n", .{
+        one.c.raft.appliedIndex(), replay_ms, apply_ms, probe.max_wait_ms, persist_ms, probe.samples, spinners, ELECTION_TIMEOUT_MS,
     });
     // Replayed (the create is idempotent: still one node), and the node was
     // never held for a hydration.
     try testing.expect(one.c.raft.appliedIndex() >= index);
     try testing.expectEqual(@as(usize, 1), countLabel(store, "gr", "R6631"));
-    try testing.expect(apply_ms <= CRITICAL_SECTION_MS);
+    try ApplyWork.expectNoneSince(work0);
     try testing.expect(probe.max_wait_ms - persist_ms < ELECTION_TIMEOUT_MS);
 }
