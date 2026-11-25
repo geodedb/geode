@@ -59,7 +59,14 @@ fi
 # Debian trixie (13), OpenSSL 3.5.7-1~deb13u2 (3.5.6 was removed from the pool 2026-09-16). `libssl-dev` carries the headers
 # and the `libssl.so`/`libcrypto.so` link-time symlinks; `libssl3t64` carries
 # the `.so.3` runtime objects those symlinks point at.
-DEB_SNAPSHOT="https://deb.debian.org/debian/pool/main/o/openssl"
+# Fetched from snapshot.debian.org, which keeps every version ever published:
+# deb.debian.org drops a version as soon as a newer security update lands
+# (3.5.7-1~deb13u2 went 404 there on 2026-11-25), which broke every
+# glibc cross-build until the pin was bumped. The timestamp is the archive
+# run that first carried this version in the main pool; the sha256 pins
+# below are unchanged and still enforced. Bump DEB_VERSION and the timestamp
+# together (https://snapshot.debian.org/mr/binary/libssl-dev/<version>/binfiles?fileinfo=1).
+DEB_SNAPSHOT="https://snapshot.debian.org/archive/debian/20260826T203905Z/pool/main/o/openssl"
 DEB_VERSION="3.5.7-1~deb13u2"
 
 # Alpine v3.22, OpenSSL 3.5.9-r0 (3.5.8-r0 was removed from the mirror; cross-build 404s, job 17097029064). `openssl-dev` carries headers + link symlinks;
