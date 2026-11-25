@@ -1,0 +1,1103 @@
+# Geode verification CI on GitHub Actions (public mirror github.com/geodedb/geode).
+#
+# gitlab.com/devnw/codepros/geode/geode is the source of truth; it mirrors to
+# gitlab.devnw.com geode/geode and from there to GitHub (all branches and tags).
+# Every build/test/scan job of the GitLab pipeline runs here instead, at parity
+# with its GitLab rules; GitLab keeps only release/publish jobs and gates them
+# on this workflow's result (`github-verify-gate` in .gitlab-ci.yml), which is
+# reported back as ONE commit status, `github-actions/geode`, on the pushed
+# commit. Set GEODE_VERIFY_ON=gitlab in .gitlab-ci.yml to move verification
+# back to GitLab.
+#
+# GitLab rule -> GitHub event mapping:
+#   merge request pipeline  -> push to any non-default branch
+#   default-branch pipeline -> push to main (and the weekly schedule)
+#   tag pipeline            -> push of a tag
+#   schedule / web / api    -> schedule, or workflow_dispatch with `lanes`
+#
+# Org policy: actions pinned by commit SHA; only actions/checkout,
+# actions/upload-artifact, actions/cache and mlugg/setup-zig are allowed. The
+# GitLab CI images (ci-catalog zig / zig-fips) are private, so the toolchain is
+# rebuilt here: setup-zig 0.16.0 + apt packages, and OpenSSL 3.6.5 with the
+# FIPS provider built into a cached user prefix (scripts/ci/install-openssl-fips.sh).
+name: ci
+
+on:
+  push:
+    branches: ['**']
+    tags: ['**']
+  schedule:
+    # The slot of GitLab's only schedule (4491545, Sunday 03:17 UTC), which
+    # is INACTIVE. A scheduled run therefore runs nothing by default; it runs
+    # only the schedule-only lanes switched on by repository variables:
+    # GEODE_PERF_GATES_LANE=1 (enforced perf gates) and GEODE_COVERAGE_LANE=1
+    # (kcov coverage, the GitLab schedule's own variable). Both are unset.
+    # The default-branch suite is not repeated on a schedule: every push to
+    # main already runs it.
+  - cron: 17 3 * * 0
+  workflow_dispatch:
+    inputs:
+      lanes:
+        description: Extra lanes (GitLab web/api runs with GEODE_COVERAGE_LANE=1 or a schedule)
+        type: choice
+        options: [none, coverage, perf-gates, all]
+        default: none
+
+permissions:
+  contents: read
+
+# Pushes to a non-default branch supersede each other (GitLab cancels the
+# older merge request pipeline the same way). Default-branch, tag, schedule
+# and manual runs each get their own group, so none is cancelled or dropped
+# while pending: GitLab's gate on that commit is waiting for its result.
+concurrency:
+  group: ci-${{ (github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name != github.event.repository.default_branch) && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  ZIG_VERSION: 0.16.0
+  STATUS_NAME: github-actions/geode
+  GITLAB_API: https://gitlab.com/api/v4
+  GITLAB_PROJECT: ${{ vars.GITLAB_COM_PROJECT_ID || '77156681' }}
+  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+  # Lanes (GitLab rules): branch = MR + default branch; tag = tag pipelines.
+  IS_TAG: ${{ github.ref_type == 'tag' }}
+  OPENSSL_FIPS_PREFIX: /home/runner/openssl-fips
+  OPENSSL_FIPS_VERSION: 3.6.5
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Status reporting to gitlab.com (one commit status per run)
+  # ---------------------------------------------------------------------------
+  start:
+    # Schedule runs and the extra manual lanes are reported here only: their
+    # commit already carries the push run's status, which GitLab gates on.
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.lanes == 'none')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+    - name: Report running to GitLab
+      env:
+        TOKEN: ${{ secrets.GITLAB_COM_STATUS_TOKEN }}
+      run: |
+        if [ -z "$TOKEN" ]; then
+          echo "::warning title=No GitLab status token::secrets.GITLAB_COM_STATUS_TOKEN is not set; not reporting to GitLab"
+          exit 0
+        fi
+        curl -fsS --retry 4 --retry-all-errors -o /dev/null -X POST -H "PRIVATE-TOKEN: $TOKEN" \
+          --data-urlencode "state=running" --data-urlencode "name=$STATUS_NAME" \
+          --data-urlencode "ref=$GITHUB_REF_NAME" --data-urlencode "target_url=$RUN_URL" \
+          --data-urlencode "description=GitHub Actions verification running" \
+          "$GITLAB_API/projects/$GITLAB_PROJECT/statuses/$GITHUB_SHA"
+
+  # ---------------------------------------------------------------------------
+  # Lint stage
+  # ---------------------------------------------------------------------------
+  zig-format:
+    # ci-catalog zig-format component: every pipeline.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - &checkout
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+      with:
+        persist-credentials: false
+        submodules: recursive
+    - &setup-zig
+      uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29   # v2.2.1
+      with:
+        version: ${{ env.ZIG_VERSION }}
+          # Caches are managed below (package cache keyed on build.zig.zon).
+        use-cache: false
+    - name: zig fmt --check src/
+      run: |
+        zig fmt --check src/ || { echo "Code formatting issues found. Run 'zig fmt src/' to fix."; exit 1; }
+    - name: zig ast-check
+      run: |
+        # The component runs `find src/ -name '*.zig' -exec zig ast-check {} \;`,
+        # whose status ignores ast-check failures; fail on any here.
+        find src/ -name '*.zig' -print0 | xargs -0 -n 1 -P 4 zig ast-check
+
+  hook-env-regression:
+    # SONNY-4778. GitLab: python:3.15-slim-bookworm, every pipeline.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    container: python:3.15-slim-bookworm@sha256:96599df822d0e1c6bb700014a05c7f3c8cabc6e0f7ff3c4f9f69cee033b4b5d9
+    timeout-minutes: 15
+    steps:
+    - name: Install git
+      run: apt-get update -qq && apt-get install -y -qq --no-install-recommends git >/dev/null
+    - *checkout
+    - run: python3 scripts/test_hook_env.py
+
+  # ---------------------------------------------------------------------------
+  # Governance stage (GitLab: one job per check; here one job per image, one
+  # step per GitLab job so a failure names itself). Every step runs even
+  # after an earlier one failed; allow_failure jobs are continue-on-error.
+  # ---------------------------------------------------------------------------
+  governance:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    container: python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
+    timeout-minutes: 30
+    env:
+      BRANCH: ${{ github.ref_type == 'branch' }}
+    steps:
+    - name: Install tools (git, make, shellcheck, ripgrep)
+      run: |
+        apt-get update -qq
+        apt-get install -y -qq --no-install-recommends git make shellcheck ripgrep >/dev/null
+    - *checkout
+    - name: governance-status-check
+      if: ${{ !cancelled() && env.BRANCH == 'true' }}
+      run: |
+        python3 tools/status_generate.py --repo . --out /tmp/status_check.csv
+        if diff -q docs/status.csv /tmp/status_check.csv >/dev/null 2>&1; then
+          echo "status.csv is up to date"
+        else
+          echo "status.csv is stale - run 'make status-generate' locally and commit"
+          diff docs/status.csv /tmp/status_check.csv || true
+          exit 1
+        fi
+    - name: governance-no-feature-flags
+      if: ${{ !cancelled() && env.BRANCH == 'true' }}
+      run: python3 tools/no_feature_flags_check.py --repo .
+    - name: governance-ci-yaml-lint
+      if: ${{ !cancelled() && env.BRANCH == 'true' }}
+      run: |
+        python3 scripts/lint_ci_yaml_runner_tags.py
+        python3 scripts/lint_ci_yaml_docker_names.py
+        for t in test_prune_zig_cache test_zig_fail_fast test_unit_capacity test_workflow_rules test_runner_tags; do
+          python3 -m unittest discover -s scripts/ci -p "$t.py"
+        done
+    - name: governance-cross-gate-status
+        # SONNY-4911 / SONNY-4920; GitLab: MR, default branch and tags.
+      if: ${{ !cancelled() }}
+      run: |
+        python3 tests/test_sonny4911_cross_gate_status.py
+        python3 tests/test_sonny4920_prepush_shard_budget.py
+    - name: governance-zig-package-cache
+      if: ${{ !cancelled() && env.BRANCH == 'true' }}
+      run: |
+        if [ -d docker/zig-packages ]; then
+          python3 tools/zig_package_cache_guard.py --strict-stale
+        else
+          echo "docker/zig-packages not present (gitignored) - skipping staleness check"
+        fi
+    - name: governance-no-page-allocator
+      if: ${{ !cancelled() && env.BRANCH == 'true' }}
+      run: |
+        if rg -n "std\\.heap\\.page_allocator" src \
+          --glob '!src/test*' --glob '!src/tests/**' --glob '!src/probe_*' --glob '!src/lib.zig'; then
+          echo "page_allocator usage detected in production source paths"
+          exit 1
+        fi
+        echo "allocator policy check passed"
+    - name: governance-stdio-abstraction
+      if: ${{ !cancelled() && env.BRANCH == 'true' }}
+      run: python3 tools/stdio_abstraction_guard.py --repo .
+    - name: governance-release-manifests
+        # GitLab: MR, default branch and tags.
+      if: ${{ !cancelled() }}
+      run: |
+        python3 tools/release_target_manifest.py sync-goreleaser \
+          --manifest release/target_manifest.json --goreleaser .goreleaser.yaml --check
+        python3 tools/release_dockerfile_manifest.py check \
+          --manifest release/dockerfile_manifest.json --repo-root .
+        python3 tests/test_sonny4884_release_image_runtime_compat.py
+        python3 tests/test_sonny4885_fips_release_runtime_compat.py
+    - name: governance-docker-healthcheck
+        # GitLab: MR, default branch and tags.
+      if: ${{ !cancelled() }}
+      run: python3 tests/test_dockerfile_health_check.py
+    - name: governance-canary-drift (allow_failure)
+      if: ${{ !cancelled() && env.BRANCH == 'true' }}
+      continue-on-error: true
+      run: |
+        count=$(grep -r "CANARY:" src/ --include="*.zig" | wc -l)
+        echo "Found $count CANARY markers in src/"
+        if [ "$count" -lt 900 ]; then
+          echo "::warning::CANARY marker count ($count) is lower than expected (>900)"
+        fi
+    - name: governance-canary-lint
+      if: ${{ !cancelled() && env.BRANCH == 'true' }}
+      run: |
+        python3 tools/canary_lint.py --repo . --fail-on-issues || {
+          echo "CANARY markers have schema violations; run 'python3 tools/canary_normalize.py --repo .'"
+          exit 1
+        }
+    - name: governance-req-doc-reports (allow_failure)
+      id: req-doc
+      if: ${{ !cancelled() && env.BRANCH == 'true' }}
+      continue-on-error: true
+      run: |
+        mkdir -p reports
+        python3 tools/req_doc_report.py --all-issues
+        python3 tools/req_doc_report.py --all-issues --gitlab-snippet
+        python3 tools/req_doc_report.py --summary
+        ls -la reports/
+    - name: migration-guard
+        # GitLab runs it only when migrations/**/*.gql or the guard change; it
+        # scans the full tree, so running it on every branch push is a superset.
+      if: ${{ !cancelled() && env.BRANCH == 'true' }}
+      run: |
+        python3 scripts/ci/check_migrations.py --self-test
+        python3 scripts/ci/check_migrations.py
+    - name: harness-rerun-selftest
+        # GitLab runs it only when the selector, its tests or the CI wiring
+        # change; it is a pure unit test, so it runs on every branch push here.
+      if: ${{ !cancelled() && env.BRANCH == 'true' }}
+      run: |
+        pip install --no-cache-dir --root-user-action=ignore -q pytest
+        python3 -m pytest scripts/ci/test_harness_rerun.py -v
+    - name: Keep REQ-DOC reports
+      if: ${{ !cancelled() && steps.req-doc.outcome != 'skipped' }}
+      uses: &upload-artifact actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9   # v7.0.2
+      with:
+        name: governance-req-doc-reports
+        path: reports/
+        retention-days: 7
+        if-no-files-found: ignore
+
+  governance-zig:
+    # governance-conformance-sync (Zig) and governance-canaryscan-verify (Go,
+    # golang:1.27.3-alpine as on GitLab). GitLab: MR and default branch.
+    if: github.event_name != 'schedule' && (github.ref_type == 'branch')
+    needs: [deps-linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+    - *checkout
+    - name: governance-canaryscan-verify
+      # Scans the whole checkout: run it before zig-cache/ (fetched
+      # packages) exists, as on GitLab where this job has no Zig cache.
+      run: |
+        docker run --rm -v "$PWD:/src" -w /src/tools/canaryscan -e GOTOOLCHAIN=auto \
+          golang:1.27.3-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 \
+          sh -c 'go build -o /tmp/canaryscan . && /tmp/canaryscan --root ../.. --verify ../../docs/GAP_ANALYSIS.md'
+    - *setup-zig
+    - &zig-env
+      name: Zig cache locations
+      run: |
+        # As on GitLab: global (package) cache and local build cache inside the checkout.
+        {
+          echo "ZIG_GLOBAL_CACHE_DIR=$GITHUB_WORKSPACE/zig-cache"
+          echo "ZIG_LOCAL_CACHE_DIR=$GITHUB_WORKSPACE/.zig-cache"
+        } >> "$GITHUB_ENV"
+    - &zig-pkg-cache
+      name: Zig package cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9   # v6.1.0
+      with:
+        path: zig-cache/p
+        key: zig-pkg-v1-${{ runner.os }}-${{ hashFiles('build.zig.zon', 'zig-pkg/**', 'docker/zig-packages/**') }}
+        restore-keys: zig-pkg-v1-${{ runner.os }}-
+    - &zig-fetch
+      name: Fetch dependencies (retried)
+      run: scripts/ci/gha_zig_fetch.sh
+    - name: governance-conformance-sync
+      if: ${{ !cancelled() }}
+      run: |
+        zig run scripts/conformance_sync.zig -- --json --fail-on-issues > /tmp/conformance_report.json || {
+          echo "Conformance scanner failed"
+          cat /tmp/conformance_report.json 2>/dev/null || true
+          exit 1
+        }
+        jq -c 'del(.. | arrays? | select(length > 20))' /tmp/conformance_report.json 2>/dev/null | head -c 4000 || head -c 4000 /tmp/conformance_report.json
+
+  governance-match-ops-campaign:
+    if: github.event_name != 'schedule' && (github.ref_type == 'branch')
+    needs: [deps-linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+    - &free-disk
+      name: Free disk space
+      run: |
+        # A cold Debug shard's .zig-cache reaches 11 GB. Runners have started
+        # with ~14 GB free (2026-11-21: "No space left on device") and, since,
+        # with ~89 GB; drop preinstalled toolchains no Zig job uses (~30 GB,
+        # about 3 minutes) only when less than 40 GB is free.
+        df -h / | tail -1
+        avail_kb=$(df -Pk / | awk 'NR==2 {print $4}')
+        if [ "$avail_kb" -ge $((40 * 1024 * 1024)) ]; then
+          echo "enough free disk; nothing removed"
+          exit 0
+        fi
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+          /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/boost /usr/local/julia* || true
+        sudo docker image prune --all --force >/dev/null 2>&1 || true
+        df -h / | tail -1
+    - *checkout
+    - *setup-zig
+    - &apt-tools
+      name: Tools the builds and test suites call
+      run: |
+        # The ci-catalog zig image's packages, plus what the test suites call
+        # (SONNY-6850: strace and openssl; python3 for the CI scripts).
+        sudo apt-get update -qq
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+          strace openssl libssl-dev pkg-config python3 jq xz-utils >/dev/null
+        # Ubuntu runners pipe core dumps to apport, which kept a SIGABRTed
+        # ReleaseSafe geode alive past the 30 s that
+        # tests/test_datadir_lock_subprocess.zig (SONNY-6447) allows it to
+        # exit. Container runners (GitLab) write no core; neither do these.
+        echo '|/bin/false' | sudo tee /proc/sys/kernel/core_pattern >/dev/null
+    - *zig-env
+    - *zig-pkg-cache
+    - *zig-fetch
+    - name: MATCH parity + benchmark campaigns, CLI transport parity
+      env:
+        GEODE_MATCH_BENCH_ENABLE: '1'
+      run: |
+        mkdir -p reports
+        zig test build.zig
+        scripts/ci/gha_zig_step.sh reports/match_parity.log -- zig build test-match-parity --summary all
+        scripts/ci/gha_zig_step.sh reports/match_bench.log -- zig build test-match-bench --summary all
+        scripts/ci/gha_zig_step.sh reports/cli_transport_parity.log -- zig build test-cli-transport-parity --summary all
+    - &cache-sizes
+      name: Cache sizes
+      if: ${{ !cancelled() }}
+      run: |
+        for d in zig-cache/p zig-cache .zig-cache; do
+          [ -d "$d" ] && du -sh "$d" || true
+        done
+        df -h / | tail -1
+    - &keep-logs
+      name: Keep the full logs
+      if: failure()
+      uses: *upload-artifact
+      with:
+        name: logs-${{ github.job }}-${{ strategy.job-index }}
+        path: reports/
+        retention-days: 7
+        if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Dependency cache warmers: one job per OS saves the Zig package cache, so
+  # the matrix jobs below restore an exact key and never race to save it.
+  # ---------------------------------------------------------------------------
+  deps-linux:
+    if: github.event_name != 'schedule' || vars.GEODE_PERF_GATES_LANE == '1' || vars.GEODE_COVERAGE_LANE == '1'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+    - *checkout
+    - *setup-zig
+    - *zig-env
+    - *zig-pkg-cache
+    - name: Fetch dependencies (all lazy deps the Linux jobs use)
+      run: |
+        scripts/ci/gha_zig_fetch.sh
+        # Lazy dependencies behind build options (FIPS) as well.
+        scripts/ci/gha_zig_fetch.sh -Dfips=true -Dopenssl_path="$OPENSSL_FIPS_PREFIX"
+    - *cache-sizes
+
+  deps-macos:
+    # Feeds only test-macos-unit (allow_failure), so it is optional too: on
+    # 2026-11-24 no hosted macOS arm64 runner took it for 73 minutes
+    # ("capacity constraints"), which must not fail or cancel the gating
+    # status of an otherwise green run.
+    if: github.event_name != 'schedule'
+    runs-on: macos-15
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+    - *checkout
+    - *setup-zig
+    - *zig-env
+    - *zig-pkg-cache
+    - *zig-fetch
+    - *cache-sizes
+
+  # ---------------------------------------------------------------------------
+  # Test stage
+  # ---------------------------------------------------------------------------
+  test-zig-release-safe:
+    # REQ-0008. GitLab: MR + default branch (blocking), tags (allow_failure).
+    if: github.event_name != 'schedule'
+    needs: [deps-linux, zig-format]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    continue-on-error: ${{ github.ref_type == 'tag' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+    env:
+      TEST_SHARD_TOTAL: '24'
+      # GitLab's workers have two CPUs (-j1); these have four.
+      ZIG_BUILD_JOBS: '2'
+    steps:
+    - *free-disk
+    - *checkout
+    - *setup-zig
+    - *apt-tools
+    - *zig-env
+    - *zig-pkg-cache
+    - *zig-fetch
+    - name: ReleaseSafe build (shard 0, REQ-0008)
+      if: matrix.shard == 0
+      run: |
+        scripts/ci/gha_zig_step.sh reports/release_safe_build.log -- \
+          zig build -j"$ZIG_BUILD_JOBS" -Doptimize=ReleaseSafe --summary all
+        ls -la zig-out/bin/geode
+    - name: ReleaseSafe tests, shard ${{ matrix.shard }}/24
+      run: |
+        scripts/ci/gha_zig_step.sh reports/zig_test_release_safe_shard_${{ matrix.shard }}.log -- \
+          zig build -j"$ZIG_BUILD_JOBS" test -Doptimize=ReleaseSafe \
+          -Dtest-shard-total="$TEST_SHARD_TOTAL" -Dtest-shard-index=${{ matrix.shard }} \
+          --summary all --error-style verbose
+    - *cache-sizes
+    - *keep-logs
+
+  test-zig-unit:
+    # GAP-0219. GitLab: MR + any branch pipeline (blocking), tags (allow_failure).
+    if: github.event_name != 'schedule'
+    needs: [deps-linux, zig-format]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    continue-on-error: ${{ github.ref_type == 'tag' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    env:
+      TEST_SHARD_TOTAL: '16'
+      ZIG_BUILD_JOBS: '1'
+    steps:
+    - *free-disk
+    - *checkout
+    - *setup-zig
+    - *apt-tools
+    - *zig-env
+    - *zig-pkg-cache
+    - *zig-fetch
+    - name: Debug tests, shard ${{ matrix.shard }}/16
+      run: |
+        scripts/ci/gha_zig_step.sh reports/zig_test_shard_${{ matrix.shard }}.log -- \
+          zig build -j"$ZIG_BUILD_JOBS" test \
+          -Dtest-shard-total="$TEST_SHARD_TOTAL" -Dtest-shard-index=${{ matrix.shard }} \
+          --summary all --error-style verbose
+    - *cache-sizes
+    - *keep-logs
+
+  test-cross-build:
+    # Every release target compiles (ReleaseSafe). GitLab: MR, default branch, tags.
+    if: github.event_name != 'schedule'
+    needs: [deps-linux, zig-format]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - {target: x86_64-linux-gnu, jobs: '2'}
+        - {target: x86_64-linux-musl, jobs: '2'}
+        - {target: aarch64-linux-gnu, jobs: '2'}
+        - {target: riscv64-linux-gnu, jobs: '2'}
+          # SIGKILLed (OOM) on an 8 GiB worker at higher concurrency.
+        - {target: aarch64-linux-musl, jobs: '1'}
+    env:
+      ZIG_TARGET: ${{ matrix.target }}
+      ZIG_BUILD_JOBS: ${{ matrix.jobs }}
+      # Mirror of the matrix above, for the drift check (keep in sync with
+      # release/target_manifest.json and .gitlab-ci.yml test-cross-build).
+      CROSS_MATRIX_TARGETS: x86_64-linux-gnu x86_64-linux-musl aarch64-linux-gnu aarch64-linux-musl riscv64-linux-gnu
+    steps:
+    - *free-disk
+    - *checkout
+    - *setup-zig
+    - *apt-tools
+    - *zig-env
+    - *zig-pkg-cache
+    - *zig-fetch
+    - name: Matrix covers the release target manifest
+      run: |
+        python3 tools/release_target_manifest.py list-zig-targets --manifest release/target_manifest.json > /tmp/release-targets.txt
+        drift=0
+        while IFS= read -r target; do
+          [ -z "$target" ] && continue
+          case "$target" in *-macos) continue ;; esac  # covered by test-macos-unit
+          case " ${CROSS_MATRIX_TARGETS} " in
+            *" ${target} "*) ;;
+            *) echo "::error::manifest target ${target} missing from the test-cross-build matrix"; drift=1 ;;
+          esac
+        done < /tmp/release-targets.txt
+        grep -qx "${ZIG_TARGET}" /tmp/release-targets.txt || { echo "::error::matrix target ${ZIG_TARGET} is no longer in release/target_manifest.json"; drift=1; }
+        exit "$drift"
+    - name: Build ${{ matrix.target }} (ReleaseSafe, linked OpenSSL as shipped)
+      run: |
+        case "${ZIG_TARGET}" in
+          riscv64-*|*-macos) echo "${ZIG_TARGET}: QUIC-only, no OpenSSL prefix" ;;
+          *) scripts/ci/fetch-openssl-prefix.sh "${ZIG_TARGET}" "dist/openssl/${ZIG_TARGET}" ;;
+        esac
+        scripts/ci/gha_zig_step.sh "reports/cross_build_${ZIG_TARGET}.log" -- \
+          zig build -j"${ZIG_BUILD_JOBS}" -Doptimize=ReleaseSafe -Dtarget="${ZIG_TARGET}" \
+          -Dopenssl-sysroot=dist/openssl --summary all
+        case "${ZIG_TARGET}" in
+          riscv64-*|*-macos) ;;
+          *)
+            readelf -d zig-out/bin/geode | grep -q 'NEEDED.*libssl\.so\.3' || {
+              echo "::error::${ZIG_TARGET} binary does not link libssl.so.3 - gRPC TLS would be compiled out"
+              exit 1
+            }
+            echo "${ZIG_TARGET} links libssl.so.3 (gRPC TLS available)"
+            ;;
+        esac
+    - name: Memory high-water mark
+      if: ${{ !cancelled() }}
+      run: |
+        for counter in memory.peak memory.events; do
+          f=$(find /sys/fs/cgroup -maxdepth 3 -path '*runner*' -name "$counter" 2>/dev/null | head -1)
+          [ -n "$f" ] && { echo "--- $f"; cat "$f"; }
+        done
+        free -m
+    - *cache-sizes
+    - *keep-logs
+
+  test-macos-unit:
+    # Native macOS Debug tests. GitLab: MR, default branch, tags; allow_failure.
+    if: github.event_name != 'schedule'
+    needs: [deps-macos, zig-format]
+    runs-on: macos-15
+    timeout-minutes: 120
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    env:
+      TEST_SHARD_TOTAL: '8'
+      ZIG_BUILD_JOBS: '2'
+    steps:
+    - *checkout
+    - *setup-zig
+    - *zig-env
+    - *zig-pkg-cache
+    - name: Homebrew OpenSSL prefix
+      run: |
+        prefix=""
+        for candidate in /opt/homebrew/opt/openssl@3 /usr/local/opt/openssl@3; do
+          if [ -f "$candidate/include/openssl/ssl.h" ] && [ -f "$candidate/lib/libssl.dylib" ] && [ -f "$candidate/lib/libcrypto.dylib" ]; then
+            prefix=$candidate
+            break
+          fi
+        done
+        if [ -z "$prefix" ]; then
+          HOMEBREW_NO_AUTO_UPDATE=1 brew install openssl@3
+          prefix=$(HOMEBREW_NO_AUTO_UPDATE=1 brew --prefix openssl@3)
+        fi
+        echo "GEODE_MACOS_OPENSSL_PREFIX=$prefix" >> "$GITHUB_ENV"
+        echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig" >> "$GITHUB_ENV"
+        echo "$prefix/bin" >> "$GITHUB_PATH"
+        echo "TMPDIR=$GITHUB_WORKSPACE/.zig-tmp" >> "$GITHUB_ENV"
+        mkdir -p "$GITHUB_WORKSPACE/.zig-tmp"
+    - *zig-fetch
+    - name: Build all installed targets (shard 0)
+      if: matrix.shard == 0
+      run: |
+        scripts/ci/gha_zig_step.sh reports/macos_build.log -- \
+          zig build --search-prefix "$GEODE_MACOS_OPENSSL_PREFIX" -j"$ZIG_BUILD_JOBS" --summary all
+    - name: Debug tests, shard ${{ matrix.shard }}/8
+      run: |
+        scripts/ci/gha_zig_step.sh reports/zig_test_macos_shard_${{ matrix.shard }}.log -- \
+          zig build --search-prefix "$GEODE_MACOS_OPENSSL_PREFIX" -j"$ZIG_BUILD_JOBS" test \
+          -Dtest-shard-total="$TEST_SHARD_TOTAL" -Dtest-shard-index=${{ matrix.shard }} \
+          --summary all --error-style verbose
+    - *cache-sizes
+    - *keep-logs
+
+  test-perf-gates-enforced:
+    # SONNY-2394 / SONNY-2439: perf claims are enforced (GEODE_PERF_GATES=enforce,
+    # ReleaseFast). GitLab: schedule pipelines only.
+    if: (github.event_name == 'schedule' && vars.GEODE_PERF_GATES_LANE == '1') || (github.event_name == 'workflow_dispatch' && (inputs.lanes == 'perf-gates' || inputs.lanes == 'all'))
+    needs: [deps-linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      GEODE_PERF_GATES: enforce
+    steps:
+    - *free-disk
+    - *checkout
+    - *setup-zig
+    - *apt-tools
+    - *zig-env
+    - *zig-pkg-cache
+    - *zig-fetch
+    - name: Enforced perf-gate steps
+      run: |
+        # The step list is the GitLab job's (.gitlab-ci.yml, test-perf-gates-enforced;
+        # tests/test_sonny2439_perf_methodology.zig checks it), read here so
+        # the two cannot drift.
+        steps=$(python3 - <<'PY'
+        import re
+        text = open(".gitlab-ci.yml").read()
+        job = text[text.index('GEODE_PERF_GATES: "enforce"'):]
+        body = job[job.index("for step in") + len("for step in"):job.index("; do")]
+        print(" ".join(t for t in re.split(r"[\s\\]+", body) if t))
+        PY
+        )
+        echo "steps: $steps"
+        mkdir -p reports
+        rc=0
+        # shellcheck disable=SC2086 # a space-separated list of step names
+        for step in $steps; do
+          echo "=== ${step} (GEODE_PERF_GATES=enforce, ReleaseFast) ==="
+          zig build "${step}" -Doptimize=ReleaseFast --summary failures > "reports/perf_gate_${step}.log" 2>&1 || rc=1
+          grep -E "PERF_CLAIM_VIOLATED|Build Summary" "reports/perf_gate_${step}.log" || true
+        done
+        exit "$rc"
+    - name: Keep perf-gate logs
+      if: ${{ !cancelled() }}
+      uses: *upload-artifact
+      with:
+        name: perf-gate-logs
+        path: reports/perf_gate_*.log
+        retention-days: 14
+
+  test-performance-benchmarks:
+    # REQ-0009 / GAP-0244. GitLab: MR, default branch, tags; allow_failure.
+    if: github.event_name != 'schedule'
+    needs: [deps-linux, zig-format]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+    - *free-disk
+    - *checkout
+    - *setup-zig
+    - *apt-tools
+    - *zig-env
+    - *zig-pkg-cache
+    - *zig-fetch
+    - name: Performance benchmarks (ReleaseSafe, serialized)
+      run: |
+        set +e
+        zig build -j1 -Doptimize=ReleaseSafe benchmark --summary all > benchmark_output.log 2>&1
+        rc=$?
+        set -e
+        echo "zig build benchmark: exit $rc, $(wc -l < benchmark_output.log) lines"
+        grep -E "VARIANCE_|benchmark success|benchmarks passed|Build Summary|error" benchmark_output.log | tail -60 || true
+        [ "$rc" -eq 0 ] || { tail -200 benchmark_output.log; exit "$rc"; }
+        if grep -Eq "VARIANCE_FAIL|VarianceEnvelopeBreached|error\\.TestUnexpectedResult" benchmark_output.log; then
+          echo "::error::Performance variance envelope breached"
+          exit 1
+        fi
+        if ! grep -Eq "benchmark success|Status: .*benchmarks passed target thresholds|MATCH_BENCH|VARIANCE_OK|benchmark_.*variance" benchmark_output.log; then
+          echo "::error::Benchmark telemetry not found in output"
+          exit 1
+        fi
+        echo "Performance benchmarks verified (REQ-0009)"
+    - name: Keep benchmark output
+      if: ${{ !cancelled() }}
+      uses: *upload-artifact
+      with:
+        name: benchmark-output
+        path: benchmark_output.log
+        retention-days: 7
+
+  loadtest-regression:
+    # GitLab: MR and default branch. Compares a Go loadtest report against the
+    # baseline when one exists; CI runners do not run the Go loadtest.
+    if: github.event_name != 'schedule' && (github.ref_type == 'branch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - *checkout
+    - name: Compare against the baseline
+      run: |
+        sudo sysctl -w net.core.rmem_max=7340032 || true
+        sudo sysctl -w net.core.wmem_max=7340032 || true
+        if [ -f reports/loadtest_go.json ]; then
+          python3 benchmarks/loadtest/compare.py \
+            --baseline benchmarks/loadtest/baseline.jsonl \
+            --current reports/loadtest_go.json \
+            --output benchmarks/loadtest/results/comparison.jsonl
+        else
+          echo "SKIP: reports/loadtest_go.json not found (load test did not run on this runner)"
+        fi
+
+  bench-timeseries:
+    # GAP-0287. GitLab: MR and default branch; blocking.
+    if: github.event_name != 'schedule' && (github.ref_type == 'branch')
+    needs: [deps-linux, zig-format]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+    - *free-disk
+    - *checkout
+    - *setup-zig
+    - *apt-tools
+    - *zig-env
+    - *zig-pkg-cache
+    - *zig-fetch
+    - name: Timeseries benchmarks
+      run: |
+        mkdir -p reports
+        scripts/ci/gha_zig_step.sh reports/bench_timeseries_output.log -- zig build bench-timeseries --summary all
+    - name: Keep benchmark output
+      if: ${{ !cancelled() }}
+      uses: *upload-artifact
+      with:
+        name: bench-timeseries-output
+        path: reports/
+        retention-days: 7
+
+  bench-query-path:
+    # M6.1. GitLab: MR and default branch; allow_failure. The baseline
+    # comparison is advisory (cross-host against a frozen baseline).
+    if: github.event_name != 'schedule' && (github.ref_type == 'branch')
+    needs: [deps-linux, zig-format]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    continue-on-error: true
+    steps:
+    - *free-disk
+    - *checkout
+    - *setup-zig
+    - *apt-tools
+    - *zig-env
+    - *zig-pkg-cache
+    - *zig-fetch
+    - name: Query-path benchmarks
+      run: |
+        zig build bench-query-parser -Doptimize=ReleaseFast -- --output bench-parser.json
+        zig build bench-query-planner -Doptimize=ReleaseFast -- --output bench-planner.json
+        zig build bench-query-executor-match -Doptimize=ReleaseFast -- --output bench-exec-match.json
+        zig build bench-query-executor-mutation -Doptimize=ReleaseFast -- --output bench-exec-mut.json
+        jq -s '{generated_at_unix_s: .[0].generated_at_unix_s, rows: (map(.rows) | add)}' \
+          bench-parser.json bench-planner.json bench-exec-match.json bench-exec-mut.json > bench-query-all.json
+    - name: Compare against the baseline (advisory)
+      run: |
+        baseline=docs/performance/2026-04-20-query-bench/baseline/bench-query-all.json
+        if [ ! -f "$baseline" ]; then
+          echo "SKIP: baseline $baseline not present"
+          exit 0
+        fi
+        zig build compare-bench -- --baseline "$baseline" --current bench-query-all.json > bench-query-compare.log 2>&1 || true
+        regressions=$(grep -oE '[0-9]+ regression\(s\) detected' bench-query-compare.log | grep -oE '[0-9]+' | head -1 || true)
+        if [ -n "${regressions:-}" ] && [ "$regressions" -gt 0 ] 2>/dev/null; then
+          echo "::notice::[advisory] compare-bench reported ${regressions} row(s) over the noise gate (cross-host vs the frozen 2026-04-20 baseline; reproduce with scripts/query-perf-gate.sh)"
+        else
+          echo "[advisory] compare-bench reported no rows over the noise gate"
+        fi
+    - name: Keep benchmark results
+      if: ${{ !cancelled() }}
+      uses: *upload-artifact
+      with:
+        name: bench-query-path
+        path: |
+          bench-query-all.json
+          bench-parser.json
+          bench-planner.json
+          bench-exec-match.json
+          bench-exec-mut.json
+          bench-query-compare.log
+        retention-days: 28
+        if-no-files-found: ignore
+
+  test-gql-compliance:
+    # GAP-0167: geodetestlab GQL compliance spec. GitLab: MR and default branch.
+    if: github.event_name != 'schedule' && (github.ref_type == 'branch')
+    needs: [deps-linux, zig-format]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+    - *free-disk
+    - *checkout
+    - *setup-zig
+    - *apt-tools
+    - *zig-env
+    - *zig-pkg-cache
+    - *zig-fetch
+    - name: Python environment and pinned geode-test-harness
+      run: |
+        python3 -m venv "$RUNNER_TEMP/venv" || {
+          sudo apt-get install -y -qq python3-venv >/dev/null && python3 -m venv "$RUNNER_TEMP/venv"
+        }
+        "$RUNNER_TEMP/venv/bin/pip" install -q --no-cache-dir pyyaml pytest
+        # The pinned ref is .gitlab-ci.yml's GEODE_TEST_HARNESS_REF (one source of truth).
+        ref=$(sed -n 's/^  GEODE_TEST_HARNESS_REF: "\([0-9a-f]*\)".*/\1/p' .gitlab-ci.yml)
+        [ -n "$ref" ] || { echo "::error::GEODE_TEST_HARNESS_REF not found in .gitlab-ci.yml"; exit 1; }
+        harness=../geode-test-harness
+        git init -q "$harness"
+        git -C "$harness" remote add origin https://gitlab.com/devnw/codepros/geode/geode-test-harness.git
+        git -C "$harness" fetch -q --depth 1 origin "$ref"
+        git -C "$harness" checkout -q --detach FETCH_HEAD
+        echo "Pinned geode-test-harness ref: $(git -C "$harness" rev-parse HEAD)"
+    - name: Build geode (Debug, as the compliance runner needs)
+      run: scripts/ci/gha_zig_step.sh reports/gql_build.log -- zig build --summary all
+    - name: GQL compliance spec
+      run: |
+        "$RUNNER_TEMP/venv/bin/python3" scripts/test/extended_test_runner.py geode_gql_compliance.yml > reports/gql_compliance.log 2>&1 || {
+          rc=$?; tail -300 reports/gql_compliance.log; exit "$rc"
+        }
+        tail -40 reports/gql_compliance.log
+    - name: Keep compliance results
+      if: ${{ !cancelled() }}
+      uses: *upload-artifact
+      with:
+        name: gql-compliance
+        path: |
+          compliance-results.xml
+          reports/
+        retention-days: 7
+        if-no-files-found: ignore
+
+  zig-fips-test:
+    # zig-fips-test-0.16.0: test-fips-seam under both crypto backends.
+    # GitLab: default branch (not tags) and MR.
+    if: github.event_name != 'schedule' && (github.ref_type == 'branch')
+    needs: [deps-linux, zig-format]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+    - *free-disk
+    - *checkout
+    - *setup-zig
+    - *apt-tools
+    - *zig-env
+    - *zig-pkg-cache
+    - name: OpenSSL FIPS provider cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9   # v6.1.0
+      with:
+        path: ${{ env.OPENSSL_FIPS_PREFIX }}
+        key: openssl-fips-${{ env.OPENSSL_FIPS_VERSION }}-${{ runner.os }}-${{ hashFiles('scripts/ci/install-openssl-fips.sh') }}
+    - name: OpenSSL ${{ env.OPENSSL_FIPS_VERSION }} with the FIPS provider
+      run: |
+        sudo apt-get install -y -qq --no-install-recommends build-essential perl gnupg >/dev/null
+        OPENSSL_VERSION="$OPENSSL_FIPS_VERSION" OPENSSL_PREFIX="$OPENSSL_FIPS_PREFIX" scripts/ci/install-openssl-fips.sh
+    - name: Fetch dependencies (retried)
+      run: scripts/ci/gha_zig_fetch.sh -Dfips=true -Dopenssl_path="$OPENSSL_FIPS_PREFIX"
+    - name: test-fips-seam, shim backend (-Dfips=false)
+      run: |
+        scripts/ci/gha_zig_step.sh reports/fips_seam_shim.log -- zig build test-fips-seam -Dfips=false --summary all
+    - name: test-fips-seam, OpenSSL FIPS provider (-Dfips=true)
+      run: |
+        OPENSSL_CONF="$OPENSSL_FIPS_PREFIX/ssl/openssl.cnf" scripts/ci/gha_zig_step.sh reports/fips_seam_fips.log -- \
+          zig build test-fips-seam -Dfips=true -Dopenssl_path="$OPENSSL_FIPS_PREFIX" --summary all
+    - *cache-sizes
+    - *keep-logs
+
+  # ---------------------------------------------------------------------------
+  # Coverage lane (SRE-187): GitLab schedule/web/api runs with GEODE_COVERAGE_LANE=1.
+  # kcov runs in the upstream kcov image pinned by digest (as on GitLab).
+  # ---------------------------------------------------------------------------
+  test-code-coverage:
+    if: (github.event_name == 'schedule' && vars.GEODE_COVERAGE_LANE == '1') || (github.event_name == 'workflow_dispatch' && (inputs.lanes == 'coverage' || inputs.lanes == 'all'))
+    needs: [deps-linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    steps:
+    - *free-disk
+    - *checkout
+    - *zig-env
+    - *zig-pkg-cache
+    - name: kcov shard ${{ matrix.shard }}/16 (LLVM-backend Debug, kcov/kcov image)
+      env:
+        SHARD: ${{ matrix.shard }}
+      run: |
+        docker run --rm --cap-add SYS_PTRACE --security-opt seccomp=unconfined \
+          -v "$GITHUB_WORKSPACE:/w" -w /w \
+          -e SHARD -e ZIG_GLOBAL_CACHE_DIR=/w/zig-cache -e ZIG_LOCAL_CACHE_DIR=/w/.zig-cache \
+          kcov/kcov@sha256:481289ae32e55e5b733019515acd10948a4f76dfed381765577db909664fc603 \
+          bash -c '
+            set -euo pipefail
+            kcov --version
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends ca-certificates curl xz-utils libssl-dev pkg-config strace openssl >/dev/null
+            curl -fsSL --retry 3 --retry-all-errors -o /tmp/zig.tar.xz https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz
+            echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz" | sha256sum -c -
+            mkdir -p /opt/zig && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
+            ln -sf /opt/zig/zig /usr/local/bin/zig
+            scripts/ci/gha_zig_fetch.sh
+            mkdir -p coverage/raw reports
+            zig build -j1 test-coverage-manifest -Dtest-coverage=true -Dtest-shard-total=16 -Dtest-shard-index="$SHARD"
+            set +e
+            zig build -j1 test -Dtest-coverage=true -Dtest-shard-total=16 -Dtest-shard-index="$SHARD" --summary all > "reports/coverage_shard_${SHARD}.log" 2>&1
+            build_rc=$?
+            set -e
+            grep -E "^Build Summary|steps succeeded" "reports/coverage_shard_${SHARD}.log" | tail -5 || true
+            python3 scripts/ci/kcov_coverage.py shard --shard "$SHARD" --build-rc "$build_rc"
+          '
+    - name: Keep the shard coverage
+      if: ${{ !cancelled() }}
+      uses: *upload-artifact
+      with:
+        name: coverage-shard-${{ matrix.shard }}
+        path: |
+          coverage/shard-*/
+          reports/coverage_shard_*.log
+        retention-days: 7
+        if-no-files-found: ignore
+
+  test-code-coverage-report:
+    if: ${{ !cancelled() && needs.test-code-coverage.result != 'skipped' }}
+    needs: [test-code-coverage]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    continue-on-error: true
+    permissions:
+      contents: read
+      actions: read  # gh run download (actions/download-artifact is not on the allowlist)
+    steps:
+    - *checkout
+    - name: Download the shard coverage
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        mkdir -p /tmp/shards
+        gh run download "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY" -p 'coverage-shard-*' -D /tmp/shards
+        for d in /tmp/shards/coverage-shard-*; do cp -a "$d"/. .; done
+        ls coverage
+    - name: Merge (kcov/kcov image)
+      run: |
+        docker run --rm -v "$GITHUB_WORKSPACE:/w" -w /w \
+          kcov/kcov@sha256:481289ae32e55e5b733019515acd10948a4f76dfed381765577db909664fc603 \
+          python3 scripts/ci/kcov_coverage.py report --total 16
+    - name: Keep the merged coverage
+      if: ${{ !cancelled() }}
+      uses: *upload-artifact
+      with:
+        name: coverage-merged
+        path: |
+          coverage/merged/
+          coverage/coverage-manifest.tsv
+        retention-days: 28
+        if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Security stage (public images, pinned by digest). GitLab: MR, default branch, tags.
+  # ---------------------------------------------------------------------------
+  security-secrets:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - *checkout
+    - name: gitleaks
+      run: |
+        docker run --rm -v "$PWD:/repo" -w /repo \
+          zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+          detect --source . --config .gitleaks.toml --redact --no-git --exit-code 1
+
+  security-trivy:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+    - *checkout
+    - name: trivy fs (vuln + secret, HIGH/CRITICAL)
+      run: |
+        docker run --rm -v "$PWD:/repo" -w /repo \
+          aquasec/trivy:0.76.0@sha256:2416d1f74045b57274df1a340eee6b510cacd73c66a6ccb8da092b117eb7d222 \
+          fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 --no-progress \
+          --db-repository public.ecr.aws/aquasecurity/trivy-db --db-repository ghcr.io/aquasecurity/trivy-db \
+          --java-db-repository public.ecr.aws/aquasecurity/trivy-java-db --java-db-repository ghcr.io/aquasecurity/trivy-java-db \
+          --skip-dirs .zig-cache --skip-dirs zig-cache --skip-dirs docker/zig-packages --skip-dirs test_logs \
+          --skip-files certs/server.key --skip-files data/server.key .
+
+  # ---------------------------------------------------------------------------
+  # Tag-only checks
+  # ---------------------------------------------------------------------------
+  zig-version-tag-check:
+    # ci-catalog zig-version-tag-check component: tags only.
+    if: github.event_name != 'schedule' && (github.ref_type == 'tag')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+    - *checkout
+    - name: build.zig.zon version matches the tag
+      run: |
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        export PATH="$HOME/.local/bin:$PATH"
+        uvx --from git+https://gitlab.com/devnw/zig/zig-tool zig-tool check-version-tag --tag "$GITHUB_REF_NAME"
+
+  # ---------------------------------------------------------------------------
+  # Result -> gitlab.com commit status `github-actions/geode`
+  # ---------------------------------------------------------------------------
+  report:
+    if: always()
+    needs:
+    - start
+    - zig-format
+    - hook-env-regression
+    - governance
+    - governance-zig
+    - governance-match-ops-campaign
+    - deps-linux
+    - deps-macos
+    - test-zig-release-safe
+    - test-zig-unit
+    - test-cross-build
+    - test-macos-unit
+    - test-perf-gates-enforced
+    - test-performance-benchmarks
+    - loadtest-regression
+    - bench-timeseries
+    - bench-query-path
+    - test-gql-compliance
+    - zig-fips-test
+    - test-code-coverage
+    - test-code-coverage-report
+    - security-secrets
+    - security-trivy
+    - zig-version-tag-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+    - name: Summarize and report to GitLab
+      env:
+        NEEDS: ${{ toJSON(needs) }}
+        TOKEN: ${{ secrets.GITLAB_COM_STATUS_TOKEN }}
+        REPORT: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.lanes == 'none') }}
+      run: |
+        # GitLab allow_failure jobs (continue-on-error here) never decide the
+        # result; on tags the unit and ReleaseSafe shards are allow_failure too.
+        optional="start deps-macos test-macos-unit test-performance-benchmarks bench-query-path test-code-coverage test-code-coverage-report"
+        if [ "$IS_TAG" = true ]; then optional="$optional test-zig-unit test-zig-release-safe"; fi
+        table=$(jq -r 'to_entries[] | "\(.key) \(.value.result)"' <<<"$NEEDS")
+        echo "$table" | column -t
+        failed=""; cancelled=""
+        while read -r job result; do
+          case " $optional " in *" $job "*) continue ;; esac
+          case "$result" in
+            failure) failed="$failed $job" ;;
+            cancelled) cancelled="$cancelled $job" ;;
+          esac
+        done <<<"$table"
+        if [ -n "$failed" ]; then state=failed; description="failed:${failed}"
+        elif [ -n "$cancelled" ]; then state=canceled; description="canceled:${cancelled}"
+        else state=success; description="all required jobs passed"
+        fi
+        optional_failed=$(echo "$table" | awk -v o=" $optional " 'index(o, " " $1 " ") && $2 == "failure" {printf " %s", $1}')
+        [ -n "$optional_failed" ] && description="$description; allow_failure failed:${optional_failed}"
+        description=${description:0:250}
+        echo "state=$state ($description)"
+        {
+          echo "### GitHub Actions verification: \`$state\`"
+          echo
+          echo "$description"
+        } >> "$GITHUB_STEP_SUMMARY"
+        if [ "$REPORT" != true ]; then
+          echo "Not a push run: the commit's push run reports to GitLab."
+        elif [ -z "$TOKEN" ]; then
+          echo "::warning title=No GitLab status token::secrets.GITLAB_COM_STATUS_TOKEN is not set; not reporting to GitLab"
+        else
+          curl -fsS --retry 4 --retry-all-errors -o /dev/null -X POST -H "PRIVATE-TOKEN: $TOKEN" \
+            --data-urlencode "state=$state" --data-urlencode "name=$STATUS_NAME" \
+            --data-urlencode "ref=$GITHUB_REF_NAME" --data-urlencode "target_url=$RUN_URL" \
+            --data-urlencode "description=$description" \
+            "$GITLAB_API/projects/$GITLAB_PROJECT/statuses/$GITHUB_SHA"
+        fi
+        [ "$state" = success ]
