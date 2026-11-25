@@ -69,10 +69,12 @@ fi
 DEB_SNAPSHOT="https://snapshot.debian.org/archive/debian/20260826T203905Z/pool/main/o/openssl"
 DEB_VERSION="3.5.7-1~deb13u2"
 
-# Alpine v3.22, OpenSSL 3.5.9-r0 (3.5.8-r0 was removed from the mirror; cross-build 404s, job 17097029064). `openssl-dev` carries headers + link symlinks;
+# Alpine v3.22, OpenSSL 3.5.9-r2 (3.5.8-r0 and 3.5.9-r0 were removed from the mirror; cross-build 404s,
+# GitLab job 17097029064 and GitHub job 139418568534). Alpine keeps only the newest build per branch and has no
+# snapshot archive, so this pin rots whenever a rebuild lands: bump APK_VERSION and the six sha256s below. `openssl-dev` carries headers + link symlinks;
 # `libssl3`/`libcrypto3` carry the runtime objects.
 APK_MIRROR="https://dl-cdn.alpinelinux.org/alpine/v3.22/main"
-APK_VERSION="3.5.9-r0"
+APK_VERSION="3.5.9-r2"
 
 # sha256 of each fetched artifact, keyed "<target>:<filename>".
 declare -A CHECKSUMS=(
@@ -80,12 +82,12 @@ declare -A CHECKSUMS=(
     ["x86_64-linux-gnu:libssl3t64_${DEB_VERSION}_amd64.deb"]="916f7f40b34a06e6ebfaefcdab331bff458328411da672598f126a760472467d"
     ["aarch64-linux-gnu:libssl-dev_${DEB_VERSION}_arm64.deb"]="b81910e8728fab596158c8384d6aa101c8249c1769eb2d33c73643b2be7a0bcf"
     ["aarch64-linux-gnu:libssl3t64_${DEB_VERSION}_arm64.deb"]="ec131326aa9fa9ec934eca386bc7991f328fe383eaefd3e43bd8901a9199c5ae"
-    ["x86_64-linux-musl:openssl-dev-${APK_VERSION}.apk"]="86cbdf7fbbef81ba79ee238b90a56bfde6d02a70fe71c00a7de05872b9f5d9c4"
-    ["x86_64-linux-musl:libssl3-${APK_VERSION}.apk"]="6801c740b9760b5b08da8db6367ebc18b2cc4dbaf371f7148429538b8bb04e23"
-    ["x86_64-linux-musl:libcrypto3-${APK_VERSION}.apk"]="3f5825ced5fde1c66a5376a3f6076b3c08538ad52d9ef23f069857e212d9175a"
-    ["aarch64-linux-musl:openssl-dev-${APK_VERSION}.apk"]="51c42d94ea97142e6aae53b1984891ec6e64039b4cdfa2c517851bd01c3c7397"
-    ["aarch64-linux-musl:libssl3-${APK_VERSION}.apk"]="338c9f6154582b4b76455a59f95538bcea8df039c5c72916dd2d8d0d844c9583"
-    ["aarch64-linux-musl:libcrypto3-${APK_VERSION}.apk"]="ede2ef7eca3b65a42e902aaf7890f9c5647dca0c55123a817179ad9f3bc6ef24"
+    ["x86_64-linux-musl:openssl-dev-${APK_VERSION}.apk"]="06262df9730a14154bde19b50beaa4f5d32c8733d258ae7c67cafebb7948a8b0"
+    ["x86_64-linux-musl:libssl3-${APK_VERSION}.apk"]="678f241a05f34858762790eac31599def62e3963702d13c62b0aa4720681fea1"
+    ["x86_64-linux-musl:libcrypto3-${APK_VERSION}.apk"]="931ac2f8cd696a47221b6317f650eb5e0ed5bf8f04d34ae7b9573027801d3544"
+    ["aarch64-linux-musl:openssl-dev-${APK_VERSION}.apk"]="5252ea38a84d4d18f128eb2d12d01ebb2fd0882b96f4e6b5493c17d0ca5ae9ba"
+    ["aarch64-linux-musl:libssl3-${APK_VERSION}.apk"]="7c8f76f087ef0cd74c15c1f64d575fd4e28e05c5db3a6343859b9d098676cb2d"
+    ["aarch64-linux-musl:libcrypto3-${APK_VERSION}.apk"]="36392036421de3d71fc815ed771e9c2291bc45c7a336e9651e9dd87d408dee99"
 )
 
 case "$TARGET" in
