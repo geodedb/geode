@@ -64,6 +64,11 @@ env:
   GITLAB_API: https://gitlab.com/api/v4
   GITLAB_PROJECT: ${{ vars.GITLAB_COM_PROJECT_ID || '77156681' }}
   RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+  # The gitlab.com status is informational (MR widget). GitLab's
+  # github-verify-gate reads the report job's verdict from GitHub's API, so a
+  # rejected post (e.g. 403: the Developer token cannot post on protected main
+  # or v* tags) must not fail the run.
+  PROTECTED_REF_NOTE: gitlab.com rejected the commit status (protected refs need push/merge rights the Developer status token does not have); github-verify-gate reads this run's report job instead.
   # Lanes (GitLab rules): branch = MR + default branch; tag = tag pipelines.
   IS_TAG: ${{ github.ref_type == 'tag' }}
   OPENSSL_FIPS_PREFIX: /home/runner/openssl-fips
@@ -92,7 +97,8 @@ jobs:
           --data-urlencode "state=running" --data-urlencode "name=$STATUS_NAME" \
           --data-urlencode "ref=$GITHUB_REF_NAME" --data-urlencode "target_url=$RUN_URL" \
           --data-urlencode "description=GitHub Actions verification running" \
-          "$GITLAB_API/projects/$GITLAB_PROJECT/statuses/$GITHUB_SHA"
+          "$GITLAB_API/projects/$GITLAB_PROJECT/statuses/$GITHUB_SHA" ||
+          echo "::warning title=GitLab status not posted::$PROTECTED_REF_NOTE"
 
   # ---------------------------------------------------------------------------
   # Lint stage
@@ -1098,6 +1104,7 @@ jobs:
             --data-urlencode "state=$state" --data-urlencode "name=$STATUS_NAME" \
             --data-urlencode "ref=$GITHUB_REF_NAME" --data-urlencode "target_url=$RUN_URL" \
             --data-urlencode "description=$description" \
-            "$GITLAB_API/projects/$GITLAB_PROJECT/statuses/$GITHUB_SHA"
+            "$GITLAB_API/projects/$GITLAB_PROJECT/statuses/$GITHUB_SHA" ||
+            echo "::warning title=GitLab status not posted::$PROTECTED_REF_NOTE"
         fi
         [ "$state" = success ]

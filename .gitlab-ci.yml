@@ -1960,15 +1960,24 @@ security-trivy:
 # With GEODE_VERIFY_ON=github every build/test/scan job above runs on GitHub
 # Actions (.github/workflows/ci.yml) against the github.com/geodedb/geode
 # mirror (gitlab.com -> gitlab.devnw.com -> GitHub, all branches and tags),
-# and the workflow's `report` job posts ONE commit status
-# `github-actions/geode` (ref = branch or tag) to this commit. This job waits
-# for that status and passes or fails with it; release/publish jobs need it.
+# and its `report` job decides the verdict: it fails when any job that is
+# not allow_failure on GitLab failed. This job waits for that verdict and
+# passes or fails with it; release/publish jobs need it.
 #
-# No secrets: the commit-statuses API needs authentication even on this
-# public project, but statuses posted through the API form an "external"
-# pipeline for (sha, ref) whose status is readable anonymously. Generous
-# deadline: mirror delay plus a queue behind other runs plus up to 6 h jobs.
-# A GitHub re-run reports again; retry this job to pick up the new result.
+# The verdict is read from GitHub's public REST API (the mirror is public),
+# not from gitlab.com commit statuses: posting a status on a protected ref
+# (main, v* tags) needs push or merge rights there, and the GitHub-held
+# status token is deliberately only a Developer. Reading GitHub directly
+# needs no credential at all and grants nothing on GitLab. The match is
+# exact: workflow ci.yml, event push, this commit, this branch or tag; the
+# newest such run wins. Only the gitlab.com -> gitlab.devnw.com mirror can
+# push to github.com/geodedb/geode, so the run is the one for this commit.
+#
+# Anonymous API calls are limited to 60/h per IP: the job polls the run list
+# once per VERIFY_POLL_SECONDS and reads the jobs only once the run has
+# completed; a rate-limited poll just counts as "unreachable" and retries.
+# Generous deadline: mirror delay plus a queue behind other runs plus up to
+# 6 h jobs. A GitHub re-run updates the same run; retry this job after one.
 # =============================================================================
 github-verify-gate:
   stage: test
@@ -1980,7 +1989,8 @@ github-verify-gate:
   variables:
     GIT_STRATEGY: none
     GITHUB_REPO: geodedb/geode
-    VERIFY_POLL_SECONDS: "90"
+    GITHUB_WORKFLOW_FILE: ci.yml
+    VERIFY_POLL_SECONDS: "120"
     VERIFY_DEADLINE_SECONDS: "28200"  # 7 h 50 min, inside the 8 h job timeout
   rules:
     - if: '$GEODE_VERIFY_ON == "github" && $CI_MERGE_REQUEST_ID'
@@ -1991,35 +2001,62 @@ github-verify-gate:
   script:
     - |
       set -eu
-      # MR pipelines test the source branch head; GitHub reports with the
-      # branch (or tag) name as the ref.
+      # MR pipelines test the source branch head; GitHub's push run carries
+      # the branch (or tag) name as head_branch.
       sha="${CI_MERGE_REQUEST_SOURCE_BRANCH_SHA:-$CI_COMMIT_SHA}"
       ref="${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME:-${CI_COMMIT_TAG:-$CI_COMMIT_BRANCH}}"
-      url="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/pipelines?source=external&order_by=id&sort=desc&per_page=1"
-      echo "Waiting for github-actions/geode on ${sha} (ref ${ref})"
+      api="https://api.github.com/repos/${GITHUB_REPO}/actions"
+      gh_get() {
+        curl -fsS --retry 3 --retry-all-errors --connect-timeout 20 \
+          -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' "$@"
+      }
+      echo "Waiting for the GitHub Actions verdict on ${sha} (ref ${ref})"
       echo "GitHub run: https://github.com/${GITHUB_REPO}/commit/${sha}/checks"
       start=$(date +%s)
       last=""
       while :; do
-        if body=$(curl -fsS --retry 3 --retry-all-errors --connect-timeout 20 -G "$url" \
-            --data-urlencode "sha=${sha}" --data-urlencode "ref=${ref}"); then
-          state=$(printf '%s' "$body" | jq -r '.[0].status // "none"' 2>/dev/null) || state="unparseable"
+        run_id=""
+        if body=$(gh_get -G "${api}/workflows/${GITHUB_WORKFLOW_FILE}/runs" \
+            --data-urlencode "head_sha=${sha}" --data-urlencode "event=push" --data-urlencode "per_page=20"); then
+          run=$(printf '%s' "$body" | jq -c --arg ref "$ref" \
+            '[.workflow_runs[] | select(.head_branch == $ref)] | max_by(.id) // empty' 2>/dev/null) || run="?"
+          if [ "$run" = "?" ]; then state="unparseable"
+          elif [ -z "$run" ]; then state="no run yet"
+          else
+            run_id=$(printf '%s' "$run" | jq -r .id)
+            state=$(printf '%s' "$run" | jq -r .status)
+          fi
         else
           state="unreachable"
         fi
+        if [ "$state" = completed ]; then
+          # The run's own conclusion also counts allow_failure jobs and the
+          # best-effort status posts; the report job is the verdict.
+          verdict=""
+          for page in 1 2 3; do
+            jobs=$(gh_get "${api}/runs/${run_id}/jobs?filter=latest&per_page=100&page=${page}") || { verdict="unreachable"; break; }
+            verdict=$(printf '%s' "$jobs" | jq -r '[.jobs[] | select(.name == "report")][0].conclusion // empty')
+            [ -n "$verdict" ] && break
+            [ "$(printf '%s' "$jobs" | jq '.jobs | length')" -lt 100 ] && { verdict="missing"; break; }
+          done
+          state="completed/${verdict:-missing}"
+        fi
         elapsed=$(( $(date +%s) - start ))
         if [ "$state" != "$last" ] || [ $(( elapsed % 900 )) -lt "$VERIFY_POLL_SECONDS" ]; then
-          echo "$(date -u +%H:%M:%S) +$((elapsed / 60))m github-actions/geode: ${state}"
+          echo "$(date -u +%H:%M:%S) +$((elapsed / 60))m run ${run_id:-none}: ${state}"
           last=$state
         fi
         case "$state" in
-          success) echo "GitHub Actions verification passed"; exit 0 ;;
-          failed|canceled|skipped)
-            echo "GitHub Actions verification ${state}: https://github.com/${GITHUB_REPO}/commit/${sha}/checks"
+          completed/success)
+            echo "GitHub Actions verification passed: https://github.com/${GITHUB_REPO}/actions/runs/${run_id}"
+            exit 0 ;;
+          completed/unreachable) ;;
+          completed/*)
+            echo "GitHub Actions verification did not pass (${state}): https://github.com/${GITHUB_REPO}/actions/runs/${run_id}"
             exit 1 ;;
         esac
         if [ "$elapsed" -ge "$VERIFY_DEADLINE_SECONDS" ]; then
-          echo "Timed out after $((elapsed / 60)) min waiting for github-actions/geode (last: ${state})"
+          echo "Timed out after $((elapsed / 60)) min waiting for GitHub Actions (last: ${state})"
           exit 1
         fi
         sleep "$VERIFY_POLL_SECONDS"
